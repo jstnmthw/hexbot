@@ -7,7 +7,7 @@ This directory contains all bot plugins. Each subdirectory is a self-contained p
 | Plugin | Commands | Description |
 |--------|----------|-------------|
 | [8ball](8ball/) | `!8ball <question>` | Magic 8-ball responses |
-| [auto-op](auto-op/) | *(automatic)* | Ops/voices users on join based on permission flags |
+| [chanop](chanop/) | `!op`, `!deop`, `!voice`, `!devoice`, `!kick`, `!ban`, `!unban`, `!kickban` | Channel protection: auto-op/voice, mode enforcement, moderation commands |
 | [greeter](greeter/) | *(automatic)* | Greets users on channel join |
 | [seen](seen/) | `!seen <nick>` | Tracks when a user was last active |
 | [topic](topic/) | `!topic`, `!topics` | Set channel topics with IRC color themes |

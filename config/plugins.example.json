@@ -1,5 +1,5 @@
 {
-  "auto-op": {
+  "chanop": {
     "enabled": true,
     "channels": ["#n0xb0t-test"]
   },

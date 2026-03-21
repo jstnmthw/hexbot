@@ -1,0 +1,11 @@
+{
+  "auto_op": true,
+  "enforce_modes": false,
+  "op_flags": ["n", "m", "o"],
+  "voice_flags": ["v"],
+  "verify_timeout_ms": 5000,
+  "notify_on_fail": false,
+  "default_kick_reason": "Requested",
+  "default_ban_reason": "Banned",
+  "enforce_delay_ms": 500
+}

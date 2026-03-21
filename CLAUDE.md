@@ -52,7 +52,7 @@ Implement in this order (each step should be testable before moving to the next)
 18. `src/core/irc-commands.ts` — convenience wrappers (op, kick, ban, etc.)
 19. `src/core/services.ts` — NickServ/SASL integration
 20. Config files (`config/bot.example.json`, `config/plugins.example.json`)
-21. MVP plugins: `auto-op`, `greeter`, `seen`, `8ball`
+21. MVP plugins: `chanop`, `greeter`, `seen`, `8ball`
 
 ## Security
 
