@@ -1,0 +1,28 @@
+{
+  "name": "n0xb0t",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Modular IRC bot framework with Eggdrop-style bind system",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx src/index.ts --repl",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "license": "GPL-2.0",
+  "dependencies": {
+    "better-sqlite3": "^12.8.0",
+    "irc-framework": "^4.14.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.5.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
+  }
+}

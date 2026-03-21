@@ -1,0 +1,31 @@
+{
+  "irc": {
+    "host": "irc.libera.chat",
+    "port": 6697,
+    "tls": true,
+    "nick": "n0xb0t",
+    "username": "n0xb0t",
+    "realname": "n0xb0t IRC Framework",
+    "channels": ["#n0xb0t-test"]
+  },
+  "owner": {
+    "handle": "admin",
+    "hostmask": "*!yourident@your.host.here"
+  },
+  "identity": {
+    "method": "hostmask",
+    "require_acc_for": ["+o", "+n"]
+  },
+  "services": {
+    "type": "atheme",
+    "nickserv": "NickServ",
+    "password": "",
+    "sasl": true
+  },
+  "database": "./data/n0xb0t.db",
+  "pluginDir": "./plugins",
+  "logging": {
+    "level": "info",
+    "mod_actions": true
+  }
+}

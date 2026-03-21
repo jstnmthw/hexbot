@@ -1,0 +1,19 @@
+{
+  "auto-op": {
+    "enabled": true,
+    "channels": ["#n0xb0t-test"]
+  },
+  "greeter": {
+    "enabled": true,
+    "channels": ["#n0xb0t-test"],
+    "config": {
+      "message": "Welcome to {channel}, {nick}!"
+    }
+  },
+  "seen": {
+    "enabled": true
+  },
+  "8ball": {
+    "enabled": true
+  }
+}

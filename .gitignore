@@ -1,0 +1,8 @@
+node_modules/
+data/
+config/bot.json
+config/plugins.json
+*.db
+*.db-journal
+*.db-wal
+.DS_Store
