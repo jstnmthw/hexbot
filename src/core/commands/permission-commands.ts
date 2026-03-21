@@ -47,11 +47,12 @@ export function registerPermissionCommands(handler: CommandHandler, permissions:
   handler.registerCommand('flags', {
     flags: '+n|+m',
     description: 'View or set user flags',
-    usage: '.flags <handle> [+flags [#channel]]',
+    usage: '.flags [handle] [+flags [#channel]]',
     category: 'permissions',
   }, (args, ctx) => {
     const parts = args.split(/\s+/);
     if (parts.length === 0 || !parts[0]) {
+      ctx.reply('Flag legend: n=owner (all access), m=master (user mgmt), o=op (channel cmds), v=voice');
       ctx.reply('Usage: .flags <handle> [+flags [#channel]]');
       return;
     }
