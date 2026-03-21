@@ -1,0 +1,340 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { Permissions } from '../../src/core/permissions.js';
+import { BotDatabase } from '../../src/database.js';
+
+describe('Permissions', () => {
+  let perms: Permissions;
+
+  beforeEach(() => {
+    perms = new Permissions();
+  });
+
+  // -------------------------------------------------------------------------
+  // addUser / getUser
+  // -------------------------------------------------------------------------
+
+  describe('addUser / getUser', () => {
+    it('should add and retrieve a user', () => {
+      perms.addUser('admin', '*!myident@my.host.com', 'nmov', 'REPL');
+      const user = perms.getUser('admin');
+      expect(user).not.toBeNull();
+      expect(user!.handle).toBe('admin');
+      expect(user!.hostmasks).toEqual(['*!myident@my.host.com']);
+      expect(user!.global).toBe('nmov');
+      expect(user!.channels).toEqual({});
+    });
+
+    it('should be case-insensitive on handle lookup', () => {
+      perms.addUser('Admin', '*!test@host', 'o', 'REPL');
+      expect(perms.getUser('admin')).not.toBeNull();
+      expect(perms.getUser('ADMIN')).not.toBeNull();
+    });
+
+    it('should throw when adding a duplicate handle', () => {
+      perms.addUser('admin', '*!test@host', 'n', 'REPL');
+      expect(() => perms.addUser('admin', '*!other@host', 'o', 'REPL'))
+        .toThrow('already exists');
+    });
+
+    it('should return null for unknown handle', () => {
+      expect(perms.getUser('nobody')).toBeNull();
+    });
+
+    it('should normalize flags (deduplicate, canonical order)', () => {
+      perms.addUser('test', '*!t@h', 'voon', 'REPL');
+      expect(perms.getUser('test')!.global).toBe('nov');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // removeUser
+  // -------------------------------------------------------------------------
+
+  describe('removeUser', () => {
+    it('should remove an existing user', () => {
+      perms.addUser('admin', '*!t@h', 'n', 'REPL');
+      perms.removeUser('admin', 'REPL');
+      expect(perms.getUser('admin')).toBeNull();
+    });
+
+    it('should throw when removing a nonexistent user', () => {
+      expect(() => perms.removeUser('nobody', 'REPL')).toThrow('not found');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // addHostmask / removeHostmask
+  // -------------------------------------------------------------------------
+
+  describe('addHostmask / removeHostmask', () => {
+    beforeEach(() => {
+      perms.addUser('admin', '*!ident@host1', 'n', 'REPL');
+    });
+
+    it('should add a hostmask to an existing user', () => {
+      perms.addHostmask('admin', '*!ident@host2', 'REPL');
+      const user = perms.getUser('admin')!;
+      expect(user.hostmasks).toEqual(['*!ident@host1', '*!ident@host2']);
+    });
+
+    it('should not duplicate an existing hostmask', () => {
+      perms.addHostmask('admin', '*!ident@host1', 'REPL');
+      expect(perms.getUser('admin')!.hostmasks).toEqual(['*!ident@host1']);
+    });
+
+    it('should throw when user not found', () => {
+      expect(() => perms.addHostmask('nobody', '*!t@h', 'REPL')).toThrow('not found');
+    });
+
+    it('should remove a hostmask', () => {
+      perms.addHostmask('admin', '*!ident@host2', 'REPL');
+      perms.removeHostmask('admin', '*!ident@host1', 'REPL');
+      expect(perms.getUser('admin')!.hostmasks).toEqual(['*!ident@host2']);
+    });
+
+    it('should throw when removing a nonexistent hostmask', () => {
+      expect(() => perms.removeHostmask('admin', '*!bad@mask', 'REPL'))
+        .toThrow('not found');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // checkFlags
+  // -------------------------------------------------------------------------
+
+  describe('checkFlags', () => {
+    beforeEach(() => {
+      perms.addUser('owner', '*!owner@secure.host', 'nmov', 'REPL');
+      perms.addUser('oper', '*!oper@some.host', 'o', 'REPL');
+      perms.addUser('nobody', '*!nobody@some.host', '', 'REPL');
+    });
+
+    function makeCtx(overrides: {
+      nick?: string;
+      ident?: string;
+      hostname?: string;
+      channel?: string | null;
+    } = {}) {
+      return {
+        nick: overrides.nick ?? 'testuser',
+        ident: overrides.ident ?? 'user',
+        hostname: overrides.hostname ?? 'test.host.com',
+        channel: overrides.channel ?? '#test',
+        text: '',
+        command: '',
+        args: '',
+        reply: () => {},
+        replyPrivate: () => {},
+      };
+    }
+
+    it('should always pass with "-" (no requirement)', () => {
+      const ctx = makeCtx({ nick: 'stranger', ident: 'x', hostname: 'x.x' });
+      expect(perms.checkFlags('-', ctx)).toBe(true);
+    });
+
+    it('should always pass with "" (empty flags)', () => {
+      const ctx = makeCtx();
+      expect(perms.checkFlags('', ctx)).toBe(true);
+    });
+
+    it('should pass when user has +o flag', () => {
+      const ctx = makeCtx({ nick: 'oper', ident: 'oper', hostname: 'some.host' });
+      expect(perms.checkFlags('+o', ctx)).toBe(true);
+    });
+
+    it('should fail when user lacks the required flag', () => {
+      const ctx = makeCtx({ nick: 'oper', ident: 'oper', hostname: 'some.host' });
+      expect(perms.checkFlags('+n', ctx)).toBe(false);
+    });
+
+    it('should pass for owner — n implies all flags', () => {
+      const ctx = makeCtx({ nick: 'owner', ident: 'owner', hostname: 'secure.host' });
+      expect(perms.checkFlags('+o', ctx)).toBe(true);
+      expect(perms.checkFlags('+m', ctx)).toBe(true);
+      expect(perms.checkFlags('+v', ctx)).toBe(true);
+      expect(perms.checkFlags('+n', ctx)).toBe(true);
+    });
+
+    it('should support OR logic with +n|+m', () => {
+      const ctx = makeCtx({ nick: 'oper', ident: 'oper', hostname: 'some.host' });
+      // oper has 'o' but not 'n' or 'm'
+      expect(perms.checkFlags('+n|+m', ctx)).toBe(false);
+
+      const ownerCtx = makeCtx({ nick: 'owner', ident: 'owner', hostname: 'secure.host' });
+      expect(perms.checkFlags('+n|+m', ownerCtx)).toBe(true);
+    });
+
+    it('should fail for unrecognized user', () => {
+      const ctx = makeCtx({ nick: 'unknown', ident: 'x', hostname: 'x.x' });
+      expect(perms.checkFlags('+o', ctx)).toBe(false);
+    });
+
+    it('should check per-channel flags', () => {
+      perms.setChannelFlags('oper', '#main', 'o', 'REPL');
+
+      // oper has 'o' in #main
+      const ctxMain = makeCtx({ nick: 'oper', ident: 'oper', hostname: 'some.host', channel: '#main' });
+      expect(perms.checkFlags('+o', ctxMain)).toBe(true);
+
+      // oper has 'o' globally too, so #games should still work via global flags
+      const ctxGames = makeCtx({ nick: 'oper', ident: 'oper', hostname: 'some.host', channel: '#games' });
+      expect(perms.checkFlags('+o', ctxGames)).toBe(true);
+    });
+
+    it('should use channel flags to grant access not in global', () => {
+      perms.addUser('chanop', '*!chanop@host', '', 'REPL');
+      perms.setChannelFlags('chanop', '#special', 'o', 'REPL');
+
+      // chanop has no global flags, but has 'o' in #special
+      const ctx = makeCtx({ nick: 'chanop', ident: 'chanop', hostname: 'host', channel: '#special' });
+      expect(perms.checkFlags('+o', ctx)).toBe(true);
+
+      // But not in #other
+      const ctxOther = makeCtx({ nick: 'chanop', ident: 'chanop', hostname: 'host', channel: '#other' });
+      expect(perms.checkFlags('+o', ctxOther)).toBe(false);
+    });
+
+    it('should fall back to global when no channel-specific flags', () => {
+      const ctx = makeCtx({ nick: 'oper', ident: 'oper', hostname: 'some.host', channel: '#anychannel' });
+      expect(perms.checkFlags('+o', ctx)).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // findByHostmask
+  // -------------------------------------------------------------------------
+
+  describe('findByHostmask', () => {
+    beforeEach(() => {
+      perms.addUser('admin', '*!myident@my.host.com', 'n', 'REPL');
+      perms.addUser('wilduser', '*!*@wild.host', 'o', 'REPL');
+    });
+
+    it('should match exact hostmask', () => {
+      const result = perms.findByHostmask('anynick!myident@my.host.com');
+      expect(result).not.toBeNull();
+      expect(result!.handle).toBe('admin');
+    });
+
+    it('should match wildcard patterns (*!*@host)', () => {
+      const result = perms.findByHostmask('someone!anyident@wild.host');
+      expect(result).not.toBeNull();
+      expect(result!.handle).toBe('wilduser');
+    });
+
+    it('should match wildcard patterns (*!ident@*)', () => {
+      perms.addUser('identuser', '*!specialident@*', 'v', 'REPL');
+      const result = perms.findByHostmask('nick!specialident@any.host');
+      expect(result).not.toBeNull();
+      expect(result!.handle).toBe('identuser');
+    });
+
+    it('should return null for non-matching hostmask', () => {
+      expect(perms.findByHostmask('nobody!wrong@wrong.host')).toBeNull();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // findByNick
+  // -------------------------------------------------------------------------
+
+  describe('findByNick', () => {
+    it('should match user by nick portion of hostmask', () => {
+      perms.addUser('nickuser', 'testnick!*@*', 'v', 'REPL');
+      const result = perms.findByNick('testnick');
+      expect(result).not.toBeNull();
+      expect(result!.handle).toBe('nickuser');
+    });
+
+    it('should return null for non-matching nick', () => {
+      perms.addUser('admin', '*!ident@host', 'n', 'REPL');
+      // '*' matches any nick, so this will match
+      const result = perms.findByNick('anynick');
+      expect(result).not.toBeNull();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // listUsers
+  // -------------------------------------------------------------------------
+
+  describe('listUsers', () => {
+    it('should return all users', () => {
+      perms.addUser('alice', '*!a@h', 'o', 'REPL');
+      perms.addUser('bob', '*!b@h', 'v', 'REPL');
+      perms.addUser('charlie', '*!c@h', 'n', 'REPL');
+
+      const users = perms.listUsers();
+      expect(users).toHaveLength(3);
+      const handles = users.map((u) => u.handle).sort();
+      expect(handles).toEqual(['alice', 'bob', 'charlie']);
+    });
+
+    it('should return empty array when no users', () => {
+      expect(perms.listUsers()).toEqual([]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Database persistence
+  // -------------------------------------------------------------------------
+
+  describe('database persistence', () => {
+    let db: BotDatabase;
+
+    beforeEach(() => {
+      db = new BotDatabase(':memory:');
+      db.open();
+    });
+
+    afterEach(() => {
+      db.close();
+    });
+
+    it('should save and load users from the database', () => {
+      // Create permissions with db, add users
+      const perms1 = new Permissions(db);
+      perms1.addUser('admin', '*!admin@secure.host', 'nmov', 'REPL');
+      perms1.addUser('oper', '*!oper@host', 'o', 'REPL');
+      perms1.setChannelFlags('oper', '#main', 'ov', 'REPL');
+
+      // Create a new Permissions instance with the same db and load
+      const perms2 = new Permissions(db);
+      perms2.loadFromDb();
+
+      // Verify data survived
+      const admin = perms2.getUser('admin');
+      expect(admin).not.toBeNull();
+      expect(admin!.handle).toBe('admin');
+      expect(admin!.hostmasks).toEqual(['*!admin@secure.host']);
+      expect(admin!.global).toBe('nmov');
+
+      const oper = perms2.getUser('oper');
+      expect(oper).not.toBeNull();
+      expect(oper!.handle).toBe('oper');
+      expect(oper!.global).toBe('o');
+      expect(oper!.channels).toEqual({ '#main': 'ov' });
+    });
+
+    it('should persist changes after addUser', () => {
+      const p = new Permissions(db);
+      p.addUser('test', '*!t@h', 'v', 'REPL');
+
+      // Verify the DB has the record
+      const raw = db.get('_permissions', 'test');
+      expect(raw).not.toBeNull();
+      const record = JSON.parse(raw!);
+      expect(record.handle).toBe('test');
+    });
+
+    it('should persist changes after removeUser', () => {
+      const p = new Permissions(db);
+      p.addUser('test', '*!t@h', 'v', 'REPL');
+      p.removeUser('test', 'REPL');
+
+      const raw = db.get('_permissions', 'test');
+      expect(raw).toBeNull();
+    });
+  });
+});

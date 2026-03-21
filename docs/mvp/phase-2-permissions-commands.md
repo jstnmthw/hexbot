@@ -13,7 +13,7 @@ Build the Eggdrop-style permissions system (hostmask-based identity, n/m/o/v fla
 
 **Goal:** Users identified by hostmask, flags checked per-channel, persisted to database.
 
-- [ ] Create `src/core/permissions.ts` implementing the `Permissions` class:
+- [x] Create `src/core/permissions.ts` implementing the `Permissions` class:
   - Constructor takes a `Database` instance (or null for testing without persistence)
   - `addUser(handle, hostmask, globalFlags)` — add a user record
   - `removeUser(handle)` — remove a user
@@ -40,7 +40,7 @@ Build the Eggdrop-style permissions system (hostmask-based identity, n/m/o/v fla
     - `findByHostmask` must not short-circuit on first partial match — verify the full `nick!ident@host` pattern
     - Owner flag (`n`) implying all flags is intentional but means `n` accounts are high-value targets
     - Log all permission changes (adduser, deluser, flag changes) with the source (REPL or IRC nick)
-- [ ] User record shape:
+- [x] User record shape:
 ```typescript
 {
   handle: 'admin',
@@ -49,8 +49,8 @@ Build the Eggdrop-style permissions system (hostmask-based identity, n/m/o/v fla
   channels: { '#main': 'o', '#games': 'v' }
 }
 ```
-- [ ] Use database namespace `_permissions` for persistence
-- [ ] Create `tests/core/permissions.test.ts`:
+- [x] Use database namespace `_permissions` for persistence
+- [x] Create `tests/core/permissions.test.ts`:
   - Test addUser and getUser
   - Test removeUser
   - Test addHostmask / removeHostmask
@@ -65,13 +65,13 @@ Build the Eggdrop-style permissions system (hostmask-based identity, n/m/o/v fla
   - Test findByHostmask returns null for non-matching hostmask
   - Test database persistence: save, create new instance, load, verify data survives
   - Test listUsers returns all users
-- [ ] **Verify:** `pnpm vitest run tests/core/permissions.test.ts` — all pass
+- [x] **Verify:** `pnpm vitest run tests/core/permissions.test.ts` — all pass
 
 ## Phase 2B: Command handler
 
 **Goal:** A shared command parser/router that takes a command string and dispatches to registered handlers. Transport-agnostic — doesn't care whether input came from REPL, IRC, or a future socket.
 
-- [ ] Create `src/command-handler.ts` implementing the `CommandHandler` class:
+- [x] Create `src/command-handler.ts` implementing the `CommandHandler` class:
   - Constructor takes no module references — it's a pure router
   - `async execute(commandString, context)` — parse and execute a command
     - `context` includes `{ source: 'repl'|'irc', nick, channel, reply(msg) }`
@@ -85,7 +85,7 @@ Build the Eggdrop-style permissions system (hostmask-based identity, n/m/o/v fla
   - Unknown command returns a helpful error message
   - Empty input is handled gracefully (no-op)
 
-- [ ] Create `src/core/commands/` directory for command groups that each module registers:
+- [x] Create `src/core/commands/` directory for command groups that each module registers:
   - `src/core/commands/permission-commands.ts` — registers `.adduser`, `.deluser`, `.flags`, `.users`
     - Export `registerPermissionCommands(handler, permissions)` function
     - Takes a `CommandHandler` and `Permissions` instance
@@ -98,35 +98,35 @@ Build the Eggdrop-style permissions system (hostmask-based identity, n/m/o/v fla
 
   Each command group is a small, focused module that only depends on the handler and the module it wraps. No god-constructor needed.
 
-- [ ] Create `tests/command-handler.test.ts`:
+- [x] Create `tests/command-handler.test.ts`:
   - Test `.help` returns list of commands
   - Test `.help <command>` returns help for that command
   - Test registerCommand works correctly
   - Test unknown command returns helpful error
   - Test empty input is handled gracefully
   - Test command parsing with quoted arguments (if needed)
-- [ ] Create `tests/core/commands/permission-commands.test.ts`:
+- [x] Create `tests/core/commands/permission-commands.test.ts`:
   - Test `.adduser admin *!test@host nmov` creates user via permissions
   - Test `.flags admin` shows current flags
   - Test `.flags admin +o #channel` sets channel flags
   - Test `.users` lists users
   - Test `.deluser admin` removes user
-- [ ] Create `tests/core/commands/dispatcher-commands.test.ts`:
+- [x] Create `tests/core/commands/dispatcher-commands.test.ts`:
   - Test `.binds` returns bind list from dispatcher
-- [ ] **Verify:** all command tests pass
+- [x] **Verify:** all command tests pass
 
 ## Phase 2C: Wire permissions into dispatcher
 
-- [ ] Update dispatcher to accept a `Permissions` instance in constructor
-- [ ] Update `_checkFlags` to use `permissions.checkFlags()` when available
-- [ ] Add integration test: bind a command with `+o` flag, dispatch with a user who has `o` → handler fires
-- [ ] Add integration test: bind with `+o`, dispatch with a user who has no flags → handler does not fire
-- [ ] **Verify:** all existing dispatcher tests still pass, new integration tests pass
+- [x] Update dispatcher to accept a `Permissions` instance in constructor
+- [x] Update `_checkFlags` to use `permissions.checkFlags()` when available
+- [x] Add integration test: bind a command with `+o` flag, dispatch with a user who has `o` → handler fires
+- [x] Add integration test: bind with `+o`, dispatch with a user who has no flags → handler does not fire
+- [x] **Verify:** all existing dispatcher tests still pass, new integration tests pass
 
 ## Phase 2D: Full test suite
 
-- [ ] Run `pnpm test` — all tests from Phase 1 + Phase 2 pass together
-- [ ] Verify no regressions in database or dispatcher tests
+- [x] Run `pnpm test` — all tests from Phase 1 + Phase 2 pass together
+- [x] Verify no regressions in database or dispatcher tests
 
 ---
 

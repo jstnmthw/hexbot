@@ -2,7 +2,7 @@
   "name": "n0xb0t",
   "version": "0.1.0",
   "type": "module",
-  "description": "Modular IRC bot framework with Eggdrop-style bind system",
+  "description": "Obnoxiously intelligent, AI-powered IRC bot",
   "main": "src/index.ts",
   "scripts": {
     "start": "tsx src/index.ts",
