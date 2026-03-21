@@ -52,14 +52,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Services module (`src/core/services.ts`) — NickServ IDENTIFY fallback, ACC/STATUS verification with timeout, Atheme/Anope/DALnet adapter support
   - `auto-op` plugin — auto-op/voice on join based on permission flags with optional NickServ verification
   - PluginAPI extended with `op`, `deop`, `voice`, `devoice`, `kick`, `ban`, `mode`, `getUserHostmask`, `permissions`, `services`, `botConfig`
+- `topic` plugin — IRC-formatted channel topics with 22 built-in themes, `!topic`, `!topic preview`, `!topics` commands
+- `api.topic(channel, text)` added to PluginAPI
 - Config examples: `config/bot.example.json`, `config/plugins.example.json`
 - Security guide: `docs/SECURITY.md`
 - Design document: `DESIGN.md`
+- Plugin API reference: `docs/plugin-api.md`
 - Phase planning docs in `docs/mvp/`
+- Feature plans: CTCP replies, topic-creator, logger-service in `docs/plans/`
 
 ### Changed
 
 - Seen plugin updated to v1.1.0 with TTL cleanup — records older than `max_age_days` (default 365) are automatically purged on query
+- Extracted `sanitize()` (newline stripping) into shared `src/utils/sanitize.ts`, replacing inline implementations in irc-bridge, irc-commands, and plugin-loader
+- Vitest config excludes `.claude/worktrees/` to prevent duplicate test runs
 
 ### Fixed
 
