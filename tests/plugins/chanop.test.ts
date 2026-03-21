@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { resolve } from 'node:path';
 import { createMockBot, type MockBot } from '../helpers/mock-bot.js';
 
@@ -252,6 +252,31 @@ describe('chanop plugin — mode enforcement', () => {
       (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Alice')
     );
     expect(modeMsg).toBeUndefined();
+  });
+
+  it('should suppress enforcement after repeated deops (rate limit)', async () => {
+    // Use a fresh bot with auto_op disabled to avoid interference
+    bot.cleanup();
+    bot = createMockBot({ botNick: 'n0xb0t' });
+    const res = await bot.pluginLoader.load(PLUGIN_PATH, {
+      chanop: { enabled: true, config: { enforce_modes: true, enforce_delay_ms: 5, auto_op: false } },
+    });
+    expect(res.status).toBe('ok');
+
+    bot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
+    addToChannel(bot, 'Alice', 'alice', 'alice.host', '#test');
+    bot.client.clearMessages();
+
+    // Trigger 5 deops rapidly — only the first 3 should be re-enforced
+    for (let i = 0; i < 5; i++) {
+      simulateMode(bot, 'EvilOp', '#test', '-o', 'Alice');
+    }
+    await tick(50);
+
+    const reOps = bot.client.messages.filter(
+      (m) => m.message === '+o' && m.args?.includes('Alice')
+    );
+    expect(reOps).toHaveLength(3);
   });
 
   it('should NOT enforce for user without flags', async () => {

@@ -10,13 +10,14 @@ export const description = 'Channel operator tools: auto-op, mode enforcement, k
 
 let api: PluginAPI;
 
-// Track intentional deops/devoices so mode enforcement doesn't reverse them.
-// Keys are "channel:lowernick", values are expiry timestamps.
-const intentionalModeChanges = new Map<string, number>();
-const INTENTIONAL_TTL_MS = 5000;
+// Mutable state — re-created on each init() so hot-reload gets a clean slate.
+let intentionalModeChanges: Map<string, number>;
+let enforcementTimers: ReturnType<typeof setTimeout>[];
+let enforcementCooldown: Map<string, { count: number; expiresAt: number }>;
 
-// Timers for delayed enforcement (cleared on teardown)
-const enforcementTimers: ReturnType<typeof setTimeout>[] = [];
+const INTENTIONAL_TTL_MS = 5000;
+const COOLDOWN_WINDOW_MS = 10_000;
+const MAX_ENFORCEMENTS = 3;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -83,6 +84,11 @@ function getUserFlags(channel: string, nick: string): string | null {
 
 export function init(pluginApi: PluginAPI): void {
   api = pluginApi;
+
+  // Fresh state on each load/reload
+  intentionalModeChanges = new Map();
+  enforcementTimers = [];
+  enforcementCooldown = new Map();
 
   const opFlags = (api.config.op_flags as string[] | undefined) ?? ['n', 'm', 'o'];
   const voiceFlags = (api.config.voice_flags as string[] | undefined) ?? ['v'];
@@ -166,6 +172,20 @@ export function init(pluginApi: PluginAPI): void {
     // Look up the affected user's flags
     const flags = getUserFlags(channel, target);
     if (!flags) return;
+
+    // Rate limit: prevent mode wars by capping enforcement frequency per user
+    const cooldownKey = `${channel.toLowerCase()}:${target.toLowerCase()}`;
+    const now = Date.now();
+    const cooldown = enforcementCooldown.get(cooldownKey);
+    if (cooldown && now < cooldown.expiresAt) {
+      if (cooldown.count >= MAX_ENFORCEMENTS) {
+        api.warn(`Suppressing mode enforcement for ${target} in ${channel} — possible mode war`);
+        return;
+      }
+      cooldown.count++;
+    } else {
+      enforcementCooldown.set(cooldownKey, { count: 1, expiresAt: now + COOLDOWN_WINDOW_MS });
+    }
 
     if (modeStr === '-o') {
       const shouldBeOpped = opFlags.some((f) => flags.includes(f));
@@ -330,4 +350,5 @@ export function teardown(): void {
   }
   enforcementTimers.length = 0;
   intentionalModeChanges.clear();
+  enforcementCooldown.clear();
 }

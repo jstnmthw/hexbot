@@ -12,15 +12,20 @@ const DEFAULT_MAX_AGE_DAYS = 365;
 export function init(api: PluginAPI): void {
   const maxAgeDays = (api.config.max_age_days as number | undefined) ?? DEFAULT_MAX_AGE_DAYS;
   const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+  const MAX_TEXT_LENGTH = 200;
 
   // Track every channel message (pubm is stackable, won't interfere with others)
   api.bind('pubm', '-', '*', (ctx: HandlerContext) => {
     if (!ctx.channel) return;
 
+    const text = ctx.text.length > MAX_TEXT_LENGTH
+      ? ctx.text.substring(0, MAX_TEXT_LENGTH) + '...'
+      : ctx.text;
+
     const record = JSON.stringify({
       nick: ctx.nick,
       channel: ctx.channel,
-      text: ctx.text,
+      text,
       time: Date.now(),
     });
 

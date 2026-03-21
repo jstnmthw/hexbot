@@ -354,15 +354,15 @@ export class PluginLoader {
         dispatcher.unbind(type, mask, handler);
       },
 
-      // IRC actions
+      // IRC actions (sanitize for defense-in-depth, even though irc-framework handles framing)
       say(target: string, message: string): void {
-        ircClient?.say(target, message);
+        ircClient?.say(target, sanitize(message));
       },
       action(target: string, message: string): void {
-        ircClient?.action(target, message);
+        ircClient?.action(target, sanitize(message));
       },
       notice(target: string, message: string): void {
-        ircClient?.notice(target, message);
+        ircClient?.notice(target, sanitize(message));
       },
       raw(line: string): void {
         ircClient?.raw(sanitize(line));

@@ -11,7 +11,7 @@ export const description = 'Set channel topics with color-coded theme borders';
 export function init(api: PluginAPI): void {
   // !topic <theme> <text>  — set the channel topic (requires o flag)
   // !topic preview <theme> <text>  — preview the themed text in channel
-  api.bind('pub', 'o', '!topic', (ctx: HandlerContext) => {
+  api.bind('pub', '+o', '!topic', (ctx: HandlerContext) => {
     if (!ctx.channel) return;
 
     const args = ctx.args.trim();

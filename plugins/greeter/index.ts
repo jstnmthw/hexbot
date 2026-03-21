@@ -11,7 +11,8 @@ let botNick = '';
 
 export function init(api: PluginAPI): void {
   const message = (api.config.message as string) ?? 'Welcome to {channel}, {nick}!';
-  botNick = (api.config.botNick as string) ?? '';
+  const irc = api.botConfig.irc as Record<string, unknown> | undefined;
+  botNick = (irc?.nick as string) ?? '';
 
   api.bind('join', '-', '*', (ctx: HandlerContext) => {
     // Don't greet the bot itself
