@@ -4,6 +4,7 @@
 
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
 import type { Bot } from './bot.js';
+import type { Logger } from './logger.js';
 
 // ---------------------------------------------------------------------------
 // BotREPL
@@ -12,9 +13,11 @@ import type { Bot } from './bot.js';
 export class BotREPL {
   private bot: Bot;
   private rl: ReadlineInterface | null = null;
+  private logger: Logger | null;
 
-  constructor(bot: Bot) {
+  constructor(bot: Bot, logger?: Logger | null) {
     this.bot = bot;
+    this.logger = logger?.child('repl') ?? null;
   }
 
   /** Start the REPL. */
@@ -34,11 +37,11 @@ export class BotREPL {
     });
 
     this.rl.on('close', () => {
-      console.log('\n[repl] Shutting down...');
+      this.logger?.info('Shutting down...');
       this.bot.shutdown().then(() => process.exit(0));
     });
 
-    console.log('[repl] Interactive mode. Type .help for commands, .quit to exit.');
+    this.logger?.info('Interactive mode. Type .help for commands, .quit to exit.');
   }
 
   /** Stop the REPL. */
@@ -59,7 +62,7 @@ export class BotREPL {
 
     // REPL-only commands
     if (trimmed === '.quit' || trimmed === '.exit') {
-      console.log('[repl] Shutting down...');
+      this.logger?.info('Shutting down...');
       await this.bot.shutdown();
       process.exit(0);
     }

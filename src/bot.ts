@@ -3,7 +3,9 @@
 // pieces but delegates all real work to the individual modules.
 
 import { readFileSync, accessSync, constants as fsConstants } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import chalk from 'chalk';
 import { Client as IrcClient } from 'irc-framework';
 
 import { BotDatabase } from './database.js';
@@ -15,6 +17,7 @@ import { IRCBridge } from './irc-bridge.js';
 import { ChannelState } from './core/channel-state.js';
 import { IRCCommands } from './core/irc-commands.js';
 import { Services } from './core/services.js';
+import { createLogger, type Logger } from './logger.js';
 
 import { PluginLoader } from './plugin-loader.js';
 
@@ -37,6 +40,7 @@ export class Bot {
   readonly commandHandler: CommandHandler;
   readonly eventBus: BotEventBus;
   readonly client: InstanceType<typeof IrcClient>;
+  readonly logger: Logger;
 
   readonly pluginLoader: PluginLoader;
   readonly channelState: ChannelState;
@@ -44,27 +48,34 @@ export class Bot {
   readonly services: Services;
 
   private bridge: IRCBridge | null = null;
+  private botLogger: Logger;
   private startTime: number = Date.now();
+  private bootStart: number = Date.now();
   private configuredChannels: string[] = [];
 
   constructor(configPath?: string) {
     const cfgPath = resolve(configPath ?? './config/bot.json');
     this.config = this.loadConfig(cfgPath);
 
-    this.db = new BotDatabase(this.config.database);
+    // Create root logger from config level
+    this.logger = createLogger(this.config.logging.level);
+    this.botLogger = this.logger.child('bot');
+
+    this.db = new BotDatabase(this.config.database, this.logger);
     this.eventBus = new BotEventBus();
-    this.permissions = new Permissions(this.db);
-    this.dispatcher = new EventDispatcher(this.permissions);
+    this.permissions = new Permissions(this.db, this.logger);
+    this.dispatcher = new EventDispatcher(this.permissions, this.logger);
     this.commandHandler = new CommandHandler(this.permissions);
     this.client = new IrcClient();
     this.configuredChannels = [...this.config.irc.channels];
-    this.channelState = new ChannelState(this.client, this.eventBus);
-    this.ircCommands = new IRCCommands(this.client, this.db);
+    this.channelState = new ChannelState(this.client, this.eventBus, this.logger);
+    this.ircCommands = new IRCCommands(this.client, this.db, undefined, this.logger);
     this.services = new Services({
       client: this.client,
       servicesConfig: this.config.services,
       identityConfig: this.config.identity,
       eventBus: this.eventBus,
+      logger: this.logger,
     });
     this.pluginLoader = new PluginLoader({
       pluginDir: this.config.pluginDir,
@@ -77,14 +88,20 @@ export class Bot {
       channelState: this.channelState,
       ircCommands: this.ircCommands,
       services: this.services,
+      logger: this.logger,
     });
   }
 
   /** Start the bot: open DB, load permissions, connect to IRC, wire everything. */
   async start(): Promise<void> {
+    this.bootStart = Date.now();
+
+    // Print startup banner
+    this.printBanner();
+
     // 1. Open database
     this.db.open();
-    console.log('[bot] Database opened');
+    this.botLogger.info('Database opened');
 
     // 2. Load permissions from DB
     this.permissions.loadFromDb();
@@ -103,6 +120,8 @@ export class Bot {
     });
     registerPluginCommands(this.commandHandler, this.pluginLoader, resolve(this.config.pluginDir));
 
+    this.printStatus('Starting...');
+
     // 5. Connect to IRC
     await this.connect();
 
@@ -112,6 +131,7 @@ export class Bot {
       dispatcher: this.dispatcher,
       eventBus: this.eventBus,
       botNick: this.config.irc.nick,
+      logger: this.logger,
     });
     this.bridge.attach();
     this.channelState.attach();
@@ -124,12 +144,13 @@ export class Bot {
     await this.pluginLoader.loadAll();
 
     this.startTime = Date.now();
-    console.log('[bot] Started');
+    const elapsed = this.startTime - this.bootStart;
+    this.printStatus(`Ready in ${elapsed}ms`);
   }
 
   /** Graceful shutdown. */
   async shutdown(): Promise<void> {
-    console.log('[bot] Shutting down...');
+    this.botLogger.info('Shutting down...');
 
     this.services.detach();
     this.channelState.detach();
@@ -146,7 +167,7 @@ export class Bot {
     }
 
     this.db.close();
-    console.log('[bot] Shutdown complete');
+    this.botLogger.info('Shutdown complete');
   }
 
   // -------------------------------------------------------------------------
@@ -181,37 +202,37 @@ export class Bot {
 
       this.client.on('registered', () => {
         registered = true;
-        console.log(`[bot] Connected to ${cfg.host}:${cfg.port} as ${cfg.nick}`);
+        this.botLogger.info(`Connected to ${cfg.host}:${cfg.port} as ${cfg.nick}`);
         this.eventBus.emit('bot:connected');
 
         // Join configured channels
         for (const channel of this.configuredChannels) {
           this.client.join(channel);
-          console.log(`[bot] Joining ${channel}`);
+          this.botLogger.info(`Joining ${channel}`);
         }
 
         resolvePromise();
       });
 
       this.client.on('close', () => {
-        console.log('[bot] Connection closed');
+        this.botLogger.info('Connection closed');
         this.eventBus.emit('bot:disconnected', 'connection closed');
       });
 
       this.client.on('reconnecting', () => {
-        console.log('[bot] Reconnecting...');
+        this.botLogger.info('Reconnecting...');
       });
 
       this.client.on('socket error', (err: unknown) => {
         const error = err instanceof Error ? err : new Error(String(err));
-        console.error('[bot] Socket error:', error.message);
+        this.botLogger.error('Socket error:', error.message);
         this.eventBus.emit('bot:error', error);
         if (!registered) {
           reject(error);
         }
       });
 
-      console.log(`[bot] Connecting to ${cfg.host}:${cfg.port}...`);
+      this.botLogger.info(`Connecting to ${cfg.host}:${cfg.port}...`);
       this.client.connect(connectOptions);
     });
   }
@@ -240,6 +261,46 @@ export class Bot {
   }
 
   // -------------------------------------------------------------------------
+  // Startup banner
+  // -------------------------------------------------------------------------
+
+  /** Print the startup banner with connection details. */
+  private printBanner(): void {
+    const lime = chalk.greenBright;
+    const dim = chalk.dim;
+    const version = this.readPackageVersion();
+    const cfg = this.config.irc;
+    const tls = cfg.tls ? ' (TLS)' : '';
+    const channels = this.configuredChannels.join(', ') || 'none';
+
+    console.log();
+    console.log(`${lime('◆')} ${lime('n0xb0t')} ${lime(`v${version}`)}`);
+    console.log(`${dim('-')} Server:      ${cfg.host}:${cfg.port}${tls}`);
+    console.log(`${dim('-')} Nick:        ${cfg.nick}`);
+    console.log(`${dim('-')} Channels:    ${channels}`);
+    console.log(`${dim('-')} Plugins:     ${this.config.pluginDir}`);
+    console.log();
+  }
+
+  /** Print a status line with a lime green check mark. */
+  private printStatus(message: string): void {
+    console.log(`${chalk.greenBright('✓')} ${message}`);
+  }
+
+  /** Read the version field from package.json. */
+  private readPackageVersion(): string {
+    try {
+      const thisDir = dirname(fileURLToPath(import.meta.url));
+      const pkgPath = join(thisDir, '..', 'package.json');
+      const raw = readFileSync(pkgPath, 'utf-8');
+      const pkg = JSON.parse(raw) as { version?: string };
+      return pkg.version ?? '0.0.0';
+    } catch {
+      return '0.0.0';
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // Owner bootstrapping
   // -------------------------------------------------------------------------
 
@@ -251,11 +312,11 @@ export class Bot {
     const existing = this.permissions.getUser(ownerCfg.handle);
     if (!existing) {
       this.permissions.addUser(ownerCfg.handle, ownerCfg.hostmask, 'n', 'config');
-      console.log(`[bot] Owner "${ownerCfg.handle}" added from config`);
+      this.botLogger.info(`Owner "${ownerCfg.handle}" added from config`);
     } else if (!existing.hostmasks.includes(ownerCfg.hostmask)) {
       // Config hostmask not present — add it without removing existing ones
       this.permissions.addHostmask(ownerCfg.handle, ownerCfg.hostmask, 'config');
-      console.log(`[bot] Owner "${ownerCfg.handle}" hostmask updated from config: ${ownerCfg.hostmask}`);
+      this.botLogger.info(`Owner "${ownerCfg.handle}" hostmask updated from config: ${ownerCfg.hostmask}`);
     }
   }
 }

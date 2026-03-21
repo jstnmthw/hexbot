@@ -25,7 +25,7 @@ async function main(): Promise<void> {
   await bot.start();
 
   if (useRepl) {
-    const repl = new BotREPL(bot);
+    const repl = new BotREPL(bot, bot.logger);
     repl.start();
   }
 }
@@ -35,7 +35,7 @@ async function main(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function gracefulShutdown(signal: string): Promise<void> {
-  console.log(`\n[bot] Received ${signal}, shutting down...`);
+  bot?.logger.child('bot').info(`Received ${signal}, shutting down...`);
   if (bot) {
     await bot.shutdown();
   }

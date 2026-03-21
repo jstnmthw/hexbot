@@ -9,6 +9,7 @@ import { sanitize } from './utils/sanitize.js';
 import type { EventDispatcher } from './dispatcher.js';
 import type { BotEventBus } from './event-bus.js';
 import type { BotDatabase } from './database.js';
+import type { Logger } from './logger.js';
 import type { Permissions } from './core/permissions.js';
 import type { ChannelState } from './core/channel-state.js';
 import type { IRCCommands } from './core/irc-commands.js';
@@ -65,6 +66,7 @@ export interface PluginLoaderDeps {
   channelState?: ChannelState | null;
   ircCommands?: IRCCommands | null;
   services?: Services | null;
+  logger?: Logger | null;
 }
 
 /** Minimal IRC client interface for plugin actions. */
@@ -94,6 +96,8 @@ export class PluginLoader {
   private channelState: ChannelState | null;
   private ircCommands: IRCCommands | null;
   private services: Services | null;
+  private logger: Logger | null;
+  private rootLogger: Logger | null;
 
   constructor(deps: PluginLoaderDeps) {
     this.pluginDir = resolve(deps.pluginDir);
@@ -106,6 +110,8 @@ export class PluginLoader {
     this.channelState = deps.channelState ?? null;
     this.ircCommands = deps.ircCommands ?? null;
     this.services = deps.services ?? null;
+    this.rootLogger = deps.logger ?? null;
+    this.logger = deps.logger?.child('plugin-loader') ?? null;
   }
 
   /** Load all enabled plugins from the plugins config. */
@@ -114,7 +120,7 @@ export class PluginLoader {
     const pluginsConfig = this.readPluginsConfig(cfgPath);
 
     if (!pluginsConfig) {
-      console.log('[plugin-loader] No plugins.json found — skipping plugin loading');
+      this.logger?.info('No plugins.json found — skipping plugin loading');
       return [];
     }
 
@@ -122,7 +128,7 @@ export class PluginLoader {
 
     for (const [name, config] of Object.entries(pluginsConfig)) {
       if (!config.enabled) {
-        console.log(`[plugin-loader] Skipping disabled plugin: ${name}`);
+        this.logger?.debug(`Skipping disabled plugin: ${name}`);
         continue;
       }
 
@@ -133,7 +139,7 @@ export class PluginLoader {
 
     const ok = results.filter((r) => r.status === 'ok').length;
     const err = results.filter((r) => r.status === 'error').length;
-    console.log(`[plugin-loader] Loaded ${ok} plugins (${err} errors)`);
+    this.logger?.info(`Loaded ${ok} plugins (${err} errors)`);
 
     return results;
   }
@@ -210,7 +216,7 @@ export class PluginLoader {
     this.loaded.set(pluginName, plugin);
 
     this.eventBus.emit('plugin:loaded', pluginName);
-    console.log(`[plugin-loader] Loaded: ${pluginName} v${plugin.version}`);
+    this.logger?.info(`Loaded: ${pluginName} v${plugin.version}`);
 
     return { name: pluginName, status: 'ok' };
   }
@@ -230,7 +236,7 @@ export class PluginLoader {
           await result;
         }
       } catch (err) {
-        console.error(`[plugin-loader] Teardown error for ${pluginName}:`, err);
+        this.logger?.error(`Teardown error for ${pluginName}:`, err);
       }
     }
 
@@ -241,7 +247,7 @@ export class PluginLoader {
     this.loaded.delete(pluginName);
 
     this.eventBus.emit('plugin:unloaded', pluginName);
-    console.log(`[plugin-loader] Unloaded: ${pluginName}`);
+    this.logger?.info(`Unloaded: ${pluginName}`);
   }
 
   /** Reload a plugin (unload + load from same path). */
@@ -283,6 +289,7 @@ export class PluginLoader {
   // -------------------------------------------------------------------------
 
   private createPluginApi(pluginId: string, config: Record<string, unknown>): PluginAPI {
+    const pluginLogger = this.rootLogger?.child(`plugin:${pluginId}`) ?? null;
     const dispatcher = this.dispatcher;
     const db = this.db;
     const ircClient = this.ircClient;
@@ -455,10 +462,16 @@ export class PluginLoader {
 
       // Logging
       log(...args: unknown[]): void {
-        console.log(`[plugin:${pluginId}]`, ...args);
+        pluginLogger?.info(...args);
       },
       error(...args: unknown[]): void {
-        console.error(`[plugin:${pluginId}]`, ...args);
+        pluginLogger?.error(...args);
+      },
+      warn(...args: unknown[]): void {
+        pluginLogger?.warn(...args);
+      },
+      debug(...args: unknown[]): void {
+        pluginLogger?.debug(...args);
       },
     };
 
@@ -485,7 +498,7 @@ export class PluginLoader {
         const raw = readFileSync(pluginConfigPath, 'utf-8');
         defaults = JSON.parse(raw) as Record<string, unknown>;
       } catch (err) {
-        console.warn(`[plugin-loader] Failed to read config.json for ${pluginName}:`, err);
+        this.logger?.warn(`Failed to read config.json for ${pluginName}:`, err);
       }
     }
 
@@ -509,7 +522,7 @@ export class PluginLoader {
       const raw = readFileSync(configPath, 'utf-8');
       return JSON.parse(raw) as PluginsConfig;
     } catch (err) {
-      console.error(`[plugin-loader] Failed to parse plugins.json:`, err);
+      this.logger?.error('Failed to parse plugins.json:', err);
       return null;
     }
   }

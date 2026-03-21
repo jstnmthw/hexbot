@@ -3,6 +3,7 @@
 
 import { sanitize } from '../utils/sanitize.js';
 import type { BotDatabase } from '../database.js';
+import type { Logger } from '../logger.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -25,11 +26,13 @@ export interface IRCCommandsClient {
 export class IRCCommands {
   private client: IRCCommandsClient;
   private db: BotDatabase | null;
+  private logger: Logger | null;
   private modesPerLine: number;
 
-  constructor(client: IRCCommandsClient, db: BotDatabase | null, modesPerLine?: number) {
+  constructor(client: IRCCommandsClient, db: BotDatabase | null, modesPerLine?: number, logger?: Logger | null) {
     this.client = client;
     this.db = db;
+    this.logger = logger?.child('irc-commands') ?? null;
     this.modesPerLine = modesPerLine ?? 4; // Safe default; updated from ISUPPORT
   }
 
@@ -153,7 +156,7 @@ export class IRCCommands {
       try {
         this.db.logModAction(action, channel, target, by, reason);
       } catch (err) {
-        console.error('[irc-commands] Failed to log mod action:', err);
+        this.logger?.error('Failed to log mod action:', err);
       }
     }
   }

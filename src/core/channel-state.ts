@@ -4,6 +4,7 @@
 
 import { ircLower } from '../utils/wildcard.js';
 import type { BotEventBus } from '../event-bus.js';
+import type { Logger } from '../logger.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -39,11 +40,13 @@ export class ChannelState {
   private channels: Map<string, ChannelInfo> = new Map();
   private client: ChannelStateClient;
   private eventBus: BotEventBus;
+  private logger: Logger | null;
   private listeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
 
-  constructor(client: ChannelStateClient, eventBus: BotEventBus) {
+  constructor(client: ChannelStateClient, eventBus: BotEventBus, logger?: Logger | null) {
     this.client = client;
     this.eventBus = eventBus;
+    this.logger = logger?.child('channel-state') ?? null;
   }
 
   /** Start listening to IRC events. */
@@ -57,7 +60,7 @@ export class ChannelState {
     this.listen('userlist', this.onUserlist.bind(this));
     this.listen('wholist', this.onWholist.bind(this));
     this.listen('topic', this.onTopic.bind(this));
-    console.log('[channel-state] Attached to IRC client');
+    this.logger?.info('Attached to IRC client');
   }
 
   /** Stop listening. */
@@ -66,7 +69,7 @@ export class ChannelState {
       this.client.removeListener(event, fn);
     }
     this.listeners = [];
-    console.log('[channel-state] Detached from IRC client');
+    this.logger?.info('Detached from IRC client');
   }
 
   // -------------------------------------------------------------------------

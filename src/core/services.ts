@@ -2,6 +2,7 @@
 // NickServ integration — bot authentication and user identity verification.
 
 import type { BotEventBus } from '../event-bus.js';
+import type { Logger } from '../logger.js';
 import type { ServicesConfig, IdentityConfig } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -31,6 +32,7 @@ export interface ServicesDeps {
   servicesConfig: ServicesConfig;
   identityConfig: IdentityConfig;
   eventBus: BotEventBus;
+  logger?: Logger | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -42,6 +44,7 @@ export class Services {
   private servicesConfig: ServicesConfig;
   private identityConfig: IdentityConfig;
   private eventBus: BotEventBus;
+  private logger: Logger | null;
   private pending: Map<string, PendingVerify> = new Map();
   private noticeListener: ((...args: unknown[]) => void) | null = null;
 
@@ -50,6 +53,7 @@ export class Services {
     this.servicesConfig = deps.servicesConfig;
     this.identityConfig = deps.identityConfig;
     this.eventBus = deps.eventBus;
+    this.logger = deps.logger?.child('services') ?? null;
   }
 
   /** Start listening for NickServ responses. */
@@ -59,7 +63,7 @@ export class Services {
       this.onNotice(event);
     };
     this.client.on('notice', this.noticeListener);
-    console.log('[services] Attached to IRC client');
+    this.logger?.info('Attached to IRC client');
   }
 
   /** Stop listening. */
@@ -74,7 +78,7 @@ export class Services {
       p.resolve({ verified: false, account: null });
     }
     this.pending.clear();
-    console.log('[services] Detached from IRC client');
+    this.logger?.info('Detached from IRC client');
   }
 
   /**
@@ -89,7 +93,7 @@ export class Services {
 
     const target = this.getNickServTarget();
     this.client.say(target, `IDENTIFY ${this.servicesConfig.password}`);
-    console.log('[services] Sent IDENTIFY to NickServ');
+    this.logger?.info('Sent IDENTIFY to NickServ');
   }
 
   /**
@@ -118,7 +122,7 @@ export class Services {
     return new Promise<VerifyResult>((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(lowerNick);
-        console.log(`[services] Verification timeout for ${nick}`);
+        this.logger?.warn(`Verification timeout for ${nick}`);
         resolve({ verified: false, account: null });
       }, timeoutMs);
 

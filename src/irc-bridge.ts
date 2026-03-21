@@ -6,6 +6,7 @@ import { sanitize } from './utils/sanitize.js';
 import { splitMessage } from './utils/split-message.js';
 import type { EventDispatcher } from './dispatcher.js';
 import type { BotEventBus } from './event-bus.js';
+import type { Logger } from './logger.js';
 import type { HandlerContext } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -25,6 +26,7 @@ interface IRCBridgeOptions {
   dispatcher: EventDispatcher;
   eventBus: BotEventBus;
   botNick: string;
+  logger?: Logger | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -56,6 +58,7 @@ export class IRCBridge {
   private dispatcher: EventDispatcher;
   private eventBus: BotEventBus;
   private botNick: string;
+  private logger: Logger | null;
   private listeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
 
   constructor(options: IRCBridgeOptions) {
@@ -63,6 +66,7 @@ export class IRCBridge {
     this.dispatcher = options.dispatcher;
     this.eventBus = options.eventBus;
     this.botNick = options.botNick;
+    this.logger = options.logger?.child('irc-bridge') ?? null;
   }
 
   /** Register all irc-framework event listeners. */
@@ -77,7 +81,7 @@ export class IRCBridge {
     this.listenIrc('notice', this.onNotice.bind(this));
     this.listenIrc('ctcp request', this.onCtcp.bind(this));
 
-    console.log('[irc-bridge] Attached to IRC client');
+    this.logger?.info('Attached to IRC client');
   }
 
   /** Remove all listeners (for clean shutdown). */
@@ -86,7 +90,7 @@ export class IRCBridge {
       this.client.removeListener(event, fn);
     }
     this.listeners = [];
-    console.log('[irc-bridge] Detached from IRC client');
+    this.logger?.info('Detached from IRC client');
   }
 
   /** Update the bot nick (e.g., after a nick change). */
@@ -351,7 +355,7 @@ export class IRCBridge {
 
   private dispatchError(type: string): (err: unknown) => void {
     return (err) => {
-      console.error(`[irc-bridge] Dispatch error (${type}):`, err);
+      this.logger?.error(`Dispatch error (${type}):`, err);
     };
   }
 }

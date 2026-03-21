@@ -118,6 +118,8 @@ export interface PluginAPI {
   // Logging (prefixed with [plugin:<name>])
   log(...args: unknown[]): void;
   error(...args: unknown[]): void;
+  warn(...args: unknown[]): void;
+  debug(...args: unknown[]): void;
 }
 
 /** What a plugin module must export. */

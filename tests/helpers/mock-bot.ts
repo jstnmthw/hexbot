@@ -10,6 +10,7 @@ import { IRCBridge } from '../../src/irc-bridge.js';
 import { ChannelState } from '../../src/core/channel-state.js';
 import { IRCCommands } from '../../src/core/irc-commands.js';
 import { Services } from '../../src/core/services.js';
+import { createLogger, type Logger } from '../../src/logger.js';
 import { MockIRCClient } from './mock-irc.js';
 import { PluginLoader } from '../../src/plugin-loader.js';
 
@@ -32,7 +33,16 @@ export interface MockBot {
   ircCommands: IRCCommands;
   services: Services;
   pluginLoader: PluginLoader;
+  logger: Logger;
   cleanup(): void;
+}
+
+/**
+ * Create a silent logger for tests (level set to 'error' to suppress most output).
+ * Tests that need to assert on log calls can still use vi.spyOn().
+ */
+export function createSilentLogger(): Logger {
+  return createLogger('error');
 }
 
 /**
@@ -42,12 +52,13 @@ export interface MockBot {
  */
 export function createMockBot(options?: { botNick?: string }): MockBot {
   const botNick = options?.botNick ?? 'testbot';
+  const logger = createSilentLogger();
 
-  const db = new BotDatabase(':memory:');
+  const db = new BotDatabase(':memory:', logger);
   db.open();
 
-  const permissions = new Permissions(db);
-  const dispatcher = new EventDispatcher(permissions);
+  const permissions = new Permissions(db, logger);
+  const dispatcher = new EventDispatcher(permissions, logger);
   const commandHandler = new CommandHandler(permissions);
   const eventBus = new BotEventBus();
   const client = new MockIRCClient();
@@ -59,14 +70,15 @@ export function createMockBot(options?: { botNick?: string }): MockBot {
     dispatcher,
     eventBus,
     botNick,
+    logger,
   });
   bridge.attach();
 
   // Wire up core modules
-  const channelState = new ChannelState(client, eventBus);
+  const channelState = new ChannelState(client, eventBus, logger);
   channelState.attach();
 
-  const ircCommands = new IRCCommands(client, db);
+  const ircCommands = new IRCCommands(client, db, undefined, logger);
 
   const botConfig: BotConfig = {
     irc: { host: 'localhost', port: 6667, tls: false, nick: botNick, username: botNick, realname: botNick, channels: ['#test'] },
@@ -83,6 +95,7 @@ export function createMockBot(options?: { botNick?: string }): MockBot {
     servicesConfig: botConfig.services,
     identityConfig: botConfig.identity,
     eventBus,
+    logger,
   });
   services.attach();
 
@@ -97,6 +110,7 @@ export function createMockBot(options?: { botNick?: string }): MockBot {
     channelState,
     ircCommands,
     services,
+    logger,
   });
 
   // Register commands
@@ -122,6 +136,7 @@ export function createMockBot(options?: { botNick?: string }): MockBot {
     ircCommands,
     services,
     pluginLoader,
+    logger,
     cleanup() {
       services.detach();
       channelState.detach();

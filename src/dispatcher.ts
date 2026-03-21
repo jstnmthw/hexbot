@@ -2,6 +2,7 @@
 // Routes IRC events to registered handlers based on bind type, mask, and flags.
 
 import { wildcardMatch, ircLower } from './utils/wildcard.js';
+import type { Logger } from './logger.js';
 import type { BindType, BindHandler, HandlerContext } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -46,9 +47,11 @@ export class EventDispatcher {
   private binds: BindEntry[] = [];
   private timers: Map<BindEntry, ReturnType<typeof setInterval>> = new Map();
   private permissions: PermissionsProvider | null;
+  private logger: Logger | null;
 
-  constructor(permissions?: PermissionsProvider | null) {
+  constructor(permissions?: PermissionsProvider | null, logger?: Logger | null) {
     this.permissions = permissions ?? null;
+    this.logger = logger?.child('dispatcher') ?? null;
   }
 
   /**
@@ -78,12 +81,12 @@ export class EventDispatcher {
       const MIN_TIMER_MS = 10_000;
       const rawMs = parseInt(mask, 10) * 1000;
       if (!Number.isFinite(rawMs) || rawMs <= 0) {
-        console.error(`[dispatcher] Invalid time bind mask: "${mask}" — must be seconds as a string`);
+        this.logger?.error(`Invalid time bind mask: "${mask}" — must be seconds as a string`);
         return;
       }
       const intervalMs = Math.max(rawMs, MIN_TIMER_MS);
       if (rawMs < MIN_TIMER_MS) {
-        console.warn(`[dispatcher] Timer interval "${mask}s" raised to 10s minimum`);
+        this.logger?.warn(`Timer interval "${mask}s" raised to 10s minimum`);
       }
       const timer = setInterval(() => {
         entry.hits++;
@@ -102,11 +105,11 @@ export class EventDispatcher {
           const result = handler(timerCtx);
           if (result instanceof Promise) {
             result.catch((err) => {
-              console.error(`[dispatcher] Timer handler error (${pluginId}):`, err);
+              this.logger?.error(`Timer handler error (${pluginId}):`, err);
             });
           }
         } catch (err) {
-          console.error(`[dispatcher] Timer handler error (${pluginId}):`, err);
+          this.logger?.error(`Timer handler error (${pluginId}):`, err);
         }
       }, intervalMs);
       this.timers.set(entry, timer);
@@ -156,7 +159,7 @@ export class EventDispatcher {
           await result;
         }
       } catch (err) {
-        console.error(`[dispatcher] Handler error (${entry.pluginId}, ${type}:${entry.mask}):`, err);
+        this.logger?.error(`Handler error (${entry.pluginId}, ${type}:${entry.mask}):`, err);
       }
     }
   }

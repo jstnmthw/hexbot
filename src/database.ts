@@ -3,6 +3,7 @@
 
 import Database from 'better-sqlite3';
 import type { Statement, Database as DatabaseType } from 'better-sqlite3';
+import type { Logger } from './logger.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,6 +33,7 @@ export interface ModLogFilter {
 export class BotDatabase {
   private db: DatabaseType | null = null;
   private readonly path: string;
+  private logger: Logger | null;
 
   // Prepared statements (initialized on open)
   private stmtGet!: Statement;
@@ -41,8 +43,9 @@ export class BotDatabase {
   private stmtListPrefix!: Statement;
   private stmtLogMod!: Statement;
 
-  constructor(path: string) {
+  constructor(path: string, logger?: Logger | null) {
     this.path = path;
+    this.logger = logger?.child('database') ?? null;
   }
 
   /** Open the database connection and initialize schema. */
@@ -96,7 +99,7 @@ export class BotDatabase {
       'INSERT INTO mod_log (action, channel, target, by_user, reason) VALUES (?, ?, ?, ?, ?)'
     );
 
-    console.log('[database] Opened:', this.path);
+    this.logger?.info('Opened:', this.path);
   }
 
   /** Close the database connection. */
@@ -104,7 +107,7 @@ export class BotDatabase {
     if (this.db) {
       this.db.close();
       this.db = null;
-      console.log('[database] Closed');
+      this.logger?.info('Closed');
     }
   }
 

@@ -18,6 +18,7 @@
   "license": "GPL-2.0",
   "dependencies": {
     "better-sqlite3": "^12.8.0",
+    "chalk": "^5.6.2",
     "irc-framework": "^4.14.0"
   },
   "devDependencies": {

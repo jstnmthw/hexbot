@@ -3,6 +3,7 @@
 
 import { wildcardMatch } from '../utils/wildcard.js';
 import type { BotDatabase } from '../database.js';
+import type { Logger } from '../logger.js';
 import type { UserRecord, HandlerContext } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -25,9 +26,11 @@ const OWNER_FLAG = 'n';
 export class Permissions {
   private users: Map<string, UserRecord> = new Map();
   private db: BotDatabase | null;
+  private logger: Logger | null;
 
-  constructor(db?: BotDatabase | null) {
+  constructor(db?: BotDatabase | null, logger?: Logger | null) {
     this.db = db ?? null;
+    this.logger = logger?.child('permissions') ?? null;
   }
 
   // -------------------------------------------------------------------------
@@ -54,7 +57,7 @@ export class Permissions {
     this.persist();
 
     const by = source ?? 'unknown';
-    console.log(`[permissions] User added: ${handle} (${hostmask}, flags: ${flags}) by ${by}`);
+    this.logger?.info(`User added: ${handle} (${hostmask}, flags: ${flags}) by ${by}`);
   }
 
   /** Remove a user by handle. */
@@ -67,7 +70,7 @@ export class Permissions {
     this.persist();
 
     const by = source ?? 'unknown';
-    console.log(`[permissions] User removed: ${handle} by ${by}`);
+    this.logger?.info(`User removed: ${handle} by ${by}`);
   }
 
   /** Add an additional hostmask to an existing user. */
@@ -85,7 +88,7 @@ export class Permissions {
     }
 
     const by = source ?? 'unknown';
-    console.log(`[permissions] Hostmask added to ${handle}: ${hostmask} by ${by}`);
+    this.logger?.info(`Hostmask added to ${handle}: ${hostmask} by ${by}`);
   }
 
   /** Remove a hostmask from a user. */
@@ -104,7 +107,7 @@ export class Permissions {
     this.persist();
 
     const by = source ?? 'unknown';
-    console.log(`[permissions] Hostmask removed from ${handle}: ${hostmask} by ${by}`);
+    this.logger?.info(`Hostmask removed from ${handle}: ${hostmask} by ${by}`);
   }
 
   /** Set global flags for a user (replaces existing). */
@@ -118,7 +121,7 @@ export class Permissions {
     this.persist();
 
     const by = source ?? 'unknown';
-    console.log(`[permissions] Global flags for ${handle} set to "${record.global}" by ${by}`);
+    this.logger?.info(`Global flags for ${handle} set to "${record.global}" by ${by}`);
   }
 
   /** Set per-channel flags for a user (replaces existing for that channel). */
@@ -137,7 +140,7 @@ export class Permissions {
     this.persist();
 
     const by = source ?? 'unknown';
-    console.log(`[permissions] Channel flags for ${handle} in ${channel} set to "${normalized}" by ${by}`);
+    this.logger?.info(`Channel flags for ${handle} in ${channel} set to "${normalized}" by ${by}`);
   }
 
   // -------------------------------------------------------------------------
@@ -242,11 +245,11 @@ export class Permissions {
         const record = JSON.parse(row.value) as UserRecord;
         this.users.set(record.handle.toLowerCase(), record);
       } catch {
-        console.error(`[permissions] Failed to parse user record: ${row.key}`);
+        this.logger?.error(`Failed to parse user record: ${row.key}`);
       }
     }
 
-    console.log(`[permissions] Loaded ${this.users.size} users from database`);
+    this.logger?.info(`Loaded ${this.users.size} users from database`);
   }
 
   /** Persist current state to the database. */
@@ -324,8 +327,8 @@ export class Permissions {
 
     const afterBang = hostmask.substring(bangIdx + 1);
     if (afterBang === '*@*' || afterBang === '*@*.*') {
-      console.warn(
-        `[security] WARNING: User "${handle}" has privileged flags (${flags}) ` +
+      this.logger?.warn(
+        `SECURITY: User "${handle}" has privileged flags (${flags}) ` +
         `with insecure hostmask "${hostmask}" — nick-only matching is easily spoofed`
       );
     }
