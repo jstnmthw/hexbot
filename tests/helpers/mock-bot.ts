@@ -7,6 +7,9 @@ import { BotDatabase } from '../../src/database.js';
 import { CommandHandler } from '../../src/command-handler.js';
 import { BotEventBus } from '../../src/event-bus.js';
 import { IRCBridge } from '../../src/irc-bridge.js';
+import { ChannelState } from '../../src/core/channel-state.js';
+import { IRCCommands } from '../../src/core/irc-commands.js';
+import { Services } from '../../src/core/services.js';
 import { MockIRCClient } from './mock-irc.js';
 import { PluginLoader } from '../../src/plugin-loader.js';
 
@@ -25,6 +28,9 @@ export interface MockBot {
   commandHandler: CommandHandler;
   eventBus: BotEventBus;
   bridge: IRCBridge;
+  channelState: ChannelState;
+  ircCommands: IRCCommands;
+  services: Services;
   pluginLoader: PluginLoader;
   cleanup(): void;
 }
@@ -56,7 +62,12 @@ export function createMockBot(options?: { botNick?: string }): MockBot {
   });
   bridge.attach();
 
-  // Create plugin loader
+  // Wire up core modules
+  const channelState = new ChannelState(client, eventBus);
+  channelState.attach();
+
+  const ircCommands = new IRCCommands(client, db);
+
   const botConfig: BotConfig = {
     irc: { host: 'localhost', port: 6667, tls: false, nick: botNick, username: botNick, realname: botNick, channels: ['#test'] },
     owner: { handle: 'admin', hostmask: '*!*@localhost' },
@@ -67,6 +78,14 @@ export function createMockBot(options?: { botNick?: string }): MockBot {
     logging: { level: 'info', mod_actions: false },
   };
 
+  const services = new Services({
+    client,
+    servicesConfig: botConfig.services,
+    identityConfig: botConfig.identity,
+    eventBus,
+  });
+  services.attach();
+
   const pluginLoader = new PluginLoader({
     pluginDir: './plugins',
     dispatcher,
@@ -75,6 +94,9 @@ export function createMockBot(options?: { botNick?: string }): MockBot {
     permissions,
     botConfig,
     ircClient: client,
+    channelState,
+    ircCommands,
+    services,
   });
 
   // Register commands
@@ -96,8 +118,13 @@ export function createMockBot(options?: { botNick?: string }): MockBot {
     commandHandler,
     eventBus,
     bridge,
+    channelState,
+    ircCommands,
+    services,
     pluginLoader,
     cleanup() {
+      services.detach();
+      channelState.detach();
       bridge.detach();
       db.close();
     },

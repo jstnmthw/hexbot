@@ -18,6 +18,9 @@ export interface BotEvents {
   'mod:kick': [channel: string, nick: string, by: string, reason: string];
   'mod:ban': [channel: string, mask: string, by: string];
   'user:identified': [nick: string, handle: string];
+  'channel:userJoined': [channel: string, nick: string];
+  'channel:userLeft': [channel: string, nick: string];
+  'channel:modeChanged': [channel: string, nick: string, mode: string];
 }
 
 // ---------------------------------------------------------------------------

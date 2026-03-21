@@ -56,8 +56,22 @@ export interface PluginDB {
   list(prefix?: string): Array<{ key: string; value: string }>;
 }
 
+/** Read-only permissions API for plugins. */
+export interface PluginPermissions {
+  findByHostmask(hostmask: string): UserRecord | null;
+  checkFlags(requiredFlags: string, ctx: HandlerContext): boolean;
+}
+
+/** Read-only services API for plugins. */
+export interface PluginServices {
+  verifyUser(nick: string): Promise<{ verified: boolean; account: string | null }>;
+  isAvailable(): boolean;
+}
+
 /** The scoped API object plugins receive in init(). */
 export interface PluginAPI {
+  pluginId: string;
+
   // Bind system (auto-tagged with plugin ID)
   bind(type: BindType, flags: string, mask: string, handler: BindHandler): void;
   unbind(type: BindType, mask: string, handler: BindHandler): void;
@@ -68,12 +82,31 @@ export interface PluginAPI {
   notice(target: string, message: string): void;
   raw(line: string): void;
 
+  // IRC channel operations
+  op(channel: string, nick: string): void;
+  deop(channel: string, nick: string): void;
+  voice(channel: string, nick: string): void;
+  devoice(channel: string, nick: string): void;
+  kick(channel: string, nick: string, reason?: string): void;
+  ban(channel: string, mask: string): void;
+  mode(channel: string, modes: string, ...params: string[]): void;
+
   // Channel state
   getChannel(name: string): ChannelState | undefined;
   getUsers(channel: string): ChannelUser[];
+  getUserHostmask(channel: string, nick: string): string | undefined;
+
+  // Permissions (read-only)
+  permissions: PluginPermissions;
+
+  // Services (identity verification)
+  services: PluginServices;
 
   // Database (namespaced to this plugin)
   db: PluginDB;
+
+  // Bot config (read-only)
+  botConfig: Record<string, unknown>;
 
   // Config (from plugins.json overrides, falling back to plugin's config.json)
   config: Record<string, unknown>;

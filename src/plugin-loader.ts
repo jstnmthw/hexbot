@@ -9,13 +9,19 @@ import type { EventDispatcher } from './dispatcher.js';
 import type { BotEventBus } from './event-bus.js';
 import type { BotDatabase } from './database.js';
 import type { Permissions } from './core/permissions.js';
+import type { ChannelState } from './core/channel-state.js';
+import type { IRCCommands } from './core/irc-commands.js';
+import type { Services } from './core/services.js';
 import type {
   PluginAPI,
   PluginDB,
+  PluginPermissions,
+  PluginServices,
   PluginsConfig,
   BindType,
   BindHandler,
   BotConfig,
+  ChannelUser,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -55,6 +61,9 @@ export interface PluginLoaderDeps {
   permissions: Permissions;
   botConfig: BotConfig;
   ircClient: IRCClientForPlugins | null;
+  channelState?: ChannelState | null;
+  ircCommands?: IRCCommands | null;
+  services?: Services | null;
 }
 
 /** Minimal IRC client interface for plugin actions. */
@@ -81,6 +90,9 @@ export class PluginLoader {
   private permissions: Permissions;
   private botConfig: BotConfig;
   private ircClient: IRCClientForPlugins | null;
+  private channelState: ChannelState | null;
+  private ircCommands: IRCCommands | null;
+  private services: Services | null;
 
   constructor(deps: PluginLoaderDeps) {
     this.pluginDir = resolve(deps.pluginDir);
@@ -90,6 +102,9 @@ export class PluginLoader {
     this.permissions = deps.permissions;
     this.botConfig = deps.botConfig;
     this.ircClient = deps.ircClient;
+    this.channelState = deps.channelState ?? null;
+    this.ircCommands = deps.ircCommands ?? null;
+    this.services = deps.services ?? null;
   }
 
   /** Load all enabled plugins from the plugins config. */
@@ -270,6 +285,10 @@ export class PluginLoader {
     const dispatcher = this.dispatcher;
     const db = this.db;
     const ircClient = this.ircClient;
+    const channelState = this.channelState;
+    const ircCommands = this.ircCommands;
+    const permissions = this.permissions;
+    const services = this.services;
 
     // Scoped database API
     const pluginDb: PluginDB = db
@@ -294,7 +313,30 @@ export class PluginLoader {
           list(): Array<{ key: string; value: string }> { return []; },
         });
 
+    // Read-only permissions API
+    const pluginPermissions: PluginPermissions = Object.freeze({
+      findByHostmask(hostmask: string) {
+        return permissions.findByHostmask(hostmask);
+      },
+      checkFlags(requiredFlags: string, ctx: import('./types.js').HandlerContext) {
+        return permissions.checkFlags(requiredFlags, ctx);
+      },
+    });
+
+    // Services API (read-only verification)
+    const pluginServicesApi: PluginServices = Object.freeze({
+      async verifyUser(nick: string) {
+        if (!services) return { verified: false, account: null };
+        return services.verifyUser(nick);
+      },
+      isAvailable() {
+        return services?.isAvailable() ?? false;
+      },
+    });
+
     const api: PluginAPI = {
+      pluginId,
+
       // Bind system (auto-tagged with pluginId)
       bind(type: BindType, flags: string, mask: string, handler: BindHandler): void {
         dispatcher.bind(type, flags, mask, handler, pluginId);
@@ -317,21 +359,79 @@ export class PluginLoader {
         ircClient?.raw(line);
       },
 
-      // Channel state (stubs until Phase 5)
-      getChannel(): undefined {
-        return undefined;
+      // IRC channel operations (delegated to IRCCommands)
+      op(channel: string, nick: string): void {
+        ircCommands?.op(channel, nick);
       },
-      getUsers(): [] {
-        return [];
+      deop(channel: string, nick: string): void {
+        ircCommands?.deop(channel, nick);
       },
+      voice(channel: string, nick: string): void {
+        ircCommands?.voice(channel, nick);
+      },
+      devoice(channel: string, nick: string): void {
+        ircCommands?.devoice(channel, nick);
+      },
+      kick(channel: string, nick: string, reason?: string): void {
+        ircCommands?.kick(channel, nick, reason);
+      },
+      ban(channel: string, mask: string): void {
+        ircCommands?.ban(channel, mask);
+      },
+      mode(channel: string, modes: string, ...params: string[]): void {
+        ircCommands?.mode(channel, modes, ...params);
+      },
+
+      // Channel state
+      getChannel(name: string) {
+        if (!channelState) return undefined;
+        const ch = channelState.getChannel(name);
+        if (!ch) return undefined;
+        // Convert UserInfo (internal) to ChannelUser (plugin-facing)
+        const users = new Map<string, ChannelUser>();
+        for (const [key, u] of ch.users) {
+          users.set(key, {
+            nick: u.nick,
+            ident: u.ident,
+            hostname: u.hostname,
+            modes: u.modes.join(''),
+            joinedAt: u.joinedAt.getTime(),
+          });
+        }
+        return { name: ch.name, topic: ch.topic, modes: ch.modes, users };
+      },
+      getUsers(channel: string): ChannelUser[] {
+        if (!channelState) return [];
+        const ch = channelState.getChannel(channel);
+        if (!ch) return [];
+        return Array.from(ch.users.values()).map((u) => ({
+          nick: u.nick,
+          ident: u.ident,
+          hostname: u.hostname,
+          modes: u.modes.join(''),
+          joinedAt: u.joinedAt.getTime(),
+        }));
+      },
+      getUserHostmask(channel: string, nick: string): string | undefined {
+        return channelState?.getUserHostmask(channel, nick);
+      },
+
+      // Permissions (read-only)
+      permissions: pluginPermissions,
+
+      // Services (identity verification)
+      services: pluginServicesApi,
 
       // Database
       db: pluginDb,
 
+      // Bot config (read-only)
+      botConfig: Object.freeze({ ...this.botConfig }),
+
       // Config
       config: Object.freeze({ ...config }),
 
-      // Server capabilities (stub until Phase 5)
+      // Server capabilities
       getServerSupports(): Record<string, string> {
         return {};
       },

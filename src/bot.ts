@@ -12,6 +12,9 @@ import { Permissions } from './core/permissions.js';
 import { CommandHandler } from './command-handler.js';
 import { BotEventBus } from './event-bus.js';
 import { IRCBridge } from './irc-bridge.js';
+import { ChannelState } from './core/channel-state.js';
+import { IRCCommands } from './core/irc-commands.js';
+import { Services } from './core/services.js';
 
 import { PluginLoader } from './plugin-loader.js';
 
@@ -36,6 +39,9 @@ export class Bot {
   readonly client: InstanceType<typeof IrcClient>;
 
   readonly pluginLoader: PluginLoader;
+  readonly channelState: ChannelState;
+  readonly ircCommands: IRCCommands;
+  readonly services: Services;
 
   private bridge: IRCBridge | null = null;
   private startTime: number = Date.now();
@@ -52,6 +58,14 @@ export class Bot {
     this.commandHandler = new CommandHandler();
     this.client = new IrcClient();
     this.configuredChannels = [...this.config.irc.channels];
+    this.channelState = new ChannelState(this.client, this.eventBus);
+    this.ircCommands = new IRCCommands(this.client, this.db);
+    this.services = new Services({
+      client: this.client,
+      servicesConfig: this.config.services,
+      identityConfig: this.config.identity,
+      eventBus: this.eventBus,
+    });
     this.pluginLoader = new PluginLoader({
       pluginDir: this.config.pluginDir,
       dispatcher: this.dispatcher,
@@ -60,6 +74,9 @@ export class Bot {
       permissions: this.permissions,
       botConfig: this.config,
       ircClient: this.client,
+      channelState: this.channelState,
+      ircCommands: this.ircCommands,
+      services: this.services,
     });
   }
 
@@ -89,7 +106,7 @@ export class Bot {
     // 5. Connect to IRC
     await this.connect();
 
-    // 6. Create and attach bridge
+    // 6. Create and attach bridge + core modules
     this.bridge = new IRCBridge({
       client: this.client,
       dispatcher: this.dispatcher,
@@ -97,8 +114,13 @@ export class Bot {
       botNick: this.config.irc.nick,
     });
     this.bridge.attach();
+    this.channelState.attach();
+    this.services.attach();
 
-    // 7. Load plugins
+    // 7. Authenticate with NickServ (non-SASL fallback)
+    this.services.identify();
+
+    // 8. Load plugins
     await this.pluginLoader.loadAll();
 
     this.startTime = Date.now();
@@ -108,6 +130,9 @@ export class Bot {
   /** Graceful shutdown. */
   async shutdown(): Promise<void> {
     console.log('[bot] Shutting down...');
+
+    this.services.detach();
+    this.channelState.detach();
 
     if (this.bridge) {
       this.bridge.detach();

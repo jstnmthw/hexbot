@@ -1,0 +1,6 @@
+{
+  "verify_timeout_ms": 5000,
+  "notify_on_fail": false,
+  "op_flags": ["n", "m", "o"],
+  "voice_flags": ["v"]
+}

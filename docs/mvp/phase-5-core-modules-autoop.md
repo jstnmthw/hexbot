@@ -16,7 +16,7 @@ Build the remaining core modules (services integration, IRC command helpers, cha
 
 **Goal:** Track who is in each channel, their modes, and hostmasks. Updated in real time from IRC events.
 
-- [ ] Create `src/core/channel-state.ts` implementing the `ChannelState` class:
+- [x] Create `src/core/channel-state.ts` implementing the `ChannelState` class:
   - Constructor takes the bot's IRC client and event bus
   - Maintains a `Map<channelName, ChannelInfo>` where:
     ```typescript
@@ -51,7 +51,7 @@ Build the remaining core modules (services integration, IRC command helpers, cha
   - `getUserModes(channel, nick)` → array of mode chars
   - Emit `channel:userJoined`, `channel:userLeft`, `channel:modeChanged` on event bus
 
-- [ ] Create `tests/core/channel-state.test.ts`:
+- [x] Create `tests/core/channel-state.test.ts`:
   - Test: user join adds them to state
   - Test: user part removes them
   - Test: user quit removes them from all channels
@@ -61,13 +61,13 @@ Build the remaining core modules (services integration, IRC command helpers, cha
   - Test: getUser returns correct info
   - Test: getUserHostmask returns formatted string
   - Test: state is empty for unknown channels
-- [ ] **Verify:** tests pass
+- [x] **Verify:** tests pass
 
 ## Phase 5B: IRC commands core module
 
 **Goal:** Convenience wrappers for common IRC operations with flood awareness.
 
-- [ ] Create `src/core/irc-commands.ts` implementing the `IRCCommands` class:
+- [x] Create `src/core/irc-commands.ts` implementing the `IRCCommands` class:
   - Constructor takes the bot's IRC client and channel state
   - `join(channel, key?)` — join a channel
   - `part(channel, message?)` — leave a channel
@@ -84,19 +84,19 @@ Build the remaining core modules (services integration, IRC command helpers, cha
   - All commands log to mod_log table when they involve user actions (kick, ban, op, deop)
   - Respect ISUPPORT `MODES` value — batch mode changes if setting multiple modes at once
 
-- [ ] Create `tests/core/irc-commands.test.ts`:
+- [x] Create `tests/core/irc-commands.test.ts`:
   - Test: op() sends correct MODE command via mock IRC client
   - Test: kick() sends KICK with reason
   - Test: ban() sends correct +b MODE
   - Test: mode batching respects MODES limit
   - Test: mod actions are logged to database
-- [ ] **Verify:** tests pass
+- [x] **Verify:** tests pass
 
 ## Phase 5C: Services core module
 
 **Goal:** NickServ integration — bot authentication and user identity verification.
 
-- [ ] Create `src/core/services.ts` implementing the `Services` class:
+- [x] Create `src/core/services.ts` implementing the `Services` class:
   - Constructor takes `{ client, config, permissions, eventBus }`
   - **Bot authentication:**
     - If `config.services.sasl` is true: SASL is handled by irc-framework (just pass config)
@@ -122,7 +122,7 @@ Build the remaining core modules (services integration, IRC command helpers, cha
   - `getServicesType()` — return configured type
   - `isAvailable()` — return true if services are configured and the network appears to have NickServ
 
-- [ ] Create `tests/core/services.test.ts`:
+- [x] Create `tests/core/services.test.ts`:
   - Test: bot auth sends IDENTIFY on connect (non-SASL mode)
   - Test: verifyUser sends correct ACC command for atheme
   - Test: verifyUser sends correct STATUS command for anope
@@ -132,11 +132,11 @@ Build the remaining core modules (services integration, IRC command helpers, cha
   - Test: services type 'none' → verifyUser always returns verified = true
   - Test: DALnet adapter uses correct NickServ target
   - All tests use mock IRC client — no real network needed
-- [ ] **Verify:** tests pass
+- [x] **Verify:** tests pass
 
 ## Phase 5D: Wire core modules into Bot
 
-- [ ] Update `src/bot.ts`:
+- [x] Update `src/bot.ts`:
   - Instantiate `ChannelState` after IRC connection
   - Instantiate `IRCCommands` after IRC connection
   - Instantiate `Services` with config
@@ -150,7 +150,7 @@ Build the remaining core modules (services integration, IRC command helpers, cha
 
 **Goal:** The MVP plugin. User joins → bot checks flags → verifies identity → ops/voices them.
 
-- [ ] Create `plugins/auto-op/index.ts`:
+- [x] Create `plugins/auto-op/index.ts`:
   - Binds `join` on `*` — triggers on any join in any channel
   - On join:
     1. Look up the user's hostmask against permissions
@@ -170,7 +170,7 @@ Build the remaining core modules (services integration, IRC command helpers, cha
     - Verify the hostmask matches BEFORE querying NickServ (don't ACC-check every joiner)
     - Log failed verification attempts (potential impersonation)
 
-- [ ] Create `plugins/auto-op/config.json`:
+- [x] Create `plugins/auto-op/config.json`:
   ```json
   {
     "verify_timeout_ms": 5000,
@@ -179,8 +179,8 @@ Build the remaining core modules (services integration, IRC command helpers, cha
     "voice_flags": ["v"]
   }
   ```
-- [ ] Create `plugins/auto-op/README.md`
-- [ ] Create `tests/plugins/auto-op.test.ts`:
+- [x] Create `plugins/auto-op/README.md`
+- [x] Create `tests/plugins/auto-op.test.ts`:
   - Test: user with `o` flag joins → gets opped
   - Test: user with `v` flag joins → gets voiced
   - Test: user with `n` flag joins → gets opped (owner implies op)
@@ -189,11 +189,11 @@ Build the remaining core modules (services integration, IRC command helpers, cha
   - Test: NickServ verification flow (mock the ACC response)
   - Test: verification timeout → user not opped
   - Test: bot doesn't op itself
-- [ ] **Verify:** tests pass
+- [x] **Verify:** tests pass
 
 ## Phase 5F: Full MVP verification
 
-- [ ] Run `pnpm test` — entire test suite passes (all phases)
+- [x] Run `pnpm test` — entire test suite passes (all phases)
 - [ ] Start bot on a real IRC network
 - [ ] Add yourself as owner: `.adduser myadmin *!myident@my.host nmov`
 - [ ] Part and rejoin the channel → bot ops you
