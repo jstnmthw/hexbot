@@ -177,6 +177,14 @@ Set +o on a user. Logged to mod_log.
 
 Set -o on a user. Logged to mod_log.
 
+#### `halfop(channel, nick)`
+
+Set +h on a user. Requires the bot to hold +h or +o in the channel. Not all networks support half-op — check ISUPPORT PREFIX before using.
+
+#### `dehalfop(channel, nick)`
+
+Set -h on a user.
+
 #### `voice(channel, nick)`
 
 Set +v on a user.
