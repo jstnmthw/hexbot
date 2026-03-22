@@ -4,7 +4,9 @@
       "Bash(pnpm:*)",
       "Bash(wc:*)",
       "Bash(grep:*)",
-      "WebSearch"
+      "WebSearch",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

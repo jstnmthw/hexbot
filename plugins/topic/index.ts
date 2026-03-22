@@ -69,8 +69,25 @@ export function init(api: PluginAPI): void {
   });
 
   // !topics — list available themes (anyone can use)
+  // !topics preview [text] — PM all themes rendered with sample text
   api.bind('pub', '-', '!topics', (ctx: HandlerContext) => {
-    ctx.reply(`Available themes: ${themeNames.join(', ')}`);
+    const args = ctx.args.trim();
+    const parts = args.split(/\s+/);
+    const subcommand = parts[0]?.toLowerCase();
+
+    if (subcommand === 'preview') {
+      const sampleText = parts.length > 1 ? parts.slice(1).join(' ') : 'Sample Topic Text';
+      const nick = ctx.nick;
+      api.say(nick, `Theme previews using: "${sampleText}"`);
+      for (const themeName of themeNames) {
+        const formatted = themes[themeName].replace('$text', sampleText);
+        api.say(nick, `${themeName}: ${formatted}`);
+      }
+      api.say(nick, `${themeNames.length} themes total. Use !topic <theme> <text> to set.`);
+      return;
+    }
+
+    ctx.reply(`Available themes: ${themeNames.join(', ')} — Use "!topics preview [text]" to preview all via PM.`);
   });
 }
 

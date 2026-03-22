@@ -10,6 +10,7 @@ import { splitMessage } from './utils/split-message.js';
 import type { EventDispatcher } from './dispatcher.js';
 import type { BotEventBus } from './event-bus.js';
 import type { Logger } from './logger.js';
+import type { MessageQueue } from './core/message-queue.js';
 import type { HandlerContext } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -30,6 +31,7 @@ interface IRCBridgeOptions {
   dispatcher: EventDispatcher;
   eventBus: BotEventBus;
   botNick: string;
+  messageQueue?: MessageQueue | null;
   logger?: Logger | null;
 }
 
@@ -62,6 +64,7 @@ export class IRCBridge {
   private dispatcher: EventDispatcher;
   private eventBus: BotEventBus;
   private botNick: string;
+  private messageQueue: MessageQueue | null;
   private logger: Logger | null;
   private listeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
   private version: string;
@@ -71,6 +74,7 @@ export class IRCBridge {
     this.dispatcher = options.dispatcher;
     this.eventBus = options.eventBus;
     this.botNick = options.botNick;
+    this.messageQueue = options.messageQueue ?? null;
     this.logger = options.logger?.child('irc-bridge') ?? null;
 
     // Read version from package.json for CTCP VERSION replies
@@ -380,19 +384,24 @@ export class IRCBridge {
     args: string;
   }): HandlerContext {
     const client = this.client;
+    const queue = this.messageQueue;
+    const enqueue = (fn: () => void) => {
+      if (queue) queue.enqueue(fn);
+      else fn();
+    };
     return {
       ...fields,
       reply: (msg: string) => {
         const target = fields.channel ?? fields.nick;
         const lines = splitMessage(sanitize(msg));
         for (const line of lines) {
-          client.say(target, line);
+          enqueue(() => client.say(target, line));
         }
       },
       replyPrivate: (msg: string) => {
         const lines = splitMessage(sanitize(msg));
         for (const line of lines) {
-          client.notice(fields.nick, line);
+          enqueue(() => client.notice(fields.nick, line));
         }
       },
     };

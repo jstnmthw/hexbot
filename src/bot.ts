@@ -16,6 +16,7 @@ import { BotEventBus } from './event-bus.js';
 import { IRCBridge } from './irc-bridge.js';
 import { ChannelState } from './core/channel-state.js';
 import { IRCCommands } from './core/irc-commands.js';
+import { MessageQueue } from './core/message-queue.js';
 import { Services } from './core/services.js';
 import { createLogger, type Logger } from './logger.js';
 
@@ -45,6 +46,7 @@ export class Bot {
   readonly pluginLoader: PluginLoader;
   readonly channelState: ChannelState;
   readonly ircCommands: IRCCommands;
+  readonly messageQueue: MessageQueue;
   readonly services: Services;
 
   private bridge: IRCBridge | null = null;
@@ -70,6 +72,11 @@ export class Bot {
     this.configuredChannels = [...this.config.irc.channels];
     this.channelState = new ChannelState(this.client, this.eventBus, this.logger);
     this.ircCommands = new IRCCommands(this.client, this.db, undefined, this.logger);
+    this.messageQueue = new MessageQueue({
+      rate: this.config.queue?.rate,
+      burst: this.config.queue?.burst,
+      logger: this.logger,
+    });
     this.services = new Services({
       client: this.client,
       servicesConfig: this.config.services,
@@ -87,6 +94,7 @@ export class Bot {
       ircClient: this.client,
       channelState: this.channelState,
       ircCommands: this.ircCommands,
+      messageQueue: this.messageQueue,
       services: this.services,
       logger: this.logger,
     });
@@ -131,6 +139,7 @@ export class Bot {
       dispatcher: this.dispatcher,
       eventBus: this.eventBus,
       botNick: this.config.irc.nick,
+      messageQueue: this.messageQueue,
       logger: this.logger,
     });
     this.bridge.attach();
@@ -159,6 +168,9 @@ export class Bot {
       this.bridge.detach();
       this.bridge = null;
     }
+
+    this.messageQueue.flush();
+    this.messageQueue.stop();
 
     if (this.client.connected) {
       this.client.quit('Shutting down');
@@ -223,6 +235,7 @@ export class Bot {
       });
 
       this.client.on('reconnecting', () => {
+        this.messageQueue.clear();
         this.botLogger.info('Reconnecting...');
       });
 

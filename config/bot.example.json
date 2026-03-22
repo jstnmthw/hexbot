@@ -27,5 +27,9 @@
   "logging": {
     "level": "info",
     "mod_actions": true
+  },
+  "queue": {
+    "rate": 2,
+    "burst": 4
   }
 }

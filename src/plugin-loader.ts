@@ -1,8 +1,8 @@
 // n0xb0t — Plugin loader
 // Discovers, loads, unloads, and hot-reloads plugins. Each plugin gets a scoped API.
 
-import { readFileSync, existsSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { readFileSync, existsSync, writeFileSync, unlinkSync } from 'node:fs';
+import { resolve, join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { sanitize } from './utils/sanitize.js';
@@ -14,6 +14,7 @@ import type { Permissions } from './core/permissions.js';
 import type { ChannelState } from './core/channel-state.js';
 import type { IRCCommands } from './core/irc-commands.js';
 import type { Services } from './core/services.js';
+import type { MessageQueue } from './core/message-queue.js';
 import type {
   PluginAPI,
   PluginDB,
@@ -65,6 +66,7 @@ export interface PluginLoaderDeps {
   ircClient: IRCClientForPlugins | null;
   channelState?: ChannelState | null;
   ircCommands?: IRCCommands | null;
+  messageQueue?: MessageQueue | null;
   services?: Services | null;
   logger?: Logger | null;
 }
@@ -96,6 +98,7 @@ export class PluginLoader {
   private ircClient: IRCClientForPlugins | null;
   private channelState: ChannelState | null;
   private ircCommands: IRCCommands | null;
+  private messageQueue: MessageQueue | null;
   private services: Services | null;
   private logger: Logger | null;
   private rootLogger: Logger | null;
@@ -110,6 +113,7 @@ export class PluginLoader {
     this.ircClient = deps.ircClient;
     this.channelState = deps.channelState ?? null;
     this.ircCommands = deps.ircCommands ?? null;
+    this.messageQueue = deps.messageQueue ?? null;
     this.services = deps.services ?? null;
     this.rootLogger = deps.logger ?? null;
     this.logger = deps.logger?.child('plugin-loader') ?? null;
@@ -156,8 +160,7 @@ export class PluginLoader {
 
     let mod: Record<string, unknown>;
     try {
-      const fileUrl = pathToFileURL(absPath).href + `?t=${Date.now()}`;
-      mod = await import(fileUrl) as Record<string, unknown>;
+      mod = await this.importWithCacheBust(absPath);
     } catch (err) {
       const name = this.inferPluginName(absPath);
       const message = err instanceof Error ? err.message : String(err);
@@ -294,6 +297,7 @@ export class PluginLoader {
     const dispatcher = this.dispatcher;
     const db = this.db;
     const ircClient = this.ircClient;
+    const messageQueue = this.messageQueue;
     const channelState = this.channelState;
     const ircCommands = this.ircCommands;
     const permissions = this.permissions;
@@ -354,15 +358,31 @@ export class PluginLoader {
         dispatcher.unbind(type, mask, handler);
       },
 
-      // IRC actions (sanitize for defense-in-depth, even though irc-framework handles framing)
+      // IRC actions — routed through message queue for flood protection
+      // (sanitize for defense-in-depth, even though irc-framework handles framing)
       say(target: string, message: string): void {
-        ircClient?.say(target, sanitize(message));
+        const safe = sanitize(message);
+        if (messageQueue) {
+          messageQueue.enqueue(() => ircClient?.say(target, safe));
+        } else {
+          ircClient?.say(target, safe);
+        }
       },
       action(target: string, message: string): void {
-        ircClient?.action(target, sanitize(message));
+        const safe = sanitize(message);
+        if (messageQueue) {
+          messageQueue.enqueue(() => ircClient?.action(target, safe));
+        } else {
+          ircClient?.action(target, safe);
+        }
       },
       notice(target: string, message: string): void {
-        ircClient?.notice(target, sanitize(message));
+        const safe = sanitize(message);
+        if (messageQueue) {
+          messageQueue.enqueue(() => ircClient?.notice(target, safe));
+        } else {
+          ircClient?.notice(target, safe);
+        }
       },
       raw(line: string): void {
         ircClient?.raw(sanitize(line));
@@ -529,6 +549,45 @@ export class PluginLoader {
       this.logger?.error('Failed to parse plugins.json:', err);
       return null;
     }
+  }
+
+  /** Import a plugin module with cache busting for all local dependencies. */
+  private async importWithCacheBust(absPath: string): Promise<Record<string, unknown>> {
+    const ts = Date.now();
+    const source = readFileSync(absPath, 'utf-8');
+    const rewritten = this.rewriteLocalImports(source, ts);
+
+    if (rewritten === source) {
+      // No local imports to bust — simple cache-bust on the entry file
+      const fileUrl = pathToFileURL(absPath).href + `?t=${ts}`;
+      return await import(fileUrl) as Record<string, unknown>;
+    }
+
+    // Write temp file in the same directory so relative paths still resolve
+    const dir = dirname(absPath);
+    const tmpPath = join(dir, `.reload-${ts}.ts`);
+    try {
+      writeFileSync(tmpPath, rewritten, 'utf-8');
+      const fileUrl = pathToFileURL(tmpPath).href + `?t=${ts}`;
+      return await import(fileUrl) as Record<string, unknown>;
+    } finally {
+      try { unlinkSync(tmpPath); } catch { /* ignore cleanup errors */ }
+    }
+  }
+
+  /** Rewrite relative import specifiers to add cache-busting query strings. */
+  private rewriteLocalImports(source: string, timestamp: number): string {
+    // Static: from './foo.js' or from '../foo.js'
+    let result = source.replace(
+      /(from\s+['"])(\.\.?\/[^?'"]+)(['"])/g,
+      (_, pre: string, spec: string, post: string) => `${pre}${spec}?t=${timestamp}${post}`,
+    );
+    // Dynamic: import('./foo.js')
+    result = result.replace(
+      /(import\(\s*['"])(\.\.?\/[^?'"]+)(['"])/g,
+      (_, pre: string, spec: string, post: string) => `${pre}${spec}?t=${timestamp}${post}`,
+    );
+    return result;
   }
 
   /** Infer a plugin name from its file path. */

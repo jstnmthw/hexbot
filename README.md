@@ -1,6 +1,6 @@
 # n0xb0t
 
-Modular IRC bot framework for Node.js with an Eggdrop-style bind system, hot-reloadable plugins, and hostmask-based permissions.
+Modular IRC bot for Node.js with a multi-network bind system, hot-reloadable plugins, and hostmask-based permissions.
 
 ## Quick start
 

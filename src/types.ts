@@ -206,6 +206,14 @@ export interface LoggingConfig {
   mod_actions: boolean;
 }
 
+/** Message queue / flood-protection settings. */
+export interface QueueConfig {
+  /** Max messages per second (steady-state). Default: 2 */
+  rate?: number;
+  /** Burst allowance — messages that can send immediately before throttling. Default: 4 */
+  burst?: number;
+}
+
 /** Shape for config/bot.json. */
 export interface BotConfig {
   irc: IrcConfig;
@@ -215,6 +223,7 @@ export interface BotConfig {
   database: string;
   pluginDir: string;
   logging: LoggingConfig;
+  queue?: QueueConfig;
 }
 
 /** Shape for a single plugin entry in config/plugins.json. */
