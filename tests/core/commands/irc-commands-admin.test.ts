@@ -1,6 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { CommandHandler, type CommandContext } from '../../../src/command-handler.js';
-import { registerIRCAdminCommands, type AdminIRCClient, type AdminBotInfo } from '../../../src/core/commands/irc-commands-admin.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { type CommandContext, CommandHandler } from '../../../src/command-handler.js';
+import {
+  type AdminBotInfo,
+  type AdminIRCClient,
+  registerIRCAdminCommands,
+} from '../../../src/core/commands/irc-commands-admin.js';
 
 /** Helper: create a minimal CommandContext. */
 function makeCtx(overrides: Partial<CommandContext> = {}): CommandContext {
@@ -64,10 +69,7 @@ describe('irc-commands-admin', () => {
       const ctx = makeCtx();
       await handler.execute('.say #test evil\r\nPRIVMSG #other :pwned', ctx);
 
-      expect(mockClient.say).toHaveBeenCalledWith(
-        '#test',
-        'evilPRIVMSG #other :pwned'
-      );
+      expect(mockClient.say).toHaveBeenCalledWith('#test', 'evilPRIVMSG #other :pwned');
     });
   });
 

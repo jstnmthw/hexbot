@@ -20,13 +20,13 @@ The goal is an open-source alternative to Eggdrop that eliminates the pain of C 
 
 ### Tech stack
 
-| Component | Choice | Rationale |
-|-----------|--------|-----------|
-| Language | TypeScript (strict mode) | Type safety, better IDE support, self-documenting interfaces. |
-| Runtime | Node.js (ESM) | Async event-driven, matches IRC's nature. |
-| IRC library | `irc-framework` | Actively maintained, powers Kiwi IRC. Handles protocol, ISUPPORT, IRCv3 caps, SASL. |
-| Database | SQLite via `better-sqlite3` | Zero config, single file, synchronous reads fine for this workload. |
-| AI provider | Google Gemini (free tier) | Free, no credit card, 1M token context, 1000 RPD. Adapter pattern for swapping providers. |
+| Component   | Choice                      | Rationale                                                                                 |
+| ----------- | --------------------------- | ----------------------------------------------------------------------------------------- |
+| Language    | TypeScript (strict mode)    | Type safety, better IDE support, self-documenting interfaces.                             |
+| Runtime     | Node.js (ESM)               | Async event-driven, matches IRC's nature.                                                 |
+| IRC library | `irc-framework`             | Actively maintained, powers Kiwi IRC. Handles protocol, ISUPPORT, IRCv3 caps, SASL.       |
+| Database    | SQLite via `better-sqlite3` | Zero config, single file, synchronous reads fine for this workload.                       |
+| AI provider | Google Gemini (free tier)   | Free, no credit card, 1M token context, 1000 RPD. Adapter pattern for swapping providers. |
 
 ---
 
@@ -88,26 +88,26 @@ The heart of n0xb0t. Modeled directly on Eggdrop's `bind` command.
 ```typescript
 dispatcher.bind(type, flags, mask, handler, pluginId);
 dispatcher.unbind(type, mask, handler);
-dispatcher.unbindAll(pluginId);  // Remove all binds for a plugin (used on unload)
+dispatcher.unbindAll(pluginId); // Remove all binds for a plugin (used on unload)
 ```
 
 **Bind types:**
 
-| Type | Trigger | Mask matches against | Stackable |
-|------|---------|---------------------|-----------|
-| `pub` | Channel message | Exact command (e.g. `!uno`) | No (overwrites) |
-| `pubm` | Channel message | Wildcard on full text | Yes |
-| `msg` | Private message | Exact command | No |
-| `msgm` | Private message | Wildcard on full text | Yes |
-| `join` | User joins channel | `#channel nick!user@host` | Yes |
-| `part` | User parts channel | `#channel nick!user@host` | Yes |
-| `kick` | User kicked | `#channel nick!user@host` | Yes |
-| `nick` | Nick change | Wildcard | Yes |
-| `mode` | Mode change | `#channel +/-mode` | Yes |
-| `raw` | Raw server line | Command/numeric string | Yes |
-| `time` | Timer (interval) | Seconds as string (e.g. `"60"`) | Yes |
-| `ctcp` | CTCP request | CTCP type (e.g. `VERSION`) | Yes |
-| `notice` | Notice message | Wildcard on text | Yes |
+| Type     | Trigger            | Mask matches against            | Stackable       |
+| -------- | ------------------ | ------------------------------- | --------------- |
+| `pub`    | Channel message    | Exact command (e.g. `!uno`)     | No (overwrites) |
+| `pubm`   | Channel message    | Wildcard on full text           | Yes             |
+| `msg`    | Private message    | Exact command                   | No              |
+| `msgm`   | Private message    | Wildcard on full text           | Yes             |
+| `join`   | User joins channel | `#channel nick!user@host`       | Yes             |
+| `part`   | User parts channel | `#channel nick!user@host`       | Yes             |
+| `kick`   | User kicked        | `#channel nick!user@host`       | Yes             |
+| `nick`   | Nick change        | Wildcard                        | Yes             |
+| `mode`   | Mode change        | `#channel +/-mode`              | Yes             |
+| `raw`    | Raw server line    | Command/numeric string          | Yes             |
+| `time`   | Timer (interval)   | Seconds as string (e.g. `"60"`) | Yes             |
+| `ctcp`   | CTCP request       | CTCP type (e.g. `VERSION`)      | Yes             |
+| `notice` | Notice message     | Wildcard on text                | Yes             |
 
 **Non-stackable** types (pub, msg) overwrite previous binds on the same mask — only one handler per command. **Stackable** types allow multiple handlers on the same mask — all matching handlers fire.
 
@@ -120,7 +120,7 @@ interface HandlerContext {
   nick: string;
   ident: string;
   hostname: string;
-  channel: string | null;       // null for PMs
+  channel: string | null; // null for PMs
   text: string;
   command: string;
   args: string;
@@ -136,7 +136,7 @@ interface HandlerContext {
 Each plugin's `init()` receives a scoped API object. The plugin can only manage its own binds and its own database namespace.
 
 ```typescript
-import type { PluginAPI, HandlerContext } from '../../src/types.js';
+import type { HandlerContext, PluginAPI } from '../../src/types.js';
 
 export const name = 'my-plugin';
 export const version = '1.0.0';
@@ -183,6 +183,7 @@ export function teardown(): void {
 ### 2.5 Plugin loader
 
 Responsibilities:
+
 - Discover plugins in the plugin directory (each subdirectory with `index.ts`, or standalone `.ts` files)
 - Load: dynamic `import()` with cache-busting query string for ESM (imports compiled `.js` output)
 - Unload: call `teardown()`, then `dispatcher.unbindAll(pluginId)`
@@ -196,6 +197,7 @@ Hot-reload works because ESM's `import()` can be cache-busted with `?t=Date.now(
 Eggdrop-style flags with per-channel overrides.
 
 **Flags:**
+
 - `n` — owner (full access, implies all other flags)
 - `m` — master
 - `o` — op
@@ -240,14 +242,15 @@ Handles the bot's own authentication and NickServ/ChanServ interaction.
 
 **Services adapter:** Different services packages use different commands:
 
-| Services | NickServ target | Identify command | ACC check |
-|----------|----------------|-----------------|-----------|
-| Atheme (Libera) | `NickServ` | `IDENTIFY <pass>` | `ACC <nick>` |
-| Anope | `NickServ` | `IDENTIFY <pass>` | `STATUS <nick>` |
-| DALnet | `nickserv@services.dal.net` | `IDENTIFY <pass>` | Different format |
-| None | N/A | N/A | N/A |
+| Services        | NickServ target             | Identify command  | ACC check        |
+| --------------- | --------------------------- | ----------------- | ---------------- |
+| Atheme (Libera) | `NickServ`                  | `IDENTIFY <pass>` | `ACC <nick>`     |
+| Anope           | `NickServ`                  | `IDENTIFY <pass>` | `STATUS <nick>`  |
+| DALnet          | `nickserv@services.dal.net` | `IDENTIFY <pass>` | Different format |
+| None            | N/A                         | N/A               | N/A              |
 
 Config:
+
 ```json
 {
   "services": {
@@ -299,6 +302,7 @@ Each plugin accesses its own namespace via `api.db`. Core modules use reserved n
 **Two-level config:**
 
 `config/bot.json` — core bot settings:
+
 ```json
 {
   "irc": {
@@ -334,6 +338,7 @@ Each plugin accesses its own namespace via `api.db`. Core modules use reserved n
 ```
 
 `config/plugins.json` — plugin routing and overrides:
+
 ```json
 {
   "auto-op": {
@@ -431,13 +436,13 @@ n0xb0t is network-agnostic. The base IRC protocol (RFC 1459 / RFC 2812) is consi
 
 What differs between networks and how we handle it:
 
-| Difference | Our approach |
-|-----------|-------------|
-| Channel modes vary (half-op, admin, etc.) | Read from ISUPPORT PREFIX, don't hardcode |
-| Services commands differ | Services adapter in core module, configurable per `services.type` |
-| Modes-per-line limits | Read from ISUPPORT MODES, queue mode changes accordingly |
-| Ban mask formats | Use standard `*!*@host` by default, extended bans opt-in |
-| NickServ target differs | Configurable `services.nickserv` field |
+| Difference                                | Our approach                                                      |
+| ----------------------------------------- | ----------------------------------------------------------------- |
+| Channel modes vary (half-op, admin, etc.) | Read from ISUPPORT PREFIX, don't hardcode                         |
+| Services commands differ                  | Services adapter in core module, configurable per `services.type` |
+| Modes-per-line limits                     | Read from ISUPPORT MODES, queue mode changes accordingly          |
+| Ban mask formats                          | Use standard `*!*@host` by default, extended bans opt-in          |
+| NickServ target differs                   | Configurable `services.nickserv` field                            |
 
 ---
 
@@ -459,6 +464,7 @@ The MVP is: **a bot that connects, loads plugins with hot-reload, has a working 
 - Mod action logging
 
 **MVP plugins:**
+
 - `auto-op` — User joins → bot checks flags → ops/voices them. Verifies via NickServ ACC if configured.
 - `greeter` — Configurable join greeting.
 - `seen` — Tracks last-seen times. `!seen <nick>` to look up.
@@ -478,9 +484,11 @@ The MVP is: **a bot that connects, loads plugins with hot-reload, has a working 
 ## 5. Roadmap
 
 ### Phase 1: Core + plugin system (MVP)
+
 Everything in section 4.1.
 
 ### Phase 2: Channel protection plugins
+
 - Flood detection (message rate, repeat, caps, nick-change spam)
 - Auto-actions: configurable escalation (warn → kick → ban)
 - Bad-word filter, anti-spam link detection
@@ -488,6 +496,7 @@ Everything in section 4.1.
 - Timed bans (auto-expire)
 
 ### Phase 3: Admin web panel
+
 - Express/Fastify + Socket.IO
 - Live log streaming
 - Plugin toggle UI
@@ -497,6 +506,7 @@ Everything in section 4.1.
 - Auth (JWT or session-based)
 
 ### Phase 4: AI chat module
+
 - Provider adapter pattern (Gemini → Claude → OpenAI swappable)
 - Per-user token budget with daily/hourly caps
 - Per-channel rate limiting (cooldown between responses)
@@ -512,6 +522,7 @@ Everything in section 4.1.
 Deferred to Phase 4, but architectural decisions made now:
 
 **Provider adapter interface:**
+
 ```typescript
 abstract class AIProvider {
   abstract complete(systemPrompt: string, messages: Message[]): Promise<string>;
@@ -522,12 +533,14 @@ abstract class AIProvider {
 ```
 
 **Starting provider:** Google Gemini free tier.
+
 - Model: Gemini 2.5 Flash-Lite (highest free RPD: ~1000/day)
 - No credit card required
 - Rate limits: 15 RPM, 1000 RPD, 250K TPM on free tier
 - Cost if upgraded: $0.10 per million input tokens
 
 **Key gotchas to design for:**
+
 - Cost control: per-user token budgets persisted in DB, global daily spend cap
 - Latency: 1-5s response time vs IRC's instant feel. Buffer full response before sending.
 - Abuse: prompt injection, trying to make bot say offensive things. Solid system prompt + output filtering.
@@ -539,6 +552,7 @@ abstract class AIProvider {
 ## 7. Development notes
 
 ### Getting started
+
 ```bash
 git clone <repo>
 cd n0xb0t
@@ -550,14 +564,16 @@ pnpm run dev        # with --repl and --watch (uses tsx)
 ```
 
 ### Creating a plugin
+
 ```bash
 mkdir plugins/my-plugin
 ```
 
 Minimum viable plugin:
+
 ```typescript
 // plugins/my-plugin/index.ts
-import type { PluginAPI, HandlerContext } from '../../src/types.js';
+import type { HandlerContext, PluginAPI } from '../../src/types.js';
 
 export const name = 'my-plugin';
 export const version = '1.0.0';
@@ -570,12 +586,15 @@ export function init(api: PluginAPI): void {
 ```
 
 ### Hot-reload workflow
+
 1. Edit plugin code
 2. In REPL or IRC: `.reload my-plugin`
 3. Changes are live immediately — no bot restart needed
 
 ### Testing against a local IRC server
+
 For development, run a local InspIRCd or ngIRCd instance. ngIRCd is the lightest option:
+
 ```bash
 # macOS
 brew install ngircd
@@ -588,14 +607,14 @@ ngircd -n  # foreground mode
 
 ## 8. Prior art and references
 
-| Project | What we take from it |
-|---------|---------------------|
-| **Eggdrop** | Bind system, flag-based permissions, hostmask identity, two-tier module architecture, party line concept (→ REPL) |
-| **Darkbot** | Keyword-based auto-response concept (relevant for AI module) |
-| **MrNodeBot** | Proof that Node.js + Express + Socket.IO works for IRC bots with web panels |
-| **Limnoria/Supybot** | ACL system design, plugin config patterns |
-| **irc-framework** | IRC protocol handling, IRCv3, SASL — we use this as our transport layer |
+| Project              | What we take from it                                                                                              |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| **Eggdrop**          | Bind system, flag-based permissions, hostmask identity, two-tier module architecture, party line concept (→ REPL) |
+| **Darkbot**          | Keyword-based auto-response concept (relevant for AI module)                                                      |
+| **MrNodeBot**        | Proof that Node.js + Express + Socket.IO works for IRC bots with web panels                                       |
+| **Limnoria/Supybot** | ACL system design, plugin config patterns                                                                         |
+| **irc-framework**    | IRC protocol handling, IRCv3, SASL — we use this as our transport layer                                           |
 
 ---
 
-*This document represents the design as of the start of development. It will evolve as the project matures.*
+_This document represents the design as of the start of development. It will evolve as the project matures._

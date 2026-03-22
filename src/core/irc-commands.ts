@@ -1,9 +1,8 @@
 // n0xb0t — IRC commands core module
 // Convenience wrappers for common IRC operations with mod action logging.
-
-import { sanitize } from '../utils/sanitize.js';
 import type { BotDatabase } from '../database.js';
 import type { Logger } from '../logger.js';
+import { sanitize } from '../utils/sanitize.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -29,7 +28,12 @@ export class IRCCommands {
   private logger: Logger | null;
   private modesPerLine: number;
 
-  constructor(client: IRCCommandsClient, db: BotDatabase | null, modesPerLine?: number, logger?: Logger | null) {
+  constructor(
+    client: IRCCommandsClient,
+    db: BotDatabase | null,
+    modesPerLine?: number,
+    logger?: Logger | null,
+  ) {
     this.client = client;
     this.db = db;
     this.logger = logger?.child('irc-commands') ?? null;
@@ -147,13 +151,20 @@ export class IRCCommands {
   private sendModeRaw(channel: string, modeString: string, params: string[]): void {
     const safeChannel = sanitize(channel);
     const safeParams = params.map((p) => sanitize(p));
-    const line = safeParams.length > 0
-      ? `MODE ${safeChannel} ${modeString} ${safeParams.join(' ')}`
-      : `MODE ${safeChannel} ${modeString}`;
+    const line =
+      safeParams.length > 0
+        ? `MODE ${safeChannel} ${modeString} ${safeParams.join(' ')}`
+        : `MODE ${safeChannel} ${modeString}`;
     this.client.raw(line);
   }
 
-  private logMod(action: string, channel: string, target: string, by: string, reason: string | null): void {
+  private logMod(
+    action: string,
+    channel: string,
+    target: string,
+    by: string,
+    reason: string | null,
+  ): void {
     if (this.db) {
       try {
         this.db.logModAction(action, channel, target, by, reason);

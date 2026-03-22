@@ -7,18 +7,18 @@
 
 /** Bind types supported by the dispatcher. */
 export type BindType =
-  | 'pub'    // Channel message — exact command match, non-stackable
-  | 'pubm'   // Channel message — wildcard on full text, stackable
-  | 'msg'    // Private message — exact command match, non-stackable
-  | 'msgm'   // Private message — wildcard on full text, stackable
-  | 'join'   // User joins channel, stackable
-  | 'part'   // User parts channel, stackable
-  | 'kick'   // User kicked, stackable
-  | 'nick'   // Nick change, stackable
-  | 'mode'   // Mode change, stackable
-  | 'raw'    // Raw server line, stackable
-  | 'time'   // Timer (interval), stackable
-  | 'ctcp'   // CTCP request, stackable
+  | 'pub' // Channel message — exact command match, non-stackable
+  | 'pubm' // Channel message — wildcard on full text, stackable
+  | 'msg' // Private message — exact command match, non-stackable
+  | 'msgm' // Private message — wildcard on full text, stackable
+  | 'join' // User joins channel, stackable
+  | 'part' // User parts channel, stackable
+  | 'kick' // User kicked, stackable
+  | 'nick' // Nick change, stackable
+  | 'mode' // Mode change, stackable
+  | 'raw' // Raw server line, stackable
+  | 'time' // Timer (interval), stackable
+  | 'ctcp' // CTCP request, stackable
   | 'notice'; // Notice message, stackable
 
 /** Permission flags: n=owner, m=master, o=op, v=voice, -=anyone. */
@@ -33,7 +33,7 @@ export interface HandlerContext {
   nick: string;
   ident: string;
   hostname: string;
-  channel: string | null;  // null for PMs
+  channel: string | null; // null for PMs
   text: string;
   command: string;
   args: string;
@@ -143,7 +143,7 @@ export interface ChannelUser {
   nick: string;
   ident: string;
   hostname: string;
-  modes: string;    // e.g. "o" for op, "v" for voice
+  modes: string; // e.g. "o" for op, "v" for voice
   joinedAt: number; // unix timestamp
 }
 
@@ -163,8 +163,8 @@ export interface ChannelState {
 export interface UserRecord {
   handle: string;
   hostmasks: string[];
-  global: string;                       // global flags, e.g. "nmov"
-  channels: Record<string, string>;     // per-channel flag overrides
+  global: string; // global flags, e.g. "nmov"
+  channels: Record<string, string>; // per-channel flag overrides
 }
 
 // ---------------------------------------------------------------------------

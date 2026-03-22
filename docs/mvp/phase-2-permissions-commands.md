@@ -1,9 +1,11 @@
 # Plan: Phase 2 — Permissions + Command Handler
 
 ## Summary
+
 Build the Eggdrop-style permissions system (hostmask-based identity, n/m/o/v flags with per-channel overrides) and the shared command handler that will serve both the REPL and IRC admin commands. Still no IRC connection — fully testable with unit tests.
 
 ## Dependencies
+
 - [x] Phase 0 complete (scaffolding)
 - [x] Phase 1 complete (database + dispatcher, tests passing)
 
@@ -41,6 +43,7 @@ Build the Eggdrop-style permissions system (hostmask-based identity, n/m/o/v fla
     - Owner flag (`n`) implying all flags is intentional but means `n` accounts are high-value targets
     - Log all permission changes (adduser, deluser, flag changes) with the source (REPL or IRC nick)
 - [x] User record shape:
+
 ```typescript
 {
   handle: 'admin',
@@ -49,6 +52,7 @@ Build the Eggdrop-style permissions system (hostmask-based identity, n/m/o/v fla
   channels: { '#main': 'o', '#games': 'v' }
 }
 ```
+
 - [x] Use database namespace `_permissions` for persistence
 - [x] Create `tests/core/permissions.test.ts`:
   - Test addUser and getUser
@@ -133,6 +137,7 @@ Build the Eggdrop-style permissions system (hostmask-based identity, n/m/o/v fla
 ## Verification
 
 **This phase is complete when:**
+
 1. `pnpm vitest run tests/core/permissions.test.ts` — all pass
 2. `pnpm vitest run tests/command-handler.test.ts` — all pass
 3. `pnpm vitest run tests/core/commands/permission-commands.test.ts` — all pass
@@ -142,4 +147,5 @@ Build the Eggdrop-style permissions system (hostmask-based identity, n/m/o/v fla
 7. Permission commands can add users, set flags, and list users using real (not mocked) permissions and dispatcher instances
 
 ## Next phase
+
 Phase 3: Bot Core + IRC Connection

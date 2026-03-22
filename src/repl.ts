@@ -1,8 +1,8 @@
 // n0xb0t — Interactive REPL
 // Provides a terminal interface for bot administration.
 // Commands are routed through the same CommandHandler used by IRC.
+import { type Interface as ReadlineInterface, createInterface } from 'node:readline';
 
-import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
 import type { Bot } from './bot.js';
 import type { Logger } from './logger.js';
 

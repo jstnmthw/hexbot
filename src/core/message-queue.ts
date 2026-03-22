@@ -2,7 +2,6 @@
 // Token-bucket rate limiter for outgoing IRC messages. Sits between
 // the bot's say/notice/action methods and the IRC client to prevent
 // excess-flood disconnects.
-
 import type { Logger } from '../logger.js';
 
 // ---------------------------------------------------------------------------
@@ -63,7 +62,9 @@ export class MessageQueue {
     }
 
     if (this.queue.length >= MessageQueue.MAX_DEPTH) {
-      this.logger?.warn(`Message queue full (${MessageQueue.MAX_DEPTH}), dropping outgoing message`);
+      this.logger?.warn(
+        `Message queue full (${MessageQueue.MAX_DEPTH}), dropping outgoing message`,
+      );
       return;
     }
 

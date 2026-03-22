@@ -1,6 +1,6 @@
 ---
 name: dev
-description: "n0xb0t project conventions and context. Auto-loads when working in this repo to provide coding standards, IRC bot patterns, and architectural context from DESIGN.md."
+description: 'n0xb0t project conventions and context. Auto-loads when working in this repo to provide coding standards, IRC bot patterns, and architectural context from DESIGN.md.'
 user-invocable: false
 ---
 

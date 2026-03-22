@@ -1,31 +1,30 @@
 // n0xb0t — Plugin loader
 // Discovers, loads, unloads, and hot-reloads plugins. Each plugin gets a scoped API.
-
-import { readFileSync, existsSync, writeFileSync, unlinkSync } from 'node:fs';
-import { resolve, join, dirname } from 'node:path';
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { sanitize } from './utils/sanitize.js';
-import type { EventDispatcher } from './dispatcher.js';
-import type { BotEventBus } from './event-bus.js';
-import type { BotDatabase } from './database.js';
-import type { Logger } from './logger.js';
-import type { Permissions } from './core/permissions.js';
 import type { ChannelState } from './core/channel-state.js';
 import type { IRCCommands } from './core/irc-commands.js';
-import type { Services } from './core/services.js';
 import type { MessageQueue } from './core/message-queue.js';
+import type { Permissions } from './core/permissions.js';
+import type { Services } from './core/services.js';
+import type { BotDatabase } from './database.js';
+import type { EventDispatcher } from './dispatcher.js';
+import type { BotEventBus } from './event-bus.js';
+import type { Logger } from './logger.js';
 import type {
+  BindHandler,
+  BindType,
+  BotConfig,
+  ChannelUser,
   PluginAPI,
   PluginDB,
   PluginPermissions,
   PluginServices,
   PluginsConfig,
-  BindType,
-  BindHandler,
-  BotConfig,
-  ChannelUser,
 } from './types.js';
+import { sanitize } from './utils/sanitize.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -173,7 +172,11 @@ export class PluginLoader {
       return { name, status: 'error', error: 'Plugin must export a "name" string' };
     }
     if (typeof mod.init !== 'function') {
-      return { name: mod.name as string, status: 'error', error: 'Plugin must export an "init" function' };
+      return {
+        name: mod.name as string,
+        status: 'error',
+        error: 'Plugin must export an "init" function',
+      };
     }
 
     const pluginName = mod.name as string;
@@ -189,7 +192,11 @@ export class PluginLoader {
 
     // Reject duplicate
     if (this.loaded.has(pluginName)) {
-      return { name: pluginName, status: 'error', error: `Plugin "${pluginName}" is already loaded` };
+      return {
+        name: pluginName,
+        status: 'error',
+        error: `Plugin "${pluginName}" is already loaded`,
+      };
     }
 
     // Create scoped API
@@ -215,7 +222,10 @@ export class PluginLoader {
       version: typeof mod.version === 'string' ? mod.version : '0.0.0',
       description: typeof mod.description === 'string' ? mod.description : '',
       filePath: absPath,
-      teardown: typeof mod.teardown === 'function' ? mod.teardown as () => void | Promise<void> : undefined,
+      teardown:
+        typeof mod.teardown === 'function'
+          ? (mod.teardown as () => void | Promise<void>)
+          : undefined,
     };
     this.loaded.set(pluginName, plugin);
 
@@ -320,10 +330,14 @@ export class PluginLoader {
           },
         })
       : Object.freeze({
-          get(): string | undefined { return undefined; },
+          get(): string | undefined {
+            return undefined;
+          },
           set(): void {},
           del(): void {},
-          list(): Array<{ key: string; value: string }> { return []; },
+          list(): Array<{ key: string; value: string }> {
+            return [];
+          },
         });
 
     // Read-only permissions API
@@ -569,7 +583,7 @@ export class PluginLoader {
     if (rewritten === source) {
       // No local imports to bust — simple cache-bust on the entry file
       const fileUrl = pathToFileURL(absPath).href + `?t=${ts}`;
-      return await import(fileUrl) as Record<string, unknown>;
+      return (await import(fileUrl)) as Record<string, unknown>;
     }
 
     // Write temp file in the same directory so relative paths still resolve
@@ -578,9 +592,13 @@ export class PluginLoader {
     try {
       writeFileSync(tmpPath, rewritten, 'utf-8');
       const fileUrl = pathToFileURL(tmpPath).href + `?t=${ts}`;
-      return await import(fileUrl) as Record<string, unknown>;
+      return (await import(fileUrl)) as Record<string, unknown>;
     } finally {
-      try { unlinkSync(tmpPath); } catch { /* ignore cleanup errors */ }
+      try {
+        unlinkSync(tmpPath);
+      } catch {
+        /* ignore cleanup errors */
+      }
     }
   }
 

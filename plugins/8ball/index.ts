@@ -1,7 +1,6 @@
 // 8ball — Magic 8-Ball plugin
 // Responds to !8ball <question> with a random answer.
-
-import type { PluginAPI, HandlerContext } from '../../src/types.js';
+import type { HandlerContext, PluginAPI } from '../../src/types.js';
 
 export const name = '8ball';
 export const version = '1.0.0';
@@ -26,7 +25,7 @@ const RESPONSES = [
   'Cannot predict now.',
   'Concentrate and ask again.',
   // Negative
-  'Don\'t count on it.',
+  "Don't count on it.",
   'My reply is no.',
   'My sources say no.',
   'Outlook not so good.',

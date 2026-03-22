@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { CommandHandler, type CommandContext } from '../../../src/command-handler.js';
-import { Permissions } from '../../../src/core/permissions.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { type CommandContext, CommandHandler } from '../../../src/command-handler.js';
 import { registerPermissionCommands } from '../../../src/core/commands/permission-commands.js';
+import { Permissions } from '../../../src/core/permissions.js';
 
 /** Helper: create a minimal CommandContext. */
 function makeCtx(overrides: Partial<CommandContext> = {}): CommandContext {

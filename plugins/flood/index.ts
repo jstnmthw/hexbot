@@ -1,8 +1,7 @@
 // flood — Inbound flood protection plugin.
 // Detects message floods, join/part spam, and nick-change spam.
 // Escalating responses: warn → kick → tempban (configurable).
-
-import type { PluginAPI, HandlerContext } from '../../src/types.js';
+import type { HandlerContext, PluginAPI } from '../../src/types.js';
 
 export const name = 'flood';
 export const version = '1.0.0';
@@ -35,9 +34,9 @@ interface BanRecord {
 // State (reset on each init)
 // ---------------------------------------------------------------------------
 
-let msgTracker: Map<string, WindowEntry>;   // `${nick}@${channel}`
-let joinTracker: Map<string, WindowEntry>;  // `${hostmask}`
-let nickTracker: Map<string, WindowEntry>;  // `${hostmask}`
+let msgTracker: Map<string, WindowEntry>; // `${nick}@${channel}`
+let joinTracker: Map<string, WindowEntry>; // `${hostmask}`
+let nickTracker: Map<string, WindowEntry>; // `${hostmask}`
 let offenceTracker: Map<string, OffenceEntry>; // `${nick}@${channel}` or `${hostmask}`
 
 // ---------------------------------------------------------------------------
@@ -89,7 +88,7 @@ function checkWindow(
   tracker: Map<string, WindowEntry>,
   key: string,
   windowMs: number,
-  threshold: number
+  threshold: number,
 ): boolean {
   const now = Date.now();
   const entry = tracker.get(key);
@@ -115,7 +114,6 @@ function storeFloodBan(channel: string, mask: string, durationMinutes: number): 
   const record: BanRecord = { mask, channel: channel.toLowerCase(), ts: now, expires };
   api.db.set(banDbKey(channel, mask), JSON.stringify(record));
 }
-
 
 function liftExpiredFloodBans(): void {
   const now = Date.now();
@@ -182,7 +180,7 @@ export function init(pluginApi: PluginAPI): void {
     action: string,
     channel: string,
     nick: string,
-    reason: string
+    reason: string,
   ): Promise<void> {
     if (!botHasOps(channel)) return;
 
@@ -224,7 +222,12 @@ export function init(pluginApi: PluginAPI): void {
     if (!flooded) return;
 
     const action = recordOffence(key);
-    await applyAction(action, ctx.channel, ctx.nick, `message flood (${msgThreshold}+ msgs/${msgWindowSecs}s)`);
+    await applyAction(
+      action,
+      ctx.channel,
+      ctx.nick,
+      `message flood (${msgThreshold}+ msgs/${msgWindowSecs}s)`,
+    );
   });
 
   // ---------------------------------------------------------------------------
@@ -245,8 +248,12 @@ export function init(pluginApi: PluginAPI): void {
 
     const offenceKey = `join:${hostmask.toLowerCase()}`;
     const action = recordOffence(offenceKey);
-    applyAction(action, ctx.channel, ctx.nick, `join flood (${joinThreshold}+ joins/${joinWindowSecs}s)`)
-      .catch((err) => api.error('Join flood action error:', err));
+    applyAction(
+      action,
+      ctx.channel,
+      ctx.nick,
+      `join flood (${joinThreshold}+ joins/${joinWindowSecs}s)`,
+    ).catch((err) => api.error('Join flood action error:', err));
   });
 
   // ---------------------------------------------------------------------------
@@ -273,8 +280,12 @@ export function init(pluginApi: PluginAPI): void {
 
       const offenceKey = `nick:${hostmask.toLowerCase()}`;
       const action = recordOffence(offenceKey);
-      applyAction(action, channel, ctx.nick, `nick-change spam (${nickThreshold}+ changes/${nickWindowSecs}s)`)
-        .catch((err) => api.error('Nick flood action error:', err));
+      applyAction(
+        action,
+        channel,
+        ctx.nick,
+        `nick-change spam (${nickThreshold}+ changes/${nickWindowSecs}s)`,
+      ).catch((err) => api.error('Nick flood action error:', err));
       break;
     }
   });

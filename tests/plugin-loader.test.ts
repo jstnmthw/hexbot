@@ -1,18 +1,18 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { PluginLoader } from '../src/plugin-loader.js';
-import type { PluginLoaderDeps } from '../src/plugin-loader.js';
-import { EventDispatcher } from '../src/dispatcher.js';
-import { BotEventBus } from '../src/event-bus.js';
-import { BotDatabase } from '../src/database.js';
-import { Permissions } from '../src/core/permissions.js';
 import { ChannelState } from '../src/core/channel-state.js';
 import { IRCCommands } from '../src/core/irc-commands.js';
+import { Permissions } from '../src/core/permissions.js';
 import { Services } from '../src/core/services.js';
+import { BotDatabase } from '../src/database.js';
+import { EventDispatcher } from '../src/dispatcher.js';
+import { BotEventBus } from '../src/event-bus.js';
 import { Logger } from '../src/logger.js';
+import { PluginLoader } from '../src/plugin-loader.js';
+import type { PluginLoaderDeps } from '../src/plugin-loader.js';
 import type { BotConfig } from '../src/types.js';
 
 // ---------------------------------------------------------------------------
@@ -46,7 +46,15 @@ function writePluginsJson(dir: string, config: Record<string, unknown>): string 
 }
 
 const MINIMAL_BOT_CONFIG: BotConfig = {
-  irc: { host: 'localhost', port: 6667, tls: false, nick: 'test', username: 'test', realname: 'test', channels: [] },
+  irc: {
+    host: 'localhost',
+    port: 6667,
+    tls: false,
+    nick: 'test',
+    username: 'test',
+    realname: 'test',
+    channels: [],
+  },
   owner: { handle: 'admin', hostmask: '*!*@localhost' },
   identity: { method: 'hostmask', require_acc_for: [] },
   services: { type: 'none', nickserv: 'NickServ', password: '', sasl: false },
@@ -55,7 +63,16 @@ const MINIMAL_BOT_CONFIG: BotConfig = {
   logging: { level: 'info', mod_actions: false },
 };
 
-function createLoader(pluginDir: string, db?: BotDatabase): { loader: PluginLoader; dispatcher: EventDispatcher; eventBus: BotEventBus; db: BotDatabase; permissions: Permissions } {
+function createLoader(
+  pluginDir: string,
+  db?: BotDatabase,
+): {
+  loader: PluginLoader;
+  dispatcher: EventDispatcher;
+  eventBus: BotEventBus;
+  db: BotDatabase;
+  permissions: Permissions;
+} {
   const database = db ?? new BotDatabase(':memory:');
   if (!db) database.open();
   const dispatcher = new EventDispatcher();
@@ -125,7 +142,17 @@ function createLoaderFull(pluginDir: string, overrides?: Partial<PluginLoaderDep
     ...overrides,
   });
 
-  return { loader, dispatcher, eventBus, db: database, permissions, mockIrcClient, channelState, ircCommands, services };
+  return {
+    loader,
+    dispatcher,
+    eventBus,
+    db: database,
+    permissions,
+    mockIrcClient,
+    channelState,
+    ircCommands,
+    services,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -145,14 +172,18 @@ describe('PluginLoader', () => {
 
   describe('load', () => {
     it('should load a valid plugin and call init()', async () => {
-      const pluginPath = writePlugin(tempDir, 'test-plugin', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'test-plugin',
+        `
         export const name = 'test-plugin';
         export const version = '1.0.0';
         export const description = 'A test plugin';
         export function init(api) {
           api.log('initialized');
         }
-      `);
+      `,
+      );
 
       const { loader } = createLoader(tempDir);
       const result = await loader.load(pluginPath);
@@ -162,14 +193,18 @@ describe('PluginLoader', () => {
     });
 
     it('should register binds from init()', async () => {
-      const pluginPath = writePlugin(tempDir, 'bind-plugin', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'bind-plugin',
+        `
         export const name = 'bind-plugin';
         export const version = '1.0.0';
         export const description = 'Plugin that binds';
         export function init(api) {
           api.bind('pub', '-', '!test', (ctx) => ctx.reply('ok'));
         }
-      `);
+      `,
+      );
 
       const { loader, dispatcher } = createLoader(tempDir);
       await loader.load(pluginPath);
@@ -180,9 +215,13 @@ describe('PluginLoader', () => {
     });
 
     it('should reject plugin with missing name export', async () => {
-      const pluginPath = writePlugin(tempDir, 'no-name', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'no-name',
+        `
         export function init(api) {}
-      `);
+      `,
+      );
 
       const { loader } = createLoader(tempDir);
       const result = await loader.load(pluginPath);
@@ -192,9 +231,13 @@ describe('PluginLoader', () => {
     });
 
     it('should reject plugin with missing init export', async () => {
-      const pluginPath = writePlugin(tempDir, 'no-init', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'no-init',
+        `
         export const name = 'no-init';
-      `);
+      `,
+      );
 
       const { loader } = createLoader(tempDir);
       const result = await loader.load(pluginPath);
@@ -204,14 +247,18 @@ describe('PluginLoader', () => {
     });
 
     it('should catch and report init() errors', async () => {
-      const pluginPath = writePlugin(tempDir, 'bad-init', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'bad-init',
+        `
         export const name = 'bad-init';
         export const version = '1.0.0';
         export const description = '';
         export function init(api) {
           throw new Error('boom');
         }
-      `);
+      `,
+      );
 
       const { loader } = createLoader(tempDir);
       const result = await loader.load(pluginPath);
@@ -222,7 +269,10 @@ describe('PluginLoader', () => {
     });
 
     it('should clean up binds when init() throws', async () => {
-      const pluginPath = writePlugin(tempDir, 'partial-init', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'partial-init',
+        `
         export const name = 'partial-init';
         export const version = '1.0.0';
         export const description = '';
@@ -230,7 +280,8 @@ describe('PluginLoader', () => {
           api.bind('pub', '-', '!before', (ctx) => {});
           throw new Error('mid-init error');
         }
-      `);
+      `,
+      );
 
       const { loader, dispatcher } = createLoader(tempDir);
       await loader.load(pluginPath);
@@ -240,12 +291,16 @@ describe('PluginLoader', () => {
     });
 
     it('should reject loading the same plugin twice', async () => {
-      const pluginPath = writePlugin(tempDir, 'dupe-plugin', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'dupe-plugin',
+        `
         export const name = 'dupe-plugin';
         export const version = '1.0.0';
         export const description = '';
         export function init(api) {}
-      `);
+      `,
+      );
 
       const { loader } = createLoader(tempDir);
       await loader.load(pluginPath);
@@ -256,12 +311,16 @@ describe('PluginLoader', () => {
     });
 
     it('should reject unsafe plugin names', async () => {
-      const pluginPath = writePlugin(tempDir, 'bad-name', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'bad-name',
+        `
         export const name = '../escape';
         export const version = '1.0.0';
         export const description = '';
         export function init(api) {}
-      `);
+      `,
+      );
 
       const { loader } = createLoader(tempDir);
       const result = await loader.load(pluginPath);
@@ -279,12 +338,16 @@ describe('PluginLoader', () => {
     });
 
     it('should emit plugin:loaded event', async () => {
-      const pluginPath = writePlugin(tempDir, 'event-plugin', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'event-plugin',
+        `
         export const name = 'event-plugin';
         export const version = '1.0.0';
         export const description = '';
         export function init(api) {}
-      `);
+      `,
+      );
 
       const { loader, eventBus } = createLoader(tempDir);
       const listener = vi.fn();
@@ -300,7 +363,10 @@ describe('PluginLoader', () => {
     it('should call teardown() on unload', async () => {
       // We track teardown via a side effect — writing a file
       const markerPath = join(tempDir, 'teardown-marker');
-      const pluginPath = writePlugin(tempDir, 'teardown-plugin', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'teardown-plugin',
+        `
         import { writeFileSync } from 'node:fs';
         export const name = 'teardown-plugin';
         export const version = '1.0.0';
@@ -309,7 +375,8 @@ describe('PluginLoader', () => {
         export function teardown() {
           writeFileSync('${markerPath.replace(/\\/g, '\\\\')}', 'torn down', 'utf-8');
         }
-      `);
+      `,
+      );
 
       const { loader } = createLoader(tempDir);
       await loader.load(pluginPath);
@@ -320,7 +387,10 @@ describe('PluginLoader', () => {
     });
 
     it('should remove all binds on unload', async () => {
-      const pluginPath = writePlugin(tempDir, 'bind-unload', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'bind-unload',
+        `
         export const name = 'bind-unload';
         export const version = '1.0.0';
         export const description = '';
@@ -328,7 +398,8 @@ describe('PluginLoader', () => {
           api.bind('pub', '-', '!a', (ctx) => {});
           api.bind('pubm', '-', '*hello*', (ctx) => {});
         }
-      `);
+      `,
+      );
 
       const { loader, dispatcher } = createLoader(tempDir);
       await loader.load(pluginPath);
@@ -346,12 +417,16 @@ describe('PluginLoader', () => {
     });
 
     it('should emit plugin:unloaded event', async () => {
-      const pluginPath = writePlugin(tempDir, 'unload-event', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'unload-event',
+        `
         export const name = 'unload-event';
         export const version = '1.0.0';
         export const description = '';
         export function init(api) {}
-      `);
+      `,
+      );
 
       const { loader, eventBus } = createLoader(tempDir);
       const listener = vi.fn();
@@ -368,14 +443,18 @@ describe('PluginLoader', () => {
     it('should reload a plugin (unload old binds, load new binds)', async () => {
       // Vitest's module transform cache prevents true code-change reload testing.
       // Instead we verify the mechanism: unload removes binds, load re-registers.
-      const pluginPath = writePlugin(tempDir, 'reload-plugin', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'reload-plugin',
+        `
         export const name = 'reload-plugin';
         export const version = '1.0.0';
         export const description = '';
         export function init(api) {
           api.bind('pub', '-', '!reload-cmd', (ctx) => {});
         }
-      `);
+      `,
+      );
 
       const { loader, dispatcher, eventBus } = createLoader(tempDir);
       await loader.load(pluginPath);
@@ -403,24 +482,36 @@ describe('PluginLoader', () => {
 
   describe('loadAll', () => {
     it('should load only enabled plugins from plugins.json', async () => {
-      writePlugin(tempDir, 'enabled-one', `
+      writePlugin(
+        tempDir,
+        'enabled-one',
+        `
         export const name = 'enabled-one';
         export const version = '1.0.0';
         export const description = '';
         export function init(api) {}
-      `);
-      writePlugin(tempDir, 'enabled-two', `
+      `,
+      );
+      writePlugin(
+        tempDir,
+        'enabled-two',
+        `
         export const name = 'enabled-two';
         export const version = '1.0.0';
         export const description = '';
         export function init(api) {}
-      `);
-      writePlugin(tempDir, 'disabled-one', `
+      `,
+      );
+      writePlugin(
+        tempDir,
+        'disabled-one',
+        `
         export const name = 'disabled-one';
         export const version = '1.0.0';
         export const description = '';
         export function init(api) {}
-      `);
+      `,
+      );
 
       const configDir = makeTempDir();
       const cfgPath = writePluginsJson(configDir, {
@@ -444,22 +535,30 @@ describe('PluginLoader', () => {
 
   describe('scoped API', () => {
     it('should namespace database operations per plugin', async () => {
-      const pluginAPath = writePlugin(tempDir, 'plugin-a', `
+      const pluginAPath = writePlugin(
+        tempDir,
+        'plugin-a',
+        `
         export const name = 'plugin-a';
         export const version = '1.0.0';
         export const description = '';
         export function init(api) {
           api.db.set('shared-key', 'value-from-a');
         }
-      `);
-      const pluginBPath = writePlugin(tempDir, 'plugin-b', `
+      `,
+      );
+      const pluginBPath = writePlugin(
+        tempDir,
+        'plugin-b',
+        `
         export const name = 'plugin-b';
         export const version = '1.0.0';
         export const description = '';
         export function init(api) {
           api.db.set('shared-key', 'value-from-b');
         }
-      `);
+      `,
+      );
 
       const db = new BotDatabase(':memory:');
       db.open();
@@ -476,7 +575,10 @@ describe('PluginLoader', () => {
     });
 
     it('should not allow plugin A to access plugin B database', async () => {
-      const pluginPath = writePlugin(tempDir, 'namespace-test', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'namespace-test',
+        `
         export const name = 'namespace-test';
         export const version = '1.0.0';
         export const description = '';
@@ -486,7 +588,8 @@ describe('PluginLoader', () => {
           api.db.set('mykey', 'myvalue');
         }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       const db = new BotDatabase(':memory:');
       db.open();
@@ -515,7 +618,10 @@ describe('PluginLoader', () => {
         color: 'blue',
       });
       // Plugin writes its config values to the DB so we can verify
-      const pluginPath = writePlugin(tempDir, 'config-plugin', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'config-plugin',
+        `
         export const name = 'config-plugin';
         export const version = '1.0.0';
         export const description = '';
@@ -524,7 +630,8 @@ describe('PluginLoader', () => {
           api.db.set('cfg-color', String(api.config.color ?? ''));
           api.db.set('cfg-extra', String(api.config.extra ?? ''));
         }
-      `);
+      `,
+      );
 
       const pluginsConfig = {
         'config-plugin': {
@@ -552,12 +659,16 @@ describe('PluginLoader', () => {
 
   describe('list', () => {
     it('should list loaded plugins', async () => {
-      const pluginPath = writePlugin(tempDir, 'list-plugin', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'list-plugin',
+        `
         export const name = 'list-plugin';
         export const version = '2.5.0';
         export const description = 'A listable plugin';
         export function init(api) {}
-      `);
+      `,
+      );
 
       const { loader } = createLoader(tempDir);
       expect(loader.list()).toHaveLength(0);
@@ -574,7 +685,10 @@ describe('PluginLoader', () => {
 
   describe('scoped API — IRC methods with null ircClient', () => {
     it('should not throw when ircClient is null', async () => {
-      const pluginPath = writePlugin(tempDir, 'null-irc', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'null-irc',
+        `
         export const name = 'null-irc';
         export const version = '1.0.0';
         export const description = '';
@@ -583,7 +697,8 @@ describe('PluginLoader', () => {
           savedApi = api;
         }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       // createLoader uses ircClient: null by default
       const { loader } = createLoader(tempDir);
@@ -604,14 +719,18 @@ describe('PluginLoader', () => {
 
   describe('scoped API — IRC methods with a real ircClient', () => {
     it('should delegate say/action/notice/raw/ctcpResponse to ircClient', async () => {
-      const pluginPath = writePlugin(tempDir, 'real-irc', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'real-irc',
+        `
         export const name = 'real-irc';
         export const version = '1.0.0';
         export const description = '';
         let savedApi;
         export function init(api) { savedApi = api; }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       const { loader, mockIrcClient } = createLoaderFull(tempDir);
       await loader.load(pluginPath);
@@ -638,14 +757,18 @@ describe('PluginLoader', () => {
 
   describe('scoped API — IRC commands with null ircCommands', () => {
     it('should not throw when ircCommands is null', async () => {
-      const pluginPath = writePlugin(tempDir, 'null-cmds', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'null-cmds',
+        `
         export const name = 'null-cmds';
         export const version = '1.0.0';
         export const description = '';
         let savedApi;
         export function init(api) { savedApi = api; }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       // createLoader uses no ircCommands by default
       const { loader } = createLoader(tempDir);
@@ -667,14 +790,18 @@ describe('PluginLoader', () => {
 
   describe('scoped API — IRC commands with real ircCommands', () => {
     it('should delegate op/deop/voice/devoice/kick/ban/mode/topic to ircCommands', async () => {
-      const pluginPath = writePlugin(tempDir, 'real-cmds', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'real-cmds',
+        `
         export const name = 'real-cmds';
         export const version = '1.0.0';
         export const description = '';
         let savedApi;
         export function init(api) { savedApi = api; }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       const { loader, ircCommands } = createLoaderFull(tempDir);
       vi.spyOn(ircCommands, 'op');
@@ -718,14 +845,18 @@ describe('PluginLoader', () => {
 
   describe('scoped API — channel state with null channelState', () => {
     it('should return undefined/empty when channelState is null', async () => {
-      const pluginPath = writePlugin(tempDir, 'null-chan', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'null-chan',
+        `
         export const name = 'null-chan';
         export const version = '1.0.0';
         export const description = '';
         let savedApi;
         export function init(api) { savedApi = api; }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       // createLoader has no channelState by default
       const { loader } = createLoader(tempDir);
@@ -742,14 +873,18 @@ describe('PluginLoader', () => {
 
   describe('scoped API — channel state with real channelState', () => {
     it('should return channel data when channel exists', async () => {
-      const pluginPath = writePlugin(tempDir, 'real-chan', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'real-chan',
+        `
         export const name = 'real-chan';
         export const version = '1.0.0';
         export const description = '';
         let savedApi;
         export function init(api) { savedApi = api; }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       const { loader, channelState } = createLoaderFull(tempDir);
       await loader.load(pluginPath);
@@ -757,15 +892,21 @@ describe('PluginLoader', () => {
       // Simulate a user joining so channelState has data
       // ChannelState responds to IRC events; trigger a join manually
       // We need to call the join handler directly via the mock client
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mockClient = (channelState as unknown as { client: Record<string, unknown> })['client'] as any;
+      const mockClient = (channelState as unknown as { client: Record<string, unknown> })[
+        'client'
+      ] as any; // eslint-disable-line @typescript-eslint/no-explicit-any
       // Attach first
       channelState.attach();
       // Find the join handler
       const onCalls = mockClient.on.mock.calls;
       const joinCall = onCalls.find((c: [string, (...args: unknown[]) => void]) => c[0] === 'join');
       if (joinCall) {
-        joinCall[1]({ nick: 'testuser', ident: 'user', hostname: 'host.example.com', channel: '#test' });
+        joinCall[1]({
+          nick: 'testuser',
+          ident: 'user',
+          hostname: 'host.example.com',
+          channel: '#test',
+        });
       }
 
       const mod = await import(join(tempDir, 'real-chan', 'index.ts') + `?t=${Date.now()}`);
@@ -792,14 +933,18 @@ describe('PluginLoader', () => {
     });
 
     it('should return undefined for non-existent channel', async () => {
-      const pluginPath = writePlugin(tempDir, 'no-chan', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'no-chan',
+        `
         export const name = 'no-chan';
         export const version = '1.0.0';
         export const description = '';
         let savedApi;
         export function init(api) { savedApi = api; }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       const { loader } = createLoaderFull(tempDir);
       await loader.load(pluginPath);
@@ -815,14 +960,18 @@ describe('PluginLoader', () => {
 
   describe('scoped API — services with null services', () => {
     it('should return defaults when services is null', async () => {
-      const pluginPath = writePlugin(tempDir, 'null-svc', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'null-svc',
+        `
         export const name = 'null-svc';
         export const version = '1.0.0';
         export const description = '';
         let savedApi;
         export function init(api) { savedApi = api; }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       // createLoader has no services by default
       const { loader } = createLoader(tempDir);
@@ -839,14 +988,18 @@ describe('PluginLoader', () => {
 
   describe('scoped API — logging methods', () => {
     it('should not throw when logger is null', async () => {
-      const pluginPath = writePlugin(tempDir, 'null-log', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'null-log',
+        `
         export const name = 'null-log';
         export const version = '1.0.0';
         export const description = '';
         let savedApi;
         export function init(api) { savedApi = api; }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       // createLoader has no logger by default
       const { loader } = createLoader(tempDir);
@@ -862,14 +1015,18 @@ describe('PluginLoader', () => {
     });
 
     it('should delegate to logger when logger is provided', async () => {
-      const pluginPath = writePlugin(tempDir, 'with-log', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'with-log',
+        `
         export const name = 'with-log';
         export const version = '1.0.0';
         export const description = '';
         let savedApi;
         export function init(api) { savedApi = api; }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       const { loader } = createLoaderFull(tempDir);
       await loader.load(pluginPath);
@@ -887,14 +1044,18 @@ describe('PluginLoader', () => {
 
   describe('scoped API — db stub when db is null', () => {
     it('should return no-op stubs', async () => {
-      const pluginPath = writePlugin(tempDir, 'null-db', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'null-db',
+        `
         export const name = 'null-db';
         export const version = '1.0.0';
         export const description = '';
         let savedApi;
         export function init(api) { savedApi = api; }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       const dispatcher = new EventDispatcher();
       const eventBus = new BotEventBus();
@@ -925,14 +1086,18 @@ describe('PluginLoader', () => {
   describe('config merging edge cases', () => {
     it('should use empty defaults when plugin config.json does not exist', async () => {
       // No config.json in plugin dir
-      const pluginPath = writePlugin(tempDir, 'no-config', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'no-config',
+        `
         export const name = 'no-config';
         export const version = '1.0.0';
         export const description = '';
         let savedApi;
         export function init(api) { savedApi = api; }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       const pluginsConfig = {
         'no-config': { enabled: true, config: { key1: 'val1' } },
@@ -953,14 +1118,18 @@ describe('PluginLoader', () => {
       mkdirSync(pluginDir, { recursive: true });
       writeFileSync(join(pluginDir, 'config.json'), '{not valid json!!!', 'utf-8');
 
-      const pluginPath = writePlugin(tempDir, 'bad-config', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'bad-config',
+        `
         export const name = 'bad-config';
         export const version = '1.0.0';
         export const description = '';
         let savedApi;
         export function init(api) { savedApi = api; }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       const { loader } = createLoaderFull(tempDir);
       const result = await loader.load(pluginPath);
@@ -969,14 +1138,18 @@ describe('PluginLoader', () => {
     });
 
     it('should use empty config when no pluginsConfig and no config.json', async () => {
-      const pluginPath = writePlugin(tempDir, 'empty-cfg', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'empty-cfg',
+        `
         export const name = 'empty-cfg';
         export const version = '1.0.0';
         export const description = '';
         let savedApi;
         export function init(api) { savedApi = api; }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       const { loader } = createLoader(tempDir);
       // Load without pluginsConfig argument
@@ -1030,14 +1203,18 @@ describe('PluginLoader', () => {
 
   describe('scoped API — getServerSupports', () => {
     it('should return an empty object', async () => {
-      const pluginPath = writePlugin(tempDir, 'supports-test', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'supports-test',
+        `
         export const name = 'supports-test';
         export const version = '1.0.0';
         export const description = '';
         let savedApi;
         export function init(api) { savedApi = api; }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       const { loader } = createLoader(tempDir);
       await loader.load(pluginPath);
@@ -1051,14 +1228,18 @@ describe('PluginLoader', () => {
 
   describe('scoped API — permissions and botConfig', () => {
     it('should expose read-only permissions API', async () => {
-      const pluginPath = writePlugin(tempDir, 'perm-test', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'perm-test',
+        `
         export const name = 'perm-test';
         export const version = '1.0.0';
         export const description = '';
         let savedApi;
         export function init(api) { savedApi = api; }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       const { loader } = createLoader(tempDir);
       await loader.load(pluginPath);
@@ -1071,14 +1252,18 @@ describe('PluginLoader', () => {
     });
 
     it('should expose botConfig without password', async () => {
-      const pluginPath = writePlugin(tempDir, 'cfg-test', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'cfg-test',
+        `
         export const name = 'cfg-test';
         export const version = '1.0.0';
         export const description = '';
         let savedApi;
         export function init(api) { savedApi = api; }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       const { loader } = createLoader(tempDir);
       await loader.load(pluginPath);
@@ -1094,10 +1279,14 @@ describe('PluginLoader', () => {
 
   describe('plugin default version and description', () => {
     it('should default version to 0.0.0 and description to empty string', async () => {
-      const pluginPath = writePlugin(tempDir, 'no-meta', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'no-meta',
+        `
         export const name = 'no-meta';
         export function init(api) {}
-      `);
+      `,
+      );
 
       const { loader } = createLoader(tempDir);
       await loader.load(pluginPath);
@@ -1111,7 +1300,10 @@ describe('PluginLoader', () => {
 
   describe('async init and teardown', () => {
     it('should handle async init()', async () => {
-      const pluginPath = writePlugin(tempDir, 'async-init', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'async-init',
+        `
         export const name = 'async-init';
         export const version = '1.0.0';
         export const description = '';
@@ -1119,7 +1311,8 @@ describe('PluginLoader', () => {
           await Promise.resolve();
           api.db.set('loaded', 'yes');
         }
-      `);
+      `,
+      );
 
       const db = new BotDatabase(':memory:');
       db.open();
@@ -1133,7 +1326,10 @@ describe('PluginLoader', () => {
 
     it('should handle async teardown()', async () => {
       const markerPath = join(tempDir, 'async-teardown-marker');
-      const pluginPath = writePlugin(tempDir, 'async-teardown', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'async-teardown',
+        `
         import { writeFileSync } from 'node:fs';
         export const name = 'async-teardown';
         export const version = '1.0.0';
@@ -1143,7 +1339,8 @@ describe('PluginLoader', () => {
           await Promise.resolve();
           writeFileSync('${markerPath.replace(/\\/g, '\\\\')}', 'async torn down', 'utf-8');
         }
-      `);
+      `,
+      );
 
       const { loader } = createLoader(tempDir);
       await loader.load(pluginPath);
@@ -1154,7 +1351,10 @@ describe('PluginLoader', () => {
     });
 
     it('should catch teardown errors without throwing', async () => {
-      const pluginPath = writePlugin(tempDir, 'bad-teardown', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'bad-teardown',
+        `
         export const name = 'bad-teardown';
         export const version = '1.0.0';
         export const description = '';
@@ -1162,7 +1362,8 @@ describe('PluginLoader', () => {
         export function teardown() {
           throw new Error('teardown explosion');
         }
-      `);
+      `,
+      );
 
       const { loader } = createLoaderFull(tempDir);
       await loader.load(pluginPath);
@@ -1175,14 +1376,18 @@ describe('PluginLoader', () => {
 
   describe('scoped API — db del and list with real db', () => {
     it('should delegate del() and list() to the real database', async () => {
-      const pluginPath = writePlugin(tempDir, 'db-ops', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'db-ops',
+        `
         export const name = 'db-ops';
         export const version = '1.0.0';
         export const description = '';
         let savedApi;
         export function init(api) { savedApi = api; }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       const db = new BotDatabase(':memory:');
       db.open();
@@ -1212,14 +1417,18 @@ describe('PluginLoader', () => {
 
   describe('scoped API — permissions checkFlags', () => {
     it('should delegate checkFlags to permissions module', async () => {
-      const pluginPath = writePlugin(tempDir, 'check-flags', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'check-flags',
+        `
         export const name = 'check-flags';
         export const version = '1.0.0';
         export const description = '';
         let savedApi;
         export function init(api) { savedApi = api; }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       const { loader } = createLoader(tempDir);
       await loader.load(pluginPath);
@@ -1247,14 +1456,18 @@ describe('PluginLoader', () => {
 
   describe('scoped API — services verifyUser with real services', () => {
     it('should delegate verifyUser to services module', async () => {
-      const pluginPath = writePlugin(tempDir, 'real-svc', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'real-svc',
+        `
         export const name = 'real-svc';
         export const version = '1.0.0';
         export const description = '';
         let savedApi;
         export function init(api) { savedApi = api; }
         export function getApi() { return savedApi; }
-      `);
+      `,
+      );
 
       const { loader, services } = createLoaderFull(tempDir);
       vi.spyOn(services, 'verifyUser').mockResolvedValue({ verified: true, account: 'testacct' });
@@ -1272,7 +1485,10 @@ describe('PluginLoader', () => {
 
   describe('scoped API — unbind', () => {
     it('should allow plugins to unbind handlers', async () => {
-      const pluginPath = writePlugin(tempDir, 'unbind-test', `
+      const pluginPath = writePlugin(
+        tempDir,
+        'unbind-test',
+        `
         export const name = 'unbind-test';
         export const version = '1.0.0';
         export const description = '';
@@ -1281,7 +1497,8 @@ describe('PluginLoader', () => {
           api.bind('pub', '-', '!removeme', handler);
           api.unbind('pub', '!removeme', handler);
         }
-      `);
+      `,
+      );
 
       const { loader, dispatcher } = createLoader(tempDir);
       await loader.load(pluginPath);

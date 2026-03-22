@@ -1,7 +1,7 @@
 ---
 name: migrate
-description: "Plan and execute database schema, config format, or plugin API migrations for n0xb0t. Use when a change requires transforming existing data or configs."
-argument-hint: "<description>"
+description: 'Plan and execute database schema, config format, or plugin API migrations for n0xb0t. Use when a change requires transforming existing data or configs.'
+argument-hint: '<description>'
 ---
 
 # Migrator

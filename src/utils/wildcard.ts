@@ -14,11 +14,21 @@ export function ircLower(text: string): string {
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
     switch (ch) {
-      case '[': result += '{'; break;
-      case ']': result += '}'; break;
-      case '\\': result += '|'; break;
-      case '~': result += '^'; break;
-      default: result += ch.toLowerCase(); break;
+      case '[':
+        result += '{';
+        break;
+      case ']':
+        result += '}';
+        break;
+      case '\\':
+        result += '|';
+        break;
+      case '~':
+        result += '^';
+        break;
+      default:
+        result += ch.toLowerCase();
+        break;
     }
   }
   return result;
@@ -32,11 +42,7 @@ export function ircLower(text: string): string {
  * @param caseInsensitive - When true, matching uses IRC-aware case folding (default: false)
  * @returns true if the text matches the pattern
  */
-export function wildcardMatch(
-  pattern: string,
-  text: string,
-  caseInsensitive = false
-): boolean {
+export function wildcardMatch(pattern: string, text: string, caseInsensitive = false): boolean {
   if (caseInsensitive) {
     pattern = ircLower(pattern);
     text = ircLower(text);

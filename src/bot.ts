@@ -1,32 +1,28 @@
 // n0xb0t — Bot class
 // Thin orchestrator that wires modules together. Creates and connects the
 // pieces but delegates all real work to the individual modules.
-
-import { readFileSync, accessSync, statSync, constants as fsConstants } from 'node:fs';
-import { resolve, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import chalk from 'chalk';
 import { Client as IrcClient } from 'irc-framework';
+import { accessSync, constants as fsConstants, readFileSync, statSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { BotDatabase } from './database.js';
-import { EventDispatcher } from './dispatcher.js';
-import { Permissions } from './core/permissions.js';
 import { CommandHandler } from './command-handler.js';
-import { BotEventBus } from './event-bus.js';
-import { IRCBridge } from './irc-bridge.js';
 import { ChannelState } from './core/channel-state.js';
-import { IRCCommands } from './core/irc-commands.js';
-import { MessageQueue } from './core/message-queue.js';
-import { Services } from './core/services.js';
-import { createLogger, type Logger } from './logger.js';
-
-import { PluginLoader } from './plugin-loader.js';
-
-import { registerPermissionCommands } from './core/commands/permission-commands.js';
 import { registerDispatcherCommands } from './core/commands/dispatcher-commands.js';
 import { registerIRCAdminCommands } from './core/commands/irc-commands-admin.js';
+import { registerPermissionCommands } from './core/commands/permission-commands.js';
 import { registerPluginCommands } from './core/commands/plugin-commands.js';
-
+import { IRCCommands } from './core/irc-commands.js';
+import { MessageQueue } from './core/message-queue.js';
+import { Permissions } from './core/permissions.js';
+import { Services } from './core/services.js';
+import { BotDatabase } from './database.js';
+import { EventDispatcher } from './dispatcher.js';
+import { BotEventBus } from './event-bus.js';
+import { IRCBridge } from './irc-bridge.js';
+import { type Logger, createLogger } from './logger.js';
+import { PluginLoader } from './plugin-loader.js';
 import type { BotConfig } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -271,7 +267,9 @@ export class Bot {
     try {
       const stat = statSync(configPath);
       if (stat.mode & 0o004) {
-        console.error(`[bot] SECURITY: ${configPath} is world-readable (mode ${(stat.mode & 0o777).toString(8)})`);
+        console.error(
+          `[bot] SECURITY: ${configPath} is world-readable (mode ${(stat.mode & 0o777).toString(8)})`,
+        );
         console.error(`[bot] Run: chmod 600 ${configPath}`);
         process.exit(1);
       }
@@ -341,7 +339,9 @@ export class Bot {
     } else if (!existing.hostmasks.includes(ownerCfg.hostmask)) {
       // Config hostmask not present — add it without removing existing ones
       this.permissions.addHostmask(ownerCfg.handle, ownerCfg.hostmask, 'config');
-      this.botLogger.info(`Owner "${ownerCfg.handle}" hostmask updated from config: ${ownerCfg.hostmask}`);
+      this.botLogger.info(
+        `Owner "${ownerCfg.handle}" hostmask updated from config: ${ownerCfg.hostmask}`,
+      );
     }
   }
 }

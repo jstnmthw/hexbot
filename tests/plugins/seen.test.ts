@@ -1,14 +1,23 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { EventDispatcher } from '../../src/dispatcher.js';
-import { BotDatabase } from '../../src/database.js';
-import { BotEventBus } from '../../src/event-bus.js';
-import { Permissions } from '../../src/core/permissions.js';
-import { PluginLoader } from '../../src/plugin-loader.js';
-import type { HandlerContext, BotConfig } from '../../src/types.js';
 import { resolve } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { Permissions } from '../../src/core/permissions.js';
+import { BotDatabase } from '../../src/database.js';
+import { EventDispatcher } from '../../src/dispatcher.js';
+import { BotEventBus } from '../../src/event-bus.js';
+import { PluginLoader } from '../../src/plugin-loader.js';
+import type { BotConfig, HandlerContext } from '../../src/types.js';
 
 const MINIMAL_BOT_CONFIG: BotConfig = {
-  irc: { host: 'localhost', port: 6667, tls: false, nick: 'test', username: 'test', realname: 'test', channels: [] },
+  irc: {
+    host: 'localhost',
+    port: 6667,
+    tls: false,
+    nick: 'test',
+    username: 'test',
+    realname: 'test',
+    channels: [],
+  },
   owner: { handle: 'admin', hostmask: '*!*@localhost' },
   identity: { method: 'hostmask', require_acc_for: [] },
   services: { type: 'none', nickserv: 'NickServ', password: '', sasl: false },
@@ -222,12 +231,16 @@ describe('seen plugin', () => {
   it('should format relative time in minutes', async () => {
     // Insert a record from ~5 minutes ago
     const fiveMinAgo = Date.now() - (5 * 60 * 1000 + 500);
-    db.set('seen', 'seen:minuser', JSON.stringify({
-      nick: 'minuser',
-      channel: '#test',
-      text: 'hi',
-      time: fiveMinAgo,
-    }));
+    db.set(
+      'seen',
+      'seen:minuser',
+      JSON.stringify({
+        nick: 'minuser',
+        channel: '#test',
+        text: 'hi',
+        time: fiveMinAgo,
+      }),
+    );
 
     const ctx = makePubCtx('bob', '!seen minuser');
     await dispatcher.dispatch('pub', ctx);
@@ -239,12 +252,16 @@ describe('seen plugin', () => {
   it('should format relative time in hours', async () => {
     // Insert a record from ~3 hours ago
     const threeHrsAgo = Date.now() - (3 * 60 * 60 * 1000 + 500);
-    db.set('seen', 'seen:houruser', JSON.stringify({
-      nick: 'houruser',
-      channel: '#test',
-      text: 'hi',
-      time: threeHrsAgo,
-    }));
+    db.set(
+      'seen',
+      'seen:houruser',
+      JSON.stringify({
+        nick: 'houruser',
+        channel: '#test',
+        text: 'hi',
+        time: threeHrsAgo,
+      }),
+    );
 
     const ctx = makePubCtx('bob', '!seen houruser');
     await dispatcher.dispatch('pub', ctx);
@@ -256,12 +273,16 @@ describe('seen plugin', () => {
   it('should format relative time in days', async () => {
     // Insert a record from ~2 days ago
     const twoDaysAgo = Date.now() - (2 * 24 * 60 * 60 * 1000 + 500);
-    db.set('seen', 'seen:dayuser', JSON.stringify({
-      nick: 'dayuser',
-      channel: '#test',
-      text: 'hi',
-      time: twoDaysAgo,
-    }));
+    db.set(
+      'seen',
+      'seen:dayuser',
+      JSON.stringify({
+        nick: 'dayuser',
+        channel: '#test',
+        text: 'hi',
+        time: twoDaysAgo,
+      }),
+    );
 
     const ctx = makePubCtx('bob', '!seen dayuser');
     await dispatcher.dispatch('pub', ctx);

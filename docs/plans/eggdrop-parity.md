@@ -181,9 +181,11 @@ Review of Eggdrop 1.9/1.10 defaults reveals four meaningful gaps in n0xb0t: time
 ### chanmod plugin (Phase 1)
 
 New key pattern in chanmod's plugin namespace:
+
 ```
 ban:<channel>:<mask>  →  { mask, channel, by, ts, expires }
 ```
+
 - `expires = 0` means permanent (no auto-remove)
 - `expires = <unix_ms>` — removed when `Date.now() >= expires`
 

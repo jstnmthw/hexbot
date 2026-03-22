@@ -1,6 +1,5 @@
 // n0xb0t — Mock IRC client for testing
 // Captures outgoing messages and can simulate incoming events.
-
 import { EventEmitter } from 'node:events';
 
 /** A captured outgoing message. */
@@ -18,7 +17,13 @@ export interface OutgoingMessage {
 export class MockIRCClient extends EventEmitter {
   public messages: OutgoingMessage[] = [];
   public connected = true;
-  public user = { nick: 'testbot', username: 'testbot', host: 'localhost', away: false, toggleModes: () => {} };
+  public user = {
+    nick: 'testbot',
+    username: 'testbot',
+    host: 'localhost',
+    away: false,
+    toggleModes: () => {},
+  };
 
   say(target: string, message: string): void {
     this.messages.push({ type: 'say', target, message });
@@ -49,7 +54,11 @@ export class MockIRCClient extends EventEmitter {
   }
 
   ctcpResponse(target: string, type: string, ...params: string[]): void {
-    this.messages.push({ type: 'ctcpResponse', target, message: `${type} ${params.join(' ')}`.trim() });
+    this.messages.push({
+      type: 'ctcpResponse',
+      target,
+      message: `${type} ${params.join(' ')}`.trim(),
+    });
   }
 
   quit(message?: string): void {

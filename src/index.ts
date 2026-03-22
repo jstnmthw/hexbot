@@ -1,6 +1,5 @@
 // n0xb0t — Entry point
 // Parses CLI args, starts the bot, optionally starts the REPL.
-
 import { Bot } from './bot.js';
 import { BotREPL } from './repl.js';
 
@@ -42,8 +41,12 @@ async function gracefulShutdown(signal: string): Promise<void> {
   process.exit(0);
 }
 
-process.on('SIGINT', () => { gracefulShutdown('SIGINT'); });
-process.on('SIGTERM', () => { gracefulShutdown('SIGTERM'); });
+process.on('SIGINT', () => {
+  gracefulShutdown('SIGINT');
+});
+process.on('SIGTERM', () => {
+  gracefulShutdown('SIGTERM');
+});
 
 process.on('uncaughtException', (err) => {
   console.error('[bot] Uncaught exception:', err);

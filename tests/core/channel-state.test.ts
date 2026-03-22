@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import { ChannelState } from '../../src/core/channel-state.js';
 import { BotEventBus } from '../../src/event-bus.js';
 
@@ -55,7 +56,10 @@ describe('ChannelState', () => {
   describe('part', () => {
     it('should remove a user on part', () => {
       client.simulateEvent('join', {
-        nick: 'Alice', ident: 'alice', hostname: 'host', channel: '#test',
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        channel: '#test',
       });
       expect(state.isUserInChannel('#test', 'Alice')).toBe(true);
 
@@ -67,10 +71,16 @@ describe('ChannelState', () => {
   describe('quit', () => {
     it('should remove a user from all channels on quit', () => {
       client.simulateEvent('join', {
-        nick: 'Alice', ident: 'alice', hostname: 'host', channel: '#chan1',
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        channel: '#chan1',
       });
       client.simulateEvent('join', {
-        nick: 'Alice', ident: 'alice', hostname: 'host', channel: '#chan2',
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        channel: '#chan2',
       });
 
       expect(state.isUserInChannel('#chan1', 'Alice')).toBe(true);
@@ -86,11 +96,17 @@ describe('ChannelState', () => {
   describe('kick', () => {
     it('should remove kicked user from channel', () => {
       client.simulateEvent('join', {
-        nick: 'Alice', ident: 'alice', hostname: 'host', channel: '#test',
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        channel: '#test',
       });
 
       client.simulateEvent('kick', {
-        nick: 'Op', kicked: 'Alice', channel: '#test', message: 'bye',
+        nick: 'Op',
+        kicked: 'Alice',
+        channel: '#test',
+        message: 'bye',
       });
 
       expect(state.isUserInChannel('#test', 'Alice')).toBe(false);
@@ -100,10 +116,16 @@ describe('ChannelState', () => {
   describe('nick change', () => {
     it('should update nick across all channels', () => {
       client.simulateEvent('join', {
-        nick: 'Alice', ident: 'alice', hostname: 'host', channel: '#chan1',
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        channel: '#chan1',
       });
       client.simulateEvent('join', {
-        nick: 'Alice', ident: 'alice', hostname: 'host', channel: '#chan2',
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        channel: '#chan2',
       });
 
       client.simulateEvent('nick', { nick: 'Alice', new_nick: 'Alice2' });
@@ -121,7 +143,10 @@ describe('ChannelState', () => {
   describe('mode changes', () => {
     it('should add mode o on +o', () => {
       client.simulateEvent('join', {
-        nick: 'Alice', ident: 'alice', hostname: 'host', channel: '#test',
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        channel: '#test',
       });
 
       client.simulateEvent('mode', {
@@ -134,7 +159,10 @@ describe('ChannelState', () => {
 
     it('should remove mode o on -o', () => {
       client.simulateEvent('join', {
-        nick: 'Alice', ident: 'alice', hostname: 'host', channel: '#test',
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        channel: '#test',
       });
 
       client.simulateEvent('mode', {
@@ -152,7 +180,10 @@ describe('ChannelState', () => {
 
     it('should handle +v mode', () => {
       client.simulateEvent('join', {
-        nick: 'Bob', ident: 'bob', hostname: 'host', channel: '#test',
+        nick: 'Bob',
+        ident: 'bob',
+        hostname: 'host',
+        channel: '#test',
       });
 
       client.simulateEvent('mode', {
@@ -167,7 +198,10 @@ describe('ChannelState', () => {
   describe('getUser', () => {
     it('should return correct user info', () => {
       client.simulateEvent('join', {
-        nick: 'Alice', ident: 'alice', hostname: 'alice.example.com', channel: '#test',
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'alice.example.com',
+        channel: '#test',
       });
 
       const user = state.getUser('#test', 'Alice');
@@ -181,7 +215,10 @@ describe('ChannelState', () => {
   describe('getUserHostmask', () => {
     it('should return formatted hostmask string', () => {
       client.simulateEvent('join', {
-        nick: 'Alice', ident: 'alice', hostname: 'host.com', channel: '#test',
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host.com',
+        channel: '#test',
       });
 
       expect(state.getUserHostmask('#test', 'Alice')).toBe('Alice!alice@host.com');
@@ -218,15 +255,16 @@ describe('ChannelState', () => {
     it('should update ident/hostname on existing user from userlist', () => {
       // User joins first with partial info
       client.simulateEvent('join', {
-        nick: 'Alice', ident: '', hostname: '', channel: '#test',
+        nick: 'Alice',
+        ident: '',
+        hostname: '',
+        channel: '#test',
       });
 
       // Then userlist arrives with full details
       client.simulateEvent('userlist', {
         channel: '#test',
-        users: [
-          { nick: 'Alice', ident: 'realident', hostname: 'real.host.com', modes: '' },
-        ],
+        users: [{ nick: 'Alice', ident: 'realident', hostname: 'real.host.com', modes: '' }],
       });
 
       const user = state.getUser('#test', 'Alice');
@@ -238,15 +276,16 @@ describe('ChannelState', () => {
 
     it('should update modes on existing user when userlist has modes', () => {
       client.simulateEvent('join', {
-        nick: 'Alice', ident: 'alice', hostname: 'host', channel: '#test',
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        channel: '#test',
       });
       expect(state.getUserModes('#test', 'Alice')).toEqual([]);
 
       client.simulateEvent('userlist', {
         channel: '#test',
-        users: [
-          { nick: 'Alice', ident: 'alice', hostname: 'host', modes: '@' },
-        ],
+        users: [{ nick: 'Alice', ident: 'alice', hostname: 'host', modes: '@' }],
       });
 
       expect(state.getUserModes('#test', 'Alice')).toContain('o');
@@ -254,7 +293,10 @@ describe('ChannelState', () => {
 
     it('should not overwrite modes when userlist has empty modes on existing user', () => {
       client.simulateEvent('join', {
-        nick: 'Alice', ident: 'alice', hostname: 'host', channel: '#test',
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        channel: '#test',
       });
       // Give Alice op via mode event
       client.simulateEvent('mode', {
@@ -266,9 +308,7 @@ describe('ChannelState', () => {
       // Userlist with empty modes should not overwrite
       client.simulateEvent('userlist', {
         channel: '#test',
-        users: [
-          { nick: 'Alice', ident: 'alice', hostname: 'host', modes: '' },
-        ],
+        users: [{ nick: 'Alice', ident: 'alice', hostname: 'host', modes: '' }],
       });
 
       expect(state.getUserModes('#test', 'Alice')).toContain('o');
@@ -276,14 +316,15 @@ describe('ChannelState', () => {
 
     it('should update only ident when hostname is empty on existing user', () => {
       client.simulateEvent('join', {
-        nick: 'Alice', ident: 'old', hostname: 'old.host', channel: '#test',
+        nick: 'Alice',
+        ident: 'old',
+        hostname: 'old.host',
+        channel: '#test',
       });
 
       client.simulateEvent('userlist', {
         channel: '#test',
-        users: [
-          { nick: 'Alice', ident: 'newident', hostname: '', modes: '' },
-        ],
+        users: [{ nick: 'Alice', ident: 'newident', hostname: '', modes: '' }],
       });
 
       const user = state.getUser('#test', 'Alice');
@@ -296,7 +337,10 @@ describe('ChannelState', () => {
   describe('case insensitivity', () => {
     it('should look up channels and nicks case-insensitively', () => {
       client.simulateEvent('join', {
-        nick: 'Alice', ident: 'alice', hostname: 'host', channel: '#Test',
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        channel: '#Test',
       });
 
       expect(state.getUser('#test', 'alice')).toBeDefined();
@@ -308,13 +352,14 @@ describe('ChannelState', () => {
     it('should update ident and hostname from wholist', () => {
       // User joins with incomplete info
       client.simulateEvent('join', {
-        nick: 'Alice', ident: '', hostname: '', channel: '#test',
+        nick: 'Alice',
+        ident: '',
+        hostname: '',
+        channel: '#test',
       });
 
       client.simulateEvent('wholist', {
-        users: [
-          { nick: 'Alice', ident: 'realident', hostname: 'real.host.com', channel: '#test' },
-        ],
+        users: [{ nick: 'Alice', ident: 'realident', hostname: 'real.host.com', channel: '#test' }],
       });
 
       const user = state.getUser('#test', 'Alice');
@@ -326,10 +371,16 @@ describe('ChannelState', () => {
 
     it('should update multiple users across channels', () => {
       client.simulateEvent('join', {
-        nick: 'Alice', ident: '', hostname: '', channel: '#chan1',
+        nick: 'Alice',
+        ident: '',
+        hostname: '',
+        channel: '#chan1',
       });
       client.simulateEvent('join', {
-        nick: 'Bob', ident: '', hostname: '', channel: '#chan2',
+        nick: 'Bob',
+        ident: '',
+        hostname: '',
+        channel: '#chan2',
       });
 
       client.simulateEvent('wholist', {
@@ -350,9 +401,7 @@ describe('ChannelState', () => {
 
     it('should ignore wholist entries for unknown channels', () => {
       client.simulateEvent('wholist', {
-        users: [
-          { nick: 'Ghost', ident: 'ghost', hostname: 'ghost.host', channel: '#unknown' },
-        ],
+        users: [{ nick: 'Ghost', ident: 'ghost', hostname: 'ghost.host', channel: '#unknown' }],
       });
 
       expect(state.getChannel('#unknown')).toBeUndefined();
@@ -362,14 +411,15 @@ describe('ChannelState', () => {
     it('should ignore wholist entries for unknown users in known channels', () => {
       // Create channel by joining someone
       client.simulateEvent('join', {
-        nick: 'Alice', ident: 'alice', hostname: 'host', channel: '#test',
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        channel: '#test',
       });
 
       // Wholist mentions a user not in the channel
       client.simulateEvent('wholist', {
-        users: [
-          { nick: 'Ghost', ident: 'ghost', hostname: 'ghost.host', channel: '#test' },
-        ],
+        users: [{ nick: 'Ghost', ident: 'ghost', hostname: 'ghost.host', channel: '#test' }],
       });
 
       expect(state.getUser('#test', 'Ghost')).toBeUndefined();
@@ -385,7 +435,10 @@ describe('ChannelState', () => {
 
     it('should skip wholist entries with missing nick or channel', () => {
       client.simulateEvent('join', {
-        nick: 'Alice', ident: 'alice', hostname: 'host', channel: '#test',
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        channel: '#test',
       });
 
       client.simulateEvent('wholist', {
@@ -416,7 +469,10 @@ describe('ChannelState', () => {
 
     it('should update topic on an existing channel', () => {
       client.simulateEvent('join', {
-        nick: 'Alice', ident: 'alice', hostname: 'host', channel: '#test',
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        channel: '#test',
       });
 
       client.simulateEvent('topic', {

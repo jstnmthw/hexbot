@@ -1,9 +1,11 @@
 # Plan: Phase 4 — Plugin Loader + Example Plugins
 
 ## Summary
+
 Build the plugin loader with full hot-reload support, then create the first example plugins (8ball, greeter, seen). This phase proves the plugin system works end-to-end: loading, unloading, reloading, scoped API, database isolation, and config resolution. At the end, you can chat with plugins in IRC and hot-reload them without restarting the bot.
 
 ## Dependencies
+
 - [x] Phase 0 complete (scaffolding)
 - [x] Phase 1 complete (database + dispatcher)
 - [x] Phase 2 complete (permissions + command handler)
@@ -41,6 +43,7 @@ Build the plugin loader with full hot-reload support, then create the first exam
     - Emit `plugin:reloaded` on event bus
   - `list()` — return array of loaded plugin info
   - `_createPluginApi(pluginId)` — create the scoped API object:
+
     ```typescript
     {
       pluginId,
@@ -100,9 +103,11 @@ Build the plugin loader with full hot-reload support, then create the first exam
       error: (...args) => console.error(`[plugin:${pluginId}]`, ...args),
     }
     ```
+
     Note: `ircCommands`, `channelState`, `services` are null until Phase 5 wires them in.
     The plugin API uses late-binding (getters or null checks) so plugins loaded before
     Phase 5 modules exist will get null for those fields — matching the stub pattern.
+
   - Config merging: read `plugins/<n>/config.json` as defaults, overlay with `plugins.json[name].config`
   - **Security:** See `docs/SECURITY.md` section 4. Key rules:
     - `Object.freeze()` the scoped API and nested objects (db, permissions, services) to prevent plugins from mutating shared state
@@ -207,6 +212,7 @@ Build the plugin loader with full hot-reload support, then create the first exam
 ## Verification
 
 **This phase is complete when:**
+
 1. `pnpm vitest run tests/plugin-loader.test.ts` — all pass
 2. All three plugin test files pass
 3. `pnpm test` — entire suite passes
@@ -217,4 +223,5 @@ Build the plugin loader with full hot-reload support, then create the first exam
 8. Config merging confirmed: plugins.json overrides plugin defaults
 
 ## Next phase
+
 Phase 5: Core Modules (services, irc-commands, channel-state) + Auto-op Plugin

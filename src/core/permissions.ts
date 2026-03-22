@@ -1,10 +1,9 @@
 // n0xb0t — Permissions system
 // Hostmask-based identity, n/m/o/v flags with per-channel overrides.
-
-import { wildcardMatch, ircLower } from '../utils/wildcard.js';
 import type { BotDatabase } from '../database.js';
 import type { Logger } from '../logger.js';
-import type { UserRecord, HandlerContext } from '../types.js';
+import type { HandlerContext, UserRecord } from '../types.js';
+import { ircLower, wildcardMatch } from '../utils/wildcard.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -313,7 +312,9 @@ export class Permissions {
       }
     }
     // Return in canonical order
-    return VALID_FLAGS.split('').filter((f) => unique.has(f)).join('');
+    return VALID_FLAGS.split('')
+      .filter((f) => unique.has(f))
+      .join('');
   }
 
   /** Warn about insecure hostmask patterns for privileged users. */
@@ -330,7 +331,7 @@ export class Permissions {
     if (afterBang === '*@*' || afterBang === '*@*.*') {
       this.logger?.warn(
         `SECURITY: User "${handle}" has privileged flags (${flags}) ` +
-        `with insecure hostmask "${hostmask}" — nick-only matching is easily spoofed`
+          `with insecure hostmask "${hostmask}" — nick-only matching is easily spoofed`,
       );
     }
   }

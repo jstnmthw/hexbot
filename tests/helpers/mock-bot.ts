@@ -1,25 +1,22 @@
 // n0xb0t — Mock bot helper for testing
 // Creates a Bot-like object with real modules but a mock IRC client.
-
-import { EventDispatcher } from '../../src/dispatcher.js';
-import { Permissions } from '../../src/core/permissions.js';
-import { BotDatabase } from '../../src/database.js';
 import { CommandHandler } from '../../src/command-handler.js';
-import { BotEventBus } from '../../src/event-bus.js';
-import { IRCBridge } from '../../src/irc-bridge.js';
 import { ChannelState } from '../../src/core/channel-state.js';
-import { IRCCommands } from '../../src/core/irc-commands.js';
-import { Services } from '../../src/core/services.js';
-import { createLogger, type Logger } from '../../src/logger.js';
-import { MockIRCClient } from './mock-irc.js';
-import { PluginLoader } from '../../src/plugin-loader.js';
-
-import { registerPermissionCommands } from '../../src/core/commands/permission-commands.js';
 import { registerDispatcherCommands } from '../../src/core/commands/dispatcher-commands.js';
 import { registerIRCAdminCommands } from '../../src/core/commands/irc-commands-admin.js';
+import { registerPermissionCommands } from '../../src/core/commands/permission-commands.js';
 import { registerPluginCommands } from '../../src/core/commands/plugin-commands.js';
-
+import { IRCCommands } from '../../src/core/irc-commands.js';
+import { Permissions } from '../../src/core/permissions.js';
+import { Services } from '../../src/core/services.js';
+import { BotDatabase } from '../../src/database.js';
+import { EventDispatcher } from '../../src/dispatcher.js';
+import { BotEventBus } from '../../src/event-bus.js';
+import { IRCBridge } from '../../src/irc-bridge.js';
+import { type Logger, createLogger } from '../../src/logger.js';
+import { PluginLoader } from '../../src/plugin-loader.js';
 import type { BotConfig } from '../../src/types.js';
+import { MockIRCClient } from './mock-irc.js';
 
 export interface MockBot {
   client: MockIRCClient;
@@ -81,7 +78,15 @@ export function createMockBot(options?: { botNick?: string }): MockBot {
   const ircCommands = new IRCCommands(client, db, undefined, logger);
 
   const botConfig: BotConfig = {
-    irc: { host: 'localhost', port: 6667, tls: false, nick: botNick, username: botNick, realname: botNick, channels: ['#test'] },
+    irc: {
+      host: 'localhost',
+      port: 6667,
+      tls: false,
+      nick: botNick,
+      username: botNick,
+      realname: botNick,
+      channels: ['#test'],
+    },
     owner: { handle: 'admin', hostmask: '*!*@localhost' },
     identity: { method: 'hostmask', require_acc_for: [] },
     services: { type: 'none', nickserv: 'NickServ', password: '', sasl: false },

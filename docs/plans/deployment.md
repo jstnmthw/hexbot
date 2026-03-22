@@ -62,6 +62,7 @@ Two parallel distribution tracks: **Option A** (Docker image via ghcr.io, primar
 **Goal:** A multi-stage Dockerfile that produces a minimal image with compiled JS, production deps only, and the native `better-sqlite3` binary fetched for the runtime environment.
 
 - [ ] Create `.dockerignore`:
+
   ```
   node_modules
   dist
@@ -76,6 +77,7 @@ Two parallel distribution tracks: **Option A** (Docker image via ghcr.io, primar
   ```
 
 - [ ] Create `entrypoint.sh`:
+
   ```sh
   #!/bin/sh
   # Seed plugins volume on first run if empty
@@ -101,9 +103,9 @@ Two parallel distribution tracks: **Option A** (Docker image via ghcr.io, primar
   - `WORKDIR /app`
   - `COPY package.json pnpm-lock.yaml ./`
   - `RUN corepack enable && pnpm install --frozen-lockfile --prod`
-    *(fresh install = correct native binary for this Alpine/Node ABI — never copy node_modules from builder)*
+    _(fresh install = correct native binary for this Alpine/Node ABI — never copy node_modules from builder)_
   - `COPY --from=builder /app/dist ./dist`
-  - `COPY --from=builder /app/dist/plugins ./bundled-plugins` *(seed source, not a volume)*
+  - `COPY --from=builder /app/dist/plugins ./bundled-plugins` _(seed source, not a volume)_
   - `COPY config/bot.example.json ./config/bot.example.json`
   - `COPY config/plugins.example.json ./config/plugins.example.json`
   - `COPY entrypoint.sh ./entrypoint.sh`
@@ -124,6 +126,7 @@ Two parallel distribution tracks: **Option A** (Docker image via ghcr.io, primar
 **Goal:** A single `docker-compose.yml` that a new user can download and run immediately.
 
 - [ ] Create `docker-compose.yml` at repo root:
+
   ```yaml
   services:
     n0xb0t:
@@ -134,18 +137,21 @@ Two parallel distribution tracks: **Option A** (Docker image via ghcr.io, primar
         - ./plugins:/app/plugins
         - ./data:/app/data
   ```
+
   Replace `OWNER` with the actual GitHub username before committing.
 
 - [ ] Create `docs/deploy/docker-quickstart.md`:
+
   ```markdown
   # Docker quickstart
+
   1. mkdir my-n0xb0t && cd my-n0xb0t
   2. curl -O <raw docker-compose.yml URL>
   3. mkdir config data
   4. curl -o config/bot.json <raw config/bot.docker.json URL>
   5. Edit config/bot.json — set server, nick, owner hostmask, NickServ password
   6. docker compose up -d
-  7. docker compose logs -f    # watch startup
+  7. docker compose logs -f # watch startup
   ```
 
 - [ ] **Verify:** With a local image tag, `docker compose up` starts the bot and mounts work (config readable, data dir writable).
@@ -219,4 +225,3 @@ None. The `data/` auto-creation fix in Phase 1 is a `mkdirSync` call, not a sche
 No new automated tests needed — this is all infrastructure (Dockerfile, YAML, docs). Manual verification steps are in each phase above.
 
 If a future PR introduces a `build:` test step, add a CI job that runs `pnpm build` and asserts exit code 0.
-

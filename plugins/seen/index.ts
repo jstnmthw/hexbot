@@ -1,7 +1,6 @@
 // seen — Last-seen tracking plugin
 // Tracks when users were last active in a channel and responds to !seen queries.
-
-import type { PluginAPI, HandlerContext } from '../../src/types.js';
+import type { HandlerContext, PluginAPI } from '../../src/types.js';
 
 export const name = 'seen';
 export const version = '1.1.0';
@@ -18,9 +17,8 @@ export function init(api: PluginAPI): void {
   api.bind('pubm', '-', '*', (ctx: HandlerContext) => {
     if (!ctx.channel) return;
 
-    const text = ctx.text.length > MAX_TEXT_LENGTH
-      ? ctx.text.substring(0, MAX_TEXT_LENGTH) + '...'
-      : ctx.text;
+    const text =
+      ctx.text.length > MAX_TEXT_LENGTH ? ctx.text.substring(0, MAX_TEXT_LENGTH) + '...' : ctx.text;
 
     const record = JSON.stringify({
       nick: ctx.nick,
@@ -48,7 +46,12 @@ export function init(api: PluginAPI): void {
     }
 
     try {
-      const record = JSON.parse(raw) as { nick: string; channel: string; text: string; time: number };
+      const record = JSON.parse(raw) as {
+        nick: string;
+        channel: string;
+        text: string;
+        time: number;
+      };
       const age = Date.now() - record.time;
 
       if (age > maxAgeMs) {

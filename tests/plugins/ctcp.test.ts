@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { resolve } from 'node:path';
-import { createMockBot, type MockBot } from '../helpers/mock-bot.js';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+import { type MockBot, createMockBot } from '../helpers/mock-bot.js';
 
 const PLUGIN_PATH = resolve('./plugins/ctcp/index.ts');
 
@@ -13,7 +14,14 @@ async function flush(): Promise<void> {
 }
 
 function simulateCtcp(bot: MockBot, nick: string, type: string, message: string): void {
-  bot.client.simulateEvent('ctcp request', { nick, ident: 'user', hostname: 'host.com', target: 'testbot', type, message });
+  bot.client.simulateEvent('ctcp request', {
+    nick,
+    ident: 'user',
+    hostname: 'host.com',
+    target: 'testbot',
+    type,
+    message,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -29,8 +37,12 @@ describe('ctcp plugin', () => {
     expect(result.status).toBe('ok');
   });
 
-  afterAll(() => { bot.cleanup(); });
-  beforeEach(() => { bot.client.clearMessages(); });
+  afterAll(() => {
+    bot.cleanup();
+  });
+  beforeEach(() => {
+    bot.client.clearMessages();
+  });
 
   it('replies to VERSION with bot name and version', async () => {
     simulateCtcp(bot, 'curious', 'VERSION', '');

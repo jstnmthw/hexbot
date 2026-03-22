@@ -1,14 +1,23 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { EventDispatcher } from '../../src/dispatcher.js';
-import { BotDatabase } from '../../src/database.js';
-import { BotEventBus } from '../../src/event-bus.js';
-import { Permissions } from '../../src/core/permissions.js';
-import { PluginLoader } from '../../src/plugin-loader.js';
-import type { HandlerContext, BotConfig } from '../../src/types.js';
 import { resolve } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { Permissions } from '../../src/core/permissions.js';
+import { BotDatabase } from '../../src/database.js';
+import { EventDispatcher } from '../../src/dispatcher.js';
+import { BotEventBus } from '../../src/event-bus.js';
+import { PluginLoader } from '../../src/plugin-loader.js';
+import type { BotConfig, HandlerContext } from '../../src/types.js';
 
 const MINIMAL_BOT_CONFIG: BotConfig = {
-  irc: { host: 'localhost', port: 6667, tls: false, nick: 'test', username: 'test', realname: 'test', channels: [] },
+  irc: {
+    host: 'localhost',
+    port: 6667,
+    tls: false,
+    nick: 'test',
+    username: 'test',
+    realname: 'test',
+    channels: [],
+  },
   owner: { handle: 'admin', hostmask: '*!*@localhost' },
   identity: { method: 'hostmask', require_acc_for: [] },
   services: { type: 'none', nickserv: 'NickServ', password: '', sasl: false },
@@ -75,13 +84,26 @@ describe('8ball plugin', () => {
 
   it('should return one of the known responses', async () => {
     const KNOWN_RESPONSES = [
-      'It is certain.', 'It is decidedly so.', 'Without a doubt.',
-      'Yes — definitely.', 'You may rely on it.', 'As I see it, yes.',
-      'Most likely.', 'Outlook good.', 'Yes.', 'Signs point to yes.',
-      'Reply hazy, try again.', 'Ask again later.', 'Better not tell you now.',
-      'Cannot predict now.', 'Concentrate and ask again.',
-      "Don't count on it.", 'My reply is no.', 'My sources say no.',
-      'Outlook not so good.', 'Very doubtful.',
+      'It is certain.',
+      'It is decidedly so.',
+      'Without a doubt.',
+      'Yes — definitely.',
+      'You may rely on it.',
+      'As I see it, yes.',
+      'Most likely.',
+      'Outlook good.',
+      'Yes.',
+      'Signs point to yes.',
+      'Reply hazy, try again.',
+      'Ask again later.',
+      'Better not tell you now.',
+      'Cannot predict now.',
+      'Concentrate and ask again.',
+      "Don't count on it.",
+      'My reply is no.',
+      'My sources say no.',
+      'Outlook not so good.',
+      'Very doubtful.',
     ];
 
     const ctx = makeCtx();

@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createMockBot, type MockBot } from '../../helpers/mock-bot.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
 import type { CommandContext } from '../../../src/command-handler.js';
+import { type MockBot, createMockBot } from '../../helpers/mock-bot.js';
 
 /** Helper: create a REPL CommandContext with a spy on reply. */
 function makeReplCtx(): CommandContext {

@@ -1,6 +1,6 @@
 ---
 name: deps
-description: "Audit n0xb0t dependencies for updates, vulnerabilities, and unused packages. Use for periodic health checks or before releases."
+description: 'Audit n0xb0t dependencies for updates, vulnerabilities, and unused packages. Use for periodic health checks or before releases.'
 ---
 
 # Dependency Checker
@@ -21,16 +21,20 @@ Audit project dependencies for updates, vulnerabilities, and unused packages.
 ## Dependency audit
 
 ### Outdated
+
 | Package | Current | Latest | Risk | Recommendation |
-|---------|---------|--------|------|----------------|
+| ------- | ------- | ------ | ---- | -------------- |
 
 ### Vulnerabilities
+
 <summarized from pnpm audit>
 
 ### Unused
+
 <packages in dependencies not imported anywhere>
 
 ### Missing
+
 <packages imported but not in dependencies>
 ```
 

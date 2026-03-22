@@ -20,31 +20,31 @@ pnpm dev          # start with interactive REPL
 
 The REPL (`.` prefix) provides admin access without IRC:
 
-| Command | Flags | Description |
-|---------|-------|-------------|
-| `.help [cmd]` | `-` | List commands or show help for one |
-| `.status` | `+o` | Connection info, uptime, bind/user counts |
-| `.say <target> <msg>` | `+o` | Send a message to a channel or user |
-| `.join <channel>` | `+n` | Join a channel |
-| `.part <channel>` | `+n` | Part a channel |
-| `.flags [handle] [+flags [#chan]]` | `+n\|+m` | View/set user flags (no args = flag legend) |
-| `.adduser <handle> <hostmask> <flags>` | `+n` | Add a bot user |
-| `.deluser <handle>` | `+n` | Remove a bot user |
-| `.users` | `+o` | List all bot users |
-| `.binds [plugin]` | `+o` | List active event binds |
-| `.plugins` | `-` | List loaded plugins |
-| `.load <name>` | `+n` | Load a plugin |
-| `.unload <name>` | `+n` | Unload a plugin |
-| `.reload <name>` | `+n` | Reload a plugin |
+| Command                                | Flags    | Description                                 |
+| -------------------------------------- | -------- | ------------------------------------------- |
+| `.help [cmd]`                          | `-`      | List commands or show help for one          |
+| `.status`                              | `+o`     | Connection info, uptime, bind/user counts   |
+| `.say <target> <msg>`                  | `+o`     | Send a message to a channel or user         |
+| `.join <channel>`                      | `+n`     | Join a channel                              |
+| `.part <channel>`                      | `+n`     | Part a channel                              |
+| `.flags [handle] [+flags [#chan]]`     | `+n\|+m` | View/set user flags (no args = flag legend) |
+| `.adduser <handle> <hostmask> <flags>` | `+n`     | Add a bot user                              |
+| `.deluser <handle>`                    | `+n`     | Remove a bot user                           |
+| `.users`                               | `+o`     | List all bot users                          |
+| `.binds [plugin]`                      | `+o`     | List active event binds                     |
+| `.plugins`                             | `-`      | List loaded plugins                         |
+| `.load <name>`                         | `+n`     | Load a plugin                               |
+| `.unload <name>`                       | `+n`     | Unload a plugin                             |
+| `.reload <name>`                       | `+n`     | Reload a plugin                             |
 
 ## Permission flags
 
-| Flag | Role | Access |
-|------|------|--------|
-| `n` | Owner | Full access; implies all other flags |
-| `m` | Master | User management |
-| `o` | Op | Channel commands, bot admin |
-| `v` | Voice | Reserved for plugin use |
+| Flag | Role   | Access                               |
+| ---- | ------ | ------------------------------------ |
+| `n`  | Owner  | Full access; implies all other flags |
+| `m`  | Master | User management                      |
+| `o`  | Op     | Channel commands, bot admin          |
+| `v`  | Voice  | Reserved for plugin use              |
 
 Flags can be set globally or per-channel. The owner defined in `bot.json` is bootstrapped automatically on startup.
 
@@ -54,13 +54,13 @@ Plugins live in `plugins/<name>/` and are enabled via `config/plugins.json`. The
 
 ### Included plugins
 
-| Plugin | Commands | Description |
-|--------|----------|-------------|
-| **8ball** | `!8ball <question>` | Magic 8-ball responses |
+| Plugin      | Commands                                                                    | Description                                                                          |
+| ----------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| **8ball**   | `!8ball <question>`                                                         | Magic 8-ball responses                                                               |
 | **chanmod** | `!op`, `!deop`, `!voice`, `!devoice`, `!kick`, `!ban`, `!unban`, `!kickban` | Channel protection: auto-op/voice on join, mode enforcement, and moderation commands |
-| **greeter** | *(automatic)* | Greets users on channel join |
-| **seen** | `!seen <nick>` | Tracks when a user was last active |
-| **topic** | `!topic <theme> <text>`, `!topics` | Set channel topics with IRC color themes |
+| **greeter** | _(automatic)_                                                               | Greets users on channel join                                                         |
+| **seen**    | `!seen <nick>`                                                              | Tracks when a user was last active                                                   |
+| **topic**   | `!topic <theme> <text>`, `!topics`                                          | Set channel topics with IRC color themes                                             |
 
 ### Writing plugins
 

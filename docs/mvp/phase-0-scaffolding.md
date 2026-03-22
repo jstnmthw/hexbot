@@ -1,9 +1,11 @@
 # Plan: Phase 0 — Project Scaffolding
 
 ## Summary
+
 Set up the n0xb0t project directory structure, install dependencies, configure tooling, and put all design documents in place. At the end of this phase, `pnpm install` succeeds and the project is ready for development. No functional code yet — just the skeleton.
 
 ## Phase goal
+
 A clean, properly structured project that any developer can clone, run `pnpm install`, and be ready to start building.
 
 ---
@@ -11,6 +13,7 @@ A clean, properly structured project that any developer can clone, run `pnpm ins
 ## Checklist
 
 ### 0.1: Initialize the project
+
 - [x] Create the project root directory `n0xb0t/`
 - [x] Run `pnpm init` or create `package.json` manually with:
   - `"name": "n0xb0t"`
@@ -30,7 +33,9 @@ A clean, properly structured project that any developer can clone, run `pnpm ins
 - [x] Verify `pnpm install` completes without errors
 
 ### 0.2: Create directory structure
+
 - [x] Create all directories:
+
 ```
 n0xb0t/
 ├── src/
@@ -52,7 +57,9 @@ n0xb0t/
 ```
 
 ### 0.3: Config examples
+
 - [x] Create `config/bot.example.json`:
+
 ```json
 {
   "irc": {
@@ -86,7 +93,9 @@ n0xb0t/
   }
 }
 ```
+
 - [x] Create `config/plugins.example.json`:
+
 ```json
 {
   "auto-op": {
@@ -110,7 +119,9 @@ n0xb0t/
 ```
 
 ### 0.4: Gitignore and project files
+
 - [x] Create `.gitignore`:
+
 ```
 node_modules/
 data/
@@ -121,6 +132,7 @@ config/plugins.json
 *.db-wal
 .DS_Store
 ```
+
 - [x] Copy `DESIGN.md` into the project root
 - [x] Copy `CLAUDE.md` into the project root
 - [ ] Create `README.md` with:
@@ -131,6 +143,7 @@ config/plugins.json
   - License (GPL-2.0)
 
 ### 0.5: Core type definitions
+
 - [x] Create `src/types.ts` with the shared interfaces referenced by DESIGN.md:
   - `HandlerContext` — the context object passed to every bind handler
   - `PluginAPI` — the scoped API object plugins receive in `init()`
@@ -141,7 +154,9 @@ config/plugins.json
   - These are type-only definitions (interfaces/types) — no runtime code
 
 ### 0.6: Stub entry point
+
 - [x] Create `src/index.ts` with a minimal placeholder:
+
 ```typescript
 // n0xb0t — Modular IRC bot framework
 // This is a placeholder. Real implementation starts in Phase 1.
@@ -152,6 +167,7 @@ process.exit(0);
 ```
 
 ### 0.7: Verify everything
+
 - [x] `pnpm install` succeeds
 - [x] `pnpm start` runs the stub and exits cleanly
 - [x] `pnpm test` runs (will report 0 tests, but no errors)
@@ -165,6 +181,7 @@ process.exit(0);
 ## Verification
 
 **This phase is complete when:**
+
 1. `pnpm install` exits with code 0
 2. `pnpm start` prints the stub message and exits with code 0
 3. `pnpm test` exits with code 0 (no tests found is fine)
@@ -173,4 +190,5 @@ process.exit(0);
 6. The project is ready for `git init` with a clean `.gitignore`
 
 ## Next phase
+
 Phase 1: Database + Dispatcher — the two foundational modules that everything else depends on.

@@ -1,9 +1,8 @@
 // n0xb0t — Services core module
 // NickServ integration — bot authentication and user identity verification.
-
 import type { BotEventBus } from '../event-bus.js';
 import type { Logger } from '../logger.js';
-import type { ServicesConfig, IdentityConfig } from '../types.js';
+import type { IdentityConfig, ServicesConfig } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -160,9 +159,7 @@ export class Services {
     // Only process notices from NickServ
     const nickServTarget = this.getNickServTarget();
     // NickServ might be 'NickServ' or 'nickserv@services.dal.net' — compare the nick part
-    const fromNick = nickServTarget.includes('@')
-      ? nickServTarget.split('@')[0]
-      : nickServTarget;
+    const fromNick = nickServTarget.includes('@') ? nickServTarget.split('@')[0] : nickServTarget;
 
     if (nick.toLowerCase() !== fromNick.toLowerCase()) {
       // Debug: log notices from other sources only when we have pending verifications
@@ -200,13 +197,15 @@ export class Services {
       const failedCmd = unknownCmd[1].toUpperCase();
       for (const [_key, pending] of this.pending) {
         const shouldRetry =
-          (failedCmd === 'ACC' || failedCmd === 'ACC.') && pending.method === 'acc' ||
-          (failedCmd === 'STATUS' || failedCmd === 'STATUS.') && pending.method === 'status';
+          ((failedCmd === 'ACC' || failedCmd === 'ACC.') && pending.method === 'acc') ||
+          ((failedCmd === 'STATUS' || failedCmd === 'STATUS.') && pending.method === 'status');
         if (shouldRetry) {
           const altMethod = pending.method === 'acc' ? 'status' : 'acc';
           const target = this.getNickServTarget();
           pending.method = altMethod;
-          this.logger?.info(`${failedCmd} not supported, falling back to ${altMethod.toUpperCase()} for ${pending.nick}`);
+          this.logger?.info(
+            `${failedCmd} not supported, falling back to ${altMethod.toUpperCase()} for ${pending.nick}`,
+          );
           if (altMethod === 'status') {
             this.client.say(target, `STATUS ${pending.nick}`);
           } else {

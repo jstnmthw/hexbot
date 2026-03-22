@@ -1,7 +1,7 @@
 ---
 name: refactor
 description: "Improve n0xb0t code quality without changing behavior. Use when code works but is messy, duplicated, or doesn't follow conventions."
-argument-hint: "<target>"
+argument-hint: '<target>'
 ---
 
 # Refactorer

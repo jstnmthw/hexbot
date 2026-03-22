@@ -1,15 +1,13 @@
 // n0xb0t — IRC bridge
 // Translates irc-framework events into dispatcher events.
 // This is the trust boundary — all IRC data entering the dispatcher passes through here.
-
-
-import { sanitize } from './utils/sanitize.js';
-import { splitMessage } from './utils/split-message.js';
+import type { MessageQueue } from './core/message-queue.js';
 import type { EventDispatcher } from './dispatcher.js';
 import type { BotEventBus } from './event-bus.js';
 import type { Logger } from './logger.js';
-import type { MessageQueue } from './core/message-queue.js';
 import type { HandlerContext } from './types.js';
+import { sanitize } from './utils/sanitize.js';
+import { splitMessage } from './utils/split-message.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,7 +41,7 @@ interface IRCBridgeOptions {
 // ---------------------------------------------------------------------------
 
 /** Strip IRC formatting/control characters (bold, color, underline, etc.) from text. */
-const IRC_FORMATTING_CHARS = String.fromCharCode(0x02, 0x03, 0x0F, 0x16, 0x1D, 0x1E, 0x1F);
+const IRC_FORMATTING_CHARS = String.fromCharCode(0x02, 0x03, 0x0f, 0x16, 0x1d, 0x1e, 0x1f);
 const IRC_COLOR_CHAR = String.fromCharCode(0x03);
 const IRC_FORMAT_RE = new RegExp(
   `[${IRC_FORMATTING_CHARS}]|${IRC_COLOR_CHAR}\\d{1,2}(,\\d{1,2})?`,
@@ -150,7 +148,10 @@ export class IRCBridge {
     const args = spaceIdx === -1 ? '' : stripped.substring(spaceIdx + 1).trim();
 
     const ctx = this.buildContext({
-      nick, ident, hostname, channel,
+      nick,
+      ident,
+      hostname,
+      channel,
       text: message,
       command,
       args,
@@ -178,7 +179,10 @@ export class IRCBridge {
     const channel = isChannel ? target : null;
 
     const ctx = this.buildContext({
-      nick, ident, hostname, channel,
+      nick,
+      ident,
+      hostname,
+      channel,
       text: message,
       command: '',
       args: message,
@@ -201,7 +205,10 @@ export class IRCBridge {
     if (!isValidChannel(channel)) return;
 
     const ctx = this.buildContext({
-      nick, ident, hostname, channel,
+      nick,
+      ident,
+      hostname,
+      channel,
       text: `${channel} ${nick}!${ident}@${hostname}`,
       command: 'JOIN',
       args: '',
@@ -220,7 +227,10 @@ export class IRCBridge {
     if (!isValidChannel(channel)) return;
 
     const ctx = this.buildContext({
-      nick, ident, hostname, channel,
+      nick,
+      ident,
+      hostname,
+      channel,
       text: `${channel} ${nick}!${ident}@${hostname}`,
       command: 'PART',
       args: message,
@@ -263,7 +273,10 @@ export class IRCBridge {
     const bangIdx = hostmask.indexOf('!');
     const atIdx = hostmask.lastIndexOf('@');
     if (bangIdx === -1 || atIdx === -1 || atIdx <= bangIdx) return { ident: '', hostname: '' };
-    return { ident: hostmask.substring(bangIdx + 1, atIdx), hostname: hostmask.substring(atIdx + 1) };
+    return {
+      ident: hostmask.substring(bangIdx + 1, atIdx),
+      hostname: hostmask.substring(atIdx + 1),
+    };
   }
 
   private onNick(event: Record<string, unknown>): void {
@@ -330,7 +343,10 @@ export class IRCBridge {
     const channel = isChannel ? target : null;
 
     const ctx = this.buildContext({
-      nick, ident, hostname, channel,
+      nick,
+      ident,
+      hostname,
+      channel,
       text: message,
       command: 'NOTICE',
       args: message,
@@ -350,10 +366,14 @@ export class IRCBridge {
     // Strip the type prefix so ctx.text contains only the payload.
     const payload = rawMessage.startsWith(type + ' ')
       ? rawMessage.substring(type.length + 1)
-      : rawMessage === type ? '' : rawMessage;
+      : rawMessage === type
+        ? ''
+        : rawMessage;
 
     const ctx = this.buildContext({
-      nick, ident, hostname,
+      nick,
+      ident,
+      hostname,
       channel: null,
       text: payload,
       command: type,

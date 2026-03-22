@@ -4,11 +4,11 @@ Sets channel topics using pre-built IRC color theme borders. Ships with 22 built
 
 ## Commands
 
-| Command | Flags | Description |
-|---------|-------|-------------|
-| `!topic <theme> <text>` | `o` | Set the channel topic wrapped in the theme's color border |
-| `!topic preview <theme> <text>` | `o` | Preview the themed topic as a channel message |
-| `!topics` | `-` | List all available theme names |
+| Command                         | Flags | Description                                               |
+| ------------------------------- | ----- | --------------------------------------------------------- |
+| `!topic <theme> <text>`         | `o`   | Set the channel topic wrapped in the theme's color border |
+| `!topic preview <theme> <text>` | `o`   | Preview the themed topic as a channel message             |
+| `!topics`                       | `-`   | List all available theme names                            |
 
 ## Configuration
 

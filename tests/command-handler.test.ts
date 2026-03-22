@@ -1,5 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
-import { CommandHandler, type CommandContext, type CommandPermissionsProvider } from '../src/command-handler.js';
+import { describe, expect, it, vi } from 'vitest';
+
+import {
+  type CommandContext,
+  CommandHandler,
+  type CommandPermissionsProvider,
+} from '../src/command-handler.js';
 
 /** Helper: create a minimal CommandContext. */
 function makeCtx(overrides: Partial<CommandContext> = {}): CommandContext {
@@ -57,12 +62,16 @@ describe('CommandHandler', () => {
     it('should register and execute a custom command', async () => {
       const handler = new CommandHandler();
       const handlerFn = vi.fn();
-      handler.registerCommand('test', {
-        flags: '-',
-        description: 'Test command',
-        usage: '.test',
-        category: 'testing',
-      }, handlerFn);
+      handler.registerCommand(
+        'test',
+        {
+          flags: '-',
+          description: 'Test command',
+          usage: '.test',
+          category: 'testing',
+        },
+        handlerFn,
+      );
 
       const ctx = makeCtx();
       await handler.execute('.test some args', ctx);
@@ -73,12 +82,16 @@ describe('CommandHandler', () => {
 
     it('should appear in getCommands()', () => {
       const handler = new CommandHandler();
-      handler.registerCommand('foo', {
-        flags: '-',
-        description: 'Foo',
-        usage: '.foo',
-        category: 'test',
-      }, vi.fn());
+      handler.registerCommand(
+        'foo',
+        {
+          flags: '-',
+          description: 'Foo',
+          usage: '.foo',
+          category: 'test',
+        },
+        vi.fn(),
+      );
 
       const commands = handler.getCommands();
       const names = commands.map((c) => c.name);
@@ -137,14 +150,18 @@ describe('CommandHandler', () => {
   describe('error handling', () => {
     it('should catch and report handler errors', async () => {
       const handler = new CommandHandler();
-      handler.registerCommand('broken', {
-        flags: '-',
-        description: 'Broken command',
-        usage: '.broken',
-        category: 'test',
-      }, () => {
-        throw new Error('something went wrong');
-      });
+      handler.registerCommand(
+        'broken',
+        {
+          flags: '-',
+          description: 'Broken command',
+          usage: '.broken',
+          category: 'test',
+        },
+        () => {
+          throw new Error('something went wrong');
+        },
+      );
 
       const ctx = makeCtx();
       await handler.execute('.broken', ctx);
@@ -163,12 +180,16 @@ describe('CommandHandler', () => {
     it('should match commands case-insensitively', async () => {
       const handler = new CommandHandler();
       const handlerFn = vi.fn();
-      handler.registerCommand('test', {
-        flags: '-',
-        description: 'Test',
-        usage: '.test',
-        category: 'test',
-      }, handlerFn);
+      handler.registerCommand(
+        'test',
+        {
+          flags: '-',
+          description: 'Test',
+          usage: '.test',
+          category: 'test',
+        },
+        handlerFn,
+      );
 
       const ctx = makeCtx();
       await handler.execute('.TEST', ctx);
@@ -189,14 +210,23 @@ describe('CommandHandler', () => {
       const perms = makePermissions(false);
       const handler = new CommandHandler(perms);
       const handlerFn = vi.fn();
-      handler.registerCommand('admin', {
-        flags: '+n',
-        description: 'Admin only',
-        usage: '.admin',
-        category: 'test',
-      }, handlerFn);
+      handler.registerCommand(
+        'admin',
+        {
+          flags: '+n',
+          description: 'Admin only',
+          usage: '.admin',
+          category: 'test',
+        },
+        handlerFn,
+      );
 
-      const ctx = makeCtx({ source: 'irc', nick: 'stranger', ident: 'user', hostname: 'evil.host' });
+      const ctx = makeCtx({
+        source: 'irc',
+        nick: 'stranger',
+        ident: 'user',
+        hostname: 'evil.host',
+      });
       await handler.execute('.admin', ctx);
 
       expect(handlerFn).not.toHaveBeenCalled();
@@ -207,14 +237,23 @@ describe('CommandHandler', () => {
       const perms = makePermissions(true);
       const handler = new CommandHandler(perms);
       const handlerFn = vi.fn();
-      handler.registerCommand('admin', {
-        flags: '+n',
-        description: 'Admin only',
-        usage: '.admin',
-        category: 'test',
-      }, handlerFn);
+      handler.registerCommand(
+        'admin',
+        {
+          flags: '+n',
+          description: 'Admin only',
+          usage: '.admin',
+          category: 'test',
+        },
+        handlerFn,
+      );
 
-      const ctx = makeCtx({ source: 'irc', nick: 'owner', ident: 'admin', hostname: 'trusted.host' });
+      const ctx = makeCtx({
+        source: 'irc',
+        nick: 'owner',
+        ident: 'admin',
+        hostname: 'trusted.host',
+      });
       await handler.execute('.admin', ctx);
 
       expect(handlerFn).toHaveBeenCalledOnce();
@@ -224,12 +263,16 @@ describe('CommandHandler', () => {
       const perms = makePermissions(false);
       const handler = new CommandHandler(perms);
       const handlerFn = vi.fn();
-      handler.registerCommand('admin', {
-        flags: '+n',
-        description: 'Admin only',
-        usage: '.admin',
-        category: 'test',
-      }, handlerFn);
+      handler.registerCommand(
+        'admin',
+        {
+          flags: '+n',
+          description: 'Admin only',
+          usage: '.admin',
+          category: 'test',
+        },
+        handlerFn,
+      );
 
       const ctx = makeCtx({ source: 'repl' });
       await handler.execute('.admin', ctx);
@@ -241,12 +284,16 @@ describe('CommandHandler', () => {
       const perms = makePermissions(false);
       const handler = new CommandHandler(perms);
       const handlerFn = vi.fn();
-      handler.registerCommand('public', {
-        flags: '-',
-        description: 'Public',
-        usage: '.public',
-        category: 'test',
-      }, handlerFn);
+      handler.registerCommand(
+        'public',
+        {
+          flags: '-',
+          description: 'Public',
+          usage: '.public',
+          category: 'test',
+        },
+        handlerFn,
+      );
 
       const ctx = makeCtx({ source: 'irc' });
       await handler.execute('.public', ctx);

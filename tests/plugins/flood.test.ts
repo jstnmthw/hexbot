@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 import { resolve } from 'node:path';
-import { createMockBot, type MockBot } from '../helpers/mock-bot.js';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+import { type MockBot, createMockBot } from '../helpers/mock-bot.js';
 
 const PLUGIN_PATH = resolve('./plugins/flood/index.ts');
 
@@ -8,15 +9,34 @@ const PLUGIN_PATH = resolve('./plugins/flood/index.ts');
 // Helpers
 // ---------------------------------------------------------------------------
 
-function simulatePrivmsg(bot: MockBot, nick: string, ident: string, hostname: string, channel: string, message: string): void {
+function simulatePrivmsg(
+  bot: MockBot,
+  nick: string,
+  ident: string,
+  hostname: string,
+  channel: string,
+  message: string,
+): void {
   bot.client.simulateEvent('privmsg', { nick, ident, hostname, target: channel, message });
 }
 
-function simulateJoin(bot: MockBot, nick: string, ident: string, hostname: string, channel: string): void {
+function simulateJoin(
+  bot: MockBot,
+  nick: string,
+  ident: string,
+  hostname: string,
+  channel: string,
+): void {
   bot.client.simulateEvent('join', { nick, ident, hostname, channel });
 }
 
-function _simulateNick(bot: MockBot, nick: string, ident: string, hostname: string, newNick: string): void {
+function _simulateNick(
+  bot: MockBot,
+  nick: string,
+  ident: string,
+  hostname: string,
+  newNick: string,
+): void {
   bot.client.simulateEvent('nick', { nick, ident, hostname, new_nick: newNick });
 }
 
@@ -32,7 +52,9 @@ function giveBotOps(bot: MockBot, channel: string): void {
   const nick = (bot.client.user as { nick: string }).nick;
   bot.client.simulateEvent('join', { nick, ident: 'bot', hostname: 'bot.host', channel });
   bot.client.simulateEvent('mode', {
-    nick: 'ChanServ', ident: 'ChanServ', hostname: 'services.',
+    nick: 'ChanServ',
+    ident: 'ChanServ',
+    hostname: 'services.',
     target: channel,
     modes: [{ mode: '+o', param: nick }],
   });
@@ -63,17 +85,23 @@ describe('flood plugin — message flood', () => {
     expect(result.status).toBe('ok');
   });
 
-  afterAll(() => { bot.cleanup(); });
-  beforeEach(() => { bot.client.clearMessages(); });
+  afterAll(() => {
+    bot.cleanup();
+  });
+  beforeEach(() => {
+    bot.client.clearMessages();
+  });
 
   it('no action below threshold', async () => {
     for (let i = 0; i < 3; i++) {
       simulatePrivmsg(bot, 'Flooder', 'bad', 'bad.host', '#test', `msg ${i}`);
     }
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'notice' || (m.type === 'raw' && m.message?.includes('KICK'))
-    )).toBeUndefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'notice' || (m.type === 'raw' && m.message?.includes('KICK')),
+      ),
+    ).toBeUndefined();
   });
 
   it('warns on first flood offence', async () => {
@@ -82,9 +110,11 @@ describe('flood plugin — message flood', () => {
       simulatePrivmsg(bot, 'FloodUser', 'bad', 'bad.host', '#test', `msg ${i}`);
     }
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'notice' && m.target === 'FloodUser' && m.message?.includes('flood')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'notice' && m.target === 'FloodUser' && m.message?.includes('flood'),
+      ),
+    ).toBeDefined();
   });
 
   it('kicks on second flood offence', async () => {
@@ -93,36 +123,44 @@ describe('flood plugin — message flood', () => {
       simulatePrivmsg(bot, 'FloodUser', 'bad', 'bad.host', '#test', `burst2 msg ${i}`);
     }
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'raw' && m.message?.includes('KICK') && m.message?.includes('FloodUser')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'raw' && m.message?.includes('KICK') && m.message?.includes('FloodUser'),
+      ),
+    ).toBeDefined();
   });
 
   it('does nothing when bot has no ops', async () => {
     const bot2 = createMockBot({ botNick: 'n0xb0t' });
     // Do NOT give bot ops
     await bot2.pluginLoader.load(PLUGIN_PATH, {
-      flood: { enabled: true, channels: ['#test'], config: { msg_threshold: 3, msg_window_secs: 10, actions: ['kick'] } },
+      flood: {
+        enabled: true,
+        channels: ['#test'],
+        config: { msg_threshold: 3, msg_window_secs: 10, actions: ['kick'] },
+      },
     });
 
     for (let i = 0; i < 5; i++) {
       simulatePrivmsg(bot2, 'BadUser', 'bad', 'bad.host', '#test', `msg ${i}`);
     }
     await flush();
-    expect(bot2.client.messages.find(
-      (m) => m.type === 'raw' && m.message?.includes('KICK')
-    )).toBeUndefined();
+    expect(
+      bot2.client.messages.find((m) => m.type === 'raw' && m.message?.includes('KICK')),
+    ).toBeUndefined();
     bot2.cleanup();
   });
 
-  it('ignores the bot\'s own messages', async () => {
+  it("ignores the bot's own messages", async () => {
     for (let i = 0; i < 10; i++) {
       simulatePrivmsg(bot, 'n0xb0t', 'bot', 'bot.host', '#test', `msg ${i}`);
     }
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'notice' || (m.type === 'raw' && m.message?.includes('KICK'))
-    )).toBeUndefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'notice' || (m.type === 'raw' && m.message?.includes('KICK')),
+      ),
+    ).toBeUndefined();
   });
 
   it('ignores privileged users (ops)', async () => {
@@ -134,9 +172,9 @@ describe('flood plugin — message flood', () => {
       simulatePrivmsg(bot, 'OpUser', 'opuser', 'op.host', '#test', `msg ${i}`);
     }
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'notice' && m.target === 'OpUser'
-    )).toBeUndefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'notice' && m.target === 'OpUser'),
+    ).toBeUndefined();
   });
 });
 
@@ -164,11 +202,20 @@ describe('flood plugin — tempban storage', () => {
       },
     });
     // Add user to channel state
-    bot.client.simulateEvent('join', { nick: 'Spammer', ident: 'spam', hostname: 'spam.host', channel: '#test' });
+    bot.client.simulateEvent('join', {
+      nick: 'Spammer',
+      ident: 'spam',
+      hostname: 'spam.host',
+      channel: '#test',
+    });
   });
 
-  afterAll(() => { bot.cleanup(); });
-  beforeEach(() => { bot.client.clearMessages(); });
+  afterAll(() => {
+    bot.cleanup();
+  });
+  beforeEach(() => {
+    bot.client.clearMessages();
+  });
 
   it('tempban stores a DB record with expiry', async () => {
     simulatePrivmsg(bot, 'Spammer', 'spam', 'spam.host', '#test', 'msg1');

@@ -1,8 +1,8 @@
 // n0xb0t — SQLite database wrapper
 // Namespaced key-value store + mod_log for moderation action tracking.
-
 import Database from 'better-sqlite3';
-import type { Statement, Database as DatabaseType } from 'better-sqlite3';
+import type { Database as DatabaseType, Statement } from 'better-sqlite3';
+
 import type { Logger } from './logger.js';
 
 // ---------------------------------------------------------------------------
@@ -77,26 +77,20 @@ export class BotDatabase {
     `);
 
     // Prepare statements for the KV store
-    this.stmtGet = this.db.prepare(
-      'SELECT value FROM kv WHERE namespace = ? AND key = ?'
-    );
+    this.stmtGet = this.db.prepare('SELECT value FROM kv WHERE namespace = ? AND key = ?');
     this.stmtSet = this.db.prepare(
       `INSERT INTO kv (namespace, key, value, updated)
        VALUES (?, ?, ?, unixepoch())
        ON CONFLICT(namespace, key)
-       DO UPDATE SET value = excluded.value, updated = excluded.updated`
+       DO UPDATE SET value = excluded.value, updated = excluded.updated`,
     );
-    this.stmtDel = this.db.prepare(
-      'DELETE FROM kv WHERE namespace = ? AND key = ?'
-    );
-    this.stmtList = this.db.prepare(
-      'SELECT key, value FROM kv WHERE namespace = ?'
-    );
+    this.stmtDel = this.db.prepare('DELETE FROM kv WHERE namespace = ? AND key = ?');
+    this.stmtList = this.db.prepare('SELECT key, value FROM kv WHERE namespace = ?');
     this.stmtListPrefix = this.db.prepare(
-      'SELECT key, value FROM kv WHERE namespace = ? AND key LIKE ? ESCAPE \'\\\''
+      "SELECT key, value FROM kv WHERE namespace = ? AND key LIKE ? ESCAPE '\\'",
     );
     this.stmtLogMod = this.db.prepare(
-      'INSERT INTO mod_log (action, channel, target, by_user, reason) VALUES (?, ?, ?, ?, ?)'
+      'INSERT INTO mod_log (action, channel, target, by_user, reason) VALUES (?, ?, ?, ?, ?)',
     );
 
     this.logger?.info('Opened:', this.path);
@@ -141,7 +135,10 @@ export class BotDatabase {
     if (prefix != null) {
       // Escape LIKE wildcards in the prefix, then append %
       const escaped = prefix.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
-      return this.stmtListPrefix.all(namespace, `${escaped}%`) as Array<{ key: string; value: string }>;
+      return this.stmtListPrefix.all(namespace, `${escaped}%`) as Array<{
+        key: string;
+        value: string;
+      }>;
     }
     return this.stmtList.all(namespace) as Array<{ key: string; value: string }>;
   }
@@ -156,7 +153,7 @@ export class BotDatabase {
     channel: string | null,
     target: string | null,
     by: string | null,
-    reason?: string | null
+    reason?: string | null,
   ): void {
     this.ensureOpen();
     this.stmtLogMod.run(action, channel, target, by, reason ?? null);

@@ -1,7 +1,7 @@
 ---
 name: plan
-description: "Analyze feature feasibility against the n0xb0t codebase and produce a structured implementation plan. Use when the user wants to plan a new feature, plugin, or capability before building it."
-argument-hint: "<feature description>"
+description: 'Analyze feature feasibility against the n0xb0t codebase and produce a structured implementation plan. Use when the user wants to plan a new feature, plugin, or capability before building it.'
+argument-hint: '<feature description>'
 ---
 
 # Planner
@@ -42,17 +42,21 @@ Write a markdown file to `docs/plans/<feature-name>.md` with this structure:
 # Plan: <Feature Name>
 
 ## Summary
+
 One paragraph describing what this feature does and why.
 
 ## Feasibility
+
 <assessment from step 3>
 
 ## Dependencies
+
 - [ ] <thing that must exist first>
 
 ## Phases
 
 ### Phase 1: <name>
+
 **Goal:** <what this phase accomplishes>
 
 - [ ] <concrete task with file path>
@@ -60,18 +64,23 @@ One paragraph describing what this feature does and why.
 - [ ] <verification step — how to confirm this phase works>
 
 ### Phase 2: <name>
+
 ...
 
 ## Config changes
+
 <any new config fields needed, with example JSON>
 
 ## Database changes
+
 <any new tables or schema changes>
 
 ## Test plan
+
 <what tests should be written and what they verify>
 
 ## Open questions
+
 <anything that needs user input before building>
 ```
 

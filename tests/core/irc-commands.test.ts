@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
 import { IRCCommands } from '../../src/core/irc-commands.js';
 import type { IRCCommandsClient } from '../../src/core/irc-commands.js';
 import { BotDatabase } from '../../src/database.js';

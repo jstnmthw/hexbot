@@ -4,13 +4,13 @@ This directory contains all bot plugins. Each subdirectory is a self-contained p
 
 ## Included plugins
 
-| Plugin | Commands | Description |
-|--------|----------|-------------|
-| [8ball](8ball/) | `!8ball <question>` | Magic 8-ball responses |
+| Plugin              | Commands                                                                    | Description                                                              |
+| ------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| [8ball](8ball/)     | `!8ball <question>`                                                         | Magic 8-ball responses                                                   |
 | [chanmod](chanmod/) | `!op`, `!deop`, `!voice`, `!devoice`, `!kick`, `!ban`, `!unban`, `!kickban` | Channel protection: auto-op/voice, mode enforcement, moderation commands |
-| [greeter](greeter/) | *(automatic)* | Greets users on channel join |
-| [seen](seen/) | `!seen <nick>` | Tracks when a user was last active |
-| [topic](topic/) | `!topic`, `!topics` | Set channel topics with IRC color themes |
+| [greeter](greeter/) | _(automatic)_                                                               | Greets users on channel join                                             |
+| [seen](seen/)       | `!seen <nick>`                                                              | Tracks when a user was last active                                       |
+| [topic](topic/)     | `!topic`, `!topics`                                                         | Set channel topics with IRC color themes                                 |
 
 ## Creating a new plugin
 
@@ -27,9 +27,9 @@ plugins/
 ### Required exports
 
 ```typescript
-import type { PluginAPI, HandlerContext } from '../../src/types.js';
+import type { HandlerContext, PluginAPI } from '../../src/types.js';
 
-export const name = 'my-plugin';           // alphanumeric, hyphens, underscores
+export const name = 'my-plugin'; // alphanumeric, hyphens, underscores
 export const version = '1.0.0';
 export const description = 'What it does';
 
@@ -71,19 +71,20 @@ api.bind('pub', '-', '!hello', (ctx: HandlerContext) => {
 ```
 
 The arguments are:
+
 - **type** — what IRC event to listen for
 - **flags** — required user permissions (`'-'` = anyone, `'o'` = ops, `'n'` = owner)
 - **mask** — what to match against (depends on the bind type)
 
 ### Common bind types
 
-| Type | Use case | Mask matches |
-|------|----------|-------------|
-| `pub` | `!command` in a channel | Exact command (e.g. `!hello`) |
-| `pubm` | Any channel text | Wildcard on full message (e.g. `*http*`) |
-| `msg` | Private message command | Exact command |
-| `join` | User joins a channel | `#channel nick!user@host` or `*` for all |
-| `time` | Run on an interval | Seconds as a string (e.g. `"300"` for 5 min) |
+| Type   | Use case                | Mask matches                                 |
+| ------ | ----------------------- | -------------------------------------------- |
+| `pub`  | `!command` in a channel | Exact command (e.g. `!hello`)                |
+| `pubm` | Any channel text        | Wildcard on full message (e.g. `*http*`)     |
+| `msg`  | Private message command | Exact command                                |
+| `join` | User joins a channel    | `#channel nick!user@host` or `*` for all     |
+| `time` | Run on an interval      | Seconds as a string (e.g. `"300"` for 5 min) |
 
 `pub` and `msg` are **non-stackable** — one handler per command across all plugins. All other types are **stackable** — every matching handler fires.
 
@@ -93,28 +94,28 @@ Every handler gets a `ctx` object:
 
 ```typescript
 api.bind('pub', '-', '!greet', (ctx: HandlerContext) => {
-  ctx.nick;       // "alice"
-  ctx.ident;      // "alice"
-  ctx.hostname;   // "user.example.com"
-  ctx.channel;    // "#lobby" (null for PMs)
-  ctx.text;       // "!greet everyone"
-  ctx.command;    // "!greet"
-  ctx.args;       // "everyone"
+  ctx.nick; // "alice"
+  ctx.ident; // "alice"
+  ctx.hostname; // "user.example.com"
+  ctx.channel; // "#lobby" (null for PMs)
+  ctx.text; // "!greet everyone"
+  ctx.command; // "!greet"
+  ctx.args; // "everyone"
 
-  ctx.reply('Hi!');            // sends to #lobby (or PM if private)
-  ctx.replyPrivate('Secret');  // sends a NOTICE to alice
+  ctx.reply('Hi!'); // sends to #lobby (or PM if private)
+  ctx.replyPrivate('Secret'); // sends a NOTICE to alice
 });
 ```
 
 ### Permission flags
 
-| Flag | Role | Access |
-|------|------|--------|
-| `n` | Owner | Full access; implies all other flags |
-| `m` | Master | User management |
-| `o` | Op | Channel commands |
-| `v` | Voice | Reserved for plugin use |
-| `-` | Anyone | No restriction |
+| Flag | Role   | Access                               |
+| ---- | ------ | ------------------------------------ |
+| `n`  | Owner  | Full access; implies all other flags |
+| `m`  | Master | User management                      |
+| `o`  | Op     | Channel commands                     |
+| `v`  | Voice  | Reserved for plugin use              |
+| `-`  | Anyone | No restriction                       |
 
 Combine with `|` for OR: `'n|m'` means owner OR master. When a user lacks the required flags, the bind silently doesn't fire.
 
@@ -154,9 +155,9 @@ Every plugin gets a namespaced key-value store. Keys never collide across plugin
 
 ```typescript
 api.db.set('score:alice', '42');
-const score = api.db.get('score:alice');  // "42" or undefined
+const score = api.db.get('score:alice'); // "42" or undefined
 api.db.del('score:alice');
-const all = api.db.list('score:');        // [{ key, value }, ...]
+const all = api.db.list('score:'); // [{ key, value }, ...]
 ```
 
 Values are strings — store structured data as JSON.
@@ -164,9 +165,9 @@ Values are strings — store structured data as JSON.
 ### Sending messages
 
 ```typescript
-api.say('#lobby', 'Hello channel');          // PRIVMSG
-api.notice('#lobby', 'Notice to channel');   // NOTICE
-api.action('#lobby', 'waves');               // /me waves
+api.say('#lobby', 'Hello channel'); // PRIVMSG
+api.notice('#lobby', 'Notice to channel'); // NOTICE
+api.action('#lobby', 'waves'); // /me waves
 ```
 
 ### Channel operations
@@ -186,10 +187,10 @@ api.mode('#lobby', '+m');
 Messages are prefixed with `[plugin:my-plugin]` and respect the bot's log level. Don't log on load — the plugin loader handles that.
 
 ```typescript
-api.log('Processing request');     // info
+api.log('Processing request'); // info
 api.warn('Rate limit approaching');
 api.error('Failed to fetch data');
-api.debug('Raw response:', data);  // only at debug level
+api.debug('Raw response:', data); // only at debug level
 ```
 
 ### Hot reloading
@@ -203,7 +204,7 @@ Plugins can be reloaded at runtime (`.reload my-plugin`). Design for this:
 ### Complete example: a dice roller
 
 ```typescript
-import type { PluginAPI, HandlerContext } from '../../src/types.js';
+import type { HandlerContext, PluginAPI } from '../../src/types.js';
 
 export const name = 'dice';
 export const version = '1.0.0';

@@ -9,10 +9,10 @@ This documents the full API surface available to n0xb0t plugins. Every plugin's 
 A plugin is a directory under `plugins/` containing an `index.ts` that exports the following:
 
 ```typescript
-import type { PluginAPI, HandlerContext } from '../../src/types.js';
+import type { HandlerContext, PluginAPI } from '../../src/types.js';
 
-export const name = 'my-plugin';        // required — alphanumeric, hyphens, underscores
-export const version = '1.0.0';         // required
+export const name = 'my-plugin'; // required — alphanumeric, hyphens, underscores
+export const version = '1.0.0'; // required
 export const description = 'What it does'; // required
 
 export function init(api: PluginAPI): void | Promise<void> {
@@ -82,12 +82,12 @@ Namespaced database access. All keys are scoped to this plugin automatically.
 
 Register an event handler.
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `type` | `BindType` | Event type (see table below) |
-| `flags` | `string` | Required user flags. `'-'` = anyone. `'+o'` = ops. `'+n\|+m'` = owner OR master. |
-| `mask` | `string` | Pattern to match against. Meaning depends on the bind type. |
-| `handler` | `(ctx: HandlerContext) => void \| Promise<void>` | The callback. |
+| Parameter | Type                                             | Description                                                                      |
+| --------- | ------------------------------------------------ | -------------------------------------------------------------------------------- |
+| `type`    | `BindType`                                       | Event type (see table below)                                                     |
+| `flags`   | `string`                                         | Required user flags. `'-'` = anyone. `'+o'` = ops. `'+n\|+m'` = owner OR master. |
+| `mask`    | `string`                                         | Pattern to match against. Meaning depends on the bind type.                      |
+| `handler` | `(ctx: HandlerContext) => void \| Promise<void>` | The callback.                                                                    |
 
 Binds are automatically tagged with the plugin ID. On unload, all binds are removed.
 
@@ -105,21 +105,21 @@ Remove a specific handler. Rarely needed since unload cleans up automatically.
 
 ### Bind types
 
-| Type | Trigger | Mask matches against | Stackable |
-|------|---------|---------------------|-----------|
-| `pub` | Channel message | Exact command (case-insensitive) | No |
-| `pubm` | Channel message | Wildcard on full text | Yes |
-| `msg` | Private message | Exact command (case-insensitive) | No |
-| `msgm` | Private message | Wildcard on full text | Yes |
-| `join` | User joins | `#channel nick!user@host` or `*` | Yes |
-| `part` | User parts | `#channel nick!user@host` or `*` | Yes |
-| `kick` | User kicked | `#channel nick!user@host` or `*` | Yes |
-| `nick` | Nick change | Wildcard on old nick | Yes |
-| `mode` | Mode change | `#channel +/-mode` or `*` | Yes |
-| `raw` | Raw server line | Command/numeric (wildcard) | Yes |
-| `time` | Timer (interval) | Seconds as string (e.g. `"60"`) | Yes |
-| `ctcp` | CTCP request | CTCP type (e.g. `VERSION`) | Yes |
-| `notice` | Notice received | Wildcard on text | Yes |
+| Type     | Trigger          | Mask matches against             | Stackable |
+| -------- | ---------------- | -------------------------------- | --------- |
+| `pub`    | Channel message  | Exact command (case-insensitive) | No        |
+| `pubm`   | Channel message  | Wildcard on full text            | Yes       |
+| `msg`    | Private message  | Exact command (case-insensitive) | No        |
+| `msgm`   | Private message  | Wildcard on full text            | Yes       |
+| `join`   | User joins       | `#channel nick!user@host` or `*` | Yes       |
+| `part`   | User parts       | `#channel nick!user@host` or `*` | Yes       |
+| `kick`   | User kicked      | `#channel nick!user@host` or `*` | Yes       |
+| `nick`   | Nick change      | Wildcard on old nick             | Yes       |
+| `mode`   | Mode change      | `#channel +/-mode` or `*`        | Yes       |
+| `raw`    | Raw server line  | Command/numeric (wildcard)       | Yes       |
+| `time`   | Timer (interval) | Seconds as string (e.g. `"60"`)  | Yes       |
+| `ctcp`   | CTCP request     | CTCP type (e.g. `VERSION`)       | Yes       |
+| `notice` | Notice received  | Wildcard on text                 | Yes       |
 
 Non-stackable types (`pub`, `msg`) replace any previous bind on the same mask. Stackable types fire all matching handlers.
 
@@ -131,17 +131,17 @@ Timer binds enforce a minimum interval of 10 seconds.
 
 Every handler receives a `ctx` object:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `nick` | `string` | Source nick |
-| `ident` | `string` | Source ident (username) |
-| `hostname` | `string` | Source hostname |
-| `channel` | `string \| null` | Channel name, or `null` for PMs |
-| `text` | `string` | Full message text |
-| `command` | `string` | Parsed command (first word for `pub`/`msg`) |
-| `args` | `string` | Everything after the command |
-| `reply(msg)` | `function` | Reply to the channel or PM source |
-| `replyPrivate(msg)` | `function` | Reply via NOTICE to the user |
+| Field               | Type             | Description                                 |
+| ------------------- | ---------------- | ------------------------------------------- |
+| `nick`              | `string`         | Source nick                                 |
+| `ident`             | `string`         | Source ident (username)                     |
+| `hostname`          | `string`         | Source hostname                             |
+| `channel`           | `string \| null` | Channel name, or `null` for PMs             |
+| `text`              | `string`         | Full message text                           |
+| `command`           | `string`         | Parsed command (first word for `pub`/`msg`) |
+| `args`              | `string`         | Everything after the command                |
+| `reply(msg)`        | `function`       | Reply to the channel or PM source           |
+| `replyPrivate(msg)` | `function`       | Reply via NOTICE to the user                |
 
 ---
 
@@ -227,8 +227,8 @@ interface ChannelUser {
   nick: string;
   ident: string;
   hostname: string;
-  modes: string;     // e.g. "ov" for op+voice
-  joinedAt: number;  // unix timestamp (ms)
+  modes: string; // e.g. "ov" for op+voice
+  joinedAt: number; // unix timestamp (ms)
 }
 ```
 
@@ -248,8 +248,8 @@ Look up a user record by matching a full `nick!ident@host` string against stored
 interface UserRecord {
   handle: string;
   hostmasks: string[];
-  global: string;                    // global flags, e.g. "nmov"
-  channels: Record<string, string>;  // per-channel overrides
+  global: string; // global flags, e.g. "nmov"
+  channels: Record<string, string>; // per-channel overrides
 }
 ```
 
@@ -330,7 +330,7 @@ Log an error prefixed with `[plugin:<name>]`. Uses `console.error`.
 ## Full example
 
 ```typescript
-import type { PluginAPI, HandlerContext } from '../../src/types.js';
+import type { HandlerContext, PluginAPI } from '../../src/types.js';
 
 export const name = 'welcome-back';
 export const version = '1.0.0';

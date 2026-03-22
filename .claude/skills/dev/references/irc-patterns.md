@@ -34,6 +34,7 @@ IRC servers kill connections that send too many messages too fast. Typical limit
 - ~20 messages in a burst before disconnect
 
 `irc-framework` has built-in send queues, but plugins should still avoid:
+
 - Loops that send a message per user in a channel
 - Responding to every message in a busy channel
 - Sending multiple lines where one would do
@@ -55,6 +56,7 @@ Pattern: on join, query ACC, wait for response, then op if verified.
 Format: `nick!ident@hostname`
 
 Common wildcard patterns:
+
 - `*!*@specific.host.com` — match anyone from this host
 - `*!myident@*` — match anyone with this ident (less reliable)
 - `*!*@*.isp.com` — match anyone from this ISP
@@ -65,6 +67,7 @@ On networks with cloaks (Libera, etc.), hostmasks look like `nick!ident@user/acc
 ## Channel modes reference
 
 Standard modes (available everywhere):
+
 - `+o nick` — operator
 - `+v nick` — voice
 - `+b mask` — ban
@@ -75,6 +78,7 @@ Standard modes (available everywhere):
 - `+l N` — user limit
 
 Common but not universal:
+
 - `+h nick` — half-op (UnrealIRCd, InspIRCd, not Libera)
 - `+a nick` — admin/protected (UnrealIRCd)
 - `+q nick` — owner (UnrealIRCd)
@@ -85,33 +89,33 @@ Always check ISUPPORT PREFIX and CHANMODES before assuming a mode exists.
 
 ## ISUPPORT tokens the bot cares about
 
-| Token | What it tells us |
-|-------|-----------------|
-| `PREFIX` | Available user modes and their symbols (e.g., `(ohv)@%+`) |
-| `CHANMODES` | Available channel modes grouped by type |
-| `MODES` | Max mode changes per MODE command |
-| `MAXCHANNELS` / `CHANLIMIT` | Max channels the bot can join |
-| `NICKLEN` | Max nick length |
-| `TOPICLEN` | Max topic length |
-| `KICKLEN` | Max kick reason length |
-| `CASEMAPPING` | Case comparison rules |
-| `NETWORK` | Network name |
+| Token                       | What it tells us                                          |
+| --------------------------- | --------------------------------------------------------- |
+| `PREFIX`                    | Available user modes and their symbols (e.g., `(ohv)@%+`) |
+| `CHANMODES`                 | Available channel modes grouped by type                   |
+| `MODES`                     | Max mode changes per MODE command                         |
+| `MAXCHANNELS` / `CHANLIMIT` | Max channels the bot can join                             |
+| `NICKLEN`                   | Max nick length                                           |
+| `TOPICLEN`                  | Max topic length                                          |
+| `KICKLEN`                   | Max kick reason length                                    |
+| `CASEMAPPING`               | Case comparison rules                                     |
+| `NETWORK`                   | Network name                                              |
 
 ## Common bind patterns
 
 ```javascript
 // Command with arguments
 api.bind('pub', '-', '!kick', async (ctx) => {
-  const target = ctx.args[0];  // First word after !kick
+  const target = ctx.args[0]; // First word after !kick
   const reason = ctx.args.slice(1).join(' ') || 'No reason';
 });
 
 // Wildcard match on any message containing a URL
-api.bind('pubm', '-', '* *http://*', async (ctx) => { });
-api.bind('pubm', '-', '* *https://*', async (ctx) => { });
+api.bind('pubm', '-', '* *http://*', async (ctx) => {});
+api.bind('pubm', '-', '* *https://*', async (ctx) => {});
 
 // Timer that fires every 5 minutes
-api.bind('time', '-', '300', async (ctx) => { });
+api.bind('time', '-', '300', async (ctx) => {});
 
 // React to ops being given
 api.bind('mode', '-', '* +o', async (ctx) => {

@@ -18,7 +18,20 @@ export interface CommandContext {
 
 /** Permission checker interface for flag enforcement. */
 export interface CommandPermissionsProvider {
-  checkFlags(requiredFlags: string, ctx: { nick: string; ident: string; hostname: string; channel: string | null; text: string; command: string; args: string; reply: (msg: string) => void; replyPrivate: (msg: string) => void }): boolean;
+  checkFlags(
+    requiredFlags: string,
+    ctx: {
+      nick: string;
+      ident: string;
+      hostname: string;
+      channel: string | null;
+      text: string;
+      command: string;
+      args: string;
+      reply: (msg: string) => void;
+      replyPrivate: (msg: string) => void;
+    },
+  ): boolean;
 }
 
 /** Options for registering a command. */
@@ -53,14 +66,18 @@ export class CommandHandler {
   constructor(permissions?: CommandPermissionsProvider | null) {
     this.permissions = permissions ?? null;
     // Register the built-in .help command
-    this.registerCommand('help', {
-      flags: '-',
-      description: 'List commands or show help for a specific command',
-      usage: '.help [command]',
-      category: 'general',
-    }, (args, ctx) => {
-      this.handleHelp(args, ctx);
-    });
+    this.registerCommand(
+      'help',
+      {
+        flags: '-',
+        description: 'List commands or show help for a specific command',
+        usage: '.help [command]',
+        category: 'general',
+      },
+      (args, ctx) => {
+        this.handleHelp(args, ctx);
+      },
+    );
   }
 
   /** Register a command. */
@@ -79,9 +96,10 @@ export class CommandHandler {
     // Parse command name and arguments
     const withoutPrefix = trimmed.substring(COMMAND_PREFIX.length);
     const spaceIdx = withoutPrefix.indexOf(' ');
-    const commandName = spaceIdx === -1
-      ? withoutPrefix.toLowerCase()
-      : withoutPrefix.substring(0, spaceIdx).toLowerCase();
+    const commandName =
+      spaceIdx === -1
+        ? withoutPrefix.toLowerCase()
+        : withoutPrefix.substring(0, spaceIdx).toLowerCase();
     const args = spaceIdx === -1 ? '' : withoutPrefix.substring(spaceIdx + 1).trim();
 
     if (!commandName) return;
@@ -104,7 +122,9 @@ export class CommandHandler {
         ident: ctx.ident ?? '',
         hostname: ctx.hostname ?? '',
         channel: ctx.channel,
-        text: '', command: commandName, args,
+        text: '',
+        command: commandName,
+        args,
         reply: ctx.reply,
         replyPrivate: ctx.reply,
       };

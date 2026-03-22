@@ -1,9 +1,11 @@
 # Plan: Phase 1 — Database + Dispatcher
 
 ## Summary
+
 Build the two foundational modules that everything else depends on: the SQLite database wrapper and the Eggdrop-style event dispatcher. These are fully testable in isolation — no IRC connection needed. This phase ends with a solid test suite proving both modules work correctly.
 
 ## Dependencies
+
 - [x] Phase 0 complete (project scaffolding, pnpm install works)
 
 ---
@@ -21,6 +23,7 @@ Build the two foundational modules that everything else depends on: the SQLite d
   - `close()` — close the database connection
   - **Security:** All queries MUST use parameterized statements (prepared statements with `?` placeholders). Never concatenate user input into SQL. Namespace isolation must be enforced in the class — callers cannot access a namespace they didn't request.
 - [ ] Table schemas:
+
 ```sql
 CREATE TABLE IF NOT EXISTS kv (
   namespace TEXT NOT NULL,
@@ -40,8 +43,9 @@ CREATE TABLE IF NOT EXISTS mod_log (
   reason    TEXT
 );
 ```
-  - `logModAction(action, channel, target, by, reason?)` — insert into mod_log
-  - `getModLog(filter?)` — query mod_log with optional channel/action/target filters
+
+- `logModAction(action, channel, target, by, reason?)` — insert into mod_log
+- `getModLog(filter?)` — query mod_log with optional channel/action/target filters
 - [ ] Create `tests/database.test.ts`:
   - Test open/close lifecycle
   - Test set and get (string values)
@@ -110,6 +114,7 @@ CREATE TABLE IF NOT EXISTS mod_log (
 ## Verification
 
 **This phase is complete when:**
+
 1. `pnpm vitest run tests/database.test.ts` — all pass
 2. `pnpm vitest run tests/core/dispatcher.test.ts` — all pass
 3. `pnpm test` — all tests pass (database + dispatcher combined)
@@ -117,4 +122,5 @@ CREATE TABLE IF NOT EXISTS mod_log (
 5. No lint errors or unhandled promise rejections in tests
 
 ## Next phase
+
 Phase 2: Permissions + Command Handler

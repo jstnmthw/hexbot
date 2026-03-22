@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { EventDispatcher } from '../../src/dispatcher.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
 import { Permissions } from '../../src/core/permissions.js';
+import { EventDispatcher } from '../../src/dispatcher.js';
 import type { HandlerContext } from '../../src/types.js';
 
 /** Helper: create a minimal HandlerContext for testing. */

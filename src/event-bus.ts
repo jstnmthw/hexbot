@@ -1,6 +1,5 @@
 // n0xb0t — Internal event bus
 // Typed EventEmitter for bot-level events (separate from the IRC dispatcher).
-
 import { EventEmitter } from 'node:events';
 
 // ---------------------------------------------------------------------------
@@ -38,12 +37,18 @@ export class BotEventBus extends EventEmitter {
     return super.on(event, listener);
   }
 
-  override once<K extends keyof BotEvents>(event: K, listener: (...args: BotEvents[K]) => void): this;
+  override once<K extends keyof BotEvents>(
+    event: K,
+    listener: (...args: BotEvents[K]) => void,
+  ): this;
   override once(event: string | symbol, listener: (...args: unknown[]) => void): this {
     return super.once(event, listener);
   }
 
-  override off<K extends keyof BotEvents>(event: K, listener: (...args: BotEvents[K]) => void): this;
+  override off<K extends keyof BotEvents>(
+    event: K,
+    listener: (...args: BotEvents[K]) => void,
+  ): this;
   override off(event: string | symbol, listener: (...args: unknown[]) => void): this {
     return super.off(event, listener);
   }

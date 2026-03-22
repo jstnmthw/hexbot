@@ -74,12 +74,12 @@ IRC commands are delimited by `\r\n`. If user input containing newlines is passe
 
 Hostmask matching is the primary identity mechanism. Security depends on pattern quality:
 
-| Pattern | Security | Notes |
-|---------|----------|-------|
-| `*!*@specific.host.com` | Good | Static host, hard to spoof |
-| `*!ident@*.isp.com` | Moderate | Ident can be faked on some servers |
-| `*!*@user/account` | Strong | Network-verified cloak (Libera, etc.) |
-| `nick!*@*` | **Dangerous** | Anyone can use any nick. Never use for privileged users |
+| Pattern                 | Security      | Notes                                                   |
+| ----------------------- | ------------- | ------------------------------------------------------- |
+| `*!*@specific.host.com` | Good          | Static host, hard to spoof                              |
+| `*!ident@*.isp.com`     | Moderate      | Ident can be faked on some servers                      |
+| `*!*@user/account`      | Strong        | Network-verified cloak (Libera, etc.)                   |
+| `nick!*@*`              | **Dangerous** | Anyone can use any nick. Never use for privileged users |
 
 **Rule:** Warn when an admin adds a `nick!*@*` hostmask for a user with `+o` or higher flags. Log a `[security]` warning.
 
@@ -184,15 +184,15 @@ api.say(channel, `User ${stripFormatting(nick)} has been granted ops`);
 
 The bot should be safe out of the box, without requiring the admin to harden it:
 
-| Setting | Default | Why |
-|---------|---------|-----|
-| `identity.method` | `"hostmask"` | Works on all networks, no services dependency |
+| Setting                    | Default        | Why                                                         |
+| -------------------------- | -------------- | ----------------------------------------------------------- |
+| `identity.method`          | `"hostmask"`   | Works on all networks, no services dependency               |
 | `identity.require_acc_for` | `["+o", "+n"]` | Privileged ops require NickServ verification when available |
-| `services.sasl` | `true` | SASL is more secure than PRIVMSG IDENTIFY |
-| `irc.tls` | `true` | Encrypted connection by default |
-| Admin commands flag | `+n` | Only owner can run admin commands |
-| `.help` flag | `-` | Help is available to everyone (no info leak risk) |
-| Plugin API `permissions` | Read-only | Plugins can check flags but not grant them |
+| `services.sasl`            | `true`         | SASL is more secure than PRIVMSG IDENTIFY                   |
+| `irc.tls`                  | `true`         | Encrypted connection by default                             |
+| Admin commands flag        | `+n`           | Only owner can run admin commands                           |
+| `.help` flag               | `-`            | Help is available to everyone (no info leak risk)           |
+| Plugin API `permissions`   | Read-only      | Plugins can check flags but not grant them                  |
 
 ---
 

@@ -1,9 +1,11 @@
 # Plan: Phase 3 — Bot Core + IRC Connection + REPL
 
 ## Summary
+
 Wire up `irc-framework`, bridge IRC events to the dispatcher, implement the REPL, and get the bot connecting to a real IRC server. This is the first phase where the bot actually comes alive. At the end, the bot connects, joins channels, responds to admin commands via IRC and the REPL, and you can see it in your IRC client.
 
 ## Dependencies
+
 - [x] Phase 0 complete (scaffolding)
 - [x] Phase 1 complete (database + dispatcher)
 - [x] Phase 2 complete (permissions + command handler)
@@ -107,6 +109,7 @@ Wire up `irc-framework`, bridge IRC events to the dispatcher, implement the REPL
 ## Phase 3F: Manual verification
 
 This phase requires a real IRC connection. Either:
+
 - Connect to Libera Chat (public, free)
 - Run a local ngIRCd/InspIRCd instance
 - Use any IRC network you have access to
@@ -151,6 +154,7 @@ This phase requires a real IRC connection. Either:
 ## Verification
 
 **This phase is complete when:**
+
 1. `pnpm run dev` starts the bot, connects to IRC, joins channels, and presents the REPL
 2. REPL commands (`.help`, `.status`, `.adduser`, `.users`, `.say`) work
 3. IRC admin commands work when sent by a user with matching hostmask and `+n` flags
@@ -160,4 +164,5 @@ This phase requires a real IRC connection. Either:
 7. Mock helpers (`mock-irc.ts`, `mock-bot.ts`) are working and usable by future phases
 
 ## Next phase
+
 Phase 4: Plugin Loader + Example Plugins

@@ -1,7 +1,7 @@
 ---
 name: debug
 description: "Investigate and fix bugs in n0xb0t. Use when something is broken — bot won't connect, plugin not responding, events not dispatching, permissions not working."
-argument-hint: "<issue description>"
+argument-hint: '<issue description>'
 ---
 
 # Debugger
@@ -13,6 +13,7 @@ Investigate and fix bugs in n0xb0t.
 ### Step 1: Reproduce and understand
 
 Get the error output, stack trace, or behavioral description. Ask for:
+
 - What they expected vs what actually happened
 - Any error messages or logs
 - Whether this worked before and what changed
@@ -31,6 +32,7 @@ Read the relevant source code, following the execution path:
 ### Step 3: Identify root cause
 
 Common IRC bot failure modes:
+
 - Socket disconnect without reconnect (auto_reconnect config)
 - Encoding issues (non-UTF8 from IRC)
 - Mode parsing (unexpected format from specific ircd)

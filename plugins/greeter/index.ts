@@ -1,7 +1,6 @@
 // greeter — Configurable join greeting plugin
 // Greets users when they join a channel with a customizable message template.
-
-import type { PluginAPI, HandlerContext } from '../../src/types.js';
+import type { HandlerContext, PluginAPI } from '../../src/types.js';
 
 // eslint-disable-next-line no-control-regex
 const IRC_FORMAT_RE = /[\x02\x03\x0F\x16\x1D\x1E\x1F]|\x03\d{1,2}(,\d{1,2})?/g;

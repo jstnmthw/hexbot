@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createMockBot, type MockBot } from './helpers/mock-bot.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
 import type { HandlerContext } from '../src/types.js';
+import { type MockBot, createMockBot } from './helpers/mock-bot.js';
 
 describe('Bot (mock)', () => {
   let bot: MockBot;
@@ -19,16 +20,22 @@ describe('Bot (mock)', () => {
       bot.permissions.addUser('admin', '*!admin@trusted.host', 'n', 'test');
 
       // Register a pub bind for the command handler
-      bot.dispatcher.bind('pub', '-', '.say', async (ctx: HandlerContext) => {
-        await bot.commandHandler.execute(ctx.text, {
-          source: 'irc',
-          nick: ctx.nick,
-          ident: ctx.ident,
-          hostname: ctx.hostname,
-          channel: ctx.channel,
-          reply: (msg: string) => ctx.reply(msg),
-        });
-      }, 'core');
+      bot.dispatcher.bind(
+        'pub',
+        '-',
+        '.say',
+        async (ctx: HandlerContext) => {
+          await bot.commandHandler.execute(ctx.text, {
+            source: 'irc',
+            nick: ctx.nick,
+            ident: ctx.ident,
+            hostname: ctx.hostname,
+            channel: ctx.channel,
+            reply: (msg: string) => ctx.reply(msg),
+          });
+        },
+        'core',
+      );
 
       // Simulate an IRC message
       bot.client.simulateEvent('privmsg', {
@@ -42,9 +49,7 @@ describe('Bot (mock)', () => {
       await new Promise((r) => setTimeout(r, 20));
 
       // The .say command should have sent a message via the IRC client
-      const sayMsg = bot.client.messages.find(
-        (m) => m.type === 'say' && m.target === '#other'
-      );
+      const sayMsg = bot.client.messages.find((m) => m.type === 'say' && m.target === '#other');
       expect(sayMsg).toBeDefined();
       expect(sayMsg?.message).toBe('Hello from admin!');
 

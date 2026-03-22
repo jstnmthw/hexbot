@@ -1,8 +1,7 @@
 // topic — IRC topic creator with color-coded themes
 // Sets channel topics using pre-built color theme borders.
-
-import type { PluginAPI, HandlerContext } from '../../src/types.js';
-import { themes, themeNames } from './themes.js';
+import type { HandlerContext, PluginAPI } from '../../src/types.js';
+import { themeNames, themes } from './themes.js';
 
 export const name = 'topic';
 export const version = '1.0.0';
@@ -61,7 +60,9 @@ export function init(api: PluginAPI): void {
 
     // Warn if the formatted topic is very long (typical IRC limit ~390 chars)
     if (formatted.length > 390) {
-      ctx.reply(`Warning: topic is ${formatted.length} chars (typical limit is ~390). It may be truncated by the server.`);
+      ctx.reply(
+        `Warning: topic is ${formatted.length} chars (typical limit is ~390). It may be truncated by the server.`,
+      );
     }
 
     api.topic(ctx.channel, formatted);
@@ -87,11 +88,12 @@ export function init(api: PluginAPI): void {
       return;
     }
 
-    ctx.reply(`Available themes: ${themeNames.join(', ')} — Use "!topics preview [text]" to preview all via PM.`);
+    ctx.reply(
+      `Available themes: ${themeNames.join(', ')} — Use "!topics preview [text]" to preview all via PM.`,
+    );
   });
 }
 
 export function teardown(): void {
   // No cleanup needed — binds are auto-removed by the loader
 }
-

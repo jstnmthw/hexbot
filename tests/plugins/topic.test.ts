@@ -1,11 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { resolve } from 'node:path';
-import { createMockBot, type MockBot } from '../helpers/mock-bot.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import { themeNames } from '../../plugins/topic/themes.js';
+import { type MockBot, createMockBot } from '../helpers/mock-bot.js';
 
 const PLUGIN_PATH = resolve('./plugins/topic/index.ts');
 
-function simulatePrivmsg(bot: MockBot, nick: string, ident: string, hostname: string, channel: string, message: string): void {
+function simulatePrivmsg(
+  bot: MockBot,
+  nick: string,
+  ident: string,
+  hostname: string,
+  channel: string,
+  message: string,
+): void {
   bot.client.simulateEvent('privmsg', { nick, ident, hostname, target: channel, message });
 }
 
@@ -33,9 +41,7 @@ describe('topic plugin', () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!topic');
     await tick();
 
-    const reply = bot.client.messages.find(
-      (m) => m.type === 'say' && m.message?.includes('Usage')
-    );
+    const reply = bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Usage'));
     expect(reply).toBeDefined();
   });
 
@@ -44,41 +50,55 @@ describe('topic plugin', () => {
     await tick();
 
     const reply = bot.client.messages.find(
-      (m) => m.type === 'say' && m.message?.includes('Unknown theme')
+      (m) => m.type === 'say' && m.message?.includes('Unknown theme'),
     );
     expect(reply).toBeDefined();
   });
 
   it('!topic with valid theme — should set topic', async () => {
     const themeName = themeNames[0]; // Use first available theme
-    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', `!topic ${themeName} Hello world`);
+    simulatePrivmsg(
+      bot,
+      'Admin',
+      'admin',
+      'admin.host',
+      '#test',
+      `!topic ${themeName} Hello world`,
+    );
     await tick();
 
     const topicMsg = bot.client.messages.find(
-      (m) => m.type === 'raw' && m.message?.includes('TOPIC')
+      (m) => m.type === 'raw' && m.message?.includes('TOPIC'),
     );
     expect(topicMsg).toBeDefined();
 
     const reply = bot.client.messages.find(
-      (m) => m.type === 'say' && m.message?.includes('Topic set')
+      (m) => m.type === 'say' && m.message?.includes('Topic set'),
     );
     expect(reply).toBeDefined();
   });
 
   it('!topic preview — should show formatted text in channel', async () => {
     const themeName = themeNames[0];
-    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', `!topic preview ${themeName} Preview text`);
+    simulatePrivmsg(
+      bot,
+      'Admin',
+      'admin',
+      'admin.host',
+      '#test',
+      `!topic preview ${themeName} Preview text`,
+    );
     await tick();
 
     // The preview should output formatted text via say, not set topic
     const sayMsg = bot.client.messages.find(
-      (m) => m.type === 'say' && m.target === '#test' && m.message?.includes('Preview text')
+      (m) => m.type === 'say' && m.target === '#test' && m.message?.includes('Preview text'),
     );
     expect(sayMsg).toBeDefined();
 
     // Should NOT set the actual topic
     const topicMsg = bot.client.messages.find(
-      (m) => m.type === 'raw' && m.message?.includes('TOPIC')
+      (m) => m.type === 'raw' && m.message?.includes('TOPIC'),
     );
     expect(topicMsg).toBeUndefined();
   });
@@ -88,7 +108,7 @@ describe('topic plugin', () => {
     await tick();
 
     const reply = bot.client.messages.find(
-      (m) => m.type === 'say' && m.message?.includes('Unknown theme')
+      (m) => m.type === 'say' && m.message?.includes('Unknown theme'),
     );
     expect(reply).toBeDefined();
   });
@@ -97,9 +117,7 @@ describe('topic plugin', () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!topic preview');
     await tick();
 
-    const reply = bot.client.messages.find(
-      (m) => m.type === 'say' && m.message?.includes('Usage')
-    );
+    const reply = bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Usage'));
     expect(reply).toBeDefined();
   });
 
@@ -108,7 +126,7 @@ describe('topic plugin', () => {
     await tick();
 
     const reply = bot.client.messages.find(
-      (m) => m.type === 'say' && m.message?.includes('Available themes')
+      (m) => m.type === 'say' && m.message?.includes('Available themes'),
     );
     expect(reply).toBeDefined();
     // Should include at least one known theme name
@@ -120,9 +138,7 @@ describe('topic plugin', () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', `!topic ${themeName}`);
     await tick();
 
-    const reply = bot.client.messages.find(
-      (m) => m.type === 'say' && m.message?.includes('Usage')
-    );
+    const reply = bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Usage'));
     expect(reply).toBeDefined();
   });
 
@@ -135,11 +151,18 @@ describe('topic plugin', () => {
     // Create a very long text that will exceed 390 chars after theming
     const longText = 'A'.repeat(400);
     const themeName = themeNames[0];
-    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', `!topic ${themeName} ${longText}`);
+    simulatePrivmsg(
+      bot,
+      'Admin',
+      'admin',
+      'admin.host',
+      '#test',
+      `!topic ${themeName} ${longText}`,
+    );
     await tick();
 
     const warning = bot.client.messages.find(
-      (m) => m.type === 'say' && m.message?.includes('Warning')
+      (m) => m.type === 'say' && m.message?.includes('Warning'),
     );
     expect(warning).toBeDefined();
     expect(warning!.message).toContain('chars');

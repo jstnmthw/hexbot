@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { CommandHandler, type CommandContext } from '../../../src/command-handler.js';
-import { EventDispatcher } from '../../../src/dispatcher.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { type CommandContext, CommandHandler } from '../../../src/command-handler.js';
 import { registerDispatcherCommands } from '../../../src/core/commands/dispatcher-commands.js';
+import { EventDispatcher } from '../../../src/dispatcher.js';
 
 /** Helper: create a minimal CommandContext. */
 function makeCtx(overrides: Partial<CommandContext> = {}): CommandContext {

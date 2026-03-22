@@ -1,9 +1,11 @@
 # Plan: Phase 5 — Core Modules + Auto-Op Plugin (MVP Complete)
 
 ## Summary
+
 Build the remaining core modules (services integration, IRC command helpers, channel state tracking) and the auto-op plugin that ties everything together. This is the final MVP phase. At the end, the bot connects, manages users, verifies identity via NickServ (on supporting networks), and automatically ops users based on their flags.
 
 ## Dependencies
+
 - [x] Phase 0 complete (scaffolding)
 - [x] Phase 1 complete (database + dispatcher)
 - [x] Phase 2 complete (permissions + command handler)
@@ -24,16 +26,16 @@ Build the remaining core modules (services integration, IRC command helpers, cha
       name: '#channel',
       topic: 'channel topic',
       modes: '+nt',
-      users: Map<nick, UserInfo>
-    }
+      users: Map<nick, UserInfo>,
+    };
     UserInfo = {
       nick: 'User',
       ident: 'ident',
       hostname: 'host.name',
-      hostmask: 'User!ident@host.name',  // computed
-      modes: ['o', 'v'],  // channel modes this user has
-      joinedAt: Date
-    }
+      hostmask: 'User!ident@host.name', // computed
+      modes: ['o', 'v'], // channel modes this user has
+      joinedAt: Date,
+    };
     ```
   - Listen to IRC events and update state:
     - `join` → add user to channel
@@ -211,6 +213,7 @@ Build the remaining core modules (services integration, IRC command helpers, cha
 ## Verification
 
 **This phase is complete when:**
+
 1. All core module tests pass (channel-state, irc-commands, services)
 2. Auto-op plugin tests pass
 3. `pnpm test` — full suite passes
@@ -224,6 +227,7 @@ Build the remaining core modules (services integration, IRC command helpers, cha
 ## MVP is complete! 🎉
 
 The bot is now a functional, plugin-based IRC bot framework with:
+
 - Eggdrop-style bind/event system
 - Hot-reloadable plugins with scoped API
 - Hostmask-based permissions with optional NickServ verification
@@ -233,6 +237,7 @@ The bot is now a functional, plugin-based IRC bot framework with:
 - Full test suite
 
 ### Post-MVP roadmap (from DESIGN.md):
+
 - **Phase 6:** Channel protection plugins (flood detection, anti-spam)
 - **Phase 7:** Admin web panel (Express + Socket.IO)
 - **Phase 8:** AI chat module (Gemini adapter)

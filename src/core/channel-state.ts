@@ -1,10 +1,9 @@
 // n0xb0t — Channel state tracking
 // Tracks who is in each channel, their modes, and hostmasks.
 // Updated in real time from IRC events.
-
-import { ircLower } from '../utils/wildcard.js';
 import type { BotEventBus } from '../event-bus.js';
 import type { Logger } from '../logger.js';
+import { ircLower } from '../utils/wildcard.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -20,8 +19,8 @@ export interface UserInfo {
   nick: string;
   ident: string;
   hostname: string;
-  hostmask: string;  // computed: nick!ident@hostname
-  modes: string[];   // channel modes: 'o', 'v', etc.
+  hostmask: string; // computed: nick!ident@hostname
+  modes: string[]; // channel modes: 'o', 'v', etc.
   joinedAt: Date;
 }
 
@@ -201,9 +200,19 @@ export class ChannelState {
       const param = m.param ? String(m.param) : '';
 
       // User modes: +o, -o, +v, -v, etc. have a nick as param
-      if (param && (mode === '+o' || mode === '-o' || mode === '+v' || mode === '-v' ||
-                    mode === '+h' || mode === '-h' || mode === '+a' || mode === '-a' ||
-                    mode === '+q' || mode === '-q')) {
+      if (
+        param &&
+        (mode === '+o' ||
+          mode === '-o' ||
+          mode === '+v' ||
+          mode === '-v' ||
+          mode === '+h' ||
+          mode === '-h' ||
+          mode === '+a' ||
+          mode === '-a' ||
+          mode === '+q' ||
+          mode === '-q')
+      ) {
         const user = ch.users.get(ircLower(param));
         if (user) {
           const modeChar = mode.charAt(1); // 'o', 'v', etc.

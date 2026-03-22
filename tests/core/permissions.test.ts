@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
 import { Permissions } from '../../src/core/permissions.js';
 import { BotDatabase } from '../../src/database.js';
 import { createLogger } from '../../src/logger.js';
@@ -33,8 +34,7 @@ describe('Permissions', () => {
 
     it('should throw when adding a duplicate handle', () => {
       perms.addUser('admin', '*!test@host', 'n', 'REPL');
-      expect(() => perms.addUser('admin', '*!other@host', 'o', 'REPL'))
-        .toThrow('already exists');
+      expect(() => perms.addUser('admin', '*!other@host', 'o', 'REPL')).toThrow('already exists');
     });
 
     it('should return null for unknown handle', () => {
@@ -94,13 +94,13 @@ describe('Permissions', () => {
     });
 
     it('should throw when removing a nonexistent hostmask', () => {
-      expect(() => perms.removeHostmask('admin', '*!bad@mask', 'REPL'))
-        .toThrow('Hostmask "*!bad@mask" not found for user "admin"');
+      expect(() => perms.removeHostmask('admin', '*!bad@mask', 'REPL')).toThrow(
+        'Hostmask "*!bad@mask" not found for user "admin"',
+      );
     });
 
     it('should throw when removing hostmask from nonexistent user', () => {
-      expect(() => perms.removeHostmask('nobody', '*!t@h', 'REPL'))
-        .toThrow('not found');
+      expect(() => perms.removeHostmask('nobody', '*!t@h', 'REPL')).toThrow('not found');
     });
   });
 
@@ -115,12 +115,14 @@ describe('Permissions', () => {
       perms.addUser('nobody', '*!nobody@some.host', '', 'REPL');
     });
 
-    function makeCtx(overrides: {
-      nick?: string;
-      ident?: string;
-      hostname?: string;
-      channel?: string | null;
-    } = {}) {
+    function makeCtx(
+      overrides: {
+        nick?: string;
+        ident?: string;
+        hostname?: string;
+        channel?: string | null;
+      } = {},
+    ) {
       return {
         nick: overrides.nick ?? 'testuser',
         ident: overrides.ident ?? 'user',
@@ -180,11 +182,21 @@ describe('Permissions', () => {
       perms.setChannelFlags('oper', '#main', 'o', 'REPL');
 
       // oper has 'o' in #main
-      const ctxMain = makeCtx({ nick: 'oper', ident: 'oper', hostname: 'some.host', channel: '#main' });
+      const ctxMain = makeCtx({
+        nick: 'oper',
+        ident: 'oper',
+        hostname: 'some.host',
+        channel: '#main',
+      });
       expect(perms.checkFlags('+o', ctxMain)).toBe(true);
 
       // oper has 'o' globally too, so #games should still work via global flags
-      const ctxGames = makeCtx({ nick: 'oper', ident: 'oper', hostname: 'some.host', channel: '#games' });
+      const ctxGames = makeCtx({
+        nick: 'oper',
+        ident: 'oper',
+        hostname: 'some.host',
+        channel: '#games',
+      });
       expect(perms.checkFlags('+o', ctxGames)).toBe(true);
     });
 
@@ -193,16 +205,31 @@ describe('Permissions', () => {
       perms.setChannelFlags('chanop', '#special', 'o', 'REPL');
 
       // chanop has no global flags, but has 'o' in #special
-      const ctx = makeCtx({ nick: 'chanop', ident: 'chanop', hostname: 'host', channel: '#special' });
+      const ctx = makeCtx({
+        nick: 'chanop',
+        ident: 'chanop',
+        hostname: 'host',
+        channel: '#special',
+      });
       expect(perms.checkFlags('+o', ctx)).toBe(true);
 
       // But not in #other
-      const ctxOther = makeCtx({ nick: 'chanop', ident: 'chanop', hostname: 'host', channel: '#other' });
+      const ctxOther = makeCtx({
+        nick: 'chanop',
+        ident: 'chanop',
+        hostname: 'host',
+        channel: '#other',
+      });
       expect(perms.checkFlags('+o', ctxOther)).toBe(false);
     });
 
     it('should fall back to global when no channel-specific flags', () => {
-      const ctx = makeCtx({ nick: 'oper', ident: 'oper', hostname: 'some.host', channel: '#anychannel' });
+      const ctx = makeCtx({
+        nick: 'oper',
+        ident: 'oper',
+        hostname: 'some.host',
+        channel: '#anychannel',
+      });
       expect(perms.checkFlags('+o', ctx)).toBe(true);
     });
   });
@@ -274,13 +301,11 @@ describe('Permissions', () => {
 
   describe('setGlobalFlags / setChannelFlags error paths', () => {
     it('should throw when setting global flags for nonexistent user', () => {
-      expect(() => perms.setGlobalFlags('nobody', 'o', 'REPL'))
-        .toThrow('not found');
+      expect(() => perms.setGlobalFlags('nobody', 'o', 'REPL')).toThrow('not found');
     });
 
     it('should throw when setting channel flags for nonexistent user', () => {
-      expect(() => perms.setChannelFlags('nobody', '#test', 'o', 'REPL'))
-        .toThrow('not found');
+      expect(() => perms.setChannelFlags('nobody', '#test', 'o', 'REPL')).toThrow('not found');
     });
 
     it('should delete channel entry when flags normalize to empty', () => {
@@ -307,9 +332,7 @@ describe('Permissions', () => {
       const permsWithLogger = new Permissions(null, logger);
       permsWithLogger.addUser('insecure', 'admin!*@*', 'o', 'REPL');
 
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('SECURITY')
-      );
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('SECURITY'));
       warnSpy.mockRestore();
     });
   });
@@ -400,12 +423,16 @@ describe('Permissions', () => {
       // Manually insert a corrupt JSON record into the _permissions namespace
       db.set('_permissions', 'corrupt', '{not valid json!!!');
       // Also insert a valid record
-      db.set('_permissions', 'valid', JSON.stringify({
-        handle: 'valid',
-        hostmasks: ['*!v@h'],
-        global: 'o',
-        channels: {},
-      }));
+      db.set(
+        '_permissions',
+        'valid',
+        JSON.stringify({
+          handle: 'valid',
+          hostmasks: ['*!v@h'],
+          global: 'o',
+          channels: {},
+        }),
+      );
 
       const p = new Permissions(db);
       p.loadFromDb();

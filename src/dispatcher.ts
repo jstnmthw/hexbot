@@ -1,9 +1,8 @@
 // n0xb0t — Event dispatcher
 // Routes IRC events to registered handlers based on bind type, mask, and flags.
-
-import { wildcardMatch, ircLower } from './utils/wildcard.js';
 import type { Logger } from './logger.js';
-import type { BindType, BindHandler, HandlerContext } from './types.js';
+import type { BindHandler, BindType, HandlerContext } from './types.js';
+import { ircLower, wildcardMatch } from './utils/wildcard.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,9 +34,7 @@ export interface BindFilter {
 // ---------------------------------------------------------------------------
 
 /** Types where only one handler per mask is kept (last one wins). */
-const NON_STACKABLE_TYPES: ReadonlySet<BindType> = new Set([
-  'pub', 'msg',
-]);
+const NON_STACKABLE_TYPES: ReadonlySet<BindType> = new Set(['pub', 'msg']);
 
 // ---------------------------------------------------------------------------
 // EventDispatcher
@@ -58,19 +55,13 @@ export class EventDispatcher {
    * Register a handler for an event type.
    * Non-stackable types (pub, msg) overwrite any existing bind on the same mask.
    */
-  bind(
-    type: BindType,
-    flags: string,
-    mask: string,
-    handler: BindHandler,
-    pluginId: string
-  ): void {
+  bind(type: BindType, flags: string, mask: string, handler: BindHandler, pluginId: string): void {
     const entry: BindEntry = { type, flags, mask, handler, pluginId, hits: 0 };
 
     // Non-stackable: remove any existing bind on the same type + mask
     if (NON_STACKABLE_TYPES.has(type)) {
       this.binds = this.binds.filter(
-        (b) => !(b.type === type && ircLower(b.mask) === ircLower(mask))
+        (b) => !(b.type === type && ircLower(b.mask) === ircLower(mask)),
       );
     }
 
@@ -119,7 +110,7 @@ export class EventDispatcher {
   /** Remove a specific handler. */
   unbind(type: BindType, mask: string, handler: BindHandler): void {
     const idx = this.binds.findIndex(
-      (b) => b.type === type && b.mask === mask && b.handler === handler
+      (b) => b.type === type && b.mask === mask && b.handler === handler,
     );
     if (idx !== -1) {
       const entry = this.binds[idx];

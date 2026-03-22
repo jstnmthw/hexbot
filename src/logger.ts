@@ -1,6 +1,5 @@
 // n0xb0t — Logger service
 // Structured console logging with level filtering, colored output, and child loggers.
-
 import chalk from 'chalk';
 
 // ---------------------------------------------------------------------------

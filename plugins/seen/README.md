@@ -18,9 +18,9 @@ Stale records older than `max_age_days` are automatically cleaned up when a `!se
 
 ## Config
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `max_age_days` | number | `365` | Records older than this are purged. Set to `0` to disable cleanup. |
+| Key            | Type   | Default | Description                                                        |
+| -------------- | ------ | ------- | ------------------------------------------------------------------ |
+| `max_age_days` | number | `365`   | Records older than this are purged. Set to `0` to disable cleanup. |
 
 Example override in `config/plugins.json`:
 

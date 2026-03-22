@@ -1,7 +1,7 @@
 ---
 name: test
-description: "Write and run Vitest tests for n0xb0t core modules and plugins. Use when the user asks to test something, or after implementing a feature that needs verification."
-argument-hint: "<module or plugin name>"
+description: 'Write and run Vitest tests for n0xb0t core modules and plugins. Use when the user asks to test something, or after implementing a feature that needs verification.'
+argument-hint: '<module or plugin name>'
 ---
 
 # Tester
@@ -11,7 +11,7 @@ Write and run tests for n0xb0t core modules and plugins using Vitest.
 ## Test framework
 
 ```typescript
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 ```
 
 ## Test file locations
@@ -37,7 +37,9 @@ tests/
 ## Testing strategy
 
 ### Core modules (unit tests)
+
 Test in isolation, mock dependencies. Priority:
+
 1. Dispatcher bind/dispatch logic — the heart of everything
 2. Permissions flag checking — security-critical
 3. Plugin loader lifecycle — load, unload, reload, error handling
@@ -45,6 +47,7 @@ Test in isolation, mock dependencies. Priority:
 5. Command handler — parsing, unknown commands, permission checks
 
 ### Plugins (integration tests)
+
 Test through the dispatcher — simulate IRC events and verify responses:
 
 ```typescript
@@ -58,8 +61,10 @@ describe('greeter plugin', () => {
 
   it('greets users on join', async () => {
     await bot.dispatcher.dispatch('join', {
-      nick: 'TestUser', channel: '#test',
-      ident: 'test', hostname: 'test.host',
+      nick: 'TestUser',
+      channel: '#test',
+      ident: 'test',
+      hostname: 'test.host',
       reply: (msg: string) => messages.push(msg),
     });
     expect(messages).toHaveLength(1);

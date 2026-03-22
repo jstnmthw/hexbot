@@ -11,7 +11,11 @@ const MAX_LINES = 4;
  * Split a message into lines that fit within IRC's message length limit.
  * Caps output at MAX_LINES, appending "..." if truncated.
  */
-export function splitMessage(text: string, maxBytes = MAX_MSG_BYTES, maxLines = MAX_LINES): string[] {
+export function splitMessage(
+  text: string,
+  maxBytes = MAX_MSG_BYTES,
+  maxLines = MAX_LINES,
+): string[] {
   // Handle newlines in the input first
   const inputLines = text.split('\n');
   const outputLines: string[] = [];

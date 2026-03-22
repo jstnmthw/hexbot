@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { resolve } from 'node:path';
-import { createMockBot, type MockBot } from '../helpers/mock-bot.js';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+import { type MockBot, createMockBot } from '../helpers/mock-bot.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -8,15 +9,34 @@ import { createMockBot, type MockBot } from '../helpers/mock-bot.js';
 
 const PLUGIN_PATH = resolve('./plugins/chanmod/index.ts');
 
-function simulateJoin(bot: MockBot, nick: string, ident: string, hostname: string, channel: string): void {
+function simulateJoin(
+  bot: MockBot,
+  nick: string,
+  ident: string,
+  hostname: string,
+  channel: string,
+): void {
   bot.client.simulateEvent('join', { nick, ident, hostname, channel });
 }
 
-function simulatePrivmsg(bot: MockBot, nick: string, ident: string, hostname: string, channel: string, message: string): void {
+function simulatePrivmsg(
+  bot: MockBot,
+  nick: string,
+  ident: string,
+  hostname: string,
+  channel: string,
+  message: string,
+): void {
   bot.client.simulateEvent('privmsg', { nick, ident, hostname, target: channel, message });
 }
 
-function simulateMode(bot: MockBot, setter: string, channel: string, mode: string, param: string): void {
+function simulateMode(
+  bot: MockBot,
+  setter: string,
+  channel: string,
+  mode: string,
+  param: string,
+): void {
   bot.client.simulateEvent('mode', {
     nick: setter,
     ident: 'ident',
@@ -37,7 +57,13 @@ async function tick(ms = 20): Promise<void> {
 }
 
 /** Add a user to channel-state so getUserHostmask works. */
-function addToChannel(bot: MockBot, nick: string, ident: string, hostname: string, channel: string): void {
+function addToChannel(
+  bot: MockBot,
+  nick: string,
+  ident: string,
+  hostname: string,
+  channel: string,
+): void {
   bot.client.simulateEvent('join', { nick, ident, hostname, channel });
 }
 
@@ -79,9 +105,11 @@ describe('chanmod plugin — auto-op', () => {
     simulateJoin(bot, 'Alice', 'alice', 'alice.host', '#test');
     await tick();
 
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Alice')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Alice'),
+      ),
+    ).toBeDefined();
   });
 
   it('should voice a user with +v flag on join', async () => {
@@ -89,9 +117,11 @@ describe('chanmod plugin — auto-op', () => {
     simulateJoin(bot, 'Bob', 'bob', 'bob.host', '#test');
     await tick();
 
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+v' && m.args?.includes('Bob')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+v' && m.args?.includes('Bob'),
+      ),
+    ).toBeDefined();
   });
 
   it('should op a user with +n flag (owner implies op)', async () => {
@@ -99,9 +129,11 @@ describe('chanmod plugin — auto-op', () => {
     simulateJoin(bot, 'Owner', 'owner', 'owner.host', '#test');
     await tick();
 
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Owner')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Owner'),
+      ),
+    ).toBeDefined();
   });
 
   it('should do nothing for unknown user', async () => {
@@ -124,9 +156,11 @@ describe('chanmod plugin — auto-op', () => {
     simulateJoin(bot, 'ChanOp', 'cop', 'cop.host', '#test');
     await tick();
 
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('ChanOp')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('ChanOp'),
+      ),
+    ).toBeDefined();
   });
 
   it('should not op/voice the bot itself', async () => {
@@ -179,9 +213,11 @@ describe('chanmod plugin — mode enforcement', () => {
     simulateMode(bot, 'EvilOp', '#test', '-o', 'Alice');
     await tick(50);
 
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Alice')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Alice'),
+      ),
+    ).toBeDefined();
   });
 
   it('should re-voice a user with +v flags when devoiced externally', async () => {
@@ -192,9 +228,11 @@ describe('chanmod plugin — mode enforcement', () => {
     simulateMode(bot, 'EvilOp', '#test', '-v', 'Bob');
     await tick(50);
 
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+v' && m.args?.includes('Bob')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+v' && m.args?.includes('Bob'),
+      ),
+    ).toBeDefined();
   });
 
   it('should NOT re-op when the bot itself set -o', async () => {
@@ -205,9 +243,11 @@ describe('chanmod plugin — mode enforcement', () => {
     simulateMode(bot, 'n0xb0t', '#test', '-o', 'Alice');
     await tick(50);
 
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Alice')
-    )).toBeUndefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Alice'),
+      ),
+    ).toBeUndefined();
   });
 
   it('should NOT re-op after an intentional !deop command', async () => {
@@ -222,9 +262,11 @@ describe('chanmod plugin — mode enforcement', () => {
     simulateMode(bot, 'SomeOp', '#test', '-o', 'Alice');
     await tick(50);
 
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Alice')
-    )).toBeUndefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Alice'),
+      ),
+    ).toBeUndefined();
   });
 
   it('should NOT enforce when enforce_modes is disabled', async () => {
@@ -241,9 +283,11 @@ describe('chanmod plugin — mode enforcement', () => {
     simulateMode(bot, 'EvilOp', '#test', '-o', 'Alice');
     await tick(50);
 
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Alice')
-    )).toBeUndefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Alice'),
+      ),
+    ).toBeUndefined();
   });
 
   it('should suppress enforcement after repeated deops (rate limit)', async () => {
@@ -251,7 +295,10 @@ describe('chanmod plugin — mode enforcement', () => {
     bot = createMockBot({ botNick: 'n0xb0t' });
     giveBotOps(bot, '#test');
     await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: { enabled: true, config: { enforce_modes: true, enforce_delay_ms: 5, auto_op: false } },
+      chanmod: {
+        enabled: true,
+        config: { enforce_modes: true, enforce_delay_ms: 5, auto_op: false },
+      },
     });
 
     bot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
@@ -264,7 +311,7 @@ describe('chanmod plugin — mode enforcement', () => {
     await tick(50);
 
     const reOps = bot.client.messages.filter(
-      (m) => m.message === '+o' && m.args?.includes('Alice')
+      (m) => m.message === '+o' && m.args?.includes('Alice'),
     );
     expect(reOps).toHaveLength(3);
   });
@@ -276,9 +323,11 @@ describe('chanmod plugin — mode enforcement', () => {
     simulateMode(bot, 'SomeOp', '#test', '-o', 'Rando');
     await tick(50);
 
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Rando')
-    )).toBeUndefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Rando'),
+      ),
+    ).toBeUndefined();
   });
 
   it('should NOT re-op a user who only has voice flags when deopped', async () => {
@@ -289,9 +338,11 @@ describe('chanmod plugin — mode enforcement', () => {
     simulateMode(bot, 'SomeOp', '#test', '-o', 'VoiceOnly');
     await tick(50);
 
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('VoiceOnly')
-    )).toBeUndefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('VoiceOnly'),
+      ),
+    ).toBeUndefined();
   });
 
   it('should NOT re-voice a user who only has op flags when devoiced', async () => {
@@ -302,9 +353,11 @@ describe('chanmod plugin — mode enforcement', () => {
     simulateMode(bot, 'SomeOp', '#test', '-v', 'OpOnly');
     await tick(50);
 
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+v' && m.args?.includes('OpOnly')
-    )).toBeUndefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+v' && m.args?.includes('OpOnly'),
+      ),
+    ).toBeUndefined();
   });
 });
 
@@ -324,128 +377,198 @@ describe('chanmod plugin — mode commands', () => {
     bot.permissions.addUser('admin', '*!admin@admin.host', 'o', 'test');
   });
 
-  afterAll(() => { bot.cleanup(); });
-  beforeEach(() => { bot.client.clearMessages(); });
+  afterAll(() => {
+    bot.cleanup();
+  });
+  beforeEach(() => {
+    bot.client.clearMessages();
+  });
 
   it('!op nick — should op the target', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!op Alice');
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Alice')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Alice'),
+      ),
+    ).toBeDefined();
   });
 
   it('!op with no args — should op the caller', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!op');
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Admin')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Admin'),
+      ),
+    ).toBeDefined();
   });
 
   it('!op from unauthorized user — should not send mode', async () => {
     simulatePrivmsg(bot, 'Nobody', 'nobody', 'nobody.host', '#test', '!op Alice');
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+o'
-    )).toBeUndefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'mode' && m.message === '+o'),
+    ).toBeUndefined();
   });
 
   it('!deop nick — should deop the target', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!deop Alice');
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '-o' && m.args?.includes('Alice')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '-o' && m.args?.includes('Alice'),
+      ),
+    ).toBeDefined();
   });
 
   it('!deop bot — should refuse', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!deop n0xb0t');
     await flush();
-    expect(bot.client.messages.find((m) => m.type === 'mode' && m.message === '-o')).toBeUndefined();
-    expect(bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('cannot deop myself'))).toBeDefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'mode' && m.message === '-o'),
+    ).toBeUndefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'say' && m.message?.includes('cannot deop myself'),
+      ),
+    ).toBeDefined();
   });
 
   it('!voice nick — should voice the target', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!voice Bob');
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+v' && m.args?.includes('Bob')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+v' && m.args?.includes('Bob'),
+      ),
+    ).toBeDefined();
   });
 
   it('!devoice nick — should devoice the target', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!devoice Bob');
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '-v' && m.args?.includes('Bob')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '-v' && m.args?.includes('Bob'),
+      ),
+    ).toBeDefined();
   });
 
   it('should sanitize nick with newline injection (bridge strips \\r\\n)', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!op bad\r\nnick');
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('badnick')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('badnick'),
+      ),
+    ).toBeDefined();
   });
 
   it('!op with invalid nick (space) — should reject', async () => {
     await bot.dispatcher.dispatch('pub', {
-      nick: 'Admin', ident: 'admin', hostname: 'admin.host',
-      channel: '#test', text: '!op bad nick', command: '!op', args: 'bad nick',
-      reply: (msg: string) => { bot.client.say('#test', msg); },
+      nick: 'Admin',
+      ident: 'admin',
+      hostname: 'admin.host',
+      channel: '#test',
+      text: '!op bad nick',
+      command: '!op',
+      args: 'bad nick',
+      reply: (msg: string) => {
+        bot.client.say('#test', msg);
+      },
       replyPrivate: () => {},
     });
-    expect(bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Invalid nick'))).toBeDefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Invalid nick')),
+    ).toBeDefined();
   });
 
   it('!deop with invalid nick (space) — should reject', async () => {
     await bot.dispatcher.dispatch('pub', {
-      nick: 'Admin', ident: 'admin', hostname: 'admin.host',
-      channel: '#test', text: '!deop bad nick', command: '!deop', args: 'bad nick',
-      reply: (msg: string) => { bot.client.say('#test', msg); },
+      nick: 'Admin',
+      ident: 'admin',
+      hostname: 'admin.host',
+      channel: '#test',
+      text: '!deop bad nick',
+      command: '!deop',
+      args: 'bad nick',
+      reply: (msg: string) => {
+        bot.client.say('#test', msg);
+      },
       replyPrivate: () => {},
     });
-    expect(bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Invalid nick'))).toBeDefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Invalid nick')),
+    ).toBeDefined();
   });
 
   it('!voice with invalid nick (space) — should reject', async () => {
     await bot.dispatcher.dispatch('pub', {
-      nick: 'Admin', ident: 'admin', hostname: 'admin.host',
-      channel: '#test', text: '!voice bad nick', command: '!voice', args: 'bad nick',
-      reply: (msg: string) => { bot.client.say('#test', msg); },
+      nick: 'Admin',
+      ident: 'admin',
+      hostname: 'admin.host',
+      channel: '#test',
+      text: '!voice bad nick',
+      command: '!voice',
+      args: 'bad nick',
+      reply: (msg: string) => {
+        bot.client.say('#test', msg);
+      },
       replyPrivate: () => {},
     });
-    expect(bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Invalid nick'))).toBeDefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Invalid nick')),
+    ).toBeDefined();
   });
 
   it('!devoice with invalid nick (space) — should reject', async () => {
     await bot.dispatcher.dispatch('pub', {
-      nick: 'Admin', ident: 'admin', hostname: 'admin.host',
-      channel: '#test', text: '!devoice bad nick', command: '!devoice', args: 'bad nick',
-      reply: (msg: string) => { bot.client.say('#test', msg); },
+      nick: 'Admin',
+      ident: 'admin',
+      hostname: 'admin.host',
+      channel: '#test',
+      text: '!devoice bad nick',
+      command: '!devoice',
+      args: 'bad nick',
+      reply: (msg: string) => {
+        bot.client.say('#test', msg);
+      },
       replyPrivate: () => {},
     });
-    expect(bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Invalid nick'))).toBeDefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Invalid nick')),
+    ).toBeDefined();
   });
 
   // DM guard tests — null channel
   for (const cmd of ['!op', '!deop', '!voice', '!devoice', '!kick', '!ban', '!unban', '!kickban']) {
     it(`${cmd} in DM (no channel) — should do nothing`, async () => {
       await bot.dispatcher.dispatch('pub', {
-        nick: 'Admin', ident: 'admin', hostname: 'admin.host',
-        channel: null as unknown as string, text: `${cmd} alice`, command: cmd, args: 'alice',
-        reply: () => {}, replyPrivate: () => {},
+        nick: 'Admin',
+        ident: 'admin',
+        hostname: 'admin.host',
+        channel: null as unknown as string,
+        text: `${cmd} alice`,
+        command: cmd,
+        args: 'alice',
+        reply: () => {},
+        replyPrivate: () => {},
       });
-      expect(bot.client.messages.find((m) => m.type === 'mode' || (m.type === 'raw' && m.message?.includes('KICK')))).toBeUndefined();
+      expect(
+        bot.client.messages.find(
+          (m) => m.type === 'mode' || (m.type === 'raw' && m.message?.includes('KICK')),
+        ),
+      ).toBeUndefined();
     });
   }
 
   it('!kickban bot — should refuse', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!kickban n0xb0t');
     await flush();
-    expect(bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('cannot ban myself'))).toBeDefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('cannot ban myself')),
+    ).toBeDefined();
   });
 });
 
@@ -464,13 +587,26 @@ describe('chanmod plugin — kick command', () => {
     bot.permissions.addUser('admin', '*!admin@admin.host', 'o', 'test');
   });
 
-  afterAll(() => { bot.cleanup(); });
-  beforeEach(() => { bot.client.clearMessages(); });
+  afterAll(() => {
+    bot.cleanup();
+  });
+  beforeEach(() => {
+    bot.client.clearMessages();
+  });
 
   it('!kick nick reason — should kick with reason', async () => {
-    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!kick BadUser spamming the channel');
+    simulatePrivmsg(
+      bot,
+      'Admin',
+      'admin',
+      'admin.host',
+      '#test',
+      '!kick BadUser spamming the channel',
+    );
     await flush();
-    const kickMsg = bot.client.messages.find((m) => m.type === 'raw' && m.message?.startsWith('KICK #test BadUser'));
+    const kickMsg = bot.client.messages.find(
+      (m) => m.type === 'raw' && m.message?.startsWith('KICK #test BadUser'),
+    );
     expect(kickMsg).toBeDefined();
     expect(kickMsg!.message).toContain('spamming the channel');
   });
@@ -478,7 +614,9 @@ describe('chanmod plugin — kick command', () => {
   it('!kick nick — should kick with default reason', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!kick BadUser');
     await flush();
-    const kickMsg = bot.client.messages.find((m) => m.type === 'raw' && m.message?.startsWith('KICK #test BadUser'));
+    const kickMsg = bot.client.messages.find(
+      (m) => m.type === 'raw' && m.message?.startsWith('KICK #test BadUser'),
+    );
     expect(kickMsg).toBeDefined();
     expect(kickMsg!.message).toContain('Requested');
   });
@@ -486,14 +624,22 @@ describe('chanmod plugin — kick command', () => {
   it('!kick with no args — should show usage', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!kick');
     await flush();
-    expect(bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Usage'))).toBeDefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Usage')),
+    ).toBeDefined();
   });
 
   it('!kick bot — should refuse', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!kick n0xb0t');
     await flush();
-    expect(bot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('KICK'))).toBeUndefined();
-    expect(bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('cannot kick myself'))).toBeDefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('KICK')),
+    ).toBeUndefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'say' && m.message?.includes('cannot kick myself'),
+      ),
+    ).toBeDefined();
   });
 });
 
@@ -512,62 +658,91 @@ describe('chanmod plugin — ban commands', () => {
     bot.permissions.addUser('admin', '*!admin@admin.host', 'o', 'test');
   });
 
-  afterAll(() => { bot.cleanup(); });
-  beforeEach(() => { bot.client.clearMessages(); });
+  afterAll(() => {
+    bot.cleanup();
+  });
+  beforeEach(() => {
+    bot.client.clearMessages();
+  });
 
   it('!ban nick — should ban with type-3 mask (*!*ident@*.domain)', async () => {
     addToChannel(bot, 'BadUser', 'bad', 'evil.host.com', '#test');
     bot.client.clearMessages();
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban BadUser');
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+b' && m.args?.includes('*!*bad@*.host.com')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+b' && m.args?.includes('*!*bad@*.host.com'),
+      ),
+    ).toBeDefined();
   });
 
   it('!ban nick — should error when hostmask unknown', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban GhostUser');
     await flush();
-    expect(bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Cannot resolve hostmask'))).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'say' && m.message?.includes('Cannot resolve hostmask'),
+      ),
+    ).toBeDefined();
   });
 
   it('!ban explicit mask — should ban with that mask directly', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban *!*@bad.host.net');
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+b' && m.args?.includes('*!*@bad.host.net')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+b' && m.args?.includes('*!*@bad.host.net'),
+      ),
+    ).toBeDefined();
   });
 
   it('!ban bot — should refuse', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban n0xb0t');
     await flush();
-    expect(bot.client.messages.find((m) => m.type === 'mode' && m.message === '+b')).toBeUndefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'mode' && m.message === '+b'),
+    ).toBeUndefined();
   });
 
   it('!unban mask — should remove ban', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!unban *!*@bad.host.net');
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'raw' && m.message?.includes('MODE #test -b *!*@bad.host.net')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'raw' && m.message?.includes('MODE #test -b *!*@bad.host.net'),
+      ),
+    ).toBeDefined();
   });
 
   it('!unban with no args — should show usage', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!unban');
     await flush();
-    expect(bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Usage'))).toBeDefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Usage')),
+    ).toBeDefined();
   });
 
   it('!kickban nick reason — should ban then kick', async () => {
     addToChannel(bot, 'BadUser2', 'bad', 'evil.host.com', '#test');
     bot.client.clearMessages();
-    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!kickban BadUser2 being terrible');
+    simulatePrivmsg(
+      bot,
+      'Admin',
+      'admin',
+      'admin.host',
+      '#test',
+      '!kickban BadUser2 being terrible',
+    );
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+b' && m.args?.includes('*!*bad@*.host.com')
-    )).toBeDefined();
-    const kickMsg = bot.client.messages.find((m) => m.type === 'raw' && m.message?.startsWith('KICK #test BadUser2'));
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+b' && m.args?.includes('*!*bad@*.host.com'),
+      ),
+    ).toBeDefined();
+    const kickMsg = bot.client.messages.find(
+      (m) => m.type === 'raw' && m.message?.startsWith('KICK #test BadUser2'),
+    );
     expect(kickMsg).toBeDefined();
     expect(kickMsg!.message).toContain('being terrible');
   });
@@ -575,19 +750,27 @@ describe('chanmod plugin — ban commands', () => {
   it('!kickban with unknown hostmask — should error', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!kickban GhostUser');
     await flush();
-    expect(bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Cannot resolve hostmask'))).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'say' && m.message?.includes('Cannot resolve hostmask'),
+      ),
+    ).toBeDefined();
   });
 
   it('!ban with no args — should show usage', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban');
     await flush();
-    expect(bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Usage'))).toBeDefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Usage')),
+    ).toBeDefined();
   });
 
   it('!kickban with no args — should show usage', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!kickban');
     await flush();
-    expect(bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Usage'))).toBeDefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Usage')),
+    ).toBeDefined();
   });
 });
 
@@ -628,17 +811,23 @@ describe('chanmod plugin — ban mask types', () => {
     bot.permissions.addUser('admin', '*!admin@admin.host', 'o', 'test');
   });
 
-  afterAll(() => { bot.cleanup(); });
-  beforeEach(() => { bot.client.clearMessages(); });
+  afterAll(() => {
+    bot.cleanup();
+  });
+  beforeEach(() => {
+    bot.client.clearMessages();
+  });
 
   it('default type 3 — wildcards first hostname component', async () => {
     addToChannel(bot, 'Target', 'evil', 'sub.example.net', '#test');
     bot.client.clearMessages();
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban Target');
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+b' && m.args?.includes('*!*evil@*.example.net')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+b' && m.args?.includes('*!*evil@*.example.net'),
+      ),
+    ).toBeDefined();
   });
 
   it('type 1 — *!*@host', async () => {
@@ -653,9 +842,11 @@ describe('chanmod plugin — ban mask types', () => {
     bot.client.clearMessages();
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban Target');
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+b' && m.args?.includes('*!*@sub.example.net')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+b' && m.args?.includes('*!*@sub.example.net'),
+      ),
+    ).toBeDefined();
   });
 
   it('type 2 — *!*ident@host', async () => {
@@ -670,9 +861,12 @@ describe('chanmod plugin — ban mask types', () => {
     bot.client.clearMessages();
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban Target');
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+b' && m.args?.includes('*!*evil@sub.example.net')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) =>
+          m.type === 'mode' && m.message === '+b' && m.args?.includes('*!*evil@sub.example.net'),
+      ),
+    ).toBeDefined();
   });
 
   it('cloaked hostmask — uses exact cloak regardless of type', async () => {
@@ -687,9 +881,11 @@ describe('chanmod plugin — ban mask types', () => {
     bot.client.clearMessages();
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban Cloaked');
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'mode' && m.message === '+b' && m.args?.includes('*!*@user/foo')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+b' && m.args?.includes('*!*@user/foo'),
+      ),
+    ).toBeDefined();
   });
 });
 
@@ -707,8 +903,12 @@ describe('chanmod plugin — timed bans', () => {
     bot.permissions.addUser('admin', '*!admin@admin.host', 'o', 'test');
   });
 
-  afterAll(() => { bot.cleanup(); });
-  beforeEach(() => { bot.client.clearMessages(); });
+  afterAll(() => {
+    bot.cleanup();
+  });
+  beforeEach(() => {
+    bot.client.clearMessages();
+  });
 
   it('!ban with duration stores record in DB', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban *!*@timed.host 60');
@@ -740,9 +940,9 @@ describe('chanmod plugin — timed bans', () => {
   it('!bans reports no bans when channel has none', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!bans #empty');
     await flush();
-    expect(bot.client.messages.find(
-      (m) => m.type === 'say' && m.message?.includes('No tracked bans')
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('No tracked bans')),
+    ).toBeDefined();
   });
 
   it('!unban removes DB record', async () => {
@@ -771,42 +971,44 @@ describe('chanmod plugin — channel mode enforcement', () => {
     });
   });
 
-  afterEach(() => { bot.cleanup(); });
+  afterEach(() => {
+    bot.cleanup();
+  });
 
   it('re-applies +t when stripped by an external user', async () => {
     bot.client.clearMessages();
     simulateMode(bot, 'EvilOp', '#test', '-t', '');
     await tick(50);
     // Channel modes (no param) are sent via raw(), not mode()
-    expect(bot.client.messages.find(
-      (m) => m.type === 'raw' && m.message === 'MODE #test +t'
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'raw' && m.message === 'MODE #test +t'),
+    ).toBeDefined();
   });
 
   it('re-applies +n when stripped by an external user', async () => {
     bot.client.clearMessages();
     simulateMode(bot, 'EvilOp', '#test', '-n', '');
     await tick(50);
-    expect(bot.client.messages.find(
-      (m) => m.type === 'raw' && m.message === 'MODE #test +n'
-    )).toBeDefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'raw' && m.message === 'MODE #test +n'),
+    ).toBeDefined();
   });
 
   it('does NOT re-apply when setter is in nodesynch_nicks (ChanServ)', async () => {
     bot.client.clearMessages();
     simulateMode(bot, 'ChanServ', '#test', '-t', '');
     await tick(50);
-    expect(bot.client.messages.find(
-      (m) => m.type === 'raw' && m.message === 'MODE #test +t'
-    )).toBeUndefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'raw' && m.message === 'MODE #test +t'),
+    ).toBeUndefined();
   });
 
   it('does NOT re-apply when the bot itself removes the mode', async () => {
     bot.client.clearMessages();
     simulateMode(bot, 'n0xb0t', '#test', '-t', '');
     await tick(50);
-    expect(bot.client.messages.find(
-      (m) => m.type === 'raw' && m.message === 'MODE #test +t'
-    )).toBeUndefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'raw' && m.message === 'MODE #test +t'),
+    ).toBeUndefined();
   });
 });

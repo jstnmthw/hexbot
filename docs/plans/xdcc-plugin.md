@@ -32,12 +32,12 @@ Reference: https://github.com/dinoex/iroffer-dinoex
 
 ## Decisions
 
-| Question | Decision |
-|----------|----------|
-| IP detection | Explicit config only — `ip` required; `init()` throws if not set |
-| Passive DCC | Both active and passive supported |
-| DCC RESUME | Included |
-| CTCP method | Spike first in Phase 3; add `ctcpRequest()` to PluginAPI if needed |
+| Question     | Decision                                                           |
+| ------------ | ------------------------------------------------------------------ |
+| IP detection | Explicit config only — `ip` required; `init()` throws if not set   |
+| Passive DCC  | Both active and passive supported                                  |
+| DCC RESUME   | Included                                                           |
+| CTCP method  | Spike first in Phase 3; add `ctcpRequest()` to PluginAPI if needed |
 
 ## Dependencies
 
@@ -58,28 +58,29 @@ Reference: https://github.com/dinoex/iroffer-dinoex
 - [ ] Create `plugins/xdcc/packs.ts` — pack CRUD on top of `api.db`
 
   **Pack schema** (stored as `pack:<n>` → JSON):
+
   ```ts
   interface XdccPack {
     num: number;
-    file: string;         // absolute path
-    desc: string;         // description shown in list
-    note?: string;        // optional note shown below pack line
-    group?: string;       // group name
-    groupDesc?: string;   // group description
-    gets: number;         // total download count
-    size: number;         // bytes (from fs.stat)
-    minspeed?: number;    // kB/s; 0 = global default
-    maxspeed?: number;    // kB/s; 0 = global default
-    lock?: string;        // password, undefined = unlocked
-    dlimitMax?: number;   // daily download limit (0 = no limit)
-    dlimitUsed?: number;  // today's download count
-    dlimitDesc?: string;  // message shown when limit exceeded
-    trigger?: string;     // custom trigger word
-    color?: string;       // IRC color code for description
-    md5?: string;         // hex MD5 of file
-    crc32?: string;       // hex CRC32 of file
-    addedAt: number;      // unix timestamp
-    modifiedAt: number;   // file mtime at add time
+    file: string; // absolute path
+    desc: string; // description shown in list
+    note?: string; // optional note shown below pack line
+    group?: string; // group name
+    groupDesc?: string; // group description
+    gets: number; // total download count
+    size: number; // bytes (from fs.stat)
+    minspeed?: number; // kB/s; 0 = global default
+    maxspeed?: number; // kB/s; 0 = global default
+    lock?: string; // password, undefined = unlocked
+    dlimitMax?: number; // daily download limit (0 = no limit)
+    dlimitUsed?: number; // today's download count
+    dlimitDesc?: string; // message shown when limit exceeded
+    trigger?: string; // custom trigger word
+    color?: string; // IRC color code for description
+    md5?: string; // hex MD5 of file
+    crc32?: string; // hex CRC32 of file
+    addedAt: number; // unix timestamp
+    modifiedAt: number; // file mtime at add time
   }
   ```
 
@@ -88,10 +89,10 @@ Reference: https://github.com/dinoex/iroffer-dinoex
   `renumber(from, to, dest)`, `sortPacks(field, dir)`
 
 - [ ] Validate on add: file exists, path resolves inside `filedir` (jailed with
-  `path.resolve` + `startsWith`), reject symlinks outside jail
+      `path.resolve` + `startsWith`), reject symlinks outside jail
 - [ ] `pack_seq` key tracks next auto-assigned pack number
 - [ ] **Verification**: add/remove/list/rename packs via unit tests; path traversal
-  attempts return clear error
+      attempts return clear error
 
 ---
 
@@ -107,9 +108,9 @@ Reference: https://github.com/dinoex/iroffer-dinoex
 - [ ] `init()` loads state before registering any binds
 - [ ] `teardown()` saves state
 - [ ] State is also saved after every pack add/remove, every queue change, and every
-  completed transfer
+      completed transfer
 - [ ] **Verification**: add packs, send bot a SIGTERM, restart, pack list intact; queue
-  entries restored
+      entries restored
 
 ---
 
@@ -118,9 +119,9 @@ Reference: https://github.com/dinoex/iroffer-dinoex
 **Goal:** Low-level DCC SEND over TCP for both active and passive modes.
 
 - [ ] **Spike**: send raw CTCP DCC SEND via `api.raw()` and confirm `\x01` bytes arrive
-  intact at a test client (HexChat/irssi). If mangled → add
-  `ctcpRequest(target: string, type: string, params: string): void` to `PluginAPI` /
-  `IRCBridge` before proceeding.
+      intact at a test client (HexChat/irssi). If mangled → add
+      `ctcpRequest(target: string, type: string, params: string): void` to `PluginAPI` /
+      `IRCBridge` before proceeding.
 - [ ] Create `plugins/xdcc/dcc.ts` — shared DCC utilities
   - `ipToInt(ip: string): number` — dotted-decimal → 32-bit unsigned int
   - `intToIp(n: number): string` — reverse
@@ -156,7 +157,7 @@ Reference: https://github.com/dinoex/iroffer-dinoex
   - Track `bytesSent`, `startedAt` for speed calculation
   - Emit `progress`, `done`, `error`, `timeout` events
 - [ ] **Verification**: active send transfers test file to HexChat; md5sum matches.
-  Passive send accepted by HexChat. RESUME restarts from correct offset.
+      Passive send accepted by HexChat. RESUME restarts from correct offset.
 
 ---
 
@@ -168,12 +169,14 @@ Reference: https://github.com/dinoex/iroffer-dinoex
 
   ```ts
   interface QueueEntry {
-    nick: string; ident: string; hostname: string;
+    nick: string;
+    ident: string;
+    hostname: string;
     packNum: number;
     mode: 'active' | 'passive';
-    resumePos: number;       // 0 = fresh transfer
+    resumePos: number; // 0 = fresh transfer
     enqueuedAt: number;
-    password?: string;       // for locked packs
+    password?: string; // for locked packs
   }
   ```
 
@@ -197,9 +200,9 @@ Reference: https://github.com/dinoex/iroffer-dinoex
   - `requeue_sends`: on `loadState()`, re-enqueue packs whose transfers were in-flight
 
 - [ ] Queue pump: `setInterval` every second in `init()`, calls `dequeue()` and starts
-  transfers; cleared in `teardown()`
+      transfers; cleared in `teardown()`
 - [ ] **Verification**: 5 requests with `slotsmax: 2` — only 2 active; idle queue promoted
-  correctly; `smallfilebypass` sends immediately
+      correctly; `smallfilebypass` sends immediately
 
 ---
 
@@ -294,7 +297,7 @@ All commands parsed from `XDCC <subcommand> [args]` private message.
   - Exempt nicks matching `autoignore_exclude` hostmasks
 
 - [ ] **Verification**: all commands tested manually against a real IRC client; XDCC LIST
-  renders correctly; flood protection activates after rapid requests
+      renders correctly; flood protection activates after rapid requests
 
 ---
 
@@ -305,6 +308,7 @@ All commands parsed from `XDCC <subcommand> [args]` private message.
 - [ ] Create `plugins/xdcc/list-format.ts`
 
   #### Header lines (full + summary modes)
+
   ```
   ** <headline> **                           (each configured headline)
   ** N packs **  X of Y slots open[, Queue: X/Y][, Min: X.Xk][, Record: X.Xk]
@@ -317,16 +321,20 @@ All commands parsed from `XDCC <subcommand> [args]` private message.
   ```
 
   #### Group headers (when packs have groups)
+
   ```
   group: <groupname>  <group_desc>
   ```
+
   Using `group_seperator` (default: double-space) between name and desc.
 
   #### Pack line
+
   ```
   #N  Xx [size] [date] description [group] [X.XK Min] [X.XK Max] [N of N DL left]
    ^- note text
   ```
+
   - `#N` in bold (`\x02#N\x02`)
   - Gets count with `x` suffix
   - Size formatted: bytes → `B/kB/MB/GB` human-readable in brackets
@@ -335,23 +343,25 @@ All commands parsed from `XDCC <subcommand> [args]` private message.
   - Group suffix if `show_group_of_pack: true`
   - Per-pack minspeed/maxspeed suffixes if different from global
   - Daily limit suffix `[N of N DL left]` if `dlimitMax > 0`
-  - Note on next line indented with ` ^- `
+  - Note on next line indented with `^-`
   - Hidden packs (`hidelockedpacks: true`) omitted if locked
 
   #### Footer lines (full mode)
+
   ```
   ** <creditline> **
   Total Offered: XB  Total Transferred: XB
   ```
 
   #### Summary mode: header + credit line only, no pack lines
+
   #### Minimal mode: pack lines only, no header/footer
 
 - [ ] Throttled delivery: send notices at `slow_privmsg` rate (default 1/sec) using a
-  per-nick timer; store handles for XDCC STOP cancellation
+      per-nick timer; store handles for XDCC STOP cancellation
 - [ ] `PSEND <channel> full|minimal|summary` admin command sends list to a channel
 - [ ] **Verification**: LIST output matches iroffer format; groups render correctly; STOP
-  cancels mid-list
+      cancels mid-list
 
 ---
 
@@ -361,7 +371,7 @@ All commands parsed from `XDCC <subcommand> [args]` private message.
 (flags: `o`) or PM from authorized hostmask.
 
 - [ ] Create `plugins/xdcc/commands-admin.ts`
-  All admin commands bound as `pub` with `o` flag, prefix `.xdcc`:
+      All admin commands bound as `pub` with `o` flag, prefix `.xdcc`:
 
   #### Pack Information
   - `.xdcc xdl` — full list in admin format (like XDCC LIST but with file paths)
@@ -456,7 +466,7 @@ All commands parsed from `XDCC <subcommand> [args]` private message.
   - `auto_crc_check`: if filename has embedded CRC32, verify on add; lock pack and log
     warning if mismatch
 - [ ] Create `plugins/xdcc/autoadd.ts` — directory watcher using `fs.watch` +
-  periodic `readdir` scan (every `autoadd_time` seconds)
+      periodic `readdir` scan (every `autoadd_time` seconds)
   - Only add file after it hasn't changed for `autoadd_delay` seconds (stat mtime stable)
   - Apply `adddir_match` / `adddir_exclude` glob filters
   - Apply `adddir_min_size` filter
@@ -465,7 +475,7 @@ All commands parsed from `XDCC <subcommand> [args]` private message.
   - Announce new packs if `autoaddann` is set
   - `noautoadd <x>` admin command suspends auto-add for N minutes
 - [ ] **Verification**: drop a file into watched dir; it appears in pack list after delay;
-  CRC mismatch locks pack
+      CRC mismatch locks pack
 
 ---
 
@@ -474,6 +484,7 @@ All commands parsed from `XDCC <subcommand> [args]` private message.
 **Goal:** All user-facing notices match iroffer verbatim.
 
 Reference message strings (implement exactly):
+
 - Queued main: `"Added you to the main queue for pack N ("desc") in position N. To Remove yourself at a later time type \"/MSG <bot> XDCC REMOVE N\"."`
 - Queued idle: `"Added you to the idle queue for pack N ("desc") in position N."`
 - Send starting: `"** Sending you pack #N ("desc"), which is XB. (resume supported)"`
@@ -487,7 +498,7 @@ Reference message strings (implement exactly):
 - Removed from queue (left channel): `"** Removed From Queue: You are no longer on a known channel"`
 
 - [ ] Create `plugins/xdcc/messages.ts` — all user-facing strings as typed functions
-  (makes testing and localization straightforward)
+      (makes testing and localization straightforward)
 - [ ] **Verification**: unit-test every message formatter against expected strings
 
 ---
@@ -497,21 +508,21 @@ Reference message strings (implement exactly):
 **Goal:** Automated coverage for all non-TCP logic.
 
 - [ ] `tests/plugins/xdcc/packs.test.ts` — pack CRUD, path traversal rejection,
-  auto-numbering, sort, renumber, daily limit reset
+      auto-numbering, sort, renumber, daily limit reset
 - [ ] `tests/plugins/xdcc/queue.test.ts` — enqueue/dequeue, main/idle promotion,
-  per-nick limits, balanced queue, cancel, smallfilebypass, requeue_sends
+      per-nick limits, balanced queue, cancel, smallfilebypass, requeue_sends
 - [ ] `tests/plugins/xdcc/dcc.test.ts` — `ipToInt`/`intToIp` roundtrip, all CTCP format
-  strings (with `\x01` delimiters), 64-bit size encoding, port pool acquire/release
+      strings (with `\x01` delimiters), 64-bit size encoding, port pool acquire/release
 - [ ] `tests/plugins/xdcc/list-format.test.ts` — full/minimal/summary list rendering,
-  group headers, pack line format (bold, gets, size, note, group suffix)
+      group headers, pack line format (bold, gets, size, note, group suffix)
 - [ ] `tests/plugins/xdcc/messages.test.ts` — all message formatters match expected
-  iroffer strings
+      iroffer strings
 - [ ] `tests/plugins/xdcc/resume.test.ts` — active and passive RESUME CTCP handshake
-  state machines; unknown token rejected; offset validated against filesize
+      state machines; unknown token rejected; offset validated against filesize
 - [ ] `tests/plugins/xdcc/checksums.test.ts` — MD5/CRC32 of known test files; embedded
-  CRC32 extraction from filenames
+      CRC32 extraction from filenames
 - [ ] `tests/plugins/xdcc/state.test.ts` — save/load roundtrip; atomic write (no
-  partial state); missing-file handling on load
+      partial state); missing-file handling on load
 - [ ] **Verification**: `pnpm test` green
 
 ---
@@ -601,6 +612,7 @@ New file `plugins/xdcc/config.json` (all keys, overridable via `plugins.json`):
 ```
 
 **Required on init (throws if empty):**
+
 - `filedir` — absolute path for all served files (all pack paths are jailed to this)
 - `ip` — bot's publicly routable IPv4 address (run `curl ifconfig.me` on the host)
 - `statefile` — absolute path for JSON state file (e.g. `/var/lib/n0xb0t/xdcc.state`)

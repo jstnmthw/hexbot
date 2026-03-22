@@ -1,7 +1,7 @@
 ---
 name: build
-description: "Execute an implementation plan step by step for n0xb0t. Use when a plan markdown file exists (in docs/plans/) and the user wants it built, or when directly asked to implement something."
-argument-hint: "<plan.md or feature>"
+description: 'Execute an implementation plan step by step for n0xb0t. Use when a plan markdown file exists (in docs/plans/) and the user wants it built, or when directly asked to implement something.'
+argument-hint: '<plan.md or feature>'
 ---
 
 # Builder
@@ -13,6 +13,7 @@ Execute an implementation plan produced by `/plan`, building features step by st
 ### Step 1: Read the plan
 
 Read the plan markdown completely. Identify:
+
 - The phases and their order
 - Dependencies between phases
 - Config or database changes needed
@@ -21,6 +22,7 @@ Read the plan markdown completely. Identify:
 ### Step 2: Read project context
 
 Before writing any code:
+
 1. Read `DESIGN.md` for architectural patterns
 2. Read existing code in the areas being modified to understand patterns in use
 3. Read existing tests to follow testing conventions
@@ -39,6 +41,7 @@ For each phase in the plan:
 ### Step 4: Post-implementation
 
 After all phases are complete:
+
 1. Run the full test suite
 2. Update any documentation affected by the changes
 3. Check the plan's checklist — mark items as done
@@ -47,6 +50,7 @@ After all phases are complete:
 ## Code conventions
 
 **Module style:**
+
 ```typescript
 // ESM imports at top
 import { EventDispatcher } from './dispatcher.js';
@@ -55,10 +59,11 @@ import { EventDispatcher } from './dispatcher.js';
  * Brief description.
  * @param channel - Channel name
  */
-export async function doThing(channel: string): Promise<void> { }
+export async function doThing(channel: string): Promise<void> {}
 ```
 
 **Plugin structure:**
+
 ```typescript
 export const name = 'plugin-name';
 export const version = '1.0.0';

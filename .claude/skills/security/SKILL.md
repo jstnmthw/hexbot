@@ -1,6 +1,6 @@
 ---
 name: security
-description: "Audit n0xb0t code for IRC-specific and general bot security vulnerabilities. Produces a structured findings report. Use before deploying to a real network or after major features land."
+description: 'Audit n0xb0t code for IRC-specific and general bot security vulnerabilities. Produces a structured findings report. Use before deploying to a real network or after major features land.'
 argument-hint: "<target: file, module, plugin, or 'all'>"
 ---
 
@@ -15,6 +15,7 @@ Always read `docs/SECURITY.md` first — it defines the project's security model
 ## Audit process
 
 ### Step 1: Scope
+
 - **File/module**: audit that file and anything it directly calls
 - **Plugin**: audit the plugin's `index.ts`, config, and API usage
 - **`all`**: audit every `.ts` file in `src/` and `plugins/`
@@ -40,21 +41,25 @@ Always read `docs/SECURITY.md` first — it defines the project's security model
 **Scope:** <what was audited>
 
 ## Summary
+
 <overall assessment>
 **Findings:** X critical, Y warning, Z info
 
 ## Findings
 
 ### [CRITICAL] <title>
+
 **File:** `path:line`
 **Category:** <category>
 **Description:** <vulnerability and exploitation>
 **Remediation:** <specific fix>
 
 ### [WARNING] ...
+
 ### [INFO] ...
 
 ## Passed checks
+
 ## Recommendations
 ```
 
