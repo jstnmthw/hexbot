@@ -25,6 +25,7 @@ interface PendingVerify {
   nick: string;
   resolve: (result: VerifyResult) => void;
   timer: ReturnType<typeof setTimeout>;
+  method: 'acc' | 'status';
 }
 
 export interface ServicesDeps {
@@ -126,13 +127,13 @@ export class Services {
         resolve({ verified: false, account: null });
       }, timeoutMs);
 
-      this.pending.set(lowerNick, { nick, resolve, timer });
-
       // Send the verification command
-      if (this.servicesConfig.type === 'anope') {
+      const method = this.servicesConfig.type === 'anope' ? 'status' : 'acc';
+      this.pending.set(lowerNick, { nick, resolve, timer, method });
+
+      if (method === 'status') {
         this.client.say(target, `STATUS ${nick}`);
       } else {
-        // Atheme and default
         this.client.say(target, `ACC ${nick}`);
       }
     });
@@ -191,6 +192,29 @@ export class Services {
       this.logger?.debug(`STATUS response: nick=${targetNick} level=${level}`);
       this.resolveVerification(targetNick, level >= 3, level >= 3 ? targetNick : null);
       return;
+    }
+
+    // Detect "Unknown command" and retry with the other method
+    const unknownCmd = message.match(/^Unknown command (\S+)/i);
+    if (unknownCmd) {
+      const failedCmd = unknownCmd[1].toUpperCase();
+      for (const [key, pending] of this.pending) {
+        const shouldRetry =
+          (failedCmd === 'ACC' || failedCmd === 'ACC.') && pending.method === 'acc' ||
+          (failedCmd === 'STATUS' || failedCmd === 'STATUS.') && pending.method === 'status';
+        if (shouldRetry) {
+          const altMethod = pending.method === 'acc' ? 'status' : 'acc';
+          const target = this.getNickServTarget();
+          pending.method = altMethod;
+          this.logger?.info(`${failedCmd} not supported, falling back to ${altMethod.toUpperCase()} for ${pending.nick}`);
+          if (altMethod === 'status') {
+            this.client.say(target, `STATUS ${pending.nick}`);
+          } else {
+            this.client.say(target, `ACC ${pending.nick}`);
+          }
+          return;
+        }
+      }
     }
 
     // No pattern matched — log for debugging

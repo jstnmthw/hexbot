@@ -173,6 +173,50 @@ describe('Services', () => {
     });
   });
 
+  describe('verifyUser — ACC/STATUS fallback', () => {
+    it('should fall back to STATUS when ACC is unknown', async () => {
+      const { services, client } = createServices({ type: 'atheme' });
+
+      const promise = services.verifyUser('Alice', 2000);
+
+      // First command should be ACC
+      expect(client.sent[0].message).toBe('ACC Alice');
+
+      // NickServ replies "Unknown command ACC."
+      client.simulateNotice('NickServ', 'Unknown command ACC.  "/msg NickServ HELP" for help.');
+
+      // Should retry with STATUS
+      expect(client.sent[1].message).toBe('STATUS Alice');
+
+      // Simulate STATUS response
+      client.simulateNotice('NickServ', 'STATUS Alice 3');
+
+      const result = await promise;
+      expect(result.verified).toBe(true);
+    });
+
+    it('should fall back to ACC when STATUS is unknown', async () => {
+      const { services, client } = createServices({ type: 'anope' });
+
+      const promise = services.verifyUser('Bob', 2000);
+
+      // First command should be STATUS
+      expect(client.sent[0].message).toBe('STATUS Bob');
+
+      // NickServ replies "Unknown command STATUS."
+      client.simulateNotice('NickServ', 'Unknown command STATUS.');
+
+      // Should retry with ACC
+      expect(client.sent[1].message).toBe('ACC Bob');
+
+      // Simulate ACC response
+      client.simulateNotice('NickServ', 'Bob ACC 3');
+
+      const result = await promise;
+      expect(result.verified).toBe(true);
+    });
+  });
+
   describe('verification timeout', () => {
     it('should return verified=false on timeout', async () => {
       const { services } = createServices({ type: 'atheme' });
