@@ -226,6 +226,7 @@ export interface BotConfig {
   pluginDir: string;
   logging: LoggingConfig;
   queue?: QueueConfig;
+  quit_message?: string;
 }
 
 /** Shape for a single plugin entry in config/plugins.json. */

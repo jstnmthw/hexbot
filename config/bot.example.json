@@ -31,5 +31,6 @@
   "queue": {
     "rate": 1,
     "burst": 5
-  }
+  },
+  "quit_message": "Hexbot v0.1.0"
 }

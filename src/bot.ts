@@ -170,7 +170,8 @@ export class Bot {
     this.messageQueue.stop();
 
     if (this.client.connected) {
-      this.client.quit('Shutting down');
+      const quitMsg = this.config.quit_message ?? `Hexbot v${this.readPackageVersion()}`;
+      this.client.quit(quitMsg);
       // Give the QUIT message a moment to send
       await new Promise<void>((r) => setTimeout(r, 500));
     }
