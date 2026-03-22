@@ -79,6 +79,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - ACC/STATUS fallback for NickServ verification (supports Atheme and Anope)
 - Deployment plan (`docs/plans/deployment.md`) — Docker + docker-compose, GitHub Actions CI/CD, systemd unit guide
 - REPL mirrors incoming private messages and notices (e.g. from ChanServ/NickServ) to the console using IRC-conventional `<nick>` / `-nick-` formatting
+- **DCC CHAT + Botnet** (`src/core/dcc.ts`) — Eggdrop-style passive DCC CHAT for remote administration:
+  - Passive DCC only (bot opens port, user connects) — no NAT issues for VPS deployments
+  - Hostmask + flag authentication; optional NickServ ACC verification before accepting session
+  - Multi-user party line ("botnet"): plain text broadcasts to all connected admins; `.command` routes through CommandHandler with real flag enforcement
+  - Banner on connect: bot version, handle, botnet roster
+  - DCC-only commands: `.botnet` / `.who` (roster + uptime), `.quit` / `.exit` (disconnect)
+  - Joining/leaving announced to all connected sessions; REPL activity broadcast to botnet
+  - Configurable: port range, max sessions, idle timeout, required flags, NickServ verify
+  - Config: `dcc` block in `bot.json` (disabled by default); see `docs/DCC.md`
+- **Halfop support** in `chanmod` plugin (v2.1.0):
+  - `botCanHalfop()` check — bot must have `+h` or `+o` to set halfop
+  - `halfop_flags` config key (default `[]`, opt-in) for auto-halfop on join (between op and voice tiers)
+  - Mode enforcement for `-h`: re-applies `+h` when a flagged user is dehalfopped externally
+  - `!halfop` / `!dehalfop` manual commands (require `+o` flag)
+- `halfop(channel, nick)` / `dehalfop(channel, nick)` added to `IRCCommands` and `PluginAPI`
+- User documentation for DCC CHAT: `docs/DCC.md`
 
 ### Changed
 
@@ -109,6 +125,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Security audit** (all findings from `docs/audits/all-2026-03-22.md`)
 - `deepblue2` topic theme: missing background color on opening decorator
 - `chanmod` commands now check that the bot holds ops before executing mode changes
+- `!unban` in `chanmod` now accepts a nick in addition to an explicit ban mask — resolves the user's hostmask from channel state, builds all standard mask candidates, and falls back to removing all candidate masks if no stored ban record is found
 - REPL prompt displayed before readline prompt, preventing interleaved output
 - ESLint and TypeScript errors: unused variables, stale reload temp files, IRC formatting control-char regex in greeter
 - Several `topic` theme string formatting bugs

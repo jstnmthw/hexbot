@@ -8,7 +8,7 @@
 
 /** Context passed to command handlers. */
 export interface CommandContext {
-  source: 'repl' | 'irc';
+  source: 'repl' | 'irc' | 'dcc';
   nick: string;
   ident?: string;
   hostname?: string;

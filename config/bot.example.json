@@ -32,5 +32,14 @@
     "rate": 1,
     "burst": 5
   },
+  "dcc": {
+    "enabled": false,
+    "ip": "0.0.0.0",
+    "port_range": [50000, 50010],
+    "require_flags": "m",
+    "max_sessions": 5,
+    "idle_timeout_ms": 300000,
+    "nickserv_verify": false
+  },
   "quit_message": "Hexbot v0.1.0"
 }

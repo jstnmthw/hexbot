@@ -218,6 +218,36 @@ export interface QueueConfig {
   burst?: number;
 }
 
+/** SOCKS5 proxy settings. */
+export interface ProxyConfig {
+  /** Proxy protocol — only 'socks5' is supported (irc-framework hardcodes type=5). */
+  type: 'socks5';
+  host: string;
+  port: number;
+  /** Optional SOCKS5 username. */
+  username?: string;
+  /** Optional SOCKS5 password. */
+  password?: string;
+}
+
+/** DCC CHAT / botnet settings. */
+export interface DccConfig {
+  /** Enable DCC CHAT. Default: false */
+  enabled: boolean;
+  /** Bot's public IPv4 address (required if enabled). */
+  ip: string;
+  /** Port range [min, max] inclusive for passive DCC listeners. */
+  port_range: [number, number];
+  /** Flags required to open a DCC session. Default: "m" */
+  require_flags: string;
+  /** Maximum concurrent DCC sessions. Default: 5 */
+  max_sessions: number;
+  /** Idle timeout in ms before disconnecting. Default: 300000 (5 min) */
+  idle_timeout_ms: number;
+  /** Require NickServ ACC verification before accepting. Default: false */
+  nickserv_verify: boolean;
+}
+
 /** Shape for config/bot.json. */
 export interface BotConfig {
   irc: IrcConfig;
@@ -228,6 +258,8 @@ export interface BotConfig {
   pluginDir: string;
   logging: LoggingConfig;
   queue?: QueueConfig;
+  proxy?: ProxyConfig;
+  dcc?: DccConfig;
   quit_message?: string;
 }
 

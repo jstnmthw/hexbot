@@ -119,6 +119,9 @@ export class BotREPL {
 
     console.log(`[repl] Command: ${trimmed}`);
 
+    // Announce REPL activity to botnet so DCC-connected users see local admin work
+    this.bot.dccManager?.announce(`*** REPL: ${trimmed}`);
+
     // Route through the command handler (REPL has implicit owner privileges)
     await this.bot.commandHandler.execute(trimmed, {
       source: 'repl',

@@ -56,6 +56,7 @@ hexbot/
 │       ├── services.ts       # NickServ/ChanServ integration, SASL
 │       ├── irc-commands.ts   # Helpers: join, part, kick, ban, mode
 │       ├── channel-state.ts  # Track users, modes, hostmasks per channel
+│       ├── dcc.ts            # DCC CHAT + botnet party line
 │       └── commands/         # Command groups (each module registers its own)
 │           ├── permission-commands.ts
 │           ├── dispatcher-commands.ts
@@ -278,6 +279,7 @@ Convenience wrappers around raw IRC commands with flood protection and mode stac
 - `unban(channel, mask)`
 - `mode(channel, modes, ...params)`
 - `op(channel, nick)` / `deop(channel, nick)`
+- `halfop(channel, nick)` / `dehalfop(channel, nick)`
 - `voice(channel, nick)` / `devoice(channel, nick)`
 - `topic(channel, text)`
 
@@ -366,34 +368,21 @@ Each plugin also ships its own `config.json` with defaults. The resolution order
 
 ### 2.12 CLI / REPL
 
-**Option A (MVP):** Attached REPL via `--repl` flag. Uses Node's `readline` module. The bot process and REPL share the same process. Commands typed in the terminal go through the same `command-handler.ts` that IRC commands use.
+**Option A:** Attached REPL via `--repl` flag. Uses Node's `readline` module. The bot process and REPL share the same process. Commands typed in the terminal go through the same `command-handler.ts` that IRC commands use. The REPL has implicit owner privileges and is intended for development/local administration only.
 
 ```bash
-# Production: daemon mode, manage via IRC commands
+# Production: daemon mode, manage via DCC CHAT or IRC commands
 pnpm start
 
 # Development: interactive REPL with watch mode
 pnpm run dev -- --repl
 ```
 
-REPL commands mirror IRC admin commands:
+REPL activity (commands typed) is broadcast to all connected DCC botnet sessions so remote admins can see local admin work.
 
-```
-> .plugins                    # List loaded plugins
-> .load auto-op               # Load a plugin
-> .unload greeter             # Unload a plugin
-> .reload seen                # Hot-reload a plugin
-> .binds                      # List all active binds
-> .binds seen                 # List binds for a specific plugin
-> .say #mychannel Hello!      # Send a message
-> .join #newchannel           # Join a channel
-> .part #oldchannel           # Leave a channel
-> .users #mychannel           # List users in a channel
-> .adduser handle hostmask flags  # Add a user
-> .flags handle [+/-flags]    # View/set user flags
-```
+**Option B (implemented):** DCC CHAT socket transport (`src/core/dcc.ts`) — see section 2.15 and `docs/DCC.md`. This is the recommended interface for production remote administration.
 
-**Design for extensibility:** The `command-handler.ts` module parses command strings and returns results. It doesn't care where input comes from. The REPL feeds it stdin lines. IRC feeds it message text. A future socket server (Option B) would feed it socket data. Same parser, multiple transports.
+**Design for extensibility:** The `command-handler.ts` module parses command strings and returns results. It doesn't care where input comes from. The REPL feeds it stdin lines. IRC feeds it message text. DCC CHAT feeds it socket data. Same parser, multiple transports.
 
 ### 2.13 Internal event bus
 
@@ -423,6 +412,43 @@ CREATE TABLE mod_log (
 ```
 
 Console logging uses structured output (timestamp, level, source module/plugin). Log level is configurable in `config/bot.json`.
+
+### 2.15 DCC CHAT / Botnet (core module)
+
+Eggdrop-style passive DCC CHAT for remote administration (`src/core/dcc.ts`). This is "Option B" from the CLI/REPL design extensibility note in section 2.12.
+
+**How it works:**
+
+1. User types `/dcc chat hexbot` in their IRC client — sends a CTCP DCC request to the bot.
+2. The bot receives it as a `ctcp` dispatcher event (`command: 'DCC'`).
+3. `DCCManager` validates the request (passive DCC only, hostmask auth, flag check).
+4. Bot opens a TCP port from the configured range (`port_range` in `bot.json`), sends a passive DCC token back via CTCP reply.
+5. User's client connects to the bot's port. Bot shows a banner and command prompt.
+6. Lines starting with `.` are routed through `CommandHandler` with the user's real flags enforced.
+7. Plain text lines are broadcast to all connected DCC sessions (the "botnet" party line).
+
+**Key decisions:**
+
+- **Passive DCC only** — bot opens port, user connects. Bot requires a public IPv4. Active DCC (user opens port) is rejected.
+- **Core module, not plugin** — needs direct access to `CommandHandler` and `Permissions`, which are not in `PluginAPI`.
+- **Wired in `bot.ts`** — created after IRC connect, torn down on shutdown. Enabled via `dcc.enabled` in `bot.json`.
+- **No implicit owner** — DCC sessions get real flag enforcement (unlike the REPL which has implicit owner access).
+
+**Config (`bot.json`):**
+
+```json
+"dcc": {
+  "enabled": true,
+  "ip": "203.0.113.42",
+  "port_range": [50000, 50010],
+  "require_flags": "m",
+  "max_sessions": 5,
+  "idle_timeout_ms": 300000,
+  "nickserv_verify": false
+}
+```
+
+See `docs/DCC.md` for full setup, client instructions, and security notes.
 
 ---
 
@@ -476,8 +502,7 @@ The MVP is: **a bot that connects, loads plugins with hot-reload, has a working 
 - AI chat module (Phase 4)
 - Flood protection / advanced moderation (Phase 2 — separate plugins)
 - Multi-bot / multi-identity support
-- Botnet / bot linking
-- DCC support
+- Botnet / bot linking (multi-bot mesh; current botnet is single-bot party line only)
 
 ---
 

@@ -13,6 +13,7 @@ import { registerDispatcherCommands } from './core/commands/dispatcher-commands.
 import { registerIRCAdminCommands } from './core/commands/irc-commands-admin.js';
 import { registerPermissionCommands } from './core/commands/permission-commands.js';
 import { registerPluginCommands } from './core/commands/plugin-commands.js';
+import { DCCManager } from './core/dcc.js';
 import { IRCCommands } from './core/irc-commands.js';
 import { MessageQueue } from './core/message-queue.js';
 import { Permissions } from './core/permissions.js';
@@ -46,7 +47,13 @@ export class Bot {
   readonly services: Services;
 
   private bridge: IRCBridge | null = null;
+  private _dccManager: DCCManager | null = null;
   private botLogger: Logger;
+
+  /** The active DCC manager, if DCC is enabled. Used by the REPL to announce activity. */
+  get dccManager(): DCCManager | null {
+    return this._dccManager;
+  }
   private startTime: number = Date.now();
   private bootStart: number = Date.now();
   private configuredChannels: string[] = [];
@@ -146,6 +153,22 @@ export class Bot {
     // 7. Authenticate with NickServ (non-SASL fallback)
     this.services.identify();
 
+    // 8a. Start DCC CHAT / botnet (if configured)
+    if (this.config.dcc?.enabled) {
+      this._dccManager = new DCCManager({
+        client: this.client,
+        dispatcher: this.dispatcher,
+        permissions: this.permissions,
+        services: this.services,
+        commandHandler: this.commandHandler,
+        config: this.config.dcc,
+        version: this.readPackageVersion(),
+        logger: this.logger,
+      });
+      this._dccManager.attach();
+      this.botLogger.info('DCC CHAT enabled');
+    }
+
     // 8. Load plugins
     await this.pluginLoader.loadAll();
 
@@ -157,6 +180,11 @@ export class Bot {
   /** Graceful shutdown. */
   async shutdown(): Promise<void> {
     this.botLogger.info('Shutting down...');
+
+    if (this._dccManager) {
+      this._dccManager.detach('Bot shutting down.');
+      this._dccManager = null;
+    }
 
     this.services.detach();
     this.channelState.detach();
