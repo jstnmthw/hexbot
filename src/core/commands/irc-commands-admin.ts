@@ -100,6 +100,35 @@ export function registerIRCAdminCommands(
   );
 
   handler.registerCommand(
+    'msg',
+    {
+      flags: '+o',
+      description: 'Send a PRIVMSG to any target (user, nick, or service)',
+      usage: '.msg <target> <message>',
+      category: 'irc',
+    },
+    (_args, ctx) => {
+      const spaceIdx = _args.indexOf(' ');
+      if (spaceIdx === -1 || !_args.trim()) {
+        ctx.reply('Usage: .msg <target> <message>');
+        return;
+      }
+      const target = _args.substring(0, spaceIdx).trim();
+      const message = _args.substring(spaceIdx + 1).trim();
+      if (!target || !message) {
+        ctx.reply('Usage: .msg <target> <message>');
+        return;
+      }
+      if (!/^[^\s\r\n]+$/.test(target)) {
+        ctx.reply('Invalid target.');
+        return;
+      }
+      client.say(target, sanitize(message));
+      ctx.reply(`Message sent to ${target}`);
+    },
+  );
+
+  handler.registerCommand(
     'status',
     {
       flags: '+o',
