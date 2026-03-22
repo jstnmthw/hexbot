@@ -90,7 +90,7 @@ describe('chanmod plugin — auto-op', () => {
   let bot: MockBot;
 
   beforeEach(async () => {
-    bot = createMockBot({ botNick: 'n0xb0t' });
+    bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
     const result = await bot.pluginLoader.load(PLUGIN_PATH);
     expect(result.status).toBe('ok');
@@ -164,15 +164,15 @@ describe('chanmod plugin — auto-op', () => {
   });
 
   it('should not op/voice the bot itself', async () => {
-    bot.permissions.addUser('botuser', '*!n0xb0t@bot.host', 'o', 'test');
-    simulateJoin(bot, 'n0xb0t', 'n0xb0t', 'bot.host', '#test');
+    bot.permissions.addUser('botuser', '*!hexbot@bot.host', 'o', 'test');
+    simulateJoin(bot, 'hexbot', 'hexbot', 'bot.host', '#test');
     await tick();
     expect(bot.client.messages.find((m) => m.type === 'mode')).toBeUndefined();
   });
 
   it('should not auto-op when auto_op is disabled', async () => {
     bot.cleanup();
-    bot = createMockBot({ botNick: 'n0xb0t' });
+    bot = createMockBot({ botNick: 'hexbot' });
     const result = await bot.pluginLoader.load(PLUGIN_PATH, {
       chanmod: { enabled: true, config: { auto_op: false } },
     });
@@ -193,7 +193,7 @@ describe('chanmod plugin — mode enforcement', () => {
   let bot: MockBot;
 
   beforeEach(async () => {
-    bot = createMockBot({ botNick: 'n0xb0t' });
+    bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
     const result = await bot.pluginLoader.load(PLUGIN_PATH, {
       chanmod: { enabled: true, config: { enforce_modes: true, enforce_delay_ms: 5 } },
@@ -240,7 +240,7 @@ describe('chanmod plugin — mode enforcement', () => {
     addToChannel(bot, 'Alice', 'alice', 'alice.host', '#test');
     bot.client.clearMessages();
 
-    simulateMode(bot, 'n0xb0t', '#test', '-o', 'Alice');
+    simulateMode(bot, 'hexbot', '#test', '-o', 'Alice');
     await tick(50);
 
     expect(
@@ -271,7 +271,7 @@ describe('chanmod plugin — mode enforcement', () => {
 
   it('should NOT enforce when enforce_modes is disabled', async () => {
     bot.cleanup();
-    bot = createMockBot({ botNick: 'n0xb0t' });
+    bot = createMockBot({ botNick: 'hexbot' });
     await bot.pluginLoader.load(PLUGIN_PATH, {
       chanmod: { enabled: true, config: { enforce_modes: false } },
     });
@@ -292,7 +292,7 @@ describe('chanmod plugin — mode enforcement', () => {
 
   it('should suppress enforcement after repeated deops (rate limit)', async () => {
     bot.cleanup();
-    bot = createMockBot({ botNick: 'n0xb0t' });
+    bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
     await bot.pluginLoader.load(PLUGIN_PATH, {
       chanmod: {
@@ -370,7 +370,7 @@ describe('chanmod plugin — mode commands', () => {
   let bot: MockBot;
 
   beforeAll(async () => {
-    bot = createMockBot({ botNick: 'n0xb0t' });
+    bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
     const result = await bot.pluginLoader.load(PLUGIN_PATH);
     expect(result.status).toBe('ok');
@@ -423,7 +423,7 @@ describe('chanmod plugin — mode commands', () => {
   });
 
   it('!deop bot — should refuse', async () => {
-    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!deop n0xb0t');
+    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!deop hexbot');
     await flush();
     expect(
       bot.client.messages.find((m) => m.type === 'mode' && m.message === '-o'),
@@ -564,7 +564,7 @@ describe('chanmod plugin — mode commands', () => {
   }
 
   it('!kickban bot — should refuse', async () => {
-    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!kickban n0xb0t');
+    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!kickban hexbot');
     await flush();
     expect(
       bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('cannot ban myself')),
@@ -580,7 +580,7 @@ describe('chanmod plugin — kick command', () => {
   let bot: MockBot;
 
   beforeAll(async () => {
-    bot = createMockBot({ botNick: 'n0xb0t' });
+    bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
     const result = await bot.pluginLoader.load(PLUGIN_PATH);
     expect(result.status).toBe('ok');
@@ -630,7 +630,7 @@ describe('chanmod plugin — kick command', () => {
   });
 
   it('!kick bot — should refuse', async () => {
-    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!kick n0xb0t');
+    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!kick hexbot');
     await flush();
     expect(
       bot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('KICK')),
@@ -651,7 +651,7 @@ describe('chanmod plugin — ban commands', () => {
   let bot: MockBot;
 
   beforeAll(async () => {
-    bot = createMockBot({ botNick: 'n0xb0t' });
+    bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
     const result = await bot.pluginLoader.load(PLUGIN_PATH);
     expect(result.status).toBe('ok');
@@ -698,7 +698,7 @@ describe('chanmod plugin — ban commands', () => {
   });
 
   it('!ban bot — should refuse', async () => {
-    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban n0xb0t');
+    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban hexbot');
     await flush();
     expect(
       bot.client.messages.find((m) => m.type === 'mode' && m.message === '+b'),
@@ -780,7 +780,7 @@ describe('chanmod plugin — ban commands', () => {
 
 describe('chanmod plugin — teardown', () => {
   it('should clean up state on unload (teardown)', async () => {
-    const bot = createMockBot({ botNick: 'n0xb0t' });
+    const bot = createMockBot({ botNick: 'hexbot' });
     await bot.pluginLoader.load(PLUGIN_PATH, {
       chanmod: { enabled: true, config: { enforce_modes: true, enforce_delay_ms: 5 } },
     });
@@ -805,7 +805,7 @@ describe('chanmod plugin — ban mask types', () => {
   let bot: MockBot;
 
   beforeAll(async () => {
-    bot = createMockBot({ botNick: 'n0xb0t' });
+    bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
     await bot.pluginLoader.load(PLUGIN_PATH);
     bot.permissions.addUser('admin', '*!admin@admin.host', 'o', 'test');
@@ -832,7 +832,7 @@ describe('chanmod plugin — ban mask types', () => {
 
   it('type 1 — *!*@host', async () => {
     bot.cleanup();
-    bot = createMockBot({ botNick: 'n0xb0t' });
+    bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
     await bot.pluginLoader.load(PLUGIN_PATH, {
       chanmod: { enabled: true, config: { default_ban_type: 1 } },
@@ -851,7 +851,7 @@ describe('chanmod plugin — ban mask types', () => {
 
   it('type 2 — *!*ident@host', async () => {
     bot.cleanup();
-    bot = createMockBot({ botNick: 'n0xb0t' });
+    bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
     await bot.pluginLoader.load(PLUGIN_PATH, {
       chanmod: { enabled: true, config: { default_ban_type: 2 } },
@@ -871,7 +871,7 @@ describe('chanmod plugin — ban mask types', () => {
 
   it('cloaked hostmask — uses exact cloak regardless of type', async () => {
     bot.cleanup();
-    bot = createMockBot({ botNick: 'n0xb0t' });
+    bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
     await bot.pluginLoader.load(PLUGIN_PATH, {
       chanmod: { enabled: true, config: { default_ban_type: 3 } },
@@ -897,7 +897,7 @@ describe('chanmod plugin — timed bans', () => {
   let bot: MockBot;
 
   beforeAll(async () => {
-    bot = createMockBot({ botNick: 'n0xb0t' });
+    bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
     await bot.pluginLoader.load(PLUGIN_PATH);
     bot.permissions.addUser('admin', '*!admin@admin.host', 'o', 'test');
@@ -961,7 +961,7 @@ describe('chanmod plugin — channel mode enforcement', () => {
   let bot: MockBot;
 
   beforeEach(async () => {
-    bot = createMockBot({ botNick: 'n0xb0t' });
+    bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
     await bot.pluginLoader.load(PLUGIN_PATH, {
       chanmod: {
@@ -1005,7 +1005,7 @@ describe('chanmod plugin — channel mode enforcement', () => {
 
   it('does NOT re-apply when the bot itself removes the mode', async () => {
     bot.client.clearMessages();
-    simulateMode(bot, 'n0xb0t', '#test', '-t', '');
+    simulateMode(bot, 'hexbot', '#test', '-t', '');
     await tick(50);
     expect(
       bot.client.messages.find((m) => m.type === 'raw' && m.message === 'MODE #test +t'),

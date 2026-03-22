@@ -20,7 +20,7 @@ import type { BotConfig } from '../src/types.js';
 // ---------------------------------------------------------------------------
 
 function makeTempDir(): string {
-  const dir = join(tmpdir(), `n0xb0t-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const dir = join(tmpdir(), `hexbot-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -750,8 +750,8 @@ describe('PluginLoader', () => {
       api.raw('PING :test');
       expect(mockIrcClient.raw).toHaveBeenCalledWith('PING :test');
 
-      api.ctcpResponse('nick', 'VERSION', 'n0xb0t');
-      expect(mockIrcClient.ctcpResponse).toHaveBeenCalledWith('nick', 'VERSION', 'n0xb0t');
+      api.ctcpResponse('nick', 'VERSION', 'hexbot');
+      expect(mockIrcClient.ctcpResponse).toHaveBeenCalledWith('nick', 'VERSION', 'hexbot');
     });
   });
 

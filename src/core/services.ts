@@ -1,4 +1,4 @@
-// n0xb0t — Services core module
+// hexbot — Services core module
 // NickServ integration — bot authentication and user identity verification.
 import type { BotEventBus } from '../event-bus.js';
 import type { Logger } from '../logger.js';

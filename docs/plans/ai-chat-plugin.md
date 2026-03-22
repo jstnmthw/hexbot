@@ -2,7 +2,7 @@
 
 ## Summary
 
-An AI-powered chat plugin that lets n0xb0t converse naturally with IRC users using LLM models. The bot monitors channel messages and responds when directly addressed (nick mention or command), maintaining per-channel conversation context via a sliding window. Built on an adapter pattern so the LLM provider (starting with Google Gemini free tier) can be swapped without touching the plugin logic. Includes layered rate limiting, per-user token budgets, permission gating, output sanitization, and a foundation for future on-demand LLM game sessions.
+An AI-powered chat plugin that lets hexbot converse naturally with IRC users using LLM models. The bot monitors channel messages and responds when directly addressed (nick mention or command), maintaining per-channel conversation context via a sliding window. Built on an adapter pattern so the LLM provider (starting with Google Gemini free tier) can be swapped without touching the plugin logic. Includes layered rate limiting, per-user token budgets, permission gating, output sanitization, and a foundation for future on-demand LLM game sessions.
 
 ## Feasibility
 
@@ -40,9 +40,9 @@ This is the most important behavioral question. The bot should feel like a chann
 
 | Trigger                 | Example                                                      | Default       |
 | ----------------------- | ------------------------------------------------------------ | ------------- |
-| **Direct address**      | `n0xb0t: what do you think?` or `n0xb0t, tell me about Rust` | **Enabled**   |
+| **Direct address**      | `hexbot: what do you think?` or `hexbot, tell me about Rust` | **Enabled**   |
 | **Command**             | `!ai tell me a joke`                                         | **Enabled**   |
-| **PM**                  | `/msg n0xb0t hey what's up`                                  | **Enabled**   |
+| **PM**                  | `/msg hexbot hey what's up`                                  | **Enabled**   |
 | **Keyword**             | Message contains a configurable keyword/phrase               | Disabled      |
 | **Random interjection** | Small % chance on any message                                | Disabled (0%) |
 

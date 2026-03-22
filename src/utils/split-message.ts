@@ -1,4 +1,4 @@
-// n0xb0t — IRC message splitting utility
+// hexbot — IRC message splitting utility
 // Splits long messages at word boundaries to fit within IRC's ~512 byte limit.
 
 /** Maximum safe message content length (accounting for protocol overhead + bot prefix). */

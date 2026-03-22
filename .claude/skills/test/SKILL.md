@@ -1,12 +1,12 @@
 ---
 name: test
-description: 'Write and run Vitest tests for n0xb0t core modules and plugins. Use when the user asks to test something, or after implementing a feature that needs verification.'
+description: 'Write and run Vitest tests for hexbot core modules and plugins. Use when the user asks to test something, or after implementing a feature that needs verification.'
 argument-hint: '<module or plugin name>'
 ---
 
 # Tester
 
-Write and run tests for n0xb0t core modules and plugins using Vitest.
+Write and run tests for hexbot core modules and plugins using Vitest.
 
 ## Test framework
 

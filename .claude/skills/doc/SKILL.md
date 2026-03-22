@@ -1,12 +1,12 @@
 ---
 name: doc
-description: 'Generate or update documentation for n0xb0t — plugin READMEs, API reference, DESIGN.md updates, CHANGELOG entries. Use when code needs docs or existing docs are outdated.'
+description: 'Generate or update documentation for hexbot — plugin READMEs, API reference, DESIGN.md updates, CHANGELOG entries. Use when code needs docs or existing docs are outdated.'
 argument-hint: '<target>'
 ---
 
 # Documenter
 
-Generate and update documentation for n0xb0t.
+Generate and update documentation for hexbot.
 
 ## Documentation types
 

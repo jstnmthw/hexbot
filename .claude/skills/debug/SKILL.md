@@ -1,12 +1,12 @@
 ---
 name: debug
-description: "Investigate and fix bugs in n0xb0t. Use when something is broken — bot won't connect, plugin not responding, events not dispatching, permissions not working."
+description: "Investigate and fix bugs in hexbot. Use when something is broken — bot won't connect, plugin not responding, events not dispatching, permissions not working."
 argument-hint: '<issue description>'
 ---
 
 # Debugger
 
-Investigate and fix bugs in n0xb0t.
+Investigate and fix bugs in hexbot.
 
 ## Process
 

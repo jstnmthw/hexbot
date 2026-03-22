@@ -3,10 +3,10 @@
     "host": "irc.libera.chat",
     "port": 6697,
     "tls": true,
-    "nick": "n0xb0t",
-    "username": "n0xb0t",
-    "realname": "n0xb0t IRC Framework",
-    "channels": ["#n0xb0t-test"]
+    "nick": "Hexbot",
+    "username": "hexbot",
+    "realname": "Hexbot IRC Framework",
+    "channels": ["#hexbot-test"]
   },
   "owner": {
     "handle": "admin",
@@ -22,7 +22,7 @@
     "password": "",
     "sasl": true
   },
-  "database": "./data/n0xb0t.db",
+  "database": "./data/hexbot.db",
   "pluginDir": "./plugins",
   "logging": {
     "level": "info",

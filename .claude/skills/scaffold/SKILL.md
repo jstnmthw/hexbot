@@ -1,12 +1,12 @@
 ---
 name: scaffold
-description: 'Generate a complete n0xb0t plugin skeleton with index.ts, config.json, README.md, and test file. Use when the user wants to create a new plugin.'
+description: 'Generate a complete hexbot plugin skeleton with index.ts, config.json, README.md, and test file. Use when the user wants to create a new plugin.'
 argument-hint: '<plugin-name>'
 ---
 
 # Plugin Scaffolder
 
-Generate complete plugin skeletons for the n0xb0t framework.
+Generate complete plugin skeletons for the hexbot framework.
 
 ## Process
 

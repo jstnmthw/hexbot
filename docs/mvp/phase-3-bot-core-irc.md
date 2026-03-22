@@ -85,7 +85,7 @@ Wire up `irc-framework`, bridge IRC events to the dispatcher, implement the REPL
   - Constructor takes the `Bot` instance
   - `start()`:
     - Create readline interface on stdin/stdout
-    - Set prompt to `n0xb0t> `
+    - Set prompt to `hexbot> `
     - On each line: pass to `bot.commandHandler.execute(line, { source: 'repl', reply: console.log })`
     - Handle special REPL-only commands:
       - `.quit` or `.exit` — graceful shutdown

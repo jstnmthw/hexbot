@@ -1,4 +1,4 @@
-# n0xb0t plugins
+# hexbot plugins
 
 This directory contains all bot plugins. Each subdirectory is a self-contained plugin with its own `index.ts`, optional `config.json`, and optional `README.md`.
 

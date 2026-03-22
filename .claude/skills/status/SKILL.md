@@ -1,6 +1,6 @@
 ---
 name: status
-description: "Scan the n0xb0t codebase and report project status against DESIGN.md. Shows what's implemented, missing, stubbed, or deviated. Use for project health checks and deciding what to work on next."
+description: "Scan the hexbot codebase and report project status against DESIGN.md. Shows what's implemented, missing, stubbed, or deviated. Use for project health checks and deciding what to work on next."
 ---
 
 # Project Manager
@@ -33,7 +33,7 @@ For each MVP plugin: directory exists? Has index.ts, config.json, README.md, tes
 ### Step 5: Report
 
 ```markdown
-## Project status: n0xb0t
+## Project status: hexbot
 
 ### Core Modules
 

@@ -1,4 +1,4 @@
-# n0xb0t Reference: IRC Protocol Gotchas & Common Patterns
+# hexbot Reference: IRC Protocol Gotchas & Common Patterns
 
 Quick reference for things that trip up IRC bot developers. Read this when you're unsure about IRC-specific behavior.
 

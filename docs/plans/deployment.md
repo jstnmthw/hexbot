@@ -51,8 +51,8 @@ Two parallel distribution tracks: **Option A** (Docker image via ghcr.io, primar
 - [ ] Add `"start:prod": "node dist/src/index.js"` script to `package.json`
 - [ ] In `src/bot.ts` constructor, `mkdirSync(dirname(resolvedDbPath), { recursive: true })` before passing path to `BotDatabase` — ensures `data/` exists even if the user forgot to create it
 - [ ] Create `docs/deploy/systemd.md` with:
-  - A complete `n0xb0t.service` unit file (ExecStart = `/usr/bin/node dist/src/index.js`, WorkingDirectory = `/opt/n0xb0t`, Restart=on-failure, RestartSec=5, User=n0xb0t)
-  - Brief instructions: `useradd -r n0xb0t`, install to `/opt/n0xb0t`, `pnpm build`, `systemctl enable --now n0xb0t`
+  - A complete `hexbot.service` unit file (ExecStart = `/usr/bin/node dist/src/index.js`, WorkingDirectory = `/opt/hexbot`, Restart=on-failure, RestartSec=5, User=hexbot)
+  - Brief instructions: `useradd -r hexbot`, install to `/opt/hexbot`, `pnpm build`, `systemctl enable --now hexbot`
 - [ ] **Verify:** `pnpm build && node dist/src/index.js --config config/bot.json` starts the bot and connects to IRC
 
 ---
@@ -82,7 +82,7 @@ Two parallel distribution tracks: **Option A** (Docker image via ghcr.io, primar
   #!/bin/sh
   # Seed plugins volume on first run if empty
   if [ -z "$(ls -A /app/plugins 2>/dev/null)" ]; then
-    echo "[n0xb0t] Seeding plugins from image..."
+    echo "[hexbot] Seeding plugins from image..."
     cp -r /app/bundled-plugins/. /app/plugins/
   fi
   exec node dist/src/index.js "$@"
@@ -117,7 +117,7 @@ Two parallel distribution tracks: **Option A** (Docker image via ghcr.io, primar
   - `pluginDir` in bot.json stays `./plugins` — the volume. Entrypoint seeds it from `./bundled-plugins` if empty.
   - Users can add custom plugins to the mounted `./plugins` dir and hot-reload without rebuilding the image.
 
-- [ ] **Verify:** `docker build -t n0xb0t:local .` succeeds. `docker run --rm n0xb0t:local node --version` prints Node 20.x.
+- [ ] **Verify:** `docker build -t hexbot:local .` succeeds. `docker run --rm hexbot:local node --version` prints Node 20.x.
 
 ---
 
@@ -129,8 +129,8 @@ Two parallel distribution tracks: **Option A** (Docker image via ghcr.io, primar
 
   ```yaml
   services:
-    n0xb0t:
-      image: ghcr.io/OWNER/n0xb0t:latest
+    hexbot:
+      image: ghcr.io/OWNER/hexbot:latest
       restart: unless-stopped
       volumes:
         - ./config:/app/config
@@ -145,7 +145,7 @@ Two parallel distribution tracks: **Option A** (Docker image via ghcr.io, primar
   ```markdown
   # Docker quickstart
 
-  1. mkdir my-n0xb0t && cd my-n0xb0t
+  1. mkdir my-hexbot && cd my-hexbot
   2. curl -O <raw docker-compose.yml URL>
   3. mkdir config data
   4. curl -o config/bot.json <raw config/bot.docker.json URL>

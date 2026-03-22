@@ -1,7 +1,7 @@
 {
   "chanmod": {
     "enabled": true,
-    "channels": ["#n0xb0t-test"],
+    "channels": ["#hexbot-test"],
     "config": {
       "auto_op": true,
       "enforce_modes": false,
@@ -18,7 +18,7 @@
   },
   "flood": {
     "enabled": false,
-    "channels": ["#n0xb0t-test"],
+    "channels": ["#hexbot-test"],
     "config": {
       "msg_threshold": 5,
       "msg_window_secs": 3,
@@ -33,7 +33,7 @@
   },
   "greeter": {
     "enabled": true,
-    "channels": ["#n0xb0t-test"],
+    "channels": ["#hexbot-test"],
     "config": {
       "message": "Welcome to {channel}, {nick}!"
     }

@@ -1,4 +1,4 @@
-// n0xb0t — IRC admin commands
+// hexbot — IRC admin commands
 // Registers .say, .join, .part, .status with the command handler.
 import type { CommandHandler } from '../../command-handler.js';
 import { sanitize } from '../../utils/sanitize.js';

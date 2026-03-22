@@ -1,4 +1,4 @@
-// n0xb0t — Event dispatcher
+// hexbot — Event dispatcher
 // Routes IRC events to registered handlers based on bind type, mask, and flags.
 import type { Logger } from './logger.js';
 import type { BindHandler, BindType, HandlerContext } from './types.js';

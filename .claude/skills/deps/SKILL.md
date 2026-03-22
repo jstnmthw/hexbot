@@ -1,6 +1,6 @@
 ---
 name: deps
-description: 'Audit n0xb0t dependencies for updates, vulnerabilities, and unused packages. Use for periodic health checks or before releases.'
+description: 'Audit hexbot dependencies for updates, vulnerabilities, and unused packages. Use for periodic health checks or before releases.'
 ---
 
 # Dependency Checker

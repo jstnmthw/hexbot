@@ -1,4 +1,4 @@
-# n0xb0t — Design Document
+# Hexbot — Design Document
 
 > A modular IRC bot framework for Node.js, inspired by Eggdrop's 30-year-old bind system but built for the modern stack. The name is a nod to "obnoxious" — fitting for a bot that'll eventually have an AI chat module annoying people in IRC channels.
 
@@ -6,7 +6,7 @@
 
 ## 1. Project overview
 
-n0xb0t is a single-process, plugin-based IRC bot written in TypeScript. It connects to any IRC network, loads plugins at runtime with hot-reload, and manages channel operations through an Eggdrop-style event bind system and flag-based permissions.
+hexbot is a single-process, plugin-based IRC bot written in TypeScript. It connects to any IRC network, loads plugins at runtime with hot-reload, and manages channel operations through an Eggdrop-style event bind system and flag-based permissions.
 
 The goal is an open-source alternative to Eggdrop that eliminates the pain of C compilation, Tcl scripting, flat-file databases, and telnet-era admin interfaces — while preserving the design patterns that made Eggdrop successful for three decades.
 
@@ -35,7 +35,7 @@ The goal is an open-source alternative to Eggdrop that eliminates the pain of C 
 ### 2.1 High-level structure
 
 ```
-n0xb0t/
+hexbot/
 ├── config/
 │   ├── bot.json              # Core: server, nick, channels, owner, identity, services
 │   └── plugins.json          # Plugin routing: which plugins enabled, per-channel overrides
@@ -83,7 +83,7 @@ Inspired by Eggdrop's C modules vs Tcl scripts:
 
 ### 2.3 Event dispatcher (the bind system)
 
-The heart of n0xb0t. Modeled directly on Eggdrop's `bind` command.
+The heart of hexbot. Modeled directly on Eggdrop's `bind` command.
 
 ```typescript
 dispatcher.bind(type, flags, mask, handler, pluginId);
@@ -309,9 +309,9 @@ Each plugin accesses its own namespace via `api.db`. Core modules use reserved n
     "host": "irc.libera.chat",
     "port": 6697,
     "tls": true,
-    "nick": "n0xb0t",
-    "username": "n0xb0t",
-    "realname": "n0xb0t IRC Framework",
+    "nick": "hexbot",
+    "username": "hexbot",
+    "realname": "hexbot IRC Framework",
     "channels": ["#mychannel"]
   },
   "owner": {
@@ -328,7 +328,7 @@ Each plugin accesses its own namespace via `api.db`. Core modules use reserved n
     "password": "botpass",
     "sasl": true
   },
-  "database": "./data/n0xb0t.db",
+  "database": "./data/hexbot.db",
   "pluginDir": "./plugins",
   "logging": {
     "level": "info",
@@ -428,7 +428,7 @@ Console logging uses structured output (timestamp, level, source module/plugin).
 
 ## 3. Network compatibility
 
-n0xb0t is network-agnostic. The base IRC protocol (RFC 1459 / RFC 2812) is consistent across all server software. `irc-framework` handles:
+hexbot is network-agnostic. The base IRC protocol (RFC 1459 / RFC 2812) is consistent across all server software. `irc-framework` handles:
 
 - ISUPPORT (005) parsing — auto-detects server capabilities (modes per line, ban list size, channel types, etc.)
 - IRCv3 capability negotiation — SASL, `account-notify`, `extended-join`, `away-notify`, `multi-prefix`
@@ -555,7 +555,7 @@ abstract class AIProvider {
 
 ```bash
 git clone <repo>
-cd n0xb0t
+cd hexbot
 pnpm install
 cp config/bot.example.json config/bot.json
 # Edit config/bot.json with your server/nick/owner

@@ -1,4 +1,4 @@
-// n0xb0t — Bot class
+// hexbot — Bot class
 // Thin orchestrator that wires modules together. Creates and connects the
 // pieces but delegates all real work to the individual modules.
 import chalk from 'chalk';
@@ -301,7 +301,7 @@ export class Bot {
     const channels = this.configuredChannels.join(', ') || 'none';
 
     console.log();
-    console.log(`${lime('◆')} ${lime('n0xb0t')} ${lime(`v${version}`)}`);
+    console.log(`${lime('◆')} ${lime('hexbot')} ${lime(`v${version}`)}`);
     console.log(`${dim('-')} Server:      ${cfg.host}:${cfg.port}${tls}`);
     console.log(`${dim('-')} Nick:        ${cfg.nick}`);
     console.log(`${dim('-')} Channels:    ${channels}`);

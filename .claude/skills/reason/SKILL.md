@@ -1,6 +1,6 @@
 ---
 name: reason
-description: "Think through architectural decisions, design trade-offs, and open questions for n0xb0t. Use when the user asks 'should we...', 'how should we handle...', or any question requiring weighing options. Does NOT write code."
+description: "Think through architectural decisions, design trade-offs, and open questions for hexbot. Use when the user asks 'should we...', 'how should we handle...', or any question requiring weighing options. Does NOT write code."
 argument-hint: '<question>'
 ---
 

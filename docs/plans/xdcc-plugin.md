@@ -615,7 +615,7 @@ New file `plugins/xdcc/config.json` (all keys, overridable via `plugins.json`):
 
 - `filedir` — absolute path for all served files (all pack paths are jailed to this)
 - `ip` — bot's publicly routable IPv4 address (run `curl ifconfig.me` on the host)
-- `statefile` — absolute path for JSON state file (e.g. `/var/lib/n0xb0t/xdcc.state`)
+- `statefile` — absolute path for JSON state file (e.g. `/var/lib/hexbot/xdcc.state`)
 
 ---
 

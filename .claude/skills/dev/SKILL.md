@@ -1,10 +1,10 @@
 ---
 name: dev
-description: 'n0xb0t project conventions and context. Auto-loads when working in this repo to provide coding standards, IRC bot patterns, and architectural context from DESIGN.md.'
+description: 'hexbot project conventions and context. Auto-loads when working in this repo to provide coding standards, IRC bot patterns, and architectural context from DESIGN.md.'
 user-invocable: false
 ---
 
-# n0xb0t Project Conventions
+# hexbot Project Conventions
 
 These conventions apply to ALL work on this project. Read `DESIGN.md` at the repo root for full architectural decisions.
 

@@ -1,6 +1,6 @@
 ---
 name: build
-description: 'Execute an implementation plan step by step for n0xb0t. Use when a plan markdown file exists (in docs/plans/) and the user wants it built, or when directly asked to implement something.'
+description: 'Execute an implementation plan step by step for hexbot. Use when a plan markdown file exists (in docs/plans/) and the user wants it built, or when directly asked to implement something.'
 argument-hint: '<plan.md or feature>'
 ---
 

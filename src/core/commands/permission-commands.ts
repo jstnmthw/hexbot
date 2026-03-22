@@ -1,4 +1,4 @@
-// n0xb0t — Permission management commands
+// hexbot — Permission management commands
 // Registers .adduser, .deluser, .flags, .users with the command handler.
 import type { CommandHandler } from '../../command-handler.js';
 import type { Permissions } from '../permissions.js';

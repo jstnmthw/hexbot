@@ -1,6 +1,6 @@
-# n0xb0t Security Guide
+# hexbot Security Guide
 
-This document defines security practices for developing n0xb0t. Every contributor and every Claude Code session should treat this as mandatory reading before writing code that handles user input, permissions, IRC output, or database operations.
+This document defines security practices for developing hexbot. Every contributor and every Claude Code session should treat this as mandatory reading before writing code that handles user input, permissions, IRC output, or database operations.
 
 ---
 

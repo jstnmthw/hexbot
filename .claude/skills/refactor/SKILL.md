@@ -1,6 +1,6 @@
 ---
 name: refactor
-description: "Improve n0xb0t code quality without changing behavior. Use when code works but is messy, duplicated, or doesn't follow conventions."
+description: "Improve hexbot code quality without changing behavior. Use when code works but is messy, duplicated, or doesn't follow conventions."
 argument-hint: '<target>'
 ---
 
@@ -18,7 +18,7 @@ Improve code quality without changing behavior.
 6. **Run tests after each change** to confirm behavior preserved
 7. **Report** what changed and why
 
-## Common targets in n0xb0t
+## Common targets in hexbot
 
 - Extracting shared utilities from plugins doing similar things
 - Improving error messages to be more specific

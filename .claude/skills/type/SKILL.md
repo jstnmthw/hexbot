@@ -1,6 +1,6 @@
 ---
 name: type
-description: 'Add TypeScript type annotations and generate declaration files for the n0xb0t plugin API. Use when the user wants better IDE autocompletion or type safety.'
+description: 'Add TypeScript type annotations and generate declaration files for the hexbot plugin API. Use when the user wants better IDE autocompletion or type safety.'
 argument-hint: '<files>'
 ---
 

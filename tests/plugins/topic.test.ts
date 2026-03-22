@@ -25,7 +25,7 @@ describe('topic plugin', () => {
   let bot: MockBot;
 
   beforeEach(async () => {
-    bot = createMockBot({ botNick: 'n0xb0t' });
+    bot = createMockBot({ botNick: 'hexbot' });
     const result = await bot.pluginLoader.load(PLUGIN_PATH);
     expect(result.status).toBe('ok');
 

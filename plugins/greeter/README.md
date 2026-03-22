@@ -16,7 +16,7 @@ In `config/plugins.json`:
     "enabled": true,
     "config": {
       "message": "Welcome to {channel}, {nick}!",
-      "botNick": "n0xb0t"
+      "botNick": "hexbot"
     }
   }
 }

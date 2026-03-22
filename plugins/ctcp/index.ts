@@ -1,4 +1,4 @@
-// n0xb0t — ctcp plugin
+// hexbot — ctcp plugin
 // Handles CTCP VERSION, PING, and TIME requests with fixed responses.
 // Responses are not user-configurable — like Eggdrop's built-in CTCP handling.
 import { readFileSync } from 'node:fs';
@@ -17,9 +17,9 @@ export function init(api: PluginAPI): void {
       name?: string;
       version?: string;
     };
-    versionString = `${pkg.name ?? 'n0xb0t'} v${pkg.version ?? '?'}`;
+    versionString = `${pkg.name ?? 'hexbot'} v${pkg.version ?? '?'}`;
   } catch {
-    versionString = 'n0xb0t';
+    versionString = 'hexbot';
   }
 
   api.bind('ctcp', '-', 'VERSION', (ctx) => {

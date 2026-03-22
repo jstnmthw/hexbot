@@ -1,4 +1,4 @@
-// n0xb0t — Interactive REPL
+// hexbot — Interactive REPL
 // Provides a terminal interface for bot administration.
 // Commands are routed through the same CommandHandler used by IRC.
 import { type Interface as ReadlineInterface, createInterface } from 'node:readline';
@@ -25,7 +25,7 @@ export class BotREPL {
     this.rl = createInterface({
       input: process.stdin,
       output: process.stdout,
-      prompt: 'n0xb0t> ',
+      prompt: 'hexbot> ',
     });
 
     this.logger?.info('Interactive mode. Type .help for commands, .quit to exit.');

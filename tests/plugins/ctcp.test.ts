@@ -32,7 +32,7 @@ describe('ctcp plugin', () => {
   let bot: MockBot;
 
   beforeAll(async () => {
-    bot = createMockBot({ botNick: 'n0xb0t' });
+    bot = createMockBot({ botNick: 'hexbot' });
     const result = await bot.pluginLoader.load(PLUGIN_PATH);
     expect(result.status).toBe('ok');
   });
@@ -51,7 +51,7 @@ describe('ctcp plugin', () => {
     const resp = bot.client.messages.find((m) => m.type === 'ctcpResponse');
     expect(resp).toBeDefined();
     expect(resp!.target).toBe('curious');
-    expect(resp!.message).toMatch(/^VERSION n0xb0t v\d/);
+    expect(resp!.message).toMatch(/^VERSION hexbot v\d/);
   });
 
   it('replies to PING by echoing the payload', async () => {
@@ -88,7 +88,7 @@ describe('ctcp plugin', () => {
 
 describe('ctcp plugin — teardown', () => {
   it('unloads cleanly', async () => {
-    const bot = createMockBot({ botNick: 'n0xb0t' });
+    const bot = createMockBot({ botNick: 'hexbot' });
     await bot.pluginLoader.load(PLUGIN_PATH);
     await bot.pluginLoader.unload('ctcp');
     expect(bot.pluginLoader.isLoaded('ctcp')).toBe(false);

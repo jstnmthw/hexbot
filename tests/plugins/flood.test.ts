@@ -68,7 +68,7 @@ describe('flood plugin — message flood', () => {
   let bot: MockBot;
 
   beforeAll(async () => {
-    bot = createMockBot({ botNick: 'n0xb0t' });
+    bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
     const result = await bot.pluginLoader.load(PLUGIN_PATH, {
       flood: {
@@ -131,7 +131,7 @@ describe('flood plugin — message flood', () => {
   });
 
   it('does nothing when bot has no ops', async () => {
-    const bot2 = createMockBot({ botNick: 'n0xb0t' });
+    const bot2 = createMockBot({ botNick: 'hexbot' });
     // Do NOT give bot ops
     await bot2.pluginLoader.load(PLUGIN_PATH, {
       flood: {
@@ -153,7 +153,7 @@ describe('flood plugin — message flood', () => {
 
   it("ignores the bot's own messages", async () => {
     for (let i = 0; i < 10; i++) {
-      simulatePrivmsg(bot, 'n0xb0t', 'bot', 'bot.host', '#test', `msg ${i}`);
+      simulatePrivmsg(bot, 'hexbot', 'bot', 'bot.host', '#test', `msg ${i}`);
     }
     await flush();
     expect(
@@ -186,7 +186,7 @@ describe('flood plugin — tempban storage', () => {
   let bot: MockBot;
 
   beforeAll(async () => {
-    bot = createMockBot({ botNick: 'n0xb0t' });
+    bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
     await bot.pluginLoader.load(PLUGIN_PATH, {
       flood: {
@@ -236,7 +236,7 @@ describe('flood plugin — tempban storage', () => {
 
 describe('flood plugin — teardown', () => {
   it('clears state on unload', async () => {
-    const bot = createMockBot({ botNick: 'n0xb0t' });
+    const bot = createMockBot({ botNick: 'hexbot' });
     await bot.pluginLoader.load(PLUGIN_PATH);
     await bot.pluginLoader.unload('flood');
     expect(bot.pluginLoader.isLoaded('flood')).toBe(false);

@@ -1,12 +1,12 @@
 ---
 name: plan
-description: 'Analyze feature feasibility against the n0xb0t codebase and produce a structured implementation plan. Use when the user wants to plan a new feature, plugin, or capability before building it.'
+description: 'Analyze feature feasibility against the hexbot codebase and produce a structured implementation plan. Use when the user wants to plan a new feature, plugin, or capability before building it.'
 argument-hint: '<feature description>'
 ---
 
 # Planner
 
-Analyze feature feasibility against the current n0xb0t codebase and produce a structured implementation plan. This agent does NOT write code — it produces a markdown plan that `/build` executes.
+Analyze feature feasibility against the current hexbot codebase and produce a structured implementation plan. This agent does NOT write code — it produces a markdown plan that `/build` executes.
 
 ## Process
 

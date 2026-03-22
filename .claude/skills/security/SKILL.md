@@ -1,12 +1,12 @@
 ---
 name: security
-description: 'Audit n0xb0t code for IRC-specific and general bot security vulnerabilities. Produces a structured findings report. Use before deploying to a real network or after major features land.'
+description: 'Audit hexbot code for IRC-specific and general bot security vulnerabilities. Produces a structured findings report. Use before deploying to a real network or after major features land.'
 argument-hint: "<target: file, module, plugin, or 'all'>"
 ---
 
 # Security Auditor
 
-Audit n0xb0t code for IRC-specific and general bot security vulnerabilities.
+Audit hexbot code for IRC-specific and general bot security vulnerabilities.
 
 ## Baseline
 

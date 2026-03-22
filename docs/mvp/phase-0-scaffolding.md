@@ -2,7 +2,7 @@
 
 ## Summary
 
-Set up the n0xb0t project directory structure, install dependencies, configure tooling, and put all design documents in place. At the end of this phase, `pnpm install` succeeds and the project is ready for development. No functional code yet — just the skeleton.
+Set up the hexbot project directory structure, install dependencies, configure tooling, and put all design documents in place. At the end of this phase, `pnpm install` succeeds and the project is ready for development. No functional code yet — just the skeleton.
 
 ## Phase goal
 
@@ -14,9 +14,9 @@ A clean, properly structured project that any developer can clone, run `pnpm ins
 
 ### 0.1: Initialize the project
 
-- [x] Create the project root directory `n0xb0t/`
+- [x] Create the project root directory `hexbot/`
 - [x] Run `pnpm init` or create `package.json` manually with:
-  - `"name": "n0xb0t"`
+  - `"name": "hexbot"`
   - `"version": "0.1.0"`
   - `"type": "module"` (ESM)
   - `"description": "Modular IRC bot framework with Eggdrop-style bind system"`
@@ -37,7 +37,7 @@ A clean, properly structured project that any developer can clone, run `pnpm ins
 - [x] Create all directories:
 
 ```
-n0xb0t/
+hexbot/
 ├── src/
 │   └── core/
 ├── config/
@@ -66,10 +66,10 @@ n0xb0t/
     "host": "irc.libera.chat",
     "port": 6697,
     "tls": true,
-    "nick": "n0xb0t",
-    "username": "n0xb0t",
-    "realname": "n0xb0t IRC Framework",
-    "channels": ["#n0xb0t-test"]
+    "nick": "hexbot",
+    "username": "hexbot",
+    "realname": "hexbot IRC Framework",
+    "channels": ["#hexbot-test"]
   },
   "owner": {
     "handle": "admin",
@@ -85,7 +85,7 @@ n0xb0t/
     "password": "",
     "sasl": true
   },
-  "database": "./data/n0xb0t.db",
+  "database": "./data/hexbot.db",
   "pluginDir": "./plugins",
   "logging": {
     "level": "info",
@@ -100,11 +100,11 @@ n0xb0t/
 {
   "auto-op": {
     "enabled": true,
-    "channels": ["#n0xb0t-test"]
+    "channels": ["#hexbot-test"]
   },
   "greeter": {
     "enabled": true,
-    "channels": ["#n0xb0t-test"],
+    "channels": ["#hexbot-test"],
     "config": {
       "message": "Welcome to {channel}, {nick}!"
     }
@@ -158,11 +158,11 @@ config/plugins.json
 - [x] Create `src/index.ts` with a minimal placeholder:
 
 ```typescript
-// n0xb0t — Modular IRC bot framework
+// hexbot — Modular IRC bot framework
 // This is a placeholder. Real implementation starts in Phase 1.
 
-console.log('[n0xb0t] Phase 0 scaffolding complete. Nothing to run yet.');
-console.log('[n0xb0t] Run "pnpm test" to verify the project is set up correctly.');
+console.log('[hexbot] Phase 0 scaffolding complete. Nothing to run yet.');
+console.log('[hexbot] Run "pnpm test" to verify the project is set up correctly.');
 process.exit(0);
 ```
 

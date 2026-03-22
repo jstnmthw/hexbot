@@ -2,7 +2,7 @@
 
 ## Summary
 
-An IRC IdleRPG plugin for n0xb0t where players progress by being present in a designated channel. Characters gain XP passively from presence, earn bonus XP from channel activity, and build uptime streak multipliers for staying connected — rewarding both lurkers and active participants. Quitting or getting kicked breaks your streak (the only real penalty). The design takes the best from the classic IdleRPG (passive progression, communal events, item hunts) while flipping the psychology: instead of punishing activity, it rewards engagement. This makes the game a community-building tool rather than a channel silencer.
+An IRC IdleRPG plugin for hexbot where players progress by being present in a designated channel. Characters gain XP passively from presence, earn bonus XP from channel activity, and build uptime streak multipliers for staying connected — rewarding both lurkers and active participants. Quitting or getting kicked breaks your streak (the only real penalty). The design takes the best from the classic IdleRPG (passive progression, communal events, item hunts) while flipping the psychology: instead of punishing activity, it rewards engagement. This makes the game a community-building tool rather than a channel silencer.
 
 ## Theme Options
 

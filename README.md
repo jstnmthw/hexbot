@@ -1,4 +1,4 @@
-# n0xb0t
+# Hexbot
 
 Modular IRC bot written in TypeScript with multi-network bind, hot-reloadable plugin, and hostmask-based permission systems.
 

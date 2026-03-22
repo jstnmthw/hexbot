@@ -1,12 +1,12 @@
 ---
 name: review
-description: 'Code review against n0xb0t conventions, security practices, and IRC bot best practices. Use when the user asks for a code review or second opinion on code.'
+description: 'Code review against hexbot conventions, security practices, and IRC bot best practices. Use when the user asks for a code review or second opinion on code.'
 argument-hint: '<files or feature>'
 ---
 
 # Reviewer
 
-Review code changes against n0xb0t conventions, security practices, and IRC bot best practices.
+Review code changes against hexbot conventions, security practices, and IRC bot best practices.
 
 ## Review checklist
 
