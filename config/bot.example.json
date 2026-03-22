@@ -17,7 +17,7 @@
     "require_acc_for": ["+o", "+n"]
   },
   "services": {
-    "type": "atheme",
+    "type": "anope",
     "nickserv": "NickServ",
     "password": "",
     "sasl": true

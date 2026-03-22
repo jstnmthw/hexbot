@@ -163,13 +163,22 @@ export class Services {
       ? nickServTarget.split('@')[0]
       : nickServTarget;
 
-    if (nick.toLowerCase() !== fromNick.toLowerCase()) return;
+    if (nick.toLowerCase() !== fromNick.toLowerCase()) {
+      // Debug: log notices from other sources only when we have pending verifications
+      if (this.pending.size > 0) {
+        this.logger?.debug(`Ignoring notice from ${nick} (expected ${fromNick}): ${message}`);
+      }
+      return;
+    }
+
+    this.logger?.debug(`NickServ notice: ${message}`);
 
     // Try to parse ACC response (Atheme): "nick ACC level"
     const accMatch = message.match(/^(\S+)\s+ACC\s+(\d+)/i);
     if (accMatch) {
       const targetNick = accMatch[1];
       const level = parseInt(accMatch[2], 10);
+      this.logger?.debug(`ACC response: nick=${targetNick} level=${level}`);
       this.resolveVerification(targetNick, level >= 3, level >= 3 ? targetNick : null);
       return;
     }
@@ -179,8 +188,14 @@ export class Services {
     if (statusMatch) {
       const targetNick = statusMatch[1];
       const level = parseInt(statusMatch[2], 10);
+      this.logger?.debug(`STATUS response: nick=${targetNick} level=${level}`);
       this.resolveVerification(targetNick, level >= 3, level >= 3 ? targetNick : null);
       return;
+    }
+
+    // No pattern matched — log for debugging
+    if (this.pending.size > 0) {
+      this.logger?.debug(`NickServ notice did not match ACC or STATUS pattern: ${message}`);
     }
   }
 

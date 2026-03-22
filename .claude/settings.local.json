@@ -3,7 +3,8 @@
     "allow": [
       "Bash(pnpm:*)",
       "Bash(wc:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "WebSearch"
     ]
   }
 }
