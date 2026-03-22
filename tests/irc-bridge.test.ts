@@ -40,7 +40,7 @@ describe('IRCBridge', () => {
       });
 
       // Give async dispatch time to complete
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(pubHandler).toHaveBeenCalledOnce();
       expect(pubmHandler).toHaveBeenCalledOnce();
@@ -70,7 +70,7 @@ describe('IRCBridge', () => {
         message: '!greet',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(client.messages).toContainEqual({
         type: 'say',
@@ -97,7 +97,7 @@ describe('IRCBridge', () => {
         message: '!secret data',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(msgHandler).toHaveBeenCalledOnce();
       expect(msgmHandler).toHaveBeenCalledOnce();
@@ -122,7 +122,7 @@ describe('IRCBridge', () => {
         message: '!dm',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(client.messages).toContainEqual({
         type: 'notice',
@@ -146,7 +146,7 @@ describe('IRCBridge', () => {
         channel: '#test',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -171,7 +171,7 @@ describe('IRCBridge', () => {
         message: 'bye',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -197,7 +197,7 @@ describe('IRCBridge', () => {
         message: 'behave',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -220,7 +220,7 @@ describe('IRCBridge', () => {
         hostname: 'host.com',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -260,7 +260,7 @@ describe('IRCBridge', () => {
         ],
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       // Should dispatch twice — once for each mode
       expect(handler).toHaveBeenCalledTimes(2);
@@ -290,7 +290,7 @@ describe('IRCBridge', () => {
         message: 'This is a test notice',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
 
@@ -312,7 +312,7 @@ describe('IRCBridge', () => {
         message: '',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -335,7 +335,7 @@ describe('IRCBridge', () => {
         message: '!cmd\r\nPRIVMSG NickServ :IDENTIFY password',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       if (handler.mock.calls.length > 0) {
         const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -361,7 +361,7 @@ describe('IRCBridge', () => {
         message: '\x02!hello\x02 world',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -384,7 +384,7 @@ describe('IRCBridge', () => {
         message: '!test',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       const msg = client.messages.find((m) => m.type === 'say');
       expect(msg?.message).not.toContain('\r');
@@ -404,7 +404,7 @@ describe('IRCBridge', () => {
         channel: 'notachannel',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       // Should not dispatch for invalid channel name
       expect(handler).not.toHaveBeenCalled();
@@ -424,7 +424,7 @@ describe('IRCBridge', () => {
         message: '',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       const resp = client.messages.find((m) => m.type === 'ctcpResponse');
       expect(resp).toBeDefined();
@@ -442,7 +442,7 @@ describe('IRCBridge', () => {
         message: '1234567890',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       const resp = client.messages.find((m) => m.type === 'ctcpResponse');
       expect(resp).toBeDefined();
@@ -463,7 +463,7 @@ describe('IRCBridge', () => {
         message: 'PING 9999999999',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       const ctx: HandlerContext = handler.mock.calls[0][0];
       expect(ctx.text).toBe('9999999999');
@@ -482,7 +482,7 @@ describe('IRCBridge', () => {
         message: '',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       const resp = client.messages.find((m) => m.type === 'ctcpResponse');
       expect(resp).toBeDefined();
@@ -504,7 +504,7 @@ describe('IRCBridge', () => {
         message: '',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       // Core handler should have replied
       const resp = client.messages.find((m) => m.type === 'ctcpResponse');
@@ -530,7 +530,7 @@ describe('IRCBridge', () => {
         message: 'dances around',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(pubmHandler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = pubmHandler.mock.calls[0][0];
@@ -555,7 +555,7 @@ describe('IRCBridge', () => {
         message: 'waves hello',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(msgmHandler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = msgmHandler.mock.calls[0][0];
@@ -589,7 +589,7 @@ describe('IRCBridge', () => {
         message: 'waves hello',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(pubHandler).not.toHaveBeenCalled();
       expect(msgHandler).not.toHaveBeenCalled();
@@ -613,7 +613,7 @@ describe('IRCBridge', () => {
         message: '!hello',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(client.messages).toContainEqual({
         type: 'say',
@@ -638,7 +638,7 @@ describe('IRCBridge', () => {
         // modes is undefined
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).not.toHaveBeenCalled();
 
@@ -657,7 +657,7 @@ describe('IRCBridge', () => {
         modes: [],
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).not.toHaveBeenCalled();
 
@@ -676,7 +676,7 @@ describe('IRCBridge', () => {
         modes: [{ mode: '+i' }],
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).not.toHaveBeenCalled();
 
@@ -695,7 +695,7 @@ describe('IRCBridge', () => {
         modes: [{ mode: '+s' }],
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -720,7 +720,7 @@ describe('IRCBridge', () => {
         message: 'Channel registered',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -744,7 +744,7 @@ describe('IRCBridge', () => {
         message: 'You are now identified',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -769,7 +769,7 @@ describe('IRCBridge', () => {
         message: 'VERSION',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       // The custom handler runs alongside the core handler
       expect(handler).toHaveBeenCalledOnce();
@@ -793,7 +793,7 @@ describe('IRCBridge', () => {
         message: 'some arbitrary payload',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -816,7 +816,7 @@ describe('IRCBridge', () => {
         message: '',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -841,7 +841,7 @@ describe('IRCBridge', () => {
         message: '',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -864,7 +864,7 @@ describe('IRCBridge', () => {
         message: 'go away',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).not.toHaveBeenCalled();
 
@@ -885,7 +885,7 @@ describe('IRCBridge', () => {
         message: 'leaving',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).not.toHaveBeenCalled();
 
@@ -934,7 +934,7 @@ describe('IRCBridge', () => {
       // Empty object — every field defaults via ?? ''
       client.simulateEvent('privmsg', {});
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       // target is '' which is not a valid channel, so msg/msgm path is taken
       expect(handler).toHaveBeenCalled();
@@ -957,7 +957,7 @@ describe('IRCBridge', () => {
         // nick, ident, hostname, message are all undefined
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -976,7 +976,7 @@ describe('IRCBridge', () => {
       // Empty object — target is '' (not a channel), so msgm path
       client.simulateEvent('action', {});
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -997,7 +997,7 @@ describe('IRCBridge', () => {
         target: '#test',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -1014,7 +1014,7 @@ describe('IRCBridge', () => {
       // channel defaults to '' which is not valid — early return
       client.simulateEvent('join', {});
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).not.toHaveBeenCalled();
 
@@ -1027,7 +1027,7 @@ describe('IRCBridge', () => {
 
       client.simulateEvent('join', { channel: '#test' });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -1044,7 +1044,7 @@ describe('IRCBridge', () => {
 
       client.simulateEvent('part', { channel: '#test' });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -1062,7 +1062,7 @@ describe('IRCBridge', () => {
 
       client.simulateEvent('kick', { channel: '#test' });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -1080,7 +1080,7 @@ describe('IRCBridge', () => {
 
       client.simulateEvent('nick', {});
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -1101,7 +1101,7 @@ describe('IRCBridge', () => {
         modes: [{ mode: '+o', param: 'someone' }],
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -1124,7 +1124,7 @@ describe('IRCBridge', () => {
         modes: [{ param: 'someone' }], // mode field is missing
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -1139,7 +1139,7 @@ describe('IRCBridge', () => {
 
       client.simulateEvent('notice', {});
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -1158,7 +1158,7 @@ describe('IRCBridge', () => {
 
       client.simulateEvent('ctcp request', {});
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -1180,7 +1180,7 @@ describe('IRCBridge', () => {
       // Emit directly without any data argument to exercise args[0] ?? {} branch
       client.emit('notice');
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -1204,7 +1204,7 @@ describe('IRCBridge', () => {
         message: '!hello',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -1227,7 +1227,7 @@ describe('IRCBridge', () => {
         message: '!solo',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).toHaveBeenCalledOnce();
       const ctx: HandlerContext = handler.mock.calls[0][0];
@@ -1253,7 +1253,7 @@ describe('IRCBridge', () => {
         message: '!test',
       });
 
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
 
       expect(handler).not.toHaveBeenCalled();
 
