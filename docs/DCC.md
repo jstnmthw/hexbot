@@ -26,24 +26,12 @@ Join a channel the bot is in and run:
 
 Look for the `nick!ident@host` line, e.g. `admin!myident@my.vps.com`.
 
-Alternatively, the bot can tell you — send it a private message:
-
-```
-/msg hexbot .status
-```
-
 ### Step 2: Add yourself
 
-If you have access to the REPL (run the bot with `--repl`):
+Bot commands (`.adduser`, `.flags`, etc.) are only available from the REPL or a DCC session — not via IRC private message. Start the bot with `--repl` and add yourself:
 
 ```
 hexbot> .adduser yourhandle *!myident@my.vps.com m
-```
-
-Or from IRC if you are already the owner (`n` flag):
-
-```
-/msg hexbot .adduser yourhandle *!myident@my.vps.com m
 ```
 
 Replace `*!myident@my.vps.com` with your actual hostmask pattern. Use `*` as a wildcard for parts that may vary (e.g., `*!*@my.static.ip`). For the owner, use flag `n` instead of `m`.
