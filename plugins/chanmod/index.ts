@@ -1,13 +1,13 @@
 // chanmod — Channel protection plugin.
-// Provides auto-op/voice on join, mode enforcement, timed bans, cycle recovery,
-// and manual moderation commands: !op, !deop, !voice, !devoice, !kick,
-// !ban, !unban, !kickban, !bans.
+// Provides auto-op/halfop/voice on join, mode enforcement, timed bans, cycle recovery,
+// and manual moderation commands: !op, !deop, !halfop, !dehalfop, !voice, !devoice,
+// !kick, !ban, !unban, !kickban, !bans.
 import type { HandlerContext, PluginAPI } from '../../src/types.js';
 
 export const name = 'chanmod';
-export const version = '2.0.0';
+export const version = '2.1.0';
 export const description =
-  'Channel operator tools: auto-op, mode enforcement, timed bans, kick/ban, cycle';
+  'Channel operator tools: auto-op/halfop/voice, mode enforcement, timed bans, kick/ban, cycle';
 
 let api: PluginAPI;
 
@@ -55,6 +55,16 @@ function botHasOps(channel: string): boolean {
   const botNick = getBotNick().toLowerCase();
   const botUser = ch.users.get(botNick);
   return botUser?.modes?.includes('o') ?? false;
+}
+
+/** Check whether the bot has +h or +o in the given channel (can set +h). */
+function botCanHalfop(channel: string): boolean {
+  const ch = api.getChannel(channel);
+  if (!ch) return false;
+  const botNick = getBotNick().toLowerCase();
+  const botUser = ch.users.get(botNick);
+  const modes = botUser?.modes ?? '';
+  return modes.includes('o') || modes.includes('h');
 }
 
 /** Validate a nick argument — no newlines, no spaces. */
@@ -220,6 +230,7 @@ export function init(pluginApi: PluginAPI): void {
   startupTimer = null;
 
   const opFlags = (api.config.op_flags as string[] | undefined) ?? ['n', 'm', 'o'];
+  const halfopFlags = (api.config.halfop_flags as string[] | undefined) ?? [];
   const voiceFlags = (api.config.voice_flags as string[] | undefined) ?? ['v'];
   const autoOpEnabled = (api.config.auto_op as boolean | undefined) ?? true;
   const enforceModes = (api.config.enforce_modes as boolean | undefined) ?? false;
@@ -295,14 +306,16 @@ export function init(pluginApi: PluginAPI): void {
     const allFlags = globalFlags + channelFlags;
 
     const shouldOp = opFlags.some((f) => allFlags.includes(f));
-    const shouldVoice = !shouldOp && voiceFlags.some((f) => allFlags.includes(f));
+    const shouldHalfop =
+      !shouldOp && halfopFlags.length > 0 && halfopFlags.some((f) => allFlags.includes(f));
+    const shouldVoice = !shouldOp && !shouldHalfop && voiceFlags.some((f) => allFlags.includes(f));
 
-    if (!shouldOp && !shouldVoice) return;
+    if (!shouldOp && !shouldHalfop && !shouldVoice) return;
 
     // NickServ verification if required
     const identityConfig = api.botConfig.identity as Record<string, unknown> | undefined;
     const requireAccFor = (identityConfig?.require_acc_for as string[] | undefined) ?? [];
-    const flagToApply = shouldOp ? '+o' : '+v';
+    const flagToApply = shouldOp ? '+o' : shouldHalfop ? '+h' : '+v';
     const needsVerification = requireAccFor.includes(flagToApply) && api.services.isAvailable();
 
     if (needsVerification) {
@@ -320,15 +333,25 @@ export function init(pluginApi: PluginAPI): void {
       );
     }
 
-    if (!botHasOps(channel)) {
-      api.log(`Cannot auto-${shouldOp ? 'op' : 'voice'} ${nick} in ${channel} — I am not opped`);
-      return;
-    }
-
     if (shouldOp) {
+      if (!botHasOps(channel)) {
+        api.log(`Cannot auto-op ${nick} in ${channel} — I am not opped`);
+        return;
+      }
       api.op(channel, nick);
       api.log(`Auto-opped ${nick} in ${channel}`);
+    } else if (shouldHalfop) {
+      if (!botCanHalfop(channel)) {
+        api.log(`Cannot auto-halfop ${nick} in ${channel} — I do not have +h or +o`);
+        return;
+      }
+      api.halfop(channel, nick);
+      api.log(`Auto-halfopped ${nick} in ${channel}`);
     } else if (shouldVoice) {
+      if (!botHasOps(channel)) {
+        api.log(`Cannot auto-voice ${nick} in ${channel} — I am not opped`);
+        return;
+      }
       api.voice(channel, nick);
       api.log(`Auto-voiced ${nick} in ${channel}`);
     }
@@ -390,15 +413,15 @@ export function init(pluginApi: PluginAPI): void {
       return; // Don't apply user-flag enforcement for bot self-deop
     }
 
-    // --- User op/voice enforcement ---
+    // --- User op/halfop/voice enforcement ---
     if (!enforceModes) return;
-    if (modeStr !== '-o' && modeStr !== '-v') return;
+    if (modeStr !== '-o' && modeStr !== '-h' && modeStr !== '-v') return;
     if (!target) return;
 
     // Don't re-enforce if the bot set this mode
     if (isBotNick(setter)) return;
 
-    // Don't re-enforce intentional deops from !deop/!devoice commands
+    // Don't re-enforce intentional deops from !deop/!dehalfop/!devoice commands
     if (wasIntentional(channel, target)) return;
 
     // Look up the affected user's flags
@@ -419,9 +442,8 @@ export function init(pluginApi: PluginAPI): void {
       enforcementCooldown.set(cooldownKey, { count: 1, expiresAt: now + COOLDOWN_WINDOW_MS });
     }
 
-    if (!botHasOps(channel)) return;
-
     if (modeStr === '-o') {
+      if (!botHasOps(channel)) return;
       const shouldBeOpped = opFlags.some((f) => flags.includes(f));
       if (shouldBeOpped) {
         api.log(`Re-enforcing +o on ${target} in ${channel} (deopped by ${setter})`);
@@ -430,7 +452,19 @@ export function init(pluginApi: PluginAPI): void {
         }, enforceDelayMs);
         enforcementTimers.push(timer);
       }
+    } else if (modeStr === '-h') {
+      if (!botCanHalfop(channel)) return;
+      const shouldBeHalfopped =
+        halfopFlags.length > 0 && halfopFlags.some((f) => flags.includes(f));
+      if (shouldBeHalfopped) {
+        api.log(`Re-enforcing +h on ${target} in ${channel} (dehalfopped by ${setter})`);
+        const timer = setTimeout(() => {
+          api.halfop(channel, target);
+        }, enforceDelayMs);
+        enforcementTimers.push(timer);
+      }
     } else if (modeStr === '-v') {
+      if (!botHasOps(channel)) return;
       const shouldBeVoiced = voiceFlags.some((f) => flags.includes(f));
       if (shouldBeVoiced) {
         api.log(`Re-enforcing +v on ${target} in ${channel} (devoiced by ${setter})`);
@@ -510,6 +544,41 @@ export function init(pluginApi: PluginAPI): void {
     markIntentional(ctx.channel, target);
     api.devoice(ctx.channel, target);
     api.log(`${ctx.nick} devoiced ${target} in ${ctx.channel}`);
+  });
+
+  api.bind('pub', '+o', '!halfop', (ctx: HandlerContext) => {
+    if (!ctx.channel) return;
+    if (!botCanHalfop(ctx.channel)) {
+      ctx.reply('I do not have +h or +o in this channel.');
+      return;
+    }
+    const target = ctx.args.trim() || ctx.nick;
+    if (!isValidNick(target)) {
+      ctx.reply('Invalid nick.');
+      return;
+    }
+    api.halfop(ctx.channel, target);
+    api.log(`${ctx.nick} halfopped ${target} in ${ctx.channel}`);
+  });
+
+  api.bind('pub', '+o', '!dehalfop', (ctx: HandlerContext) => {
+    if (!ctx.channel) return;
+    if (!botCanHalfop(ctx.channel)) {
+      ctx.reply('I do not have +h or +o in this channel.');
+      return;
+    }
+    const target = ctx.args.trim() || ctx.nick;
+    if (!isValidNick(target)) {
+      ctx.reply('Invalid nick.');
+      return;
+    }
+    if (isBotNick(target)) {
+      ctx.reply('I cannot dehalfop myself.');
+      return;
+    }
+    markIntentional(ctx.channel, target);
+    api.dehalfop(ctx.channel, target);
+    api.log(`${ctx.nick} dehalfopped ${target} in ${ctx.channel}`);
   });
 
   // ---------------------------------------------------------------------------
@@ -611,18 +680,56 @@ export function init(pluginApi: PluginAPI): void {
       ctx.reply('I am not opped in this channel.');
       return;
     }
-    const mask = ctx.args.trim().split(/\s+/)[0];
-    if (!mask) {
-      ctx.reply('Usage: !unban <mask>');
+    const arg = ctx.args.trim().split(/\s+/)[0];
+    if (!arg) {
+      ctx.reply('Usage: !unban <nick|mask>');
       return;
     }
-    if (/[\r\n]/.test(mask)) {
-      ctx.reply('Invalid ban mask.');
+    if (/[\r\n]/.test(arg)) {
+      ctx.reply('Invalid argument.');
       return;
     }
-    api.mode(ctx.channel, '-b', mask);
-    removeBanRecord(ctx.channel, mask);
-    api.log(`${ctx.nick} unbanned ${mask} in ${ctx.channel}`);
+
+    // If it looks like an explicit mask, use it directly.
+    if (arg.includes('!') || arg.includes('@')) {
+      api.mode(ctx.channel, '-b', arg);
+      removeBanRecord(ctx.channel, arg);
+      api.log(`${ctx.nick} unbanned ${arg} in ${ctx.channel}`);
+      return;
+    }
+
+    // Nick given — resolve their hostmask and find the stored ban record.
+    if (!isValidNick(arg)) {
+      ctx.reply('Invalid nick.');
+      return;
+    }
+    const hostmask = api.getUserHostmask(ctx.channel, arg);
+    if (!hostmask) {
+      ctx.reply(
+        `${arg} is not in the channel. Provide an explicit mask: !unban *!*@host — use !bans to list stored masks.`,
+      );
+      return;
+    }
+    const fullHostmask = hostmask.includes('!') ? hostmask : `${arg}!${hostmask}`;
+    // Try all three mask types and find the first one with a stored record.
+    const candidates = [1, 2, 3]
+      .map((t) => buildBanMask(fullHostmask, t))
+      .filter((m): m is string => m !== null);
+    const records = getChannelBanRecords(ctx.channel);
+    const storedMasks = new Set(records.map((r) => r.mask));
+    const match = candidates.find((m) => storedMasks.has(m));
+    if (match) {
+      api.mode(ctx.channel, '-b', match);
+      removeBanRecord(ctx.channel, match);
+      api.log(`${ctx.nick} unbanned ${arg} (${match}) in ${ctx.channel}`);
+    } else {
+      // No stored record — apply -b for each candidate so the server picks the
+      // right one, and clean up whatever record matches.
+      for (const m of candidates) {
+        api.mode(ctx.channel, '-b', m);
+      }
+      api.log(`${ctx.nick} unbanned ${arg} (no stored record) in ${ctx.channel}`);
+    }
   });
 
   api.bind('pub', '+o', '!kickban', (ctx: HandlerContext) => {

@@ -103,6 +103,14 @@ export class IRCCommands {
     this.sendMode(channel, '-v', nick);
   }
 
+  halfop(channel: string, nick: string): void {
+    this.sendMode(channel, '+h', nick);
+  }
+
+  dehalfop(channel: string, nick: string): void {
+    this.sendMode(channel, '-h', nick);
+  }
+
   topic(channel: string, text: string): void {
     const safe = sanitize(text);
     this.client.raw(`TOPIC ${sanitize(channel)} :${safe}`);

@@ -418,6 +418,12 @@ export class PluginLoader {
       devoice(channel: string, nick: string): void {
         ircCommands?.devoice(channel, nick);
       },
+      halfop(channel: string, nick: string): void {
+        ircCommands?.halfop(channel, nick);
+      },
+      dehalfop(channel: string, nick: string): void {
+        ircCommands?.dehalfop(channel, nick);
+      },
       kick(channel: string, nick: string, reason?: string): void {
         ircCommands?.kick(channel, nick, reason);
       },

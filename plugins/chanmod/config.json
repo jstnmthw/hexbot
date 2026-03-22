@@ -4,6 +4,7 @@
   "enforce_channel_modes": "",
   "nodesynch_nicks": ["ChanServ"],
   "op_flags": ["n", "m", "o"],
+  "halfop_flags": [],
   "voice_flags": ["v"],
   "verify_timeout_ms": 5000,
   "notify_on_fail": false,

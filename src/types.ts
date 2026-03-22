@@ -90,6 +90,8 @@ export interface PluginAPI {
   deop(channel: string, nick: string): void;
   voice(channel: string, nick: string): void;
   devoice(channel: string, nick: string): void;
+  halfop(channel: string, nick: string): void;
+  dehalfop(channel: string, nick: string): void;
   kick(channel: string, nick: string, reason?: string): void;
   ban(channel: string, mask: string): void;
   mode(channel: string, modes: string, ...params: string[]): void;
