@@ -220,8 +220,6 @@ export interface QueueConfig {
 
 /** SOCKS5 proxy settings. */
 export interface ProxyConfig {
-  /** Proxy protocol — only 'socks5' is supported (irc-framework hardcodes type=5). */
-  type: 'socks5';
   host: string;
   port: number;
   /** Optional SOCKS5 username. */

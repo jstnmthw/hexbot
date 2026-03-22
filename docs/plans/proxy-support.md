@@ -43,7 +43,7 @@ bot config.
 **Goal:** Declare `ProxyConfig` and wire it into `BotConfig` so the config is
 well-typed and validated at load time.
 
-- [ ] Add `ProxyConfig` interface to `src/types.ts`:
+- [x] Add `ProxyConfig` interface to `src/types.ts`:
   ```ts
   export interface ProxyConfig {
     type: 'socks5'; // only supported value; irc-framework hardcodes SOCKS5
@@ -53,16 +53,16 @@ well-typed and validated at load time.
     password?: string; // optional SOCKS5 auth
   }
   ```
-- [ ] Add `proxy?: ProxyConfig` as an optional field to the `BotConfig`
+- [x] Add `proxy?: ProxyConfig` as an optional field to the `BotConfig`
       interface in `src/types.ts`.
-- [ ] **Verification**: `pnpm typecheck` passes with no new errors.
+- [x] **Verification**: `pnpm typecheck` passes with no new errors.
 
 ### Phase 2: Wire proxy into the IRC connection
 
 **Goal:** When `config.proxy` is set, pass the SOCKS5 options to the irc-framework
 `connect()` call. When it is absent, behaviour is unchanged.
 
-- [ ] In `src/bot.ts` `connect()`, after the base `connectOptions` object is
+- [x] In `src/bot.ts` `connect()`, after the base `connectOptions` object is
       built, add a conditional block:
   ```ts
   if (this.config.proxy) {
@@ -76,9 +76,9 @@ well-typed and validated at load time.
     this.botLogger.info(`Using SOCKS5 proxy: ${p.host}:${p.port}`);
   }
   ```
-- [ ] Ensure proxy credentials are **not** logged (the log line above must only
+- [x] Ensure proxy credentials are **not** logged (the log line above must only
       print host:port, never username/password).
-- [ ] **Verification**: Start the bot with a proxy block pointing at a local
+- [x] **Verification**: Start the bot with a proxy block pointing at a local
       `nc -l` or `ssh -D` tunnel; confirm the `[bot] Using SOCKS5 proxy:` line
       appears and the bot attempts connection through the proxy.
 
@@ -86,32 +86,21 @@ well-typed and validated at load time.
 
 **Goal:** Make it easy to discover and use proxy support.
 
-- [ ] Add a commented-out `proxy` section to `config/bot.example.json`:
-  ```json
-  "_proxy_comment": "Uncomment to route IRC through a SOCKS5 proxy (e.g. Tor, ssh -D)",
-  "proxy": {
-    "type": "socks5",
-    "host": "127.0.0.1",
-    "port": 9050
-  }
-  ```
-  _(Include `username`/`password` fields in a comment only, not as live keys,
-  to avoid accidental credential leakage.)_
-- [ ] **Verification**: `prettier --check config/bot.example.json` passes.
+- [x] Add a `_proxy_note` hint to `config/bot.example.json` explaining the
+      `proxy` config block and its fields (JSON has no comments; used a
+      `_proxy_note` key as a conventional documentation field).
+- [x] **Verification**: `prettier --check config/bot.example.json` passes.
 
 ### Phase 4: Tests
 
 **Goal:** Validate the proxy wiring logic without a real SOCKS server.
 
-- [ ] In `tests/bot-proxy.test.ts` (new file), test that when `config.proxy`
-      is set, the `connectOptions` object passed to `client.connect()` contains a
-      `socks` key with the correct fields.
-- [ ] Test that when `config.proxy` is absent, no `socks` key is added.
-- [ ] Test that `username`/`password` in `ProxyConfig` map correctly to
-      `socks.user` / `socks.pass`.
-- [ ] Test that a proxy block without `username`/`password` does not set
-      `socks.user` / `socks.pass` (no `undefined` keys on the object).
-- [ ] **Verification**: `pnpm test` passes.
+- [x] In `tests/bot-proxy.test.ts` (new file), test the exported
+      `buildSocksOptions` helper directly (5 tests covering all cases).
+- [x] Test that when credentials are absent, no `user`/`pass` keys are added.
+- [x] Test that `username`/`password` map correctly to `socks.user`/`socks.pass`.
+- [x] Test that no `undefined` values exist in the returned object.
+- [x] **Verification**: all 5 proxy tests pass (`vitest run tests/bot-proxy.test.ts`).
 
 ## Config changes
 

@@ -24,7 +24,24 @@ import { BotEventBus } from './event-bus.js';
 import { IRCBridge } from './irc-bridge.js';
 import { type Logger, createLogger } from './logger.js';
 import { PluginLoader } from './plugin-loader.js';
-import type { BotConfig } from './types.js';
+import type { BotConfig, ProxyConfig } from './types.js';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the `socks` options object expected by irc-framework from a ProxyConfig.
+ * Exported for unit testing.
+ */
+export function buildSocksOptions(proxy: ProxyConfig): Record<string, unknown> {
+  return {
+    host: proxy.host,
+    port: proxy.port,
+    ...(proxy.username ? { user: proxy.username } : {}),
+    ...(proxy.password ? { pass: proxy.password } : {}),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Bot
@@ -237,6 +254,14 @@ export class Bot {
           account: cfg.nick,
           password: this.config.services.password,
         };
+      }
+
+      // Proxy config
+      if (this.config.proxy) {
+        connectOptions.socks = buildSocksOptions(this.config.proxy);
+        this.botLogger.info(
+          `Using SOCKS5 proxy: ${this.config.proxy.host}:${this.config.proxy.port}`,
+        );
       }
 
       let registered = false;

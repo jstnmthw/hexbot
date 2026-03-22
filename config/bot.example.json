@@ -41,5 +41,9 @@
     "idle_timeout_ms": 300000,
     "nickserv_verify": false
   },
+  "proxy": {
+    "host": "127.0.0.1",
+    "port": 9050
+  },
   "quit_message": "Hexbot v0.1.0"
 }

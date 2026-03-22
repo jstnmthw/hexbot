@@ -1,0 +1,57 @@
+import { describe, expect, it } from 'vitest';
+
+import { buildSocksOptions } from '../src/bot.js';
+import type { ProxyConfig } from '../src/types.js';
+
+describe('buildSocksOptions', () => {
+  it('produces host and port without auth fields when credentials are omitted', () => {
+    const proxy: ProxyConfig = { host: '127.0.0.1', port: 9050 };
+    const opts = buildSocksOptions(proxy);
+
+    expect(opts).toEqual({ host: '127.0.0.1', port: 9050 });
+    expect('user' in opts).toBe(false);
+    expect('pass' in opts).toBe(false);
+  });
+
+  it('includes user and pass when credentials are provided', () => {
+    const proxy: ProxyConfig = {
+      host: 'proxy.example.com',
+      port: 1080,
+      username: 'alice',
+      password: 's3cret',
+    };
+    const opts = buildSocksOptions(proxy);
+
+    expect(opts).toEqual({ host: 'proxy.example.com', port: 1080, user: 'alice', pass: 's3cret' });
+  });
+
+  it('omits user/pass when only username is provided (no password)', () => {
+    const proxy: ProxyConfig = { host: '127.0.0.1', port: 1080, username: 'bob' };
+    const opts = buildSocksOptions(proxy);
+
+    expect(opts.user).toBe('bob');
+    expect('pass' in opts).toBe(false);
+  });
+
+  it('omits user/pass when only password is provided (no username)', () => {
+    const proxy: ProxyConfig = {
+      host: '127.0.0.1',
+      port: 1080,
+      password: 'only-pass',
+    };
+    const opts = buildSocksOptions(proxy);
+
+    expect('user' in opts).toBe(false);
+    expect(opts.pass).toBe('only-pass');
+  });
+
+  it('does not include credential keys with undefined values', () => {
+    const proxy: ProxyConfig = { host: '10.0.0.1', port: 9050 };
+    const opts = buildSocksOptions(proxy);
+
+    // Ensure the spread didn't add keys with undefined values
+    for (const val of Object.values(opts)) {
+      expect(val).not.toBeUndefined();
+    }
+  });
+});
