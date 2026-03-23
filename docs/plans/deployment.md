@@ -2,7 +2,7 @@
 
 ## Summary
 
-Single distribution track: **clone the repo, configure, `docker compose up`**. Docker Compose mounts the source tree into a Node container and runs the bot with `tsx`. No image registry, no compiled artifacts, no plugin seeding — the container is just a runtime wrapper. Plugins live on the host filesystem and can be edited/reloaded without rebuilding anything.
+Primary distribution track: **git clone + docker compose**. Users clone the repo, edit config, and run `docker compose up -d`. The Dockerfile is included in the repo and builds locally — no pre-built image required. A future phase (deferred) will publish images to ghcr.io for users who prefer a no-clone flow.
 
 ---
 
@@ -26,12 +26,17 @@ Single distribution track: **clone the repo, configure, `docker compose up`**. D
 
 ## Decisions
 
-1. **No image registry.** Users clone the repo and build locally. No ghcr.io, no published images.
-2. **No compiled JS in production.** The container uses `tsx` to run TypeScript directly — same as development. A `build`/`start:prod` script pair is added for users who want compiled output outside Docker, but Docker uses `tsx`.
-3. **Volume mounts for user state.** `config/`, `plugins/`, and `data/` are bind-mounted from the host. Users edit files on the host; the bot sees changes immediately (plugins via hot-reload, config on restart).
-4. **No plugin seeding or bundled-plugins.** Plugins live in `plugins/` on the host, mounted into the container as-is. Users manage their own plugin directory.
-5. **No systemd docs.** Out of scope for now — Docker is the supported "always on" path.
-6. **tsconfig rootDir:** Leave as-is. Not relevant since Docker runs via `tsx`, not compiled output.
+1. **Plugin directory in Docker:** Volume mount at `/app/plugins`. The image seeds the volume on first run via an entrypoint script (copies bundled compiled plugins if the directory is empty). Users can add or replace plugins by editing the mounted directory and hot-reloading. `pluginDir` in the Docker example config stays `./plugins`.
+
+2. **First-run plugin seeding:** Entrypoint script (`entrypoint.sh`) checks if `/app/plugins` is empty and copies from `/app/bundled-plugins/` (compiled plugins baked into the image at build time). Users who want a clean slate can delete the seeded files and use their own.
+
+3. **Process manager:** systemd only. No pm2 docs.
+
+4. **tsconfig rootDir:** Leave `rootDir: "."` as-is. Production entry point is `node dist/src/index.js`. Don't clean this up in this plan.
+
+5. **Image registry:** Deferred. The `docker-compose.yml` uses `build: .` so users build locally from the cloned repo. Registry publishing (ghcr.io) is a future phase.
+
+6. **`pluginDir` in Docker config:** Stays as `./plugins` (the volume), not `./dist/plugins`. The entrypoint seeds `./plugins` from the baked-in compiled output. No separate `bot.docker.json` needed — `bot.example.json` works as-is.
 
 ---
 
@@ -75,38 +80,44 @@ Single distribution track: **clone the repo, configure, `docker compose up`**. D
   *.db
   ```
 
-- [x] Create `Dockerfile`:
+- [ ] Create `Dockerfile` (multi-stage):
 
-  ```dockerfile
-  FROM node:20-alpine
+  **Stage 1 — builder** (`node:20-alpine`):
+  - `WORKDIR /app`
+  - `COPY package.json pnpm-lock.yaml ./`
+  - `RUN corepack enable && pnpm install --frozen-lockfile`
+  - `COPY tsconfig.json ./`
+  - `COPY src/ ./src/`
+  - `RUN pnpm exec tsc`
 
-  WORKDIR /app
-
-  # Install pnpm
-  RUN corepack enable
-
-  # Install dependencies (including native better-sqlite3 for Alpine)
-  COPY package.json pnpm-lock.yaml ./
-  RUN pnpm install --frozen-lockfile
-
-  # Copy source (plugins/config/data come from volume mounts)
-  COPY tsconfig.json ./
-  COPY src/ ./src/
-  COPY types/ ./types/
-
-  CMD ["pnpm", "start"]
-  ```
+  **Stage 2 — runtime** (`node:20-alpine`):
+  - `WORKDIR /app`
+  - `COPY package.json pnpm-lock.yaml ./`
+  - `RUN corepack enable && pnpm install --frozen-lockfile --prod`
+    _(fresh install = correct native binary for this Alpine/Node ABI — never copy node_modules from builder)_
+  - `COPY --from=builder /app/dist ./dist`
+  - `COPY config/bot.example.json ./config/bot.example.json`
+  - `COPY config/plugins.example.json ./config/plugins.example.json`
+  - `CMD ["node", "dist/src/index.js"]`
 
   Notes:
-  - Single stage — no compilation step needed since we run via `tsx`.
-  - `plugins/`, `config/`, and `data/` are volume-mounted at runtime, not baked in.
-  - `node_modules` is built inside the container, so `better-sqlite3` gets the correct native binary.
+  - No entrypoint script needed. Plugins come from the cloned repo via the volume mount — `./plugins` is never empty.
+  - Users can edit plugins in the cloned repo and hot-reload without rebuilding the image.
 
-- [x] Create `docker-compose.yml`:
+- [ ] **Verify:** `docker build -t hexbot:local .` succeeds. `docker run --rm hexbot:local node --version` prints Node 20.x.
+
+---
+
+### Phase 3: docker-compose
+
+**Goal:** A `docker-compose.yml` in the repo root that builds locally. Users clone, configure, and `docker compose up -d`.
+
+- [ ] Create `docker-compose.yml` at repo root:
 
   ```yaml
   services:
     hexbot:
+      build: .
       build: .
       restart: unless-stopped
       volumes:
@@ -115,13 +126,28 @@ Single distribution track: **clone the repo, configure, `docker compose up`**. D
         - ./data:/app/data
   ```
 
-- [x] **Verify:** `docker compose up --build` starts the bot. Editing a plugin on the host and running `.reload <plugin>` in IRC picks up changes.
+- [ ] Create `docs/deploy/docker-quickstart.md`:
+
+  ```markdown
+  # Docker quickstart
+
+  1. git clone <repo> && cd hexbot
+  2. cp config/bot.example.json config/bot.json
+  3. Edit config/bot.json — set server, nick, owner hostmask, NickServ password
+  4. docker compose up -d
+  5. docker compose logs -f # watch startup
+
+  After a `git pull`, rebuild the image:
+  docker compose up -d --build
+  ```
+
+- [ ] **Verify:** `docker compose up` starts the bot and mounts work (config readable, data dir writable).
 
 ---
 
-### Phase 4: GitHub Actions CI
+### Phase 4: GitHub Actions (CI only)
 
-**Goal:** CI runs lint, typecheck, and tests on every PR.
+**Goal:** CI runs tests on every PR and push. No Docker publishing yet (deferred to Phase 5).
 
 - [x] Create `.github/workflows/ci.yml`:
   - Trigger: `push` to any branch, `pull_request` to `main`
@@ -134,23 +160,39 @@ Single distribution track: **clone the repo, configure, `docker compose up`**. D
     - `pnpm lint`
     - `pnpm test`
 
-- [x] **Verify:** Push a branch, confirm CI runs and passes.
+- [ ] **Verify:** CI passes on a test PR.
 
 ---
 
 ### Phase 5: README update
 
-**Goal:** README documents the Docker quickstart.
+**Goal:** README documents the git clone → docker compose flow as the primary quickstart.
 
-- [x] Add "Deploy with Docker" section to `README.md`:
-  1. Clone the repo
-  2. `cp config/bot.example.json config/bot.json` — edit server, nick, owner
-  3. `cp config/plugins.example.json config/plugins.json` — edit as needed
-  4. `docker compose up -d`
-  5. `docker compose logs -f`
-- [x] Clarify that `pnpm start` = tsx (dev), `pnpm start:prod` = compiled JS (optional)
+- [ ] Add "Quick start (Docker)" section to `README.md`:
+  - `git clone` → edit config → `docker compose up -d`
+  - Note: `docker compose up -d --build` after `git pull`
+  - Link to `docs/deploy/docker-quickstart.md` for full steps
+- [ ] Add "Production deployment (bare metal)" section linking to `docs/deploy/systemd.md`
+- [ ] Update "Development" section to clarify `pnpm start` = tsx (dev), `pnpm start:prod` = compiled (production)
 
 - [x] **Verify:** README renders cleanly on GitHub.
+
+---
+
+### Phase 6 (Deferred): Registry publishing
+
+**Goal:** Publish pre-built images to ghcr.io so users can deploy without cloning.
+
+When ready, this phase covers:
+
+- `docker-compose.yml` variant using `image: ghcr.io/OWNER/hexbot:latest` (or a separate `docker-compose.registry.yml`)
+- `.github/workflows/docker.yml` — build and push on version tags and `main`:
+  - `docker/setup-qemu-action` (multi-arch: `linux/amd64,linux/arm64`)
+  - `docker/setup-buildx-action`
+  - `docker/login-action` (ghcr.io via `GITHUB_TOKEN`)
+  - `docker/metadata-action` — `v*.*.*` → `:v1.2.3` + `:latest`, `main` → `:edge`
+  - `docker/build-push-action` with GHA layer cache
+- No-clone quickstart docs (curl compose file, pull image, run)
 
 ---
 
