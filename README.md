@@ -25,6 +25,7 @@ The REPL (`.` prefix) provides admin access without IRC:
 | `.help [cmd]`                          | `-`      | List commands or show help for one          |
 | `.status`                              | `+o`     | Connection info, uptime, bind/user counts   |
 | `.say <target> <msg>`                  | `+o`     | Send a message to a channel or user         |
+| `.msg <target> <msg>`                  | `+o`     | Send a PRIVMSG to any target                |
 | `.join <channel>`                      | `+n`     | Join a channel                              |
 | `.part <channel>`                      | `+n`     | Part a channel                              |
 | `.flags [handle] [+flags [#chan]]`     | `+n\|+m` | View/set user flags (no args = flag legend) |
@@ -54,17 +55,25 @@ Plugins live in `plugins/<name>/` and are enabled via `config/plugins.json`. The
 
 ### Included plugins
 
-| Plugin      | Commands                                                                    | Description                                                                          |
-| ----------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| **8ball**   | `!8ball <question>`                                                         | Magic 8-ball responses                                                               |
-| **chanmod** | `!op`, `!deop`, `!voice`, `!devoice`, `!kick`, `!ban`, `!unban`, `!kickban` | Channel protection: auto-op/voice on join, mode enforcement, and moderation commands |
-| **greeter** | _(automatic)_                                                               | Greets users on channel join                                                         |
-| **seen**    | `!seen <nick>`                                                              | Tracks when a user was last active                                                   |
-| **topic**   | `!topic <theme> <text>`, `!topics`                                          | Set channel topics with IRC color themes                                             |
+| Plugin      | Commands                                                                                                     | Description                                                                                       |
+| ----------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| **8ball**   | `!8ball <question>`                                                                                          | Magic 8-ball responses                                                                            |
+| **chanmod** | `!op`, `!deop`, `!halfop`, `!dehalfop`, `!voice`, `!devoice`, `!kick`, `!ban`, `!unban`, `!kickban`, `!bans` | Channel protection: auto-op/halfop/voice on join, mode enforcement, timed bans, cycle recovery    |
+| **ctcp**    | _(automatic)_                                                                                                | Replies to CTCP VERSION, PING, and TIME requests                                                  |
+| **flood**   | _(automatic)_                                                                                                | Inbound flood protection: rate limiting, join/part spam, nick-change spam; escalating enforcement |
+| **greeter** | _(automatic)_                                                                                                | Greets users on channel join                                                                      |
+| **seen**    | `!seen <nick>`                                                                                               | Tracks when a user was last active                                                                |
+| **topic**   | `!topic <theme> <text>`, `!topic preview <theme> <text>`, `!topics`                                          | Set channel topics with IRC color-coded theme borders                                             |
 
 ### Writing plugins
 
 See [plugins/README.md](plugins/README.md) for the full plugin authoring guide, bind types, config patterns, and a complete example.
+
+## Features
+
+- **SOCKS5 proxy** — tunnel the IRC connection through a SOCKS5 proxy (Tor, SSH dynamic forward, etc.); configure via `proxy` in `bot.json`
+- **DCC CHAT / party line** — users connect directly via DCC CHAT for an admin party-line session; configure via `dcc` in `bot.json` (see [docs/DCC.md](docs/DCC.md))
+- **IRC CASEMAPPING** — reads the server's `CASEMAPPING` ISUPPORT token and applies correct nick/channel folding (`rfc1459`, `strict-rfc1459`, or `ascii`) throughout all core modules and the plugin API (`api.ircLower()`)
 
 ## Architecture
 
@@ -73,10 +82,12 @@ See [DESIGN.md](DESIGN.md) for full architecture details.
 ## Development
 
 ```bash
-pnpm test          # run tests (vitest)
-pnpm test:watch    # watch mode
-pnpm lint          # eslint
-pnpm typecheck     # tsc --noEmit
+pnpm test           # run tests (vitest)
+pnpm test:watch     # watch mode
+pnpm test:coverage  # with coverage report
+pnpm lint           # eslint
+pnpm typecheck      # tsc --noEmit
+pnpm format         # prettier
 ```
 
 ## License
