@@ -27,7 +27,7 @@ export function init(api: PluginAPI): void {
       time: Date.now(),
     });
 
-    api.db.set(`seen:${ctx.nick.toLowerCase()}`, record);
+    api.db.set(`seen:${api.ircLower(ctx.nick)}`, record);
   });
 
   // Respond to !seen queries
@@ -39,7 +39,7 @@ export function init(api: PluginAPI): void {
       return;
     }
 
-    const raw = api.db.get(`seen:${targetNick.toLowerCase()}`);
+    const raw = api.db.get(`seen:${api.ircLower(targetNick)}`);
     if (!raw) {
       ctx.reply(`I haven't seen ${targetNick}.`);
       return;
@@ -55,7 +55,7 @@ export function init(api: PluginAPI): void {
       const age = Date.now() - record.time;
 
       if (age > maxAgeMs) {
-        api.db.del(`seen:${targetNick.toLowerCase()}`);
+        api.db.del(`seen:${api.ircLower(targetNick)}`);
         ctx.reply(`I haven't seen ${targetNick}.`);
         return;
       }

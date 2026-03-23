@@ -49,13 +49,13 @@ function getBotNick(): string {
 }
 
 function isBotNick(nick: string): boolean {
-  return nick.toLowerCase() === getBotNick().toLowerCase();
+  return api.ircLower(nick) === api.ircLower(getBotNick());
 }
 
 function botHasOps(channel: string): boolean {
   const ch = api.getChannel(channel);
   if (!ch) return false;
-  const botNick = getBotNick().toLowerCase();
+  const botNick = api.ircLower(getBotNick());
   const botUser = ch.users.get(botNick);
   return botUser?.modes?.includes('o') ?? false;
 }
@@ -105,13 +105,13 @@ function checkWindow(
 // ---------------------------------------------------------------------------
 
 function banDbKey(channel: string, mask: string): string {
-  return `ban:${channel.toLowerCase()}:${mask}`;
+  return `ban:${api.ircLower(channel)}:${mask}`;
 }
 
 function storeFloodBan(channel: string, mask: string, durationMinutes: number): void {
   const now = Date.now();
   const expires = durationMinutes === 0 ? 0 : now + durationMinutes * 60_000;
-  const record: BanRecord = { mask, channel: channel.toLowerCase(), ts: now, expires };
+  const record: BanRecord = { mask, channel: api.ircLower(channel), ts: now, expires };
   api.db.set(banDbKey(channel, mask), JSON.stringify(record));
 }
 
@@ -217,7 +217,7 @@ export function init(pluginApi: PluginAPI): void {
     if (isBotNick(ctx.nick)) return;
     if (isPrivileged(ctx.nick, ctx.channel, ignoreOps)) return;
 
-    const key = `${ctx.nick.toLowerCase()}@${ctx.channel.toLowerCase()}`;
+    const key = `${api.ircLower(ctx.nick)}@${api.ircLower(ctx.channel ?? '')}`;
     const flooded = checkWindow(msgTracker, key, msgWindowMs, msgThreshold);
     if (!flooded) return;
 
@@ -240,13 +240,13 @@ export function init(pluginApi: PluginAPI): void {
 
     const { ident, hostname } = ctx;
     const hostmask = `${ctx.nick}!${ident}@${hostname}`;
-    const key = `join:${hostmask.toLowerCase()}`;
+    const key = `join:${api.ircLower(hostmask)}`;
 
     const flooded = checkWindow(joinTracker, key, joinWindowMs, joinThreshold);
     if (!flooded) return;
     if (isPrivileged(ctx.nick, ctx.channel, ignoreOps)) return;
 
-    const offenceKey = `join:${hostmask.toLowerCase()}`;
+    const offenceKey = `join:${api.ircLower(hostmask)}`;
     const action = recordOffence(offenceKey);
     applyAction(
       action,
@@ -265,7 +265,7 @@ export function init(pluginApi: PluginAPI): void {
     if (!ident && !hostname) return; // Incomplete hostmask data — skip
 
     const hostmask = `${ctx.nick}!${ident}@${hostname}`;
-    const key = `nick:${hostmask.toLowerCase()}`;
+    const key = `nick:${api.ircLower(hostmask)}`;
 
     const flooded = checkWindow(nickTracker, key, nickWindowMs, nickThreshold);
     if (!flooded) return;
@@ -278,7 +278,7 @@ export function init(pluginApi: PluginAPI): void {
       if (isPrivileged(ctx.nick, channel, ignoreOps)) return;
       if (!botHasOps(channel)) continue;
 
-      const offenceKey = `nick:${hostmask.toLowerCase()}`;
+      const offenceKey = `nick:${api.ircLower(hostmask)}`;
       const action = recordOffence(offenceKey);
       applyAction(
         action,

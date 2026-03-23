@@ -21,7 +21,7 @@ export function init(api: PluginAPI): void {
 
   api.bind('join', '-', '*', (ctx: HandlerContext) => {
     // Don't greet the bot itself
-    if (ctx.nick === botNick || ctx.nick.toLowerCase() === botNick.toLowerCase()) {
+    if (api.ircLower(ctx.nick) === api.ircLower(botNick)) {
       return;
     }
 

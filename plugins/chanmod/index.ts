@@ -45,14 +45,14 @@ function getBotNick(): string {
 }
 
 function isBotNick(nick: string): boolean {
-  return nick.toLowerCase() === getBotNick().toLowerCase();
+  return api.ircLower(nick) === api.ircLower(getBotNick());
 }
 
 /** Check whether the bot has +o in the given channel. */
 function botHasOps(channel: string): boolean {
   const ch = api.getChannel(channel);
   if (!ch) return false;
-  const botNick = getBotNick().toLowerCase();
+  const botNick = api.ircLower(getBotNick());
   const botUser = ch.users.get(botNick);
   return botUser?.modes?.includes('o') ?? false;
 }
@@ -61,7 +61,7 @@ function botHasOps(channel: string): boolean {
 function botCanHalfop(channel: string): boolean {
   const ch = api.getChannel(channel);
   if (!ch) return false;
-  const botNick = getBotNick().toLowerCase();
+  const botNick = api.ircLower(getBotNick());
   const botUser = ch.users.get(botNick);
   const modes = botUser?.modes ?? '';
   return modes.includes('o') || modes.includes('h');
@@ -74,13 +74,13 @@ function isValidNick(nick: string): boolean {
 
 /** Mark a mode change as intentional (from a !deop/!devoice command). */
 function markIntentional(channel: string, nick: string): void {
-  const key = `${channel.toLowerCase()}:${nick.toLowerCase()}`;
+  const key = `${api.ircLower(channel)}:${api.ircLower(nick)}`;
   intentionalModeChanges.set(key, Date.now() + INTENTIONAL_TTL_MS);
 }
 
 /** Check if a mode change was intentional (and consume it). */
 function wasIntentional(channel: string, nick: string): boolean {
-  const key = `${channel.toLowerCase()}:${nick.toLowerCase()}`;
+  const key = `${api.ircLower(channel)}:${api.ircLower(nick)}`;
   const expiry = intentionalModeChanges.get(key);
   if (expiry && Date.now() < expiry) {
     intentionalModeChanges.delete(key);
@@ -148,13 +148,13 @@ function getUserFlags(channel: string, nick: string): string | null {
 // ---------------------------------------------------------------------------
 
 function banDbKey(channel: string, mask: string): string {
-  return `ban:${channel.toLowerCase()}:${mask}`;
+  return `ban:${api.ircLower(channel)}:${mask}`;
 }
 
 function storeBan(channel: string, mask: string, by: string, durationMinutes: number): void {
   const now = Date.now();
   const expires = durationMinutes === 0 ? 0 : now + durationMinutes * 60_000;
-  const record: BanRecord = { mask, channel: channel.toLowerCase(), by, ts: now, expires };
+  const record: BanRecord = { mask, channel: api.ircLower(channel), by, ts: now, expires };
   api.db.set(banDbKey(channel, mask), JSON.stringify(record));
 }
 
@@ -168,7 +168,7 @@ function getAllBanRecords(): BanRecord[] {
 
 function getChannelBanRecords(channel: string): BanRecord[] {
   return api.db
-    .list(`ban:${channel.toLowerCase()}:`)
+    .list(`ban:${api.ircLower(channel)}:`)
     .map(({ value }) => JSON.parse(value) as BanRecord);
 }
 
@@ -369,7 +369,7 @@ export function init(pluginApi: PluginAPI): void {
     if (enforceChannelModeSet.size > 0 && modeStr.startsWith('-') && modeStr.length === 2) {
       const modeChar = modeStr[1];
       if (enforceChannelModeSet.has(modeChar)) {
-        const isNodesynch = nodesynchNicks.some((n) => n.toLowerCase() === setter.toLowerCase());
+        const isNodesynch = nodesynchNicks.some((n) => api.ircLower(n) === api.ircLower(setter));
         if (!isNodesynch && !isBotNick(setter) && botHasOps(channel)) {
           api.log(`Re-enforcing +${modeChar} on ${channel} (removed by ${setter})`);
           const timer = setTimeout(() => {
@@ -382,8 +382,8 @@ export function init(pluginApi: PluginAPI): void {
 
     // --- Bot self-deop → cycle ---
     if (modeStr === '-o' && isBotNick(target)) {
-      if (cycleOnDeop && !cycleScheduled.has(channel.toLowerCase())) {
-        const cooldownKey = `${channel.toLowerCase()}:cycle`;
+      if (cycleOnDeop && !cycleScheduled.has(api.ircLower(channel))) {
+        const cooldownKey = `${api.ircLower(channel)}:cycle`;
         const now = Date.now();
         const cooldown = enforcementCooldown.get(cooldownKey);
         if (cooldown && now < cooldown.expiresAt) {
@@ -393,12 +393,12 @@ export function init(pluginApi: PluginAPI): void {
             const isInviteOnly = ch?.modes.includes('i') ?? false;
             if (!isInviteOnly) {
               api.log(`Cycling ${channel} to regain ops`);
-              cycleScheduled.add(channel.toLowerCase());
+              cycleScheduled.add(api.ircLower(channel));
               const timer = setTimeout(() => {
                 api.part(channel, 'Cycling to regain ops');
                 const rejoinTimer = setTimeout(() => {
                   api.join(channel);
-                  cycleScheduled.delete(channel.toLowerCase());
+                  cycleScheduled.delete(api.ircLower(channel));
                   enforcementCooldown.delete(cooldownKey);
                 }, 2000);
                 cycleTimers.push(rejoinTimer);
@@ -429,7 +429,7 @@ export function init(pluginApi: PluginAPI): void {
     if (!flags) return;
 
     // Rate limit: prevent mode wars by capping enforcement frequency per user
-    const cooldownKey = `${channel.toLowerCase()}:${target.toLowerCase()}`;
+    const cooldownKey = `${api.ircLower(channel)}:${api.ircLower(target)}`;
     const now = Date.now();
     const cooldown = enforcementCooldown.get(cooldownKey);
     if (cooldown && now < cooldown.expiresAt) {

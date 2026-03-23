@@ -590,4 +590,46 @@ describe('ChannelState', () => {
       expect(state.getUserModes('#test', 'Empty')).toEqual([]);
     });
   });
+
+  describe('setCasemapping', () => {
+    it('rfc1459 (default): nick with [ is stored under {-folded key', () => {
+      client.simulateEvent('join', {
+        nick: '[Brace]',
+        ident: 'b',
+        hostname: 'host.com',
+        channel: '#test',
+      });
+      // Retrievable via the original nick (ircLower folds [ to {)
+      const user = state.getUser('#test', '[Brace]');
+      expect(user).toBeDefined();
+      expect(user!.nick).toBe('[Brace]');
+    });
+
+    it('ascii: nick with [ is NOT folded — stored and retrieved as [', () => {
+      state.setCasemapping('ascii');
+      client.simulateEvent('join', {
+        nick: '[Brace]',
+        ident: 'b',
+        hostname: 'host.com',
+        channel: '#test',
+      });
+      const user = state.getUser('#test', '[Brace]');
+      expect(user).toBeDefined();
+      expect(user!.nick).toBe('[Brace]');
+      // Under ascii: {Brace} is a different key — not found
+      expect(state.getUser('#test', '{Brace}')).toBeUndefined();
+    });
+
+    it('rfc1459: {Brace} lookup finds [Brace] entry', () => {
+      client.simulateEvent('join', {
+        nick: '[Brace]',
+        ident: 'b',
+        hostname: 'host.com',
+        channel: '#test',
+      });
+      // rfc1459: [Brace] and {Brace} both fold to {brace}
+      const user = state.getUser('#test', '{Brace}');
+      expect(user).toBeDefined();
+    });
+  });
 });

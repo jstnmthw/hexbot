@@ -24,6 +24,7 @@ import { BotEventBus } from './event-bus.js';
 import { IRCBridge } from './irc-bridge.js';
 import { type Logger, createLogger } from './logger.js';
 import { PluginLoader } from './plugin-loader.js';
+import type { Casemapping } from './types.js';
 import type { BotConfig, ProxyConfig } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -66,6 +67,11 @@ export class Bot {
   private bridge: IRCBridge | null = null;
   private _dccManager: DCCManager | null = null;
   private botLogger: Logger;
+  private _casemapping: Casemapping = 'rfc1459';
+
+  getCasemapping(): Casemapping {
+    return this._casemapping;
+  }
 
   /** The active DCC manager, if DCC is enabled. Used by the REPL to announce activity. */
   get dccManager(): DCCManager | null {
@@ -117,6 +123,27 @@ export class Bot {
       messageQueue: this.messageQueue,
       services: this.services,
       logger: this.logger,
+      getCasemapping: () => this.getCasemapping(),
+      getServerSupports: () => {
+        const known = [
+          'CASEMAPPING',
+          'MODES',
+          'MAXCHANNELS',
+          'CHANTYPES',
+          'PREFIX',
+          'CHANLIMIT',
+          'NICKLEN',
+          'TOPICLEN',
+          'KICKLEN',
+          'NETWORK',
+        ];
+        const result: Record<string, string> = {};
+        for (const k of known) {
+          const v = this.client.network.supports(k);
+          if (v !== false) result[k] = String(v);
+        }
+        return result;
+      },
     });
   }
 
@@ -270,6 +297,22 @@ export class Bot {
         registered = true;
         this.botLogger.info(`Connected to ${cfg.host}:${cfg.port} as ${cfg.nick}`);
         this.eventBus.emit('bot:connected');
+
+        // Read CASEMAPPING from ISUPPORT (available after 005)
+        const cm = this.client.network.supports('CASEMAPPING');
+        if (cm === 'ascii' || cm === 'strict-rfc1459' || cm === 'rfc1459') {
+          this._casemapping = cm;
+        } else {
+          this._casemapping = 'rfc1459'; // safe fallback for unknown values
+        }
+        this.botLogger.info(`CASEMAPPING: ${this._casemapping}`);
+
+        // Propagate to modules that use IRC nick/channel key comparison
+        this.channelState.setCasemapping(this._casemapping);
+        this.permissions.setCasemapping(this._casemapping);
+        this.dispatcher.setCasemapping(this._casemapping);
+        this.services.setCasemapping(this._casemapping);
+        if (this._dccManager) this._dccManager.setCasemapping(this._casemapping);
 
         // Join configured channels
         for (const channel of this.configuredChannels) {

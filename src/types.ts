@@ -2,6 +2,13 @@
 // These are type-only definitions (interfaces/types) — no runtime code.
 
 // ---------------------------------------------------------------------------
+// IRC network types
+// ---------------------------------------------------------------------------
+
+/** IRC CASEMAPPING values from ISUPPORT 005. */
+export type Casemapping = 'rfc1459' | 'strict-rfc1459' | 'ascii';
+
+// ---------------------------------------------------------------------------
 // Bind system types
 // ---------------------------------------------------------------------------
 
@@ -119,6 +126,9 @@ export interface PluginAPI {
 
   // Server capabilities (from ISUPPORT)
   getServerSupports(): Record<string, string>;
+
+  // IRC-aware case folding using the connected network's CASEMAPPING
+  ircLower(text: string): string;
 
   // Logging (prefixed with [plugin:<name>])
   log(...args: unknown[]): void;

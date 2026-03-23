@@ -3,7 +3,7 @@
 import type { BotDatabase } from '../database.js';
 import type { Logger } from '../logger.js';
 import type { HandlerContext, UserRecord } from '../types.js';
-import { ircLower, wildcardMatch } from '../utils/wildcard.js';
+import { type Casemapping, ircLower, wildcardMatch } from '../utils/wildcard.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -26,10 +26,15 @@ export class Permissions {
   private users: Map<string, UserRecord> = new Map();
   private db: BotDatabase | null;
   private logger: Logger | null;
+  private casemapping: Casemapping = 'rfc1459';
 
   constructor(db?: BotDatabase | null, logger?: Logger | null) {
     this.db = db ?? null;
     this.logger = logger?.child('permissions') ?? null;
+  }
+
+  setCasemapping(cm: Casemapping): void {
+    this.casemapping = cm;
   }
 
   // -------------------------------------------------------------------------
@@ -130,7 +135,7 @@ export class Permissions {
       throw new Error(`User "${handle}" not found`);
     }
 
-    const normalizedChannel = ircLower(channel);
+    const normalizedChannel = ircLower(channel, this.casemapping);
     const normalized = this.normalizeFlags(flags);
     if (normalized === '') {
       delete record.channels[normalizedChannel];
@@ -292,7 +297,7 @@ export class Permissions {
 
     // Check channel-specific flags
     if (channel) {
-      const channelFlags = record.channels[ircLower(channel)];
+      const channelFlags = record.channels[ircLower(channel, this.casemapping)];
       if (channelFlags) {
         // Owner in channel implies all flags for that channel
         if (channelFlags.includes(OWNER_FLAG)) return true;

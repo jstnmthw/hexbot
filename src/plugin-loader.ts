@@ -17,6 +17,7 @@ import type {
   BindHandler,
   BindType,
   BotConfig,
+  Casemapping,
   ChannelUser,
   PluginAPI,
   PluginDB,
@@ -25,6 +26,7 @@ import type {
   PluginsConfig,
 } from './types.js';
 import { sanitize } from './utils/sanitize.js';
+import { ircLower } from './utils/wildcard.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -68,6 +70,8 @@ export interface PluginLoaderDeps {
   messageQueue?: MessageQueue | null;
   services?: Services | null;
   logger?: Logger | null;
+  getCasemapping?: () => Casemapping;
+  getServerSupports?: () => Record<string, string>;
 }
 
 /** Minimal IRC client interface for plugin actions. */
@@ -101,6 +105,8 @@ export class PluginLoader {
   private services: Services | null;
   private logger: Logger | null;
   private rootLogger: Logger | null;
+  private getCasemapping: () => Casemapping;
+  private getServerSupports: () => Record<string, string>;
 
   constructor(deps: PluginLoaderDeps) {
     this.pluginDir = resolve(deps.pluginDir);
@@ -116,6 +122,8 @@ export class PluginLoader {
     this.services = deps.services ?? null;
     this.rootLogger = deps.logger ?? null;
     this.logger = deps.logger?.child('plugin-loader') ?? null;
+    this.getCasemapping = deps.getCasemapping ?? (() => 'rfc1459');
+    this.getServerSupports = deps.getServerSupports ?? (() => ({}));
   }
 
   /** Load all enabled plugins from the plugins config. */
@@ -312,6 +320,8 @@ export class PluginLoader {
     const ircCommands = this.ircCommands;
     const permissions = this.permissions;
     const services = this.services;
+    const getCasemapping = this.getCasemapping;
+    const getServerSupports = this.getServerSupports;
 
     // Scoped database API
     const pluginDb: PluginDB = db
@@ -510,7 +520,12 @@ export class PluginLoader {
 
       // Server capabilities
       getServerSupports(): Record<string, string> {
-        return {};
+        return getServerSupports();
+      },
+
+      // IRC-aware case folding using the network's active CASEMAPPING
+      ircLower(text: string): string {
+        return ircLower(text, getCasemapping());
       },
 
       // Logging

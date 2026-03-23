@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { wildcardMatch } from '../../src/utils/wildcard.js';
+import { caseCompare, ircLower, wildcardMatch } from '../../src/utils/wildcard.js';
 
 describe('wildcardMatch', () => {
   describe('exact match', () => {
@@ -128,5 +128,68 @@ describe('wildcardMatch', () => {
     it('should handle IRC channel mask patterns', () => {
       expect(wildcardMatch('#test *!*@*', '#test nick!user@host')).toBe(true);
     });
+  });
+});
+
+describe('ircLower', () => {
+  describe('rfc1459 (default)', () => {
+    it('lowercases ASCII letters', () => {
+      expect(ircLower('HELLO')).toBe('hello');
+      expect(ircLower('HELLO', 'rfc1459')).toBe('hello');
+    });
+    it('folds [ to {', () => {
+      expect(ircLower('[hello]', 'rfc1459')).toBe('{hello}');
+    });
+    it('folds \\ to |', () => {
+      expect(ircLower('A\\B', 'rfc1459')).toBe('a|b');
+    });
+    it('folds ~ to ^', () => {
+      expect(ircLower('~ABC', 'rfc1459')).toBe('^abc');
+    });
+  });
+
+  describe('strict-rfc1459', () => {
+    it('folds [ ] \\ but NOT ~', () => {
+      expect(ircLower('[hello]', 'strict-rfc1459')).toBe('{hello}');
+      expect(ircLower('~ABC', 'strict-rfc1459')).toBe('~abc');
+    });
+  });
+
+  describe('ascii', () => {
+    it('only lowercases ASCII letters, no bracket folding', () => {
+      expect(ircLower('[hello]', 'ascii')).toBe('[hello]');
+      expect(ircLower('~ABC', 'ascii')).toBe('~abc');
+      expect(ircLower('HELLO', 'ascii')).toBe('hello');
+    });
+  });
+});
+
+describe('caseCompare', () => {
+  it('rfc1459: ~ equals ^', () => {
+    expect(caseCompare('~nick', '^nick', 'rfc1459')).toBe(true);
+  });
+  it('strict-rfc1459: ~ does not equal ^', () => {
+    expect(caseCompare('~nick', '^nick', 'strict-rfc1459')).toBe(false);
+  });
+  it('ascii: ~ does not equal ^', () => {
+    expect(caseCompare('~nick', '^nick', 'ascii')).toBe(false);
+  });
+  it('ascii: [foo] does not equal {foo}', () => {
+    expect(caseCompare('[foo]', '{foo}', 'ascii')).toBe(false);
+  });
+  it('rfc1459: [foo] equals {foo}', () => {
+    expect(caseCompare('[foo]', '{foo}', 'rfc1459')).toBe(true);
+  });
+});
+
+describe('wildcardMatch with casemapping', () => {
+  it('rfc1459: [foo] matches {foo} in case-insensitive mode', () => {
+    expect(wildcardMatch('[foo]', '{foo}', true, 'rfc1459')).toBe(true);
+  });
+  it('ascii: [foo] does NOT match {foo} in case-insensitive mode', () => {
+    expect(wildcardMatch('[foo]', '{foo}', true, 'ascii')).toBe(false);
+  });
+  it('rfc1459: ~nick matches ^nick in case-insensitive mode', () => {
+    expect(wildcardMatch('~*', '^user', true, 'rfc1459')).toBe(true);
   });
 });

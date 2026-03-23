@@ -3,13 +3,22 @@
 // Supports `*` (match any string, including empty) and `?` (match exactly one character).
 
 /**
- * IRC-aware lowercase per RFC 1459 CASEMAPPING.
- * In addition to standard ASCII lowercasing:
- *   [ → {   ] → }   \ → |   ~ → ^
- *
- * This is the most common CASEMAPPING on IRC networks.
+ * IRC CASEMAPPING values from ISUPPORT 005.
+ * - rfc1459:        a-z=A-Z, [={, ]=}, \=|, ~=^
+ * - strict-rfc1459: same as rfc1459 but ~ ≠ ^
+ * - ascii:          only a-z=A-Z
  */
-export function ircLower(text: string): string {
+export type Casemapping = 'rfc1459' | 'strict-rfc1459' | 'ascii';
+
+/**
+ * IRC-aware lowercase using the specified CASEMAPPING.
+ * Defaults to 'rfc1459' — the most common mapping on legacy networks.
+ */
+export function ircLower(text: string, casemapping: Casemapping = 'rfc1459'): string {
+  if (casemapping === 'ascii') {
+    return text.toLowerCase();
+  }
+
   let result = '';
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
@@ -24,7 +33,8 @@ export function ircLower(text: string): string {
         result += '|';
         break;
       case '~':
-        result += '^';
+        // strict-rfc1459 does NOT fold ~ to ^
+        result += casemapping === 'strict-rfc1459' ? '~' : '^';
         break;
       default:
         result += ch.toLowerCase();
@@ -35,17 +45,31 @@ export function ircLower(text: string): string {
 }
 
 /**
+ * Case-insensitive string equality using the specified CASEMAPPING.
+ * Defaults to 'rfc1459'.
+ */
+export function caseCompare(a: string, b: string, casemapping: Casemapping = 'rfc1459'): boolean {
+  return ircLower(a, casemapping) === ircLower(b, casemapping);
+}
+
+/**
  * Match a string against a wildcard pattern.
  *
  * @param pattern  - Wildcard pattern (`*` = any string, `?` = any single char)
  * @param text     - The string to test
  * @param caseInsensitive - When true, matching uses IRC-aware case folding (default: false)
+ * @param casemapping - Which IRC CASEMAPPING to use when caseInsensitive is true (default: 'rfc1459')
  * @returns true if the text matches the pattern
  */
-export function wildcardMatch(pattern: string, text: string, caseInsensitive = false): boolean {
+export function wildcardMatch(
+  pattern: string,
+  text: string,
+  caseInsensitive = false,
+  casemapping: Casemapping = 'rfc1459',
+): boolean {
   if (caseInsensitive) {
-    pattern = ircLower(pattern);
-    text = ircLower(text);
+    pattern = ircLower(pattern, casemapping);
+    text = ircLower(text, casemapping);
   }
 
   // Dynamic programming approach — track positions in the pattern.

@@ -16,6 +16,7 @@ import type { CommandHandler } from '../command-handler.js';
 import type { EventDispatcher } from '../dispatcher.js';
 import type { Logger } from '../logger.js';
 import type { DccConfig, HandlerContext, UserRecord } from '../types.js';
+import { type Casemapping, ircLower } from '../utils/wildcard.js';
 import type { Permissions } from './permissions.js';
 import type { Services } from './services.js';
 
@@ -308,9 +309,10 @@ export class DCCManager {
   private version: string;
   private logger: Logger | null;
 
-  private sessions: Map<string, DCCSession> = new Map(); // key = nick.toLowerCase()
+  private sessions: Map<string, DCCSession> = new Map(); // key = ircLower(nick)
   private allocatedPorts: Set<number> = new Set();
   private pending: Map<number, PendingDCC> = new Map(); // key = port
+  private casemapping: Casemapping = 'rfc1459';
 
   constructor(deps: DCCManagerDeps) {
     this.client = deps.client;
@@ -321,6 +323,10 @@ export class DCCManager {
     this.config = deps.config;
     this.version = deps.version;
     this.logger = deps.logger?.child('dcc') ?? null;
+  }
+
+  setCasemapping(cm: Casemapping): void {
+    this.casemapping = cm;
   }
 
   /** Attach to the dispatcher — starts listening for DCC CTCP requests. */
@@ -376,7 +382,7 @@ export class DCCManager {
 
   /** Remove a session by IRC nick (called by DCCSession.onClose). */
   removeSession(nick: string): void {
-    this.sessions.delete(nick.toLowerCase());
+    this.sessions.delete(ircLower(nick, this.casemapping));
   }
 
   // -------------------------------------------------------------------------
@@ -421,7 +427,7 @@ export class DCCManager {
     }
 
     // 5. Already connected?
-    if (this.sessions.has(nick.toLowerCase())) {
+    if (this.sessions.has(ircLower(nick, this.casemapping))) {
       this.client.notice(nick, 'DCC CHAT: you already have an active session.');
       return;
     }
@@ -505,7 +511,7 @@ export class DCCManager {
       logger: this.logger,
     });
 
-    this.sessions.set(pending.nick.toLowerCase(), session);
+    this.sessions.set(ircLower(pending.nick, this.casemapping), session);
     this.announce(`*** ${pending.user.handle} has joined the botnet`);
     this.logger?.info(`DCC session opened: ${pending.user.handle} (${pending.nick})`);
 

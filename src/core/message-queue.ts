@@ -34,8 +34,8 @@ export class MessageQueue {
   private readonly logger: Logger | null;
 
   constructor(options: MessageQueueOptions = {}) {
-    this.rate = options.rate ?? 1;
-    this.burst = options.burst ?? 5;
+    this.rate = options.rate ?? 2;
+    this.burst = options.burst ?? 4;
     // Bucket capacity must be at least 1 so drain() can always accumulate a token
     this.capacity = Math.max(1, this.burst);
     this.tokens = this.burst;

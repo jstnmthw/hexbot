@@ -2,7 +2,7 @@
 // Routes IRC events to registered handlers based on bind type, mask, and flags.
 import type { Logger } from './logger.js';
 import type { BindHandler, BindType, HandlerContext } from './types.js';
-import { ircLower, wildcardMatch } from './utils/wildcard.js';
+import { type Casemapping, caseCompare, wildcardMatch } from './utils/wildcard.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -45,10 +45,15 @@ export class EventDispatcher {
   private timers: Map<BindEntry, ReturnType<typeof setInterval>> = new Map();
   private permissions: PermissionsProvider | null;
   private logger: Logger | null;
+  private casemapping: Casemapping = 'rfc1459';
 
   constructor(permissions?: PermissionsProvider | null, logger?: Logger | null) {
     this.permissions = permissions ?? null;
     this.logger = logger?.child('dispatcher') ?? null;
+  }
+
+  setCasemapping(cm: Casemapping): void {
+    this.casemapping = cm;
   }
 
   /**
@@ -61,7 +66,7 @@ export class EventDispatcher {
     // Non-stackable: remove any existing bind on the same type + mask
     if (NON_STACKABLE_TYPES.has(type)) {
       this.binds = this.binds.filter(
-        (b) => !(b.type === type && ircLower(b.mask) === ircLower(mask)),
+        (b) => !(b.type === type && caseCompare(b.mask, mask, this.casemapping)),
       );
     }
 
@@ -172,44 +177,50 @@ export class EventDispatcher {
   // -------------------------------------------------------------------------
 
   private matchesMask(type: BindType, mask: string, ctx: HandlerContext): boolean {
+    const cm = this.casemapping;
     switch (type) {
       case 'pub':
       case 'msg':
         // Exact command match (IRC case-insensitive)
-        return ircLower(ctx.command) === ircLower(mask);
+        return caseCompare(ctx.command, mask, cm);
 
       case 'pubm':
       case 'msgm':
         // Wildcard match against full text
-        return wildcardMatch(mask, ctx.text, true);
+        return wildcardMatch(mask, ctx.text, true, cm);
 
       case 'join':
       case 'part':
       case 'kick':
         // Mask format: "#channel nick!user@host" or "*" for all
         if (mask === '*') return true;
-        return wildcardMatch(mask, `${ctx.channel} ${ctx.nick}!${ctx.ident}@${ctx.hostname}`, true);
+        return wildcardMatch(
+          mask,
+          `${ctx.channel} ${ctx.nick}!${ctx.ident}@${ctx.hostname}`,
+          true,
+          cm,
+        );
 
       case 'nick':
         // Wildcard against the nick
-        return wildcardMatch(mask, ctx.nick, true);
+        return wildcardMatch(mask, ctx.nick, true, cm);
 
       case 'mode':
         // Mask format: "#channel +/-mode" or wildcard
         if (mask === '*') return true;
-        return wildcardMatch(mask, ctx.text, true);
+        return wildcardMatch(mask, ctx.text, true, cm);
 
       case 'raw':
         // Match against the command/numeric
-        return wildcardMatch(mask, ctx.command, true);
+        return wildcardMatch(mask, ctx.command, true, cm);
 
       case 'notice':
         // Wildcard on text
-        return wildcardMatch(mask, ctx.text, true);
+        return wildcardMatch(mask, ctx.text, true, cm);
 
       case 'ctcp':
         // Match CTCP type (IRC case-insensitive)
-        return ircLower(ctx.command) === ircLower(mask);
+        return caseCompare(ctx.command, mask, cm);
 
       case 'time':
         // Timer binds are handled by setInterval, not by dispatch

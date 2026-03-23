@@ -3,6 +3,7 @@
 import type { BotEventBus } from '../event-bus.js';
 import type { Logger } from '../logger.js';
 import type { IdentityConfig, ServicesConfig } from '../types.js';
+import { type Casemapping, ircLower } from '../utils/wildcard.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -47,6 +48,7 @@ export class Services {
   private logger: Logger | null;
   private pending: Map<string, PendingVerify> = new Map();
   private noticeListener: ((...args: unknown[]) => void) | null = null;
+  private casemapping: Casemapping = 'rfc1459';
 
   constructor(deps: ServicesDeps) {
     this.client = deps.client;
@@ -54,6 +56,10 @@ export class Services {
     this.identityConfig = deps.identityConfig;
     this.eventBus = deps.eventBus;
     this.logger = deps.logger?.child('services') ?? null;
+  }
+
+  setCasemapping(cm: Casemapping): void {
+    this.casemapping = cm;
   }
 
   /** Start listening for NickServ responses. */
@@ -109,7 +115,7 @@ export class Services {
     }
 
     const target = this.getNickServTarget();
-    const lowerNick = nick.toLowerCase();
+    const lowerNick = ircLower(nick, this.casemapping);
 
     // Cancel any existing pending verification for this nick
     const existing = this.pending.get(lowerNick);
@@ -223,7 +229,7 @@ export class Services {
   }
 
   private resolveVerification(nick: string, verified: boolean, account: string | null): void {
-    const lower = nick.toLowerCase();
+    const lower = ircLower(nick, this.casemapping);
     const pending = this.pending.get(lower);
     if (!pending) return;
 

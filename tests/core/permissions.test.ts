@@ -443,4 +443,28 @@ describe('Permissions', () => {
       expect(p.getUser('valid')!.global).toBe('o');
     });
   });
+
+  describe('setCasemapping', () => {
+    it('rfc1459 (default): channel name with [ is folded to { in key', () => {
+      const p = new Permissions();
+      p.addUser('alpha', '*!*@host', 'o');
+      p.setChannelFlags('alpha', '#[test]', 'v');
+
+      const record = p.getUser('alpha')!;
+      // rfc1459: #[test] → #{test}
+      expect(record.channels['#{test}']).toBe('v');
+    });
+
+    it('ascii: channel name with [ is NOT folded', () => {
+      const p = new Permissions();
+      p.setCasemapping('ascii');
+      p.addUser('beta', '*!*@host', 'o');
+      p.setChannelFlags('beta', '#[test]', 'v');
+
+      const record = p.getUser('beta')!;
+      // ascii: #[test] stays as #[test]
+      expect(record.channels['#[test]']).toBe('v');
+      expect(record.channels['#{test}']).toBeUndefined();
+    });
+  });
 });
