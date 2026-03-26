@@ -14,6 +14,7 @@ import { registerIRCAdminCommands } from './core/commands/irc-commands-admin';
 import { registerPermissionCommands } from './core/commands/permission-commands';
 import { registerPluginCommands } from './core/commands/plugin-commands';
 import { DCCManager } from './core/dcc';
+import { HelpRegistry } from './core/help-registry';
 import { IRCCommands } from './core/irc-commands';
 import { MessageQueue } from './core/message-queue';
 import { Permissions } from './core/permissions';
@@ -63,6 +64,7 @@ export class Bot {
   readonly ircCommands: IRCCommands;
   readonly messageQueue: MessageQueue;
   readonly services: Services;
+  readonly helpRegistry: HelpRegistry;
 
   private bridge: IRCBridge | null = null;
   private _dccManager: DCCManager | null = null;
@@ -114,6 +116,7 @@ export class Bot {
       eventBus: this.eventBus,
       logger: this.logger,
     });
+    this.helpRegistry = new HelpRegistry();
     this.pluginLoader = new PluginLoader({
       pluginDir: this.config.pluginDir,
       dispatcher: this.dispatcher,
@@ -126,6 +129,7 @@ export class Bot {
       ircCommands: this.ircCommands,
       messageQueue: this.messageQueue,
       services: this.services,
+      helpRegistry: this.helpRegistry,
       logger: this.logger,
       getCasemapping: () => this.getCasemapping(),
       getServerSupports: () => {

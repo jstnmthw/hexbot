@@ -17,6 +17,86 @@ export function setupCommands(
   config: ChanmodConfig,
   state: SharedState,
 ): () => void {
+  api.registerHelp([
+    {
+      command: '!op',
+      flags: 'o',
+      usage: '!op [nick]',
+      description: 'Op a nick (or yourself if omitted)',
+      category: 'moderation',
+    },
+    {
+      command: '!deop',
+      flags: 'o',
+      usage: '!deop [nick]',
+      description: 'Deop a nick (or yourself if omitted)',
+      category: 'moderation',
+    },
+    {
+      command: '!halfop',
+      flags: 'o',
+      usage: '!halfop [nick]',
+      description: 'Halfop a nick (or yourself if omitted)',
+      category: 'moderation',
+    },
+    {
+      command: '!dehalfop',
+      flags: 'o',
+      usage: '!dehalfop [nick]',
+      description: 'Dehalfop a nick (or yourself if omitted)',
+      category: 'moderation',
+    },
+    {
+      command: '!voice',
+      flags: 'o',
+      usage: '!voice [nick]',
+      description: 'Voice a nick (or yourself if omitted)',
+      category: 'moderation',
+    },
+    {
+      command: '!devoice',
+      flags: 'o',
+      usage: '!devoice [nick]',
+      description: 'Devoice a nick (or yourself if omitted)',
+      category: 'moderation',
+    },
+    {
+      command: '!kick',
+      flags: 'o',
+      usage: '!kick <nick> [reason]',
+      description: 'Kick a nick with an optional reason',
+      category: 'moderation',
+    },
+    {
+      command: '!ban',
+      flags: 'o',
+      usage: '!ban <nick|mask> [minutes]',
+      description: 'Ban a nick or mask; optionally timed',
+      category: 'moderation',
+    },
+    {
+      command: '!unban',
+      flags: 'o',
+      usage: '!unban <nick|mask>',
+      description: 'Remove a ban by nick or mask',
+      category: 'moderation',
+    },
+    {
+      command: '!kickban',
+      flags: 'o',
+      usage: '!kickban <nick> [reason]',
+      description: 'Ban and kick in one step',
+      category: 'moderation',
+    },
+    {
+      command: '!bans',
+      flags: 'o',
+      usage: '!bans [channel]',
+      description: 'List tracked bans and expiry times',
+      category: 'moderation',
+    },
+  ]);
+
   // ---------------------------------------------------------------------------
   // !op / !deop / !voice / !devoice / !halfop / !dehalfop
   // ---------------------------------------------------------------------------

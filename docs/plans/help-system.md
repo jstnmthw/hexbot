@@ -38,7 +38,7 @@ automatically cleared on plugin unload, so the list is always current. A standal
 
 **Goal:** Define the data shape and the registry that stores it.
 
-- [ ] Add `HelpEntry` interface to `src/types.ts`:
+- [x] Add `HelpEntry` interface to `src/types.ts`:
   ```typescript
   export interface HelpEntry {
     command: string; // trigger including "!", e.g. "!op"
@@ -49,28 +49,28 @@ automatically cleared on plugin unload, so the list is always current. A standal
     category?: string; // grouping label, defaults to pluginId
   }
   ```
-- [ ] Create `src/core/help-registry.ts` with a `HelpRegistry` class:
+- [x] Create `src/core/help-registry.ts` with a `HelpRegistry` class:
   - `register(pluginId: string, entries: HelpEntry[]): void` — stores entries keyed by
     pluginId; overwrites any prior registration for that plugin
   - `unregister(pluginId: string): void` — removes all entries for that plugin
   - `getAll(): HelpEntry[]` — returns all entries across all plugins
   - `get(command: string): HelpEntry | undefined` — case-insensitive lookup by command
     name (strips leading `!` for comparison)
-- [ ] Verification: unit test in `tests/core/help-registry.test.ts` covering register,
+- [x] Verification: unit test in `tests/core/help-registry.test.ts` covering register,
       unregister, getAll, and get (with and without leading `!`)
 
 ### Phase 2: Wire `HelpRegistry` into `PluginAPI`
 
 **Goal:** Plugins can call `api.registerHelp()` and `api.getHelpEntries()` in `init()`.
 
-- [ ] Add to `PluginAPI` interface in `src/types.ts`:
+- [x] Add to `PluginAPI` interface in `src/types.ts`:
   ```typescript
   registerHelp(entries: HelpEntry[]): void;
   getHelpEntries(): HelpEntry[];
   ```
-- [ ] Add `helpRegistry?: HelpRegistry` to `PluginLoaderDeps` interface in
+- [x] Add `helpRegistry?: HelpRegistry` to `PluginLoaderDeps` interface in
       `src/plugin-loader.ts`
-- [ ] Implement in `createPluginApi()` inside `src/plugin-loader.ts`:
+- [x] Implement in `createPluginApi()` inside `src/plugin-loader.ts`:
   ```typescript
   registerHelp(entries: HelpEntry[]): void {
     helpRegistry?.register(pluginId, entries);
@@ -79,11 +79,11 @@ automatically cleared on plugin unload, so the list is always current. A standal
     return helpRegistry?.getAll() ?? [];
   },
   ```
-- [ ] In `PluginLoader.unload()`, call `this.helpRegistry?.unregister(pluginName)` after
+- [x] In `PluginLoader.unload()`, call `this.helpRegistry?.unregister(pluginName)` after
       teardown and before removing from `this.loaded` (same place as `unbindAll`)
-- [ ] Instantiate `HelpRegistry` in `Bot` constructor (`src/bot.ts`) and pass it in
+- [x] Instantiate `HelpRegistry` in `Bot` constructor (`src/bot.ts`) and pass it in
       `PluginLoaderDeps`
-- [ ] Verification: load a test plugin that calls `api.registerHelp([...])`, assert entries
+- [x] Verification: load a test plugin that calls `api.registerHelp([...])`, assert entries
       appear in `helpRegistry.getAll()`; reload the plugin, assert entries are refreshed; unload,
       assert they are gone
 
@@ -91,7 +91,7 @@ automatically cleared on plugin unload, so the list is always current. A standal
 
 **Goal:** `!help` and `!help <command>` work in channels and PMs.
 
-- [ ] Create `plugins/help/index.ts`:
+- [x] Create `plugins/help/index.ts`:
   - Export `name = 'help'`, `version`, `description`
   - In `init(api)`:
     - Bind `!help` on `pub` (flags `'-'`) — channel command
@@ -120,7 +120,7 @@ automatically cleared on plugin unload, so the list is always current. A standal
        - `send(ctx, ...)` each line: header, grouped commands, footer
        - Enforce per-user cooldown (default 30 s) to prevent queue flooding
   - Teardown: clear cooldown map
-- [ ] Create `plugins/help/config.json`:
+- [x] Create `plugins/help/config.json`:
   ```json
   {
     "cooldown_ms": 30000,
@@ -134,7 +134,7 @@ automatically cleared on plugin unload, so the list is always current. A standal
   - `"privmsg"` — private PRIVMSG to requesting nick
   - `"channel_notice"` — NOTICE to the channel for list view (appears as `-Bot- [#ch] ...`);
     falls back to private notice if invoked via PM
-- [ ] Verification: load the help plugin in tests, call the handler, assert reply lines
+- [x] Verification: load the help plugin in tests, call the handler, assert reply lines
       sent to the correct nick (not the channel) with correct content; verify permission
       filtering omits commands the mock user cannot run; test both `reply_type` values
 
@@ -145,7 +145,7 @@ automatically cleared on plugin unload, so the list is always current. A standal
 Each plugin calls `api.registerHelp([...])` near the top of `init()`. Categories should be
 human-readable strings (e.g. `"moderation"`, `"info"`).
 
-- [ ] `plugins/chanmod/commands.ts` — register:
+- [x] `plugins/chanmod/commands.ts` — register:
 
   | command     | flags | usage                         | description                              |
   | ----------- | ----- | ----------------------------- | ---------------------------------------- |
@@ -163,14 +163,14 @@ human-readable strings (e.g. `"moderation"`, `"info"`).
 
   Category: `"moderation"`
 
-- [ ] `plugins/8ball/index.ts` — register `!8ball <question>`, flags `-`, category `"fun"`
-- [ ] `plugins/seen/index.ts` — register `!seen <nick>`, flags `-`, category `"info"`
-- [ ] `plugins/topic/index.ts` — register:
+- [x] `plugins/8ball/index.ts` — register `!8ball <question>`, flags `-`, category `"fun"`
+- [x] `plugins/seen/index.ts` — register `!seen <nick>`, flags `-`, category `"info"`
+- [x] `plugins/topic/index.ts` — register:
   - `!topic <theme> <text>` / `!topic preview [text]` / `!topics`, flags `-`, category `"topic"`
-- [ ] `plugins/greeter/index.ts` — register `!greet [set|show|delete] ...`, flags `-`,
+- [x] `plugins/greeter/index.ts` — register `!greet [set|show|delete] ...`, flags `-`,
       category `"general"` (if `allow_custom` is enabled; register unconditionally and let
       permission filtering handle it at query time)
-- [ ] Verification: load all plugins in integration test, call `api.getHelpEntries()`,
+- [x] Verification: load all plugins in integration test, call `api.getHelpEntries()`,
       assert expected commands are present
 
 ## Config changes

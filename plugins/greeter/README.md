@@ -9,11 +9,13 @@ Automatic — fires on every JOIN event.
 
 Optional user commands (when `allow_custom: true`):
 
-| Command                | Description                    |
-| ---------------------- | ------------------------------ |
-| `!greet`               | Show your current custom greet |
-| `!greet set <message>` | Set your custom greet          |
-| `!greet del`           | Remove your custom greet       |
+| Command                | Flags       | Description                    |
+| ---------------------- | ----------- | ------------------------------ |
+| `!greet`               | anyone      | Show your current custom greet |
+| `!greet set <message>` | `min_flag`+ | Set your custom greet          |
+| `!greet del`           | `min_flag`+ | Remove your custom greet       |
+
+`!greet` is listed in `!help` output regardless of the `allow_custom` setting.
 
 Custom greet messages support the same `{channel}` and `{nick}` template substitutions
 as the default message.

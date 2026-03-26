@@ -129,6 +129,10 @@ export interface PluginAPI {
   // IRC-aware case folding using the connected network's CASEMAPPING
   ircLower(text: string): string;
 
+  // Help registry
+  registerHelp(entries: HelpEntry[]): void;
+  getHelpEntries(): HelpEntry[];
+
   // Logging (prefixed with [plugin:<name>])
   log(...args: unknown[]): void;
   error(...args: unknown[]): void;
@@ -268,6 +272,20 @@ export interface BotConfig {
   proxy?: ProxyConfig;
   dcc?: DccConfig;
   quit_message?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Help system
+// ---------------------------------------------------------------------------
+
+/** A single help entry registered by a plugin. */
+export interface HelpEntry {
+  command: string; // trigger including "!", e.g. "!op"
+  flags: string; // required flags, same format as bind (e.g. "o", "n|m", "-")
+  usage: string; // concise usage line, e.g. "!op [nick]"
+  description: string; // one-line description
+  detail?: string[]; // extra lines shown only in !help <command>
+  category?: string; // grouping label, defaults to pluginId
 }
 
 /** Shape for a single plugin entry in config/plugins.json. */

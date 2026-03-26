@@ -12,6 +12,25 @@ let previewCooldown: Map<string, number>;
 
 export function init(api: PluginAPI): void {
   previewCooldown = new Map();
+
+  api.registerHelp([
+    {
+      command: '!topic',
+      flags: 'o',
+      usage: '!topic <theme> <text>',
+      description: 'Set the channel topic with a color-coded theme',
+      detail: ['Use !topic preview <theme> <text> to preview without setting'],
+      category: 'topic',
+    },
+    {
+      command: '!topics',
+      flags: '-',
+      usage: '!topics [preview [text]]',
+      description: 'List available topic themes; preview renders all themes',
+      category: 'topic',
+    },
+  ]);
+
   // !topic <theme> <text>  — set the channel topic (requires o flag)
   // !topic preview <theme> <text>  — preview the themed text in channel
   api.bind('pub', '+o', '!topic', (ctx: HandlerContext) => {

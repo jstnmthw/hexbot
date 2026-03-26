@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import type { ChannelState } from './core/channel-state';
+import { HelpRegistry } from './core/help-registry';
 import type { IRCCommands } from './core/irc-commands';
 import type { MessageQueue } from './core/message-queue';
 import type { Permissions } from './core/permissions';
@@ -19,6 +20,7 @@ import type {
   BotConfig,
   Casemapping,
   ChannelUser,
+  HelpEntry,
   PluginAPI,
   PluginDB,
   PluginPermissions,
@@ -69,6 +71,7 @@ export interface PluginLoaderDeps {
   ircCommands?: IRCCommands | null;
   messageQueue?: MessageQueue | null;
   services?: Services | null;
+  helpRegistry?: HelpRegistry | null;
   logger?: Logger | null;
   getCasemapping?: () => Casemapping;
   getServerSupports?: () => Record<string, string>;
@@ -102,6 +105,7 @@ export class PluginLoader {
   private ircCommands: IRCCommands | null;
   private messageQueue: MessageQueue | null;
   private services: Services | null;
+  private helpRegistry: HelpRegistry | null;
   private logger: Logger | null;
   private rootLogger: Logger | null;
   private getCasemapping: () => Casemapping;
@@ -119,6 +123,7 @@ export class PluginLoader {
     this.ircCommands = deps.ircCommands ?? null;
     this.messageQueue = deps.messageQueue ?? null;
     this.services = deps.services ?? null;
+    this.helpRegistry = deps.helpRegistry ?? null;
     this.rootLogger = deps.logger ?? null;
     this.logger = deps.logger?.child('plugin-loader') ?? null;
     this.getCasemapping = deps.getCasemapping ?? (() => 'rfc1459');
@@ -288,6 +293,9 @@ export class PluginLoader {
     // Remove all binds
     this.dispatcher.unbindAll(pluginName);
 
+    // Remove help entries
+    this.helpRegistry?.unregister(pluginName);
+
     // Remove from loaded map
     this.loaded.delete(pluginName);
 
@@ -343,6 +351,7 @@ export class PluginLoader {
     const ircCommands = this.ircCommands;
     const permissions = this.permissions;
     const services = this.services;
+    const helpRegistry = this.helpRegistry;
     const getCasemapping = this.getCasemapping;
     const getServerSupports = this.getServerSupports;
 
@@ -552,6 +561,14 @@ export class PluginLoader {
       // IRC-aware case folding using the network's active CASEMAPPING
       ircLower(text: string): string {
         return ircLower(text, getCasemapping());
+      },
+
+      // Help registry
+      registerHelp(entries: HelpEntry[]): void {
+        helpRegistry?.register(pluginId, entries);
+      },
+      getHelpEntries(): HelpEntry[] {
+        return helpRegistry?.getAll() ?? [];
       },
 
       // Logging

@@ -9,6 +9,16 @@ export const description = 'Tracks and reports when users were last seen';
 const DEFAULT_MAX_AGE_DAYS = 365;
 
 export function init(api: PluginAPI): void {
+  api.registerHelp([
+    {
+      command: '!seen',
+      flags: '-',
+      usage: '!seen <nick>',
+      description: 'Show when a nick was last seen in channel',
+      category: 'info',
+    },
+  ]);
+
   const maxAgeDays = (api.config.max_age_days as number | undefined) ?? DEFAULT_MAX_AGE_DAYS;
   const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
   const MAX_TEXT_LENGTH = 200;

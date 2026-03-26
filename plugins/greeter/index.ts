@@ -44,6 +44,16 @@ export function meetsMinFlag(record: UserRecord, minFlag: string, channel: strin
 let botNick = '';
 
 export function init(api: PluginAPI): void {
+  api.registerHelp([
+    {
+      command: '!greet',
+      flags: '-',
+      usage: '!greet [set <message>|delete]',
+      description: 'View, set, or delete your custom join greeting',
+      category: 'general',
+    },
+  ]);
+
   const message = (api.config.message as string) ?? 'Welcome to {channel}, {nick}!';
   const allowCustom = (api.config.allow_custom as boolean) ?? false;
   const minFlag = (api.config.min_flag as string) ?? 'v';

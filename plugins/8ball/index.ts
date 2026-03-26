@@ -33,6 +33,16 @@ const RESPONSES = [
 ];
 
 export function init(api: PluginAPI): void {
+  api.registerHelp([
+    {
+      command: '!8ball',
+      flags: '-',
+      usage: '!8ball <question>',
+      description: 'Ask the magic 8-ball a yes/no question',
+      category: 'fun',
+    },
+  ]);
+
   api.bind('pub', '-', '!8ball', (ctx: HandlerContext) => {
     if (!ctx.args.trim()) {
       ctx.reply('Usage: !8ball <question>');

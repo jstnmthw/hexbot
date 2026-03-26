@@ -1,7 +1,7 @@
 {
   "chanmod": {
     "enabled": true,
-    "channels": ["#hexbot-test"],
+    "channels": ["#hexbot"],
     "config": {
       "auto_op": true,
       "enforce_modes": false,
@@ -18,7 +18,7 @@
   },
   "flood": {
     "enabled": false,
-    "channels": ["#hexbot-test"],
+    "channels": ["#hexbot"],
     "config": {
       "msg_threshold": 5,
       "msg_window_secs": 3,
@@ -33,7 +33,7 @@
   },
   "greeter": {
     "enabled": true,
-    "channels": ["#hexbot-test"],
+    "channels": ["#hexbot"],
     "config": {
       "message": "Welcome to {channel}, {nick}!"
     }
@@ -48,6 +48,9 @@
     "enabled": true
   },
   "ctcp": {
+    "enabled": true
+  },
+  "help": {
     "enabled": true
   }
 }

@@ -1,0 +1,6 @@
+{
+  "cooldown_ms": 30000,
+  "reply_type": "notice",
+  "header": "*** Help ***",
+  "footer": "*** End of Help ***"
+}
