@@ -37,16 +37,63 @@ export type Flag = 'n' | 'm' | 'o' | 'v' | '-';
 // Handler context
 // ---------------------------------------------------------------------------
 
-/** Context object passed to every bind handler. */
+/**
+ * Context object passed to every bind handler.
+ *
+ * Field semantics vary by bind type:
+ *
+ * | type    | nick           | channel      | text                        | command             | args                    |
+ * |---------|----------------|--------------|-----------------------------|---------------------|-------------------------|
+ * | pub     | sender         | #channel     | full message (raw)          | command word        | text after command      |
+ * | pubm    | sender         | #channel     | full message (raw)          | command word / `''` for `/me` | args / action text |
+ * | msg     | sender         | null (PM)    | full message (raw)          | command word        | text after command      |
+ * | msgm    | sender         | null (PM)    | full message (raw)          | command word / `''` for `/me` | args / action text |
+ * | join    | joiner         | #channel     | `"#chan nick!ident@host"`    | `'JOIN'`            | `''`                    |
+ * | part    | parter         | #channel     | `"#chan nick!ident@host"`    | `'PART'`            | part reason             |
+ * | kick    | **kicked** nick | #channel    | `"#chan kicked!ident@host"`  | `'KICK'`            | `"reason (by kicker)"` |
+ * | nick    | old nick       | null         | new nick                    | `'NICK'`            | new nick                |
+ * | mode    | mode setter    | #channel     | `"#chan +o nick"`            | mode string (`+o`)  | mode param              |
+ * | ctcp    | sender         | null         | CTCP payload (no type prefix)| CTCP type (upper)  | CTCP payload            |
+ * | notice  | sender         | #chan / null | notice text                 | `'NOTICE'`          | notice text             |
+ * | topic   | setter         | #channel     | new topic                   | `'topic'`           | `''`                    |
+ * | quit    | quitter        | null         | quit reason                 | `'quit'`            | `''`                    |
+ * | time    | `''`           | null         | `''`                        | `''`                | `''`                    |
+ */
 export interface HandlerContext {
+  /** Nick of the user who triggered this event. For `kick`: the kicked user (not the kicker). */
   nick: string;
+  /** Ident of the user who triggered this event. */
   ident: string;
+  /** Hostname of the user who triggered this event. */
   hostname: string;
-  channel: string | null; // null for PMs
+  /** Channel the event occurred in. `null` for private messages, nick events, CTCP, and quit. */
+  channel: string | null;
+  /**
+   * Raw message text (for `pub`/`msg`/`pubm`/`msgm`: includes IRC formatting codes).
+   * For non-message events, a synthetic string — see table above.
+   */
   text: string;
+  /**
+   * For `pub`/`msg`: the first whitespace-delimited word with formatting stripped (e.g. `'!op'`).
+   * For `pubm`/`msgm` triggered by `/me` actions: `''`.
+   * For non-message events: an event-specific keyword — see table above.
+   */
   command: string;
+  /**
+   * For `pub`/`msg`: everything after the command word, trimmed.
+   * For `pubm`/`msgm` triggered by `/me` actions: the action text.
+   * For other events: event-specific value — see table above.
+   */
   args: string;
+  /**
+   * Send a reply to the channel (or nick if from a PM).
+   * Long messages are automatically split. Output is rate-limited.
+   */
   reply(msg: string): void;
+  /**
+   * Send a private NOTICE reply to the originating nick.
+   * Long messages are automatically split. Output is rate-limited.
+   */
   replyPrivate(msg: string): void;
 }
 
@@ -71,9 +118,19 @@ export interface PluginPermissions {
   checkFlags(requiredFlags: string, ctx: HandlerContext): boolean;
 }
 
+/** Result from a NickServ identity verification query. */
+export interface VerifyResult {
+  /** True if the nick is currently identified with NickServ (ACC level ≥ 3). */
+  verified: boolean;
+  /** The services account name, or null if not identified / unknown. */
+  account: string | null;
+}
+
 /** Read-only services API for plugins. */
 export interface PluginServices {
-  verifyUser(nick: string): Promise<{ verified: boolean; account: string | null }>;
+  /** Query NickServ ACC/STATUS to verify a nick's identity. */
+  verifyUser(nick: string): Promise<VerifyResult>;
+  /** True if the configured services adapter is available (type is not 'none'). */
   isAvailable(): boolean;
 }
 
@@ -166,20 +223,31 @@ export interface PluginExports {
 // Channel state
 // ---------------------------------------------------------------------------
 
-/** A user present in a channel. */
+/** A user present in a channel (plugin-facing view). */
 export interface ChannelUser {
   nick: string;
   ident: string;
   hostname: string;
-  modes: string; // e.g. "o" for op, "v" for voice
-  joinedAt: number; // unix timestamp
+  /** Channel modes as a concatenated string, e.g. `"o"` for op, `"ov"` for op+voice. */
+  modes: string;
+  /** Unix timestamp (ms) of when the user joined. */
+  joinedAt: number;
+  /**
+   * Services account name from IRCv3 `account-notify` / `extended-join`.
+   * - `string`    — nick is identified as this account
+   * - `null`      — nick is known NOT to be identified
+   * - `undefined` — no account-notify/extended-join data available for this user
+   */
+  accountName?: string | null;
 }
 
-/** State for a single channel. */
+/** State for a single channel (plugin-facing view). */
 export interface ChannelState {
   name: string;
   topic: string;
+  /** Channel modes as a string (e.g. `"+mnt"`). */
   modes: string;
+  /** All users currently in the channel, keyed by lowercased nick. */
   users: Map<string, ChannelUser>;
 }
 

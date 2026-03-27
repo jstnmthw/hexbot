@@ -515,6 +515,7 @@ export class PluginLoader {
             hostname: u.hostname,
             modes: u.modes.join(''),
             joinedAt: u.joinedAt.getTime(),
+            accountName: u.accountName,
           });
         }
         return { name: ch.name, topic: ch.topic, modes: ch.modes, users };
@@ -529,6 +530,7 @@ export class PluginLoader {
           hostname: u.hostname,
           modes: u.modes.join(''),
           joinedAt: u.joinedAt.getTime(),
+          accountName: u.accountName,
         }));
       },
       getUserHostmask(channel: string, nick: string): string | undefined {
