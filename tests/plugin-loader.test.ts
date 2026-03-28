@@ -132,7 +132,6 @@ function createLoaderFull(pluginDir: string, overrides?: Partial<PluginLoaderDep
   const services = new Services({
     client: mockChannelClient,
     servicesConfig: MINIMAL_BOT_CONFIG.services,
-    identityConfig: MINIMAL_BOT_CONFIG.identity,
     eventBus,
   });
   const logger = new Logger(null, { value: 'debug' });

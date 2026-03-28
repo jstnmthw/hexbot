@@ -144,7 +144,6 @@ export class Bot {
     this.services = new Services({
       client: this.client,
       servicesConfig: this.config.services,
-      identityConfig: this.config.identity,
       eventBus: this.eventBus,
       logger: this.logger,
     });
@@ -241,7 +240,6 @@ export class Bot {
     this.bridge = new IRCBridge({
       client: this.client,
       dispatcher: this.dispatcher,
-      eventBus: this.eventBus,
       botNick: this.config.irc.nick,
       messageQueue: this.messageQueue,
       channelState: this.channelState,

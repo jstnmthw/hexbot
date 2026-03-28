@@ -2,7 +2,7 @@
 // NickServ integration — bot authentication and user identity verification.
 import type { BotEventBus } from '../event-bus';
 import type { Logger } from '../logger';
-import type { IdentityConfig, ServicesConfig } from '../types';
+import type { ServicesConfig } from '../types';
 import { toEventObject } from '../utils/irc-event';
 import { type Casemapping, ircLower } from '../utils/wildcard';
 
@@ -32,7 +32,6 @@ interface PendingVerify {
 export interface ServicesDeps {
   client: ServicesClient;
   servicesConfig: ServicesConfig;
-  identityConfig: IdentityConfig;
   eventBus: BotEventBus;
   logger?: Logger | null;
 }
@@ -44,7 +43,6 @@ export interface ServicesDeps {
 export class Services {
   private client: ServicesClient;
   private servicesConfig: ServicesConfig;
-  private identityConfig: IdentityConfig;
   private eventBus: BotEventBus;
   private logger: Logger | null;
   private pending: Map<string, PendingVerify> = new Map();
@@ -54,7 +52,6 @@ export class Services {
   constructor(deps: ServicesDeps) {
     this.client = deps.client;
     this.servicesConfig = deps.servicesConfig;
-    this.identityConfig = deps.identityConfig;
     this.eventBus = deps.eventBus;
     this.logger = deps.logger?.child('services') ?? null;
   }

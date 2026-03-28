@@ -71,7 +71,6 @@ export function createMockBot(options?: { botNick?: string; currentNick?: string
   const bridge = new IRCBridge({
     client,
     dispatcher,
-    eventBus,
     botNick: currentNick,
     logger,
   });
@@ -104,7 +103,6 @@ export function createMockBot(options?: { botNick?: string; currentNick?: string
   const services = new Services({
     client,
     servicesConfig: botConfig.services,
-    identityConfig: botConfig.identity,
     eventBus,
     logger,
   });

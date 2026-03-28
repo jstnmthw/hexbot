@@ -44,10 +44,6 @@ async function flush(): Promise<void> {
   await Promise.resolve();
 }
 
-async function _tick(ms = 20): Promise<void> {
-  await new Promise<void>((r) => setTimeout(r, ms));
-}
-
 function giveBotOps(bot: MockBot, channel: string): void {
   const nick = bot.client.user.nick;
   bot.client.simulateEvent('join', { nick, ident: 'bot', hostname: 'bot.host', channel });

@@ -110,7 +110,7 @@ export function parseDccChatPayload(args: string): DccChatPayload | null {
 /** Returns true if the DCC request is passive (port=0 with a token).
  *  Some clients (e.g. mIRC) send their real IP with port=0; others send ip=0.
  *  Port=0 is the universal passive-DCC indicator. */
-export function isPassiveDcc(ip: number, port: number): boolean {
+export function isPassiveDcc(_ip: number, port: number): boolean {
   return port === 0;
 }
 

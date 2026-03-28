@@ -3,7 +3,6 @@
 // This is the trust boundary — all IRC data entering the dispatcher passes through here.
 import type { MessageQueue } from './core/message-queue';
 import type { EventDispatcher } from './dispatcher';
-import type { BotEventBus } from './event-bus';
 import type { Logger } from './logger';
 import type { HandlerContext } from './types';
 import { isModeArray, toEventObject } from './utils/irc-event';
@@ -31,7 +30,6 @@ interface ChannelStateProvider {
 interface IRCBridgeOptions {
   client: IRCClient;
   dispatcher: EventDispatcher;
-  eventBus: BotEventBus;
   botNick: string;
   messageQueue?: MessageQueue | null;
   channelState?: ChannelStateProvider | null;
@@ -72,7 +70,6 @@ function isValidChannel(name: string): boolean {
 export class IRCBridge {
   private client: IRCClient;
   private dispatcher: EventDispatcher;
-  private eventBus: BotEventBus;
   private botNick: string;
   private messageQueue: MessageQueue | null;
   private channelState: ChannelStateProvider | null;
@@ -84,7 +81,6 @@ export class IRCBridge {
   constructor(options: IRCBridgeOptions) {
     this.client = options.client;
     this.dispatcher = options.dispatcher;
-    this.eventBus = options.eventBus;
     this.botNick = options.botNick;
     this.messageQueue = options.messageQueue ?? null;
     this.channelState = options.channelState ?? null;

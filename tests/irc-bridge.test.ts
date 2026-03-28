@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { EventDispatcher } from '../src/dispatcher';
-import { BotEventBus } from '../src/event-bus';
 import { IRCBridge } from '../src/irc-bridge';
 import { Logger, createLogger } from '../src/logger';
 import type { HandlerContext } from '../src/types';
@@ -10,14 +9,12 @@ import { MockIRCClient } from './helpers/mock-irc';
 describe('IRCBridge', () => {
   let client: MockIRCClient;
   let dispatcher: EventDispatcher;
-  let eventBus: BotEventBus;
   let bridge: IRCBridge;
 
   beforeEach(() => {
     client = new MockIRCClient();
     dispatcher = new EventDispatcher();
-    eventBus = new BotEventBus();
-    bridge = new IRCBridge({ client, dispatcher, eventBus, botNick: 'testbot' });
+    bridge = new IRCBridge({ client, dispatcher, botNick: 'testbot' });
     bridge.attach();
   });
 
@@ -1214,7 +1211,6 @@ describe('IRCBridge', () => {
       topicBridge = new IRCBridge({
         client: topicClient,
         dispatcher: topicDispatcher,
-        eventBus: new BotEventBus(),
         botNick: 'testbot',
       });
       topicBridge.attach();
@@ -1405,11 +1401,9 @@ describe('IRCBridge', () => {
 
       const loggedClient = new MockIRCClient();
       const loggedDispatcher = new EventDispatcher();
-      const loggedBus = new BotEventBus();
       const loggedBridge = new IRCBridge({
         client: loggedClient,
         dispatcher: loggedDispatcher,
-        eventBus: loggedBus,
         botNick: 'testbot',
         logger,
       });

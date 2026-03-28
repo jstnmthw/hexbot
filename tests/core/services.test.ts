@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Services } from '../../src/core/services';
 import { BotEventBus } from '../../src/event-bus';
-import type { IdentityConfig, ServicesConfig } from '../../src/types';
+import type { ServicesConfig } from '../../src/types';
 
 // ---------------------------------------------------------------------------
 // Mock IRC client
@@ -35,7 +35,6 @@ function createServices(opts?: {
   nickserv?: string;
   password?: string;
   sasl?: boolean;
-  method?: IdentityConfig['method'];
 }): { services: Services; client: MockClient; eventBus: BotEventBus } {
   const client = new MockClient();
   const eventBus = new BotEventBus();
@@ -47,15 +46,9 @@ function createServices(opts?: {
     sasl: opts?.sasl ?? false,
   };
 
-  const identityConfig: IdentityConfig = {
-    method: opts?.method ?? 'hostmask',
-    require_acc_for: [],
-  };
-
   const services = new Services({
     client,
     servicesConfig,
-    identityConfig,
     eventBus,
   });
 
