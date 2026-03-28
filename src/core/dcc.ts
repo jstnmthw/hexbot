@@ -313,6 +313,8 @@ export class DCCSession {
       this.socket.destroy();
     }
 
+    this.manager.removeSession(this.nick);
+    this.manager.announce(`*** ${this.handle} has left the console`);
     this.logger?.info(`DCC session closed: ${this.handle} (${reason ?? 'unknown'})`);
   }
 

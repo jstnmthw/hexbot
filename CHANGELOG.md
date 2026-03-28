@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- `createPluginApi()` refactored into focused sub-factories (`createPluginIrcActionsApi`, `createPluginChannelStateApi`, `createPluginChannelSettingsApi`, `createPluginHelpApi`, `createPluginLogApi`) — drops from 231 to 47 lines; no behaviour change
+- `flood` plugin: extracted `FloodConfig` type and `isFloodTriggered` helper; lifted three bind handlers out of `init()` as module-level functions; `init()` drops from 85 to 33 lines
+- `dcc`: passive-DCC guard moved into `validateDccRequest()` as first check; `onDccCtcp()` drops from 26 to 12 lines
+- `.claude/` removed from version control and added to `.gitignore` — skills and local settings are local-only
+- Dependency bumps: vitest 4.1.0 → 4.1.2, @vitest/coverage-v8 4.1.0 → 4.1.2, typescript-eslint 8.57.1 → 8.57.2
+
+### Fixed
+
+- **DCC idle timeout leaves stale session**: after an idle timeout closed a session, the session was not removed from the sessions map — subsequent connect attempts were rejected with "you already have an active session". `close()` now calls `removeSession()` directly so cleanup runs regardless of which path triggers it
+- **Crash on DCC CTCP**: `ctcpRequest()` used instead of the non-existent `ctcp()` method in irc-framework — previously threw an uncaught `TypeError` and crashed the bot
+- Dead code removed (`/deadcode` audit): `Services.identityConfig` private field (stored but never read), `IRCBridge.eventBus` private field (same pattern), unused `_tick` helper in `flood.test.ts`, `isPassiveDcc` `ip` param renamed to `_ip`
+
 ### Added
 
 - **Phase 0 — Scaffolding**: project structure, `package.json`, `tsconfig.json`, ESLint config, Vitest setup
