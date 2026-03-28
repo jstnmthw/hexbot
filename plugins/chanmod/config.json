@@ -2,6 +2,8 @@
   "auto_op": true,
   "enforce_modes": false,
   "enforce_channel_modes": "",
+  "enforce_channel_key": "",
+  "enforce_channel_limit": 0,
   "nodesynch_nicks": ["ChanServ"],
   "op_flags": ["n", "m", "o"],
   "halfop_flags": [],

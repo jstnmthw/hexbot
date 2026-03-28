@@ -113,7 +113,7 @@ export class Bot {
   }
   private startTime: number = Date.now();
   private bootStart: number = Date.now();
-  private configuredChannels: string[] = [];
+  private configuredChannels: Array<{ name: string; key?: string }> = [];
 
   constructor(configPath?: string) {
     const cfgPath = resolve(configPath ?? './config/bot.json');
@@ -133,7 +133,9 @@ export class Bot {
     this.dispatcher = new EventDispatcher(this.permissions, this.logger);
     this.commandHandler = new CommandHandler(this.permissions);
     this.client = new IrcClient();
-    this.configuredChannels = [...this.config.irc.channels];
+    this.configuredChannels = this.config.irc.channels.map((entry) =>
+      typeof entry === 'string' ? { name: entry } : { name: entry.name, key: entry.key },
+    );
     this.channelState = new ChannelState(this.client, this.eventBus, this.logger);
     this.ircCommands = new IRCCommands(this.client, this.db, undefined, this.logger);
     this.messageQueue = new MessageQueue({
@@ -234,7 +236,7 @@ export class Bot {
     registerDispatcherCommands(this.commandHandler, this.dispatcher);
     registerIRCAdminCommands(this.commandHandler, this.client, {
       getUptime: () => Date.now() - this.startTime,
-      getChannels: () => [...this.configuredChannels],
+      getChannels: () => this.configuredChannels.map((c) => c.name),
       getBindCount: () => this.dispatcher.listBinds().length,
       getUserCount: () => this.permissions.listUsers().length,
     });
@@ -406,10 +408,27 @@ export class Bot {
       this.services.setCasemapping(this._casemapping);
       if (this._dccManager) this._dccManager.setCasemapping(this._casemapping);
 
+      // Log join failures so the user knows why the bot is not in a channel
+      const JOIN_ERRORS: Record<string, string> = {
+        '471': 'channel is full (+l)',
+        '473': 'invite only (+i)',
+        '474': 'banned from channel (+b)',
+        '475': 'bad channel key (+k)',
+        '477': 'need to register nick (+r)',
+      };
+      for (const [numeric, reason] of Object.entries(JOIN_ERRORS)) {
+        this.client.on(numeric, (event: unknown) => {
+          const e = event as Record<string, unknown>;
+          const params = Array.isArray(e.params) ? (e.params as unknown[]) : [];
+          const channel = String(params[1] ?? '');
+          this.botLogger.warn(`Cannot join ${channel}: ${reason}`);
+        });
+      }
+
       // Join configured channels
-      for (const channel of this.configuredChannels) {
-        this.client.join(channel);
-        this.botLogger.info(`Joining ${channel}`);
+      for (const ch of this.configuredChannels) {
+        this.client.join(ch.name, ch.key);
+        this.botLogger.info(`Joining ${ch.name}`);
       }
 
       resolve();
@@ -483,7 +502,7 @@ export class Bot {
     const version = this.readPackageVersion();
     const cfg = this.config.irc;
     const tls = cfg.tls ? ' (TLS)' : '';
-    const channels = this.configuredChannels.join(', ') || 'none';
+    const channels = this.configuredChannels.map((c) => c.name).join(', ') || 'none';
 
     console.log();
     console.log(`${lime('◆')} ${lime('hexbot')} ${lime(`v${version}`)}`);

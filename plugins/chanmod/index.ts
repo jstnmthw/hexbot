@@ -36,7 +36,19 @@ export function init(api: PluginAPI): void {
       key: 'channel_modes',
       type: 'string',
       default: config.enforce_channel_modes,
-      description: 'Mode string to enforce when enforce_modes is on',
+      description: 'Mode string to enforce when enforce_modes is on (e.g. "imnpst")',
+    },
+    {
+      key: 'channel_key',
+      type: 'string',
+      default: config.enforce_channel_key,
+      description: 'Channel key (+k) to enforce when enforce_modes is on (empty = disabled)',
+    },
+    {
+      key: 'channel_limit',
+      type: 'int',
+      default: config.enforce_channel_limit,
+      description: 'Channel user limit (+l) to enforce when enforce_modes is on (0 = disabled)',
     },
     {
       key: 'auto_op',

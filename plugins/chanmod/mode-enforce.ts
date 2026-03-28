@@ -37,21 +37,64 @@ export function setupModeEnforce(
     const channelModes = api.channelSettings.get(channel, 'channel_modes') as string;
     const enforceChannelModeSet = parseModesSet(channelModes);
 
-    // --- Channel mode enforcement (e.g. +nt) ---
+    // Shared guards reused by all channel-mode enforcement blocks below.
+    const enforceModes = api.channelSettings.get(channel, 'enforce_modes') as boolean;
+    const isNodesynch = config.nodesynch_nicks.some(
+      (n) => api.ircLower(n) === api.ircLower(setter),
+    );
+    const canEnforce =
+      enforceModes && !isNodesynch && !isBotNick(api, setter) && botHasOps(api, channel);
+
+    // --- Simple channel mode enforcement (e.g. +imnpst) ---
     if (enforceChannelModeSet.size > 0 && modeStr.startsWith('-') && modeStr.length === 2) {
       const modeChar = modeStr[1];
-      if (enforceChannelModeSet.has(modeChar)) {
-        const enforceModes = api.channelSettings.get(channel, 'enforce_modes') as boolean;
-        const isNodesynch = config.nodesynch_nicks.some(
-          (n) => api.ircLower(n) === api.ircLower(setter),
-        );
-        if (enforceModes && !isNodesynch && !isBotNick(api, setter) && botHasOps(api, channel)) {
-          api.log(`Re-enforcing +${modeChar} on ${channel} (removed by ${setter})`);
-          const timer = setTimeout(() => {
-            api.mode(channel, '+' + modeChar);
-          }, config.enforce_delay_ms);
-          state.enforcementTimers.push(timer);
-        }
+      if (enforceChannelModeSet.has(modeChar) && canEnforce) {
+        api.log(`Re-enforcing +${modeChar} on ${channel} (removed by ${setter})`);
+        const timer = setTimeout(() => {
+          api.mode(channel, '+' + modeChar);
+        }, config.enforce_delay_ms);
+        state.enforcementTimers.push(timer);
+      }
+    }
+
+    // --- Channel key enforcement (+k / -k) ---
+    const channelKey = api.channelSettings.get(channel, 'channel_key') as string;
+    if (channelKey && canEnforce) {
+      if (modeStr === '-k') {
+        // Key was removed — restore it
+        api.log(`Re-enforcing +k on ${channel} (key removed by ${setter})`);
+        const timer = setTimeout(() => {
+          api.mode(channel, '+k', channelKey);
+        }, config.enforce_delay_ms);
+        state.enforcementTimers.push(timer);
+      } else if (modeStr === '+k' && target !== channelKey) {
+        // Key was changed to something else — overwrite with the configured key
+        api.log(`Re-enforcing channel key on ${channel} (changed by ${setter})`);
+        const timer = setTimeout(() => {
+          api.mode(channel, '+k', channelKey);
+        }, config.enforce_delay_ms);
+        state.enforcementTimers.push(timer);
+      }
+    }
+
+    // --- Channel limit enforcement (+l / -l) ---
+    const channelLimit = api.channelSettings.get(channel, 'channel_limit') as number;
+    if (channelLimit > 0 && canEnforce) {
+      const limitStr = String(channelLimit);
+      if (modeStr === '-l') {
+        // Limit was removed — restore it
+        api.log(`Re-enforcing +l ${channelLimit} on ${channel} (limit removed by ${setter})`);
+        const timer = setTimeout(() => {
+          api.mode(channel, '+l', limitStr);
+        }, config.enforce_delay_ms);
+        state.enforcementTimers.push(timer);
+      } else if (modeStr === '+l' && target !== limitStr) {
+        // Limit was changed — overwrite with the configured limit
+        api.log(`Re-enforcing channel limit on ${channel} (changed to ${target} by ${setter})`);
+        const timer = setTimeout(() => {
+          api.mode(channel, '+l', limitStr);
+        }, config.enforce_delay_ms);
+        state.enforcementTimers.push(timer);
       }
     }
 
@@ -109,9 +152,6 @@ export function setupModeEnforce(
     const bitch = api.channelSettings.get(channel, 'bitch') as boolean;
     if (bitch && (modeStr === '+o' || modeStr === '+h') && target) {
       if (isBotNick(api, setter) || isBotNick(api, target)) return;
-      const isNodesynch = config.nodesynch_nicks.some(
-        (n) => api.ircLower(n) === api.ircLower(setter),
-      );
       if (!isNodesynch && botHasOps(api, channel)) {
         const targetFlags = getUserFlags(api, channel, target);
         const isAuthorized =
@@ -157,7 +197,6 @@ export function setupModeEnforce(
     if (wasIntentional(state, api, channel, target)) return;
 
     // -h/-v: only enforce if enforce_modes is on; punish_deop only applies to -o
-    const enforceModes = api.channelSettings.get(channel, 'enforce_modes') as boolean;
     const protectOps = api.channelSettings.get(channel, 'protect_ops') as boolean;
     if ((modeStr === '-h' || modeStr === '-v') && !enforceModes) return;
     // -o: process if either feature is enabled

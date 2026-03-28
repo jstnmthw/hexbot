@@ -269,6 +269,12 @@ export interface UserRecord {
 // Config shapes
 // ---------------------------------------------------------------------------
 
+/** A channel entry — plain name or name+key for keyed (+k) channels. */
+export interface ChannelEntry {
+  name: string;
+  key?: string;
+}
+
 /** IRC connection settings from config/bot.json. */
 export interface IrcConfig {
   host: string;
@@ -277,7 +283,9 @@ export interface IrcConfig {
   nick: string;
   username: string;
   realname: string;
-  channels: string[];
+  /** Channel list. Each entry is either a plain name (e.g. "#hexbot") or
+   *  an object with a key (e.g. {"name": "#secret", "key": "pass"}). */
+  channels: (string | ChannelEntry)[];
   /**
    * Path to a TLS client certificate file (PEM format).
    * Required when `services.sasl_mechanism` is "EXTERNAL" (CertFP authentication).

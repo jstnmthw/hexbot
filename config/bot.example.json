@@ -6,7 +6,7 @@
     "nick": "Hexbot",
     "username": "hexbot",
     "realname": "Hexbot IRC Bot",
-    "channels": ["#hexbot"],
+    "channels": ["#hexbot", { "name": "#secret", "key": "password" }],
     "_comment_tls_cert": "Optional: set tls_cert + tls_key and sasl_mechanism=EXTERNAL for CertFP auth (no password needed)"
   },
   "owner": {

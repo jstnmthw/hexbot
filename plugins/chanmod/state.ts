@@ -56,6 +56,8 @@ export interface ChanmodConfig {
   enforce_delay_ms: number;
   nodesynch_nicks: string[];
   enforce_channel_modes: string;
+  enforce_channel_key: string;
+  enforce_channel_limit: number;
   // Cycle
   cycle_on_deop: boolean;
   cycle_delay_ms: number;
@@ -106,6 +108,8 @@ export function readConfig(api: PluginAPI): ChanmodConfig {
     enforce_delay_ms: cfg(c, 'enforce_delay_ms', 500),
     nodesynch_nicks: cfg<string[]>(c, 'nodesynch_nicks', ['ChanServ']),
     enforce_channel_modes: cfg(c, 'enforce_channel_modes', ''),
+    enforce_channel_key: cfg(c, 'enforce_channel_key', ''),
+    enforce_channel_limit: cfg(c, 'enforce_channel_limit', 0),
     cycle_on_deop: cfg(c, 'cycle_on_deop', false),
     cycle_delay_ms: cfg(c, 'cycle_delay_ms', 5000),
     default_kick_reason: cfg(c, 'default_kick_reason', 'Requested'),

@@ -366,7 +366,11 @@ export class PluginLoader {
 
     // Build plugin-facing bot config (password omitted; filesystem paths omitted).
     const pluginBotConfig: PluginBotConfig = {
-      irc: { ...this.botConfig.irc, channels: [...this.botConfig.irc.channels] },
+      irc: {
+        ...this.botConfig.irc,
+        // Expose only channel names to plugins — never expose channel keys
+        channels: this.botConfig.irc.channels.map((c) => (typeof c === 'string' ? c : c.name)),
+      },
       owner: { ...this.botConfig.owner },
       identity: { ...this.botConfig.identity },
       services: {
