@@ -16,6 +16,7 @@ import type { CommandHandler } from '../command-handler';
 import type { EventDispatcher } from '../dispatcher';
 import type { Logger } from '../logger';
 import type { DccConfig, HandlerContext, UserRecord } from '../types';
+import { toEventObject } from '../utils/irc-event';
 import { type Casemapping, ircLower } from '../utils/wildcard';
 import type { Permissions } from './permissions';
 import type { Services } from './services';
@@ -29,6 +30,8 @@ export interface DCCIRCClient {
   notice(target: string, message: string): void;
   ctcpRequest(target: string, type: string, ...params: string[]): void;
   ctcpResponse(target: string, type: string, ...params: string[]): void;
+  on(event: string, listener: (...args: unknown[]) => void): void;
+  removeListener(event: string, listener: (...args: unknown[]) => void): void;
 }
 
 export interface DCCManagerDeps {
@@ -356,6 +359,7 @@ export class DCCManager {
   private pending: Map<number, PendingDCC> = new Map(); // key = port
   private casemapping: Casemapping = 'rfc1459';
   private botNick: string;
+  private ircListeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
 
   constructor(deps: DCCManagerDeps) {
     this.client = deps.client;
@@ -376,6 +380,32 @@ export class DCCManager {
   /** Attach to the dispatcher — starts listening for DCC CTCP requests. */
   attach(): void {
     this.dispatcher.bind('ctcp', '-', 'DCC', this.onDccCtcp.bind(this), PLUGIN_ID);
+
+    // Mirror incoming private messages and notices to all DCC sessions so
+    // operators can see responses from services (e.g. NickServ, LimitServ).
+    const onNotice = (...args: unknown[]) => {
+      const e = toEventObject(args[0]);
+      const nick = String(e.nick ?? '');
+      const target = String(e.target ?? '');
+      const message = String(e.message ?? '');
+      if (/^[#&]/.test(target)) return; // skip channel notices
+      this.announce(`-${nick}- ${message}`);
+    };
+    const onPrivmsg = (...args: unknown[]) => {
+      const e = toEventObject(args[0]);
+      const nick = String(e.nick ?? '');
+      const target = String(e.target ?? '');
+      const message = String(e.message ?? '');
+      if (/^[#&]/.test(target)) return; // skip channel messages
+      this.announce(`<${nick}> ${message}`);
+    };
+    this.client.on('notice', onNotice);
+    this.client.on('privmsg', onPrivmsg);
+    this.ircListeners = [
+      { event: 'notice', fn: onNotice },
+      { event: 'privmsg', fn: onPrivmsg },
+    ];
+
     this.logger?.info(
       `DCC CHAT listening (${this.config.ip}, ports ${this.config.port_range[0]}–${this.config.port_range[1]})`,
     );
@@ -384,6 +414,10 @@ export class DCCManager {
   /** Detach and close all sessions. */
   detach(reason = 'Bot shutting down.'): void {
     this.dispatcher.unbindAll(PLUGIN_ID);
+    for (const { event, fn } of this.ircListeners) {
+      this.client.removeListener(event, fn);
+    }
+    this.ircListeners = [];
     this.closeAll(reason);
     // Close any pending (not-yet-accepted) servers
     for (const pending of this.pending.values()) {

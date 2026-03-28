@@ -1433,4 +1433,107 @@ describe('IRCBridge', () => {
       vi.restoreAllMocks();
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Flood limiter integration
+  // ---------------------------------------------------------------------------
+
+  describe('flood limiter integration', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('blocks pub dispatch after count+1 channel messages from same hostmask', async () => {
+      dispatcher.setFloodConfig({ pub: { count: 3, window: 10 } });
+      const handler = vi.fn();
+      dispatcher.bind('pub', '-', '!help', handler, 'test');
+
+      const event = {
+        nick: 'spammer',
+        ident: 'user',
+        hostname: 'evil.host',
+        target: '#test',
+        message: '!help',
+      };
+
+      // 3 messages allowed
+      for (let i = 0; i < 3; i++) {
+        client.simulateEvent('privmsg', event);
+        await Promise.resolve();
+      }
+      expect(handler).toHaveBeenCalledTimes(3);
+
+      // 4th message blocked
+      client.simulateEvent('privmsg', event);
+      await Promise.resolve();
+      expect(handler).toHaveBeenCalledTimes(3);
+
+      dispatcher.unbindAll('test');
+    });
+
+    it('blocks msg dispatch after count+1 private messages from same hostmask', async () => {
+      dispatcher.setFloodConfig({ msg: { count: 3, window: 10 } });
+      const handler = vi.fn();
+      dispatcher.bind('msg', '-', '!help', handler, 'test');
+
+      const event = {
+        nick: 'spammer',
+        ident: 'user',
+        hostname: 'evil.host',
+        target: 'testbot', // PM target is the bot's nick
+        message: '!help',
+      };
+
+      for (let i = 0; i < 3; i++) {
+        client.simulateEvent('privmsg', event);
+        await Promise.resolve();
+      }
+      expect(handler).toHaveBeenCalledTimes(3);
+
+      client.simulateEvent('privmsg', event);
+      await Promise.resolve();
+      expect(handler).toHaveBeenCalledTimes(3);
+
+      dispatcher.unbindAll('test');
+    });
+
+    it('does not block an owner-flagged user even when flooded', async () => {
+      const permissions = {
+        checkFlags: vi.fn().mockReturnValue(true), // always owner
+      };
+      const ownerDispatcher = new EventDispatcher(permissions);
+      ownerDispatcher.setFloodConfig({ pub: { count: 3, window: 10 } });
+      const ownerBridge = new IRCBridge({
+        client,
+        dispatcher: ownerDispatcher,
+        botNick: 'testbot',
+      });
+      ownerBridge.attach();
+
+      const handler = vi.fn();
+      ownerDispatcher.bind('pub', '-', '!help', handler, 'test');
+
+      const event = {
+        nick: 'owner',
+        ident: 'o',
+        hostname: 'trusted.host',
+        target: '#test',
+        message: '!help',
+      };
+
+      for (let i = 0; i < 10; i++) {
+        client.simulateEvent('privmsg', event);
+        await Promise.resolve();
+      }
+
+      expect(handler).toHaveBeenCalledTimes(10);
+
+      ownerBridge.detach();
+      ownerDispatcher.unbindAll('test');
+    });
+  });
 });

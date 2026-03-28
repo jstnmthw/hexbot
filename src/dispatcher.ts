@@ -1,7 +1,14 @@
 // hexbot — Event dispatcher
 // Routes IRC events to registered handlers based on bind type, mask, and flags.
 import type { Logger } from './logger';
-import type { BindHandler, BindType, HandlerContext } from './types';
+import type {
+  BindHandler,
+  BindType,
+  FloodConfig,
+  FloodWindowConfig,
+  HandlerContext,
+} from './types';
+import { SlidingWindowCounter } from './utils/sliding-window';
 import { type Casemapping, caseCompare, wildcardMatch } from './utils/wildcard';
 
 // ---------------------------------------------------------------------------
@@ -50,6 +57,26 @@ export interface BindFilter {
   pluginId?: string;
 }
 
+/**
+ * Narrow interface for sending flood-warning NOTICEs.
+ * Injected by the bot to avoid a direct dep on the IRC client.
+ */
+export interface FloodNoticeProvider {
+  sendNotice(nick: string, message: string): void;
+}
+
+/** Result from floodCheck(). */
+export interface FloodCheckResult {
+  /** True if the user is currently rate-limited and this message should be dropped. */
+  blocked: boolean;
+  /**
+   * True only on the first blocked message per window — the caller should
+   * send a one-time warning notice if this is true.
+   * Always false when blocked is false.
+   */
+  firstBlock: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -61,6 +88,8 @@ const NON_STACKABLE_TYPES: ReadonlySet<BindType> = new Set(['pub', 'msg']);
 // EventDispatcher
 // ---------------------------------------------------------------------------
 
+const FLOOD_DEFAULTS: Required<FloodWindowConfig> = { count: 5, window: 10 };
+
 export class EventDispatcher {
   private binds: BindEntry[] = [];
   private timers: Map<BindEntry, ReturnType<typeof setInterval>> = new Map();
@@ -68,6 +97,16 @@ export class EventDispatcher {
   private verification: VerificationProvider | null = null;
   private logger: Logger | null;
   private casemapping: Casemapping = 'rfc1459';
+
+  private floodNotice: FloodNoticeProvider | null = null;
+  private floodConfig: {
+    pub: Required<FloodWindowConfig>;
+    msg: Required<FloodWindowConfig>;
+  } | null = null;
+  private pubFlood = new SlidingWindowCounter();
+  private msgFlood = new SlidingWindowCounter();
+  /** Tracks which hostmask keys have already received the one-time flood warning this window. */
+  private floodWarned = new Set<string>();
 
   constructor(permissions?: PermissionsProvider | null, logger?: Logger | null) {
     this.permissions = permissions ?? null;
@@ -81,6 +120,68 @@ export class EventDispatcher {
 
   setCasemapping(cm: Casemapping): void {
     this.casemapping = cm;
+  }
+
+  /** Wire in the flood notice provider (injected by Bot to avoid a direct IRC client dep). */
+  setFloodNotice(provider: FloodNoticeProvider): void {
+    this.floodNotice = provider;
+  }
+
+  /**
+   * Configure input flood limiting. Call with the `flood` section of bot.json.
+   * If not called, flood limiting is disabled.
+   */
+  setFloodConfig(config: FloodConfig): void {
+    this.floodConfig = {
+      pub: { ...FLOOD_DEFAULTS, ...config.pub },
+      msg: { ...FLOOD_DEFAULTS, ...config.msg },
+    };
+  }
+
+  /**
+   * Gate check for per-user input flood limiting.
+   *
+   * Call this **once per IRC message** in the bridge before the paired dispatch calls
+   * (pub+pubm for channel messages, msg+msgm for private messages). If `blocked` is
+   * true, skip both dispatch calls.
+   *
+   * - `pub` covers channel PRIVMSG (pub + pubm binds share one counter)
+   * - `msg` covers private PRIVMSG (msg + msgm binds share one counter)
+   * - Users with the `n` (owner) flag bypass flood protection entirely
+   * - On the first blocked message per window, `firstBlock` is true — the caller
+   *   should send a one-time NOTICE warning (this method handles it automatically
+   *   when a `FloodNoticeProvider` is attached)
+   */
+  floodCheck(floodType: 'pub' | 'msg', key: string, ctx: HandlerContext): FloodCheckResult {
+    if (!this.floodConfig) return { blocked: false, firstBlock: false };
+
+    // Owner bypass — n-flagged users are never flood-limited
+    if (this.permissions?.checkFlags('n', ctx)) return { blocked: false, firstBlock: false };
+
+    const cfg = this.floodConfig[floodType];
+    const counter = floodType === 'pub' ? this.pubFlood : this.msgFlood;
+    const windowMs = cfg.window * 1000;
+
+    const exceeded = counter.check(key, windowMs, cfg.count);
+
+    if (!exceeded) {
+      // Window has room — clear any stale warned state so next flood gets a fresh notice
+      this.floodWarned.delete(key);
+      return { blocked: false, firstBlock: false };
+    }
+
+    // User is flooding
+    if (!this.floodWarned.has(key)) {
+      this.floodWarned.add(key);
+      this.floodNotice?.sendNotice(
+        ctx.nick,
+        'You are sending commands too quickly. Please slow down.',
+      );
+      this.logger?.warn(`[dispatcher] flood: ${key} (${floodType}) — blocked`);
+      return { blocked: true, firstBlock: true };
+    }
+
+    return { blocked: true, firstBlock: false };
   }
 
   /**

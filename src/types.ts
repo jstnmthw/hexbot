@@ -331,6 +331,24 @@ export interface QueueConfig {
   burst?: number;
 }
 
+/** Per-event-type flood window configuration. */
+export interface FloodWindowConfig {
+  /** Max events allowed within the window before blocking. */
+  count: number;
+  /** Window size in seconds. */
+  window: number;
+}
+
+/**
+ * Input flood limiter configuration.
+ * `pub` covers channel commands (pub + pubm); `msg` covers private message commands (msg + msgm).
+ * If absent, flood limiting is disabled.
+ */
+export interface FloodConfig {
+  pub?: FloodWindowConfig;
+  msg?: FloodWindowConfig;
+}
+
 /** SOCKS5 proxy settings. */
 export interface ProxyConfig {
   /** Must be true for the proxy to be used. */
@@ -371,6 +389,7 @@ export interface BotConfig {
   pluginDir: string;
   logging: LoggingConfig;
   queue?: QueueConfig;
+  flood?: FloodConfig;
   proxy?: ProxyConfig;
   dcc?: DccConfig;
   quit_message?: string;

@@ -163,6 +163,16 @@ export class Bot {
       this.dispatcher.setVerification(verificationProvider);
     }
 
+    // Wire input flood limiter
+    if (this.config.flood) {
+      this.dispatcher.setFloodConfig(this.config.flood);
+    }
+    this.dispatcher.setFloodNotice({
+      sendNotice: (nick: string, msg: string) => {
+        this.messageQueue.enqueue(() => this.client.notice(nick, msg));
+      },
+    });
+
     this.pluginLoader = new PluginLoader({
       pluginDir: this.config.pluginDir,
       dispatcher: this.dispatcher,

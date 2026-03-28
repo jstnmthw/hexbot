@@ -34,6 +34,10 @@
     "rate": 1,
     "burst": 5
   },
+  "flood": {
+    "pub": { "count": 5, "window": 10 },
+    "msg": { "count": 5, "window": 10 }
+  },
   "dcc": {
     "enabled": false,
     "ip": "0.0.0.0",

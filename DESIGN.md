@@ -150,6 +150,19 @@ interface HandlerContext {
 
 **Flag checking:** Before dispatching to a handler, the dispatcher checks if the triggering user has the required flags. Flags of `-` mean no requirement (anyone can trigger).
 
+**Input flood limiting:** The dispatcher enforces per-user rate limits on `pub`/`pubm` (channel commands) and `msg`/`msgm` (private message commands). Before each IRC PRIVMSG is dispatched, the bridge calls `dispatcher.floodCheck('pub'|'msg', key, ctx)` — if the user has exceeded the configured threshold, both dispatch calls for that message are skipped. On the first blocked message per window, the user receives a single NOTICE warning. Users with the `n` (owner) flag bypass flood limits entirely.
+
+Configure in `config/bot.json` under the `"flood"` key:
+
+```json
+"flood": {
+  "pub": { "count": 5, "window": 10 },
+  "msg": { "count": 5, "window": 10 }
+}
+```
+
+If the `flood` key is absent, flood limiting is disabled.
+
 ### 2.4 Plugin API
 
 Each plugin's `init()` receives a scoped API object. The plugin can only manage its own binds and its own database namespace.

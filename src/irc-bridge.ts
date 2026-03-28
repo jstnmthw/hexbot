@@ -168,11 +168,18 @@ export class IRCBridge {
       args,
     });
 
+    // Build flood key: prefer full hostmask for accuracy, fall back to nick
+    const floodKey = ident && hostname ? `${nick}!${ident}@${hostname}` : nick;
+
     if (isChannel) {
+      const flood = this.dispatcher.floodCheck('pub', floodKey, ctx);
+      if (flood.blocked) return;
       // Dispatch pub (exact command) and pubm (wildcard on full text)
       this.dispatcher.dispatch('pub', ctx).catch(this.dispatchError('pub'));
       this.dispatcher.dispatch('pubm', ctx).catch(this.dispatchError('pubm'));
     } else {
+      const flood = this.dispatcher.floodCheck('msg', floodKey, ctx);
+      if (flood.blocked) return;
       // Private message
       this.dispatcher.dispatch('msg', ctx).catch(this.dispatchError('msg'));
       this.dispatcher.dispatch('msgm', ctx).catch(this.dispatchError('msgm'));

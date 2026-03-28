@@ -128,6 +128,9 @@ class MockIRCClient implements DCCIRCClient {
   ctcpResponse(target: string, type: string, ...params: string[]): void {
     this.ctcpResponses.push({ target, type, params });
   }
+
+  on(_event: string, _listener: (...args: unknown[]) => void): void {}
+  removeListener(_event: string, _listener: (...args: unknown[]) => void): void {}
 }
 
 function makePermissions(user: UserRecord | null) {
