@@ -62,14 +62,17 @@ describe('parseDccChatPayload', () => {
 });
 
 describe('isPassiveDcc', () => {
-  it('returns true when ip=0 and port=0', () => {
+  it('returns true when ip=0 and port=0 (standard passive)', () => {
     expect(isPassiveDcc(0, 0)).toBe(true);
   });
 
-  it('returns false for active DCC', () => {
+  it('returns true when ip is real but port=0 (mIRC-style passive)', () => {
+    expect(isPassiveDcc(16909060, 0)).toBe(true);
+  });
+
+  it('returns false for active DCC (non-zero port)', () => {
     expect(isPassiveDcc(16909060, 50000)).toBe(false);
     expect(isPassiveDcc(0, 50000)).toBe(false);
-    expect(isPassiveDcc(16909060, 0)).toBe(false);
   });
 });
 
