@@ -15,16 +15,17 @@ export function toEventObject(val: unknown): Record<string, unknown> {
 }
 
 /** Validate that a single value is an irc-framework mode entry. */
-function isModeEntry(m: unknown): m is { mode: string; param?: string } {
+function isModeEntry(m: unknown): m is { mode?: string; param?: string } {
   if (typeof m !== 'object' || m === null) return false;
-  return typeof (m as Record<string, unknown>).mode === 'string';
+  const rec = m as Record<string, unknown>;
+  return rec.mode === undefined || typeof rec.mode === 'string';
 }
 
 /**
  * Validate that a value is an irc-framework modes array
- * (each element has a `mode: string` and optional `param: string`).
+ * (each element has an optional `mode: string` and optional `param: string`).
  */
-export function isModeArray(val: unknown): val is Array<{ mode: string; param?: string }> {
+export function isModeArray(val: unknown): val is Array<{ mode?: string; param?: string }> {
   return Array.isArray(val) && val.every(isModeEntry);
 }
 
