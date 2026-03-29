@@ -37,8 +37,8 @@ export class MockIRCClient extends EventEmitter {
     this.messages.push({ type: 'action', target, message });
   }
 
-  join(channel: string): void {
-    this.messages.push({ type: 'join', target: channel });
+  join(channel: string, key?: string): void {
+    this.messages.push({ type: 'join', target: channel, message: key });
   }
 
   part(channel: string, message?: string): void {

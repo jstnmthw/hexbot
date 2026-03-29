@@ -3,6 +3,7 @@ import type { PluginAPI } from '../../src/types';
 import { setupAutoOp } from './auto-op';
 import { setupBans } from './bans';
 import { setupCommands } from './commands';
+import { setupInvite } from './invite';
 import { setupModeEnforce } from './mode-enforce';
 import { setupProtection } from './protection';
 import { createState, readConfig } from './state';
@@ -80,6 +81,12 @@ export function init(api: PluginAPI): void {
       default: config.chanserv_op,
       description: 'Request ops from ChanServ when the bot is deopped and ChanServ is present',
     },
+    {
+      key: 'invite',
+      type: 'flag',
+      default: config.invite,
+      description: 'Accept invites from ops/masters and join the invited channel',
+    },
   ]);
 
   teardowns = [
@@ -88,6 +95,7 @@ export function init(api: PluginAPI): void {
     setupModeEnforce(api, config, state),
     setupProtection(api, config, state),
     setupCommands(api, config, state),
+    setupInvite(api, config, state),
   ];
 }
 

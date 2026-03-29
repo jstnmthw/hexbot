@@ -28,7 +28,8 @@ export type BindType =
   | 'ctcp' // CTCP request, stackable
   | 'notice' // Notice message, stackable
   | 'topic' // Topic change, stackable
-  | 'quit'; // User quit (not channel-scoped), stackable
+  | 'quit' // User quit (not channel-scoped), stackable
+  | 'invite'; // Bot invited to a channel, stackable
 
 /** Permission flags: n=owner, m=master, o=op, v=voice, -=anyone. */
 export type Flag = 'n' | 'm' | 'o' | 'v' | '-';
@@ -57,6 +58,7 @@ export type Flag = 'n' | 'm' | 'o' | 'v' | '-';
  * | notice  | sender         | #chan / null | notice text                 | `'NOTICE'`          | notice text             |
  * | topic   | setter         | #channel     | new topic                   | `'topic'`           | `''`                    |
  * | quit    | quitter        | null         | quit reason                 | `'quit'`            | `''`                    |
+ * | invite  | inviter        | #channel     | `"#chan nick!ident@host"`    | `'INVITE'`          | `''`                    |
  * | time    | `''`           | null         | `''`                        | `''`                | `''`                    |
  */
 export interface HandlerContext {

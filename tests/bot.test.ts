@@ -141,6 +141,71 @@ describe('Bot (mock)', () => {
     });
   });
 
+  describe('core invite bind', () => {
+    it('should re-join a configured channel with its key on invite', async () => {
+      // Simulate the core invite bind logic from bot.ts
+      const configuredChannels = [{ name: '#test', key: 'secret' }];
+      bot.dispatcher.bind(
+        'invite',
+        '-',
+        '*',
+        (ctx) => {
+          const channel = ctx.channel;
+          if (!channel) return;
+          const ch = configuredChannels.find((c) => c.name.toLowerCase() === channel.toLowerCase());
+          if (!ch) return;
+          bot.client.join(ch.name, ch.key);
+        },
+        'core-invite-test',
+      );
+
+      bot.client.simulateEvent('invite', {
+        nick: 'someone',
+        ident: 'user',
+        hostname: 'host.com',
+        channel: '#test',
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      const joinMsg = bot.client.messages.find((m) => m.type === 'join' && m.target === '#test');
+      expect(joinMsg).toBeDefined();
+      expect(joinMsg?.message).toBe('secret');
+
+      bot.dispatcher.unbindAll('core-invite-test');
+    });
+
+    it('should ignore invites to non-configured channels', async () => {
+      const configuredChannels = [{ name: '#test', key: undefined as string | undefined }];
+      bot.dispatcher.bind(
+        'invite',
+        '-',
+        '*',
+        (ctx) => {
+          const channel = ctx.channel;
+          if (!channel) return;
+          const ch = configuredChannels.find((c) => c.name.toLowerCase() === channel.toLowerCase());
+          if (!ch) return;
+          bot.client.join(ch.name, ch.key);
+        },
+        'core-invite-test',
+      );
+
+      bot.client.simulateEvent('invite', {
+        nick: 'someone',
+        ident: 'user',
+        hostname: 'host.com',
+        channel: '#unknown',
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(bot.client.messages.find((m) => m.type === 'join')).toBeUndefined();
+
+      bot.dispatcher.unbindAll('core-invite-test');
+    });
+  });
+
   describe('cleanup', () => {
     it('should detach bridge and close database on cleanup', () => {
       // Verify the bridge is attached by checking it dispatches

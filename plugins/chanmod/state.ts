@@ -88,6 +88,7 @@ export interface ChanmodConfig {
   chanserv_op: boolean;
   chanserv_nick: string;
   chanserv_op_delay_ms: number;
+  invite: boolean;
 }
 
 /** Read a typed value from the plugin config, falling back to a default. Single cast site. */
@@ -137,5 +138,6 @@ export function readConfig(api: PluginAPI): ChanmodConfig {
     chanserv_op: cfg(c, 'chanserv_op', false),
     chanserv_nick: cfg(c, 'chanserv_nick', 'ChanServ'),
     chanserv_op_delay_ms: cfg(c, 'chanserv_op_delay_ms', 1000),
+    invite: cfg(c, 'invite', false),
   };
 }

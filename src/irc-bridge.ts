@@ -100,6 +100,7 @@ export class IRCBridge {
     this.listenIrc('ctcp request', this.onCtcp.bind(this));
     this.listenIrc('topic', this.onTopic.bind(this));
     this.listenIrc('quit', this.onQuit.bind(this));
+    this.listenIrc('invite', this.onInvite.bind(this));
 
     // Suppress topic events during the initial channel join burst
     this.topicStartupGrace = true;
@@ -445,6 +446,27 @@ export class IRCBridge {
     });
 
     this.dispatcher.dispatch('quit', ctx).catch(this.dispatchError('quit'));
+  }
+
+  private onInvite(event: Record<string, unknown>): void {
+    const nick = sanitize(String(event.nick ?? ''));
+    const ident = sanitize(String(event.ident ?? ''));
+    const hostname = sanitize(String(event.hostname ?? ''));
+    const channel = sanitize(String(event.channel ?? ''));
+
+    if (!isValidChannel(channel)) return;
+
+    const ctx = this.buildContext({
+      nick,
+      ident,
+      hostname,
+      channel,
+      text: `${channel} ${nick}!${ident}@${hostname}`,
+      command: 'INVITE',
+      args: '',
+    });
+
+    this.dispatcher.dispatch('invite', ctx).catch(this.dispatchError('invite'));
   }
 
   // -------------------------------------------------------------------------

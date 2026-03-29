@@ -354,6 +354,7 @@ export class EventDispatcher {
       case 'join':
       case 'part':
       case 'kick':
+      case 'invite':
         // Mask format: "#channel nick!user@host" or "*" for all
         if (mask === '*') return true;
         return wildcardMatch(

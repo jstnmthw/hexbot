@@ -3150,3 +3150,123 @@ describe('chanmod plugin — chanserv_op recovery', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Invite handling tests
+// ---------------------------------------------------------------------------
+
+describe('chanmod plugin — invite handling', () => {
+  let bot: MockBot;
+
+  beforeAll(async () => {
+    bot = createMockBot({ botNick: 'hexbot' });
+    const result = await bot.pluginLoader.load(PLUGIN_PATH);
+    expect(result.status).toBe('ok');
+  });
+
+  afterAll(() => {
+    bot.cleanup();
+  });
+
+  beforeEach(() => {
+    for (const user of bot.permissions.listUsers()) bot.permissions.removeUser(user.handle);
+    bot.client.clearMessages();
+  });
+
+  it('should ignore invite when invite setting is off (default)', async () => {
+    // No explicit channelSettings set — default is false
+    bot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
+
+    bot.client.simulateEvent('invite', {
+      nick: 'Alice',
+      ident: 'alice',
+      hostname: 'alice.host',
+      channel: '#invited',
+    });
+
+    await flush();
+
+    expect(bot.client.messages.find((m) => m.type === 'join')).toBeUndefined();
+  });
+
+  it('should ignore invite from unprivileged user (not in permissions DB)', async () => {
+    bot.channelSettings.set('#invited', 'invite', true);
+
+    bot.client.simulateEvent('invite', {
+      nick: 'Stranger',
+      ident: 'stranger',
+      hostname: 'unknown.host',
+      channel: '#invited',
+    });
+
+    await flush();
+
+    expect(bot.client.messages.find((m) => m.type === 'join')).toBeUndefined();
+
+    bot.channelSettings.set('#invited', 'invite', false);
+  });
+
+  it('should accept invite from user with channel op flag', async () => {
+    bot.channelSettings.set('#invited', 'invite', true);
+    bot.permissions.addUser('alice', '*!alice@alice.host', '', 'test');
+    bot.permissions.setChannelFlags('alice', '#invited', 'o');
+
+    bot.client.simulateEvent('invite', {
+      nick: 'Alice',
+      ident: 'alice',
+      hostname: 'alice.host',
+      channel: '#invited',
+    });
+
+    await flush();
+
+    expect(
+      bot.client.messages.find((m) => m.type === 'join' && m.target === '#invited'),
+    ).toBeDefined();
+
+    bot.channelSettings.set('#invited', 'invite', false);
+  });
+
+  it('should accept invite from user with global master flag', async () => {
+    bot.channelSettings.set('#invited', 'invite', true);
+    bot.permissions.addUser('master', '*!master@master.host', 'm', 'test');
+
+    bot.client.simulateEvent('invite', {
+      nick: 'master',
+      ident: 'master',
+      hostname: 'master.host',
+      channel: '#invited',
+    });
+
+    await flush();
+
+    expect(
+      bot.client.messages.find((m) => m.type === 'join' && m.target === '#invited'),
+    ).toBeDefined();
+
+    bot.channelSettings.set('#invited', 'invite', false);
+  });
+
+  it('should skip join if already in the channel', async () => {
+    bot.channelSettings.set('#test', 'invite', true);
+    bot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
+
+    // Bot is already in #test (addToChannel simulates a join)
+    addToChannel(bot, 'hexbot', 'bot', 'bot.host', '#test');
+
+    bot.client.clearMessages();
+
+    bot.client.simulateEvent('invite', {
+      nick: 'Alice',
+      ident: 'alice',
+      hostname: 'alice.host',
+      channel: '#test',
+    });
+
+    await flush();
+
+    expect(bot.client.messages.find((m) => m.type === 'join')).toBeUndefined();
+
+    bot.channelSettings.set('#test', 'invite', false);
+  });
+});

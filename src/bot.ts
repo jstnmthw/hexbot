@@ -432,6 +432,25 @@ export class Bot {
         }
       });
 
+      // Core INVITE handler — auto-join configured channels on invite (no permission check).
+      // Plugins may add their own 'invite' binds for user-triggered joins with flag checking.
+      this.dispatcher.bind(
+        'invite',
+        '-',
+        '*',
+        (ctx) => {
+          const channel = ctx.channel;
+          if (!channel) return;
+          const ch = this.configuredChannels.find(
+            (c) => c.name.toLowerCase() === channel.toLowerCase(),
+          );
+          if (!ch) return;
+          this.client.join(ch.name, ch.key);
+          this.botLogger.info(`INVITE from ${ctx.nick}: re-joining configured channel ${ch.name}`);
+        },
+        'core',
+      );
+
       // Join configured channels
       for (const ch of this.configuredChannels) {
         this.client.join(ch.name, ch.key);

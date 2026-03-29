@@ -127,6 +127,9 @@ dispatcher.unbindAll(pluginId); // Remove all binds for a plugin (used on unload
 | `time`   | Timer (interval)   | Seconds as string (e.g. `"60"`) | Yes             |
 | `ctcp`   | CTCP request       | CTCP type (e.g. `VERSION`)      | Yes             |
 | `notice` | Notice message     | Wildcard on text                | Yes             |
+| `topic`  | Topic change       | Channel name wildcard           | Yes             |
+| `quit`   | User quit          | `nick!user@host`                | Yes             |
+| `invite` | Bot invited        | `#channel nick!user@host`       | Yes             |
 
 **Non-stackable** types (pub, msg) overwrite previous binds on the same mask — only one handler per command. **Stackable** types allow multiple handlers on the same mask — all matching handlers fire.
 

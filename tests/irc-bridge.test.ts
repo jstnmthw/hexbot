@@ -1536,4 +1536,96 @@ describe('IRCBridge', () => {
       ownerDispatcher.unbindAll('test');
     });
   });
+
+  describe('invite events', () => {
+    it('should dispatch invite with correct ctx fields', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('invite', '-', '*', handler, 'test');
+
+      client.simulateEvent('invite', {
+        nick: 'inviter',
+        ident: 'iuser',
+        hostname: 'invite.host.com',
+        channel: '#secret',
+      });
+
+      await Promise.resolve();
+
+      expect(handler).toHaveBeenCalledOnce();
+      const ctx: HandlerContext = handler.mock.calls[0][0];
+      expect(ctx.nick).toBe('inviter');
+      expect(ctx.ident).toBe('iuser');
+      expect(ctx.hostname).toBe('invite.host.com');
+      expect(ctx.channel).toBe('#secret');
+      expect(ctx.command).toBe('INVITE');
+      expect(ctx.args).toBe('');
+      expect(ctx.text).toBe('#secret inviter!iuser@invite.host.com');
+
+      dispatcher.unbindAll('test');
+    });
+
+    it('should reject invalid channel names', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('invite', '-', '*', handler, 'test');
+
+      client.simulateEvent('invite', {
+        nick: 'inviter',
+        ident: 'user',
+        hostname: 'host.com',
+        channel: 'notachannel',
+      });
+
+      await Promise.resolve();
+
+      expect(handler).not.toHaveBeenCalled();
+
+      dispatcher.unbindAll('test');
+    });
+
+    it('should match wildcard mask *', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('invite', '-', '*', handler, 'test');
+
+      client.simulateEvent('invite', {
+        nick: 'someone',
+        ident: 'u',
+        hostname: 'h.com',
+        channel: '#anychan',
+      });
+
+      await Promise.resolve();
+
+      expect(handler).toHaveBeenCalledOnce();
+
+      dispatcher.unbindAll('test');
+    });
+
+    it('should match specific channel pattern but not others', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('invite', '-', '#test *', handler, 'test');
+
+      client.simulateEvent('invite', {
+        nick: 'someone',
+        ident: 'u',
+        hostname: 'h.com',
+        channel: '#test',
+      });
+
+      await Promise.resolve();
+      expect(handler).toHaveBeenCalledOnce();
+      handler.mockClear();
+
+      client.simulateEvent('invite', {
+        nick: 'someone',
+        ident: 'u',
+        hostname: 'h.com',
+        channel: '#other',
+      });
+
+      await Promise.resolve();
+      expect(handler).not.toHaveBeenCalled();
+
+      dispatcher.unbindAll('test');
+    });
+  });
 });
