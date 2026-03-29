@@ -1,4 +1,4 @@
-// hexbot — Internal event bus
+// HexBot — Internal event bus
 // Typed EventEmitter for bot-level events (separate from the IRC dispatcher).
 import { EventEmitter } from 'node:events';
 

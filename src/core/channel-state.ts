@@ -1,4 +1,4 @@
-// hexbot — Channel state tracking
+// HexBot — Channel state tracking
 // Tracks who is in each channel, their modes, and hostmasks.
 // Updated in real time from IRC events.
 import type { BotEventBus } from '../event-bus';

@@ -1,4 +1,4 @@
-// hexbot — IRC bridge
+// HexBot — IRC bridge
 // Translates irc-framework events into dispatcher events.
 // This is the trust boundary — all IRC data entering the dispatcher passes through here.
 import type { MessageQueue } from './core/message-queue';

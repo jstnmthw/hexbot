@@ -2,7 +2,7 @@
 
 ## Summary
 
-This feature implements bot-to-bot linking: a TCP link protocol where multiple hexbot instances connect to each other, share channel/user/permission state, relay privileged commands across the network, and form a hub-and-leaf topology. This is entirely separate from the existing DCC CHAT console feature.
+This feature implements bot-to-bot linking: a TCP link protocol where multiple HexBot instances connect to each other, share channel/user/permission state, relay privileged commands across the network, and form a hub-and-leaf topology. This is entirely separate from the existing DCC CHAT console feature.
 
 ---
 

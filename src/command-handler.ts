@@ -1,4 +1,4 @@
-// hexbot — Command router
+// HexBot — Command router
 // Parses command strings and dispatches to registered handlers.
 // Transport-agnostic — works with REPL, IRC, or any future input source.
 

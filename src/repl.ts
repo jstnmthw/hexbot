@@ -1,4 +1,4 @@
-// hexbot — Interactive REPL
+// HexBot — Interactive REPL
 // Provides a terminal interface for bot administration.
 // Commands are routed through the same CommandHandler used by IRC.
 import { type Interface as ReadlineInterface, createInterface } from 'node:readline';

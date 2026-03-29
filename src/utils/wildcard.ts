@@ -1,4 +1,4 @@
-// hexbot — Wildcard pattern matching + IRC case mapping utilities
+// HexBot — Wildcard pattern matching + IRC case mapping utilities
 // Shared by the dispatcher (mask matching) and permissions (hostmask matching).
 // Supports `*` (match any string, including empty) and `?` (match exactly one character).
 

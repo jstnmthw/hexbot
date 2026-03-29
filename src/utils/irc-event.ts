@@ -1,4 +1,4 @@
-// hexbot — IRC event type utilities
+// HexBot — IRC event type utilities
 // Type guards and coercions for irc-framework event payloads.
 // irc-framework emits events as untyped unknown values; these helpers provide
 // safe, validated access without requiring casts at every call site.

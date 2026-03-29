@@ -1,4 +1,4 @@
-// hexbot — Mock bot helper for testing
+// HexBot — Mock bot helper for testing
 // Creates a Bot-like object with real modules but a mock IRC client.
 import { CommandHandler } from '../../src/command-handler';
 import { ChannelSettings } from '../../src/core/channel-settings';

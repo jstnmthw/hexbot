@@ -1,7 +1,7 @@
 /**
- * hexbot — Public type declarations
+ * HexBot — Public type declarations
  *
- * This package provides TypeScript types for hexbot plugin development.
+ * This package provides TypeScript types for HexBot plugin development.
  *
  * ## Quick start
  *
@@ -10,7 +10,7 @@
  *
  * export const name = 'my-plugin';
  * export const version = '1.0.0';
- * export const description = 'My hexbot plugin';
+ * export const description = 'My HexBot plugin';
  *
  * export function init(api: PluginAPI): void {
  *   api.bind('pub', '-', '!hello', (ctx) => {

@@ -1,4 +1,4 @@
-// hexbot — Entry point
+// HexBot — Entry point
 // Parses CLI args, starts the bot, optionally starts the REPL.
 import { Bot } from './bot';
 import { BotREPL } from './repl';

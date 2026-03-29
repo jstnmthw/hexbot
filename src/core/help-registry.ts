@@ -1,4 +1,4 @@
-// hexbot — Help registry
+// HexBot — Help registry
 // Stores HelpEntry records registered by plugins. Cleared automatically on plugin unload.
 import type { HelpEntry } from '../types';
 

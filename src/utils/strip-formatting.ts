@@ -1,4 +1,4 @@
-// hexbot — IRC formatting strip utility
+// HexBot — IRC formatting strip utility
 // Removes IRC control characters from a string before display in security-relevant
 // contexts. See docs/SECURITY.md section 5.2 for when to apply this.
 

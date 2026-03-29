@@ -1,4 +1,4 @@
-// hexbot — Message queue with flood protection
+// HexBot — Message queue with flood protection
 // Token-bucket rate limiter for outgoing IRC messages. Sits between
 // the bot's say/notice/action methods and the IRC client to prevent
 // excess-flood disconnects.

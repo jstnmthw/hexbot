@@ -1,4 +1,4 @@
-// hexbot — Logger service
+// HexBot — Logger service
 // Structured console logging with level filtering, colored output, and child loggers.
 import chalk from 'chalk';
 

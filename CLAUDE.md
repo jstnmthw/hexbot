@@ -1,10 +1,10 @@
 # CLAUDE.md — Instructions for Claude Code
 
-This file tells Claude Code how to work on the hexbot project.
+This file tells Claude Code how to work on the HexBot project.
 
 ## Project context
 
-hexbot is a modular IRC bot framework for Node.js. Read `DESIGN.md` thoroughly before writing any code — it contains all architectural decisions, agreed-upon patterns, and scope boundaries. Read `docs/SECURITY.md` before writing any code that handles user input, permissions, IRC output, or database operations.
+HexBot is a modular IRC bot framework for Node.js. Read `DESIGN.md` thoroughly before writing any code — it contains all architectural decisions, agreed-upon patterns, and scope boundaries. Read `docs/SECURITY.md` before writing any code that handles user input, permissions, IRC output, or database operations.
 
 ## Key constraints
 

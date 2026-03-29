@@ -1,4 +1,4 @@
-// hexbot — Shared type definitions
+// HexBot — Shared type definitions
 // These are type-only definitions (interfaces/types) — no runtime code.
 
 // ---------------------------------------------------------------------------

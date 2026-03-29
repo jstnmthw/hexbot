@@ -1,5 +1,5 @@
 /**
- * hexbot — Configuration types
+ * HexBot — Configuration types
  *
  * Shapes for `config/bot.json` and `config/plugins.json`.
  * These types mirror the config files exactly — all optional fields

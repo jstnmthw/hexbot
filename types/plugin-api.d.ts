@@ -1,5 +1,5 @@
 /**
- * hexbot — Plugin API types
+ * HexBot — Plugin API types
  *
  * Defines every interface a plugin interacts with via the `api` object
  * received in `init()`. All objects on the API are frozen at runtime.
@@ -614,7 +614,7 @@ export interface PluginAPI {
 // ---------------------------------------------------------------------------
 
 /**
- * Required and optional exports for a hexbot plugin module.
+ * Required and optional exports for a HexBot plugin module.
  *
  * A plugin is a directory under `plugins/` containing an `index.ts` that
  * exports at least `name`, `version`, `description`, and `init`.

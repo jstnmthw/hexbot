@@ -1,4 +1,4 @@
-// hexbot — Per-channel settings registry
+// HexBot — Per-channel settings registry
 // Plugins register typed setting definitions; values are stored in the DB under 'chanset' namespace.
 import type { BotDatabase } from '../database';
 import type { ChannelSettingDef, ChannelSettingEntry, ChannelSettingValue } from '../types';

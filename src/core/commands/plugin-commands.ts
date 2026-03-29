@@ -1,4 +1,4 @@
-// hexbot — Plugin management commands
+// HexBot — Plugin management commands
 // .plugins, .load, .unload, .reload
 import type { CommandHandler } from '../../command-handler';
 import type { PluginLoader } from '../../plugin-loader';

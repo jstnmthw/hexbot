@@ -1,4 +1,4 @@
-// hexbot — IRC commands core module
+// HexBot — IRC commands core module
 // Convenience wrappers for common IRC operations with mod action logging.
 import type { BotDatabase } from '../database';
 import type { Logger } from '../logger';

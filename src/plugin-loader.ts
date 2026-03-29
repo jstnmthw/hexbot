@@ -1,4 +1,4 @@
-// hexbot — Plugin loader
+// HexBot — Plugin loader
 // Discovers, loads, unloads, and hot-reloads plugins. Each plugin gets a scoped API.
 import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';

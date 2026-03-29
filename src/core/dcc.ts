@@ -1,4 +1,4 @@
-// hexbot — DCC CHAT + Console
+// HexBot — DCC CHAT + Console
 // Implements passive DCC CHAT for remote administration and a shared console
 // where connected users can manage the bot and chat with each other.
 //
@@ -189,14 +189,14 @@ export class DCCSession {
         ? `${others.length} other(s) here: ${others.join(', ')}`
         : 'you are the only one here';
 
-    this.writeLine(`Connected to ${botNick}, running hexbot v${version}`);
+    this.writeLine(`Connected to ${botNick}, running HexBot v${version}`);
     this.writeLine('');
     for (const line of BANNER_LOGO) {
       this.writeLine(line);
     }
     this.writeLine('');
     this.writeLine(
-      `Hey ${this.handle}!  My name is ${botNick} and I am running hexbot v${version},`,
+      `Hey ${this.handle}!  My name is ${botNick} and I am running HexBot v${version},`,
     );
     this.writeLine(`on ${platform}.`);
     this.writeLine('');
@@ -498,14 +498,14 @@ export class DCCManager {
   ): Promise<UserRecord | null> {
     const { ident, hostname } = ctx;
 
-    // 0. Passive DCC — hexbot only accepts passive (port=0) DCC
+    // 0. Passive DCC — HexBot only accepts passive (port=0) DCC
     if (!isPassiveDcc(parsed.ip, parsed.port)) {
       this.logger?.info(
         `DCC CHAT rejected (active DCC) from ${nick}: ip=${parsed.ip} port=${parsed.port}`,
       );
       this.client.notice(
         nick,
-        'hexbot only accepts passive DCC CHAT. Enable passive/reverse DCC in your client settings, then try /dcc chat hexbot again.',
+        'HexBot only accepts passive DCC CHAT. Enable passive/reverse DCC in your client settings, then try /dcc chat hexbot again.',
       );
       return null;
     }

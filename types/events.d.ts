@@ -1,5 +1,5 @@
 /**
- * hexbot — Event types
+ * HexBot — Event types
  *
  * Defines the bind system's event types, handler signatures, and the
  * HandlerContext object passed to every handler.

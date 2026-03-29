@@ -1,6 +1,6 @@
 # Plugin API Reference
 
-This documents the full API surface available to hexbot plugins. Every plugin's `init()` function receives a frozen `PluginAPI` object scoped to that plugin.
+This documents the full API surface available to HexBot plugins. Every plugin's `init()` function receives a frozen `PluginAPI` object scoped to that plugin.
 
 ---
 

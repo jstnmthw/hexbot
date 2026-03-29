@@ -1,4 +1,4 @@
-// hexbot — Event dispatcher
+// HexBot — Event dispatcher
 // Routes IRC events to registered handlers based on bind type, mask, and flags.
 import type { Logger } from './logger';
 import type {

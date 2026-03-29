@@ -1,4 +1,4 @@
-// hexbot — Mock IRC client for testing
+// HexBot — Mock IRC client for testing
 // Captures outgoing messages and can simulate incoming events.
 import { EventEmitter } from 'node:events';
 

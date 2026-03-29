@@ -1,4 +1,4 @@
-// hexbot — ctcp plugin
+// HexBot — ctcp plugin
 // Handles CTCP VERSION, PING, and TIME requests with fixed responses.
 // Responses are not user-configurable
 import { readFileSync } from 'node:fs';
@@ -22,7 +22,7 @@ export function init(api: PluginAPI): void {
     /* v8 ignore stop */
     /* v8 ignore start -- catch only fires if package.json is missing or malformed */
   } catch {
-    versionString = 'hexbot';
+    versionString = 'HexBot';
   }
   /* v8 ignore stop */
 

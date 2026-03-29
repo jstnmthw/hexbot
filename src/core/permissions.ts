@@ -1,4 +1,4 @@
-// hexbot — Permissions system
+// HexBot — Permissions system
 // Hostmask-based identity, n/m/o/v flags with per-channel overrides.
 import type { BotDatabase } from '../database';
 import type { Logger } from '../logger';

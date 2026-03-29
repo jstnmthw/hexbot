@@ -1,4 +1,4 @@
-// hexbot — Per-channel settings commands
+// HexBot — Per-channel settings commands
 // Registers .chanset and .chaninfo with the command handler.
 import type { CommandHandler } from '../../command-handler';
 import { sanitize } from '../../utils/sanitize';

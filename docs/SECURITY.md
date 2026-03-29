@@ -1,6 +1,6 @@
-# hexbot Security Guide
+# HexBot Security Guide
 
-This document defines security practices for developing hexbot. Every contributor and every Claude Code session should treat this as mandatory reading before writing code that handles user input, permissions, IRC output, or database operations.
+This document defines security practices for developing HexBot. Every contributor and every Claude Code session should treat this as mandatory reading before writing code that handles user input, permissions, IRC output, or database operations.
 
 ---
 
@@ -229,7 +229,7 @@ IRCv3 message tags carry metadata alongside messages. Their trust level depends 
 
 **Rule:** Client-only tags (prefixed `+`) are relayed verbatim by the server without modification. An attacker can set any client-only tag to any value. Never use client-only tag values for security decisions.
 
-**Rule:** The `account` server tag (when present) identifies the sender's services account. It may be treated as server-verified, but only when the server has enabled the `account-tag` capability. Hexbot's dispatcher uses the live account map from `account-notify` / `extended-join` rather than reading this tag directly.
+**Rule:** The `account` server tag (when present) identifies the sender's services account. It may be treated as server-verified, but only when the server has enabled the `account-tag` capability. HexBot's dispatcher uses the live account map from `account-notify` / `extended-join` rather than reading this tag directly.
 
 ```typescript
 // BAD: reading a client-only tag as authoritative

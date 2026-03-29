@@ -1,4 +1,4 @@
-// hexbot — Dispatcher inspection commands
+// HexBot — Dispatcher inspection commands
 // Registers .binds with the command handler.
 import type { CommandHandler } from '../../command-handler';
 import type { EventDispatcher } from '../../dispatcher';

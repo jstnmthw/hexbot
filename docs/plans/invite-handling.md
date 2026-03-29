@@ -2,7 +2,7 @@
 
 ## Summary
 
-Add full INVITE handling to hexbot in two tiers:
+Add full INVITE handling to HexBot in two tiers:
 
 1. **Core auto-join** — bot automatically rejoins any channel it is already configured to be in when invited (no permission check, matches Eggdrop's core behavior).
 2. **chanmod `invite` channel setting** — when enabled, accept user-triggered invites from users holding the `o` flag in the channel or the global `m`/`n` flag.
@@ -22,7 +22,7 @@ The work touches four source files and one new plugin module in a well-contained
 
 irc-framework's `invite` event includes `nick`, `ident`, and `hostname` directly from the IRC protocol message (`:nick!ident@host INVITE botnick :#channel`). The inviter's full hostmask is present in the event itself — no shared channel or channel state lookup is needed.
 
-This is how Eggdrop handles invite permissions: it matches `nick!ident@host` from the INVITE message directly against its user database. hexbot's chanmod invite handler should do the same — construct `nick!ident@host` from `ctx` and call `api.permissions.findByHostmask(fullHostmask)` directly, bypassing `getUserHostmask()`.
+This is how Eggdrop handles invite permissions: it matches `nick!ident@host` from the INVITE message directly against its user database. HexBot's chanmod invite handler should do the same — construct `nick!ident@host` from `ctx` and call `api.permissions.findByHostmask(fullHostmask)` directly, bypassing `getUserHostmask()`.
 
 WHOIS is **not** needed for basic flag checking. It would only be warranted if you wanted to gate on services account identity (similar to `require_acc_for`), which is out of scope here.
 
