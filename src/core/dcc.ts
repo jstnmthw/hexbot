@@ -481,17 +481,18 @@ export class DCCManager {
       this.logger?.debug(`DCC CTCP from ${nick}: not a CHAT subtype, ignoring`);
       return;
     }
-    const user = await this.validateDccRequest(nick, ctx, parsed);
+    const user = await this.rejectIfInvalid(nick, ctx, parsed);
     if (!user) return;
     await this.acceptDccConnection(nick, ctx.ident, ctx.hostname, user, parsed);
   }
 
   /**
    * Run all guard checks for an incoming DCC CHAT request.
-   * Returns the matching UserRecord if all checks pass, or null if rejected
-   * (rejection notice already sent to the nick).
+   * Returns the matching UserRecord if all checks pass, or null if rejected.
+   * **Side effect:** sends an IRC notice to `nick` on rejection — callers must
+   * treat a null return as "already handled", not a silent failure.
    */
-  private async validateDccRequest(
+  private async rejectIfInvalid(
     nick: string,
     ctx: HandlerContext,
     parsed: DccChatPayload,
@@ -571,7 +572,23 @@ export class DCCManager {
       this.client.notice(nick, 'DCC CHAT: no ports available, try again later.');
       return;
     }
+    /* v8 ignore next */
+    this.openDccServer(port, nick, ident, hostname, user, parsed);
+  }
 
+  /**
+   * Open a TCP server on the given port, send the passive DCC CTCP reply,
+   * and register timeout + connection handlers.
+   */
+  /* v8 ignore next */
+  private openDccServer(
+    port: number,
+    nick: string,
+    ident: string,
+    hostname: string,
+    user: import('../types').UserRecord,
+    parsed: DccChatPayload,
+  ): void {
     /* v8 ignore start */
     const server = createServer();
     this.allocatedPorts.add(port);
@@ -612,6 +629,7 @@ export class DCCManager {
       this.allocatedPorts.delete(port);
       this.pending.delete(port);
     });
+    /* v8 ignore stop */
   }
 
   // -------------------------------------------------------------------------

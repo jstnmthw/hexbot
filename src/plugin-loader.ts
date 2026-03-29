@@ -496,35 +496,9 @@ export class PluginLoader {
     /* v8 ignore start */
     // Multi-file plugin: create uniquely-named temp copies so Node treats each
     // as a new module, bypassing its module cache.
-    // Map: original basename (no ext) -> temp basename (no ext)
-    const nameRemap = new Map<string, string>();
-    for (const origPath of allFiles.keys()) {
-      const base = basename(origPath, '.ts');
-      nameRemap.set(base, `.reload-${ts}-${base}`);
-    }
-
-    const tmpFiles: string[] = [];
-    let entryTmpPath = '';
+    const nameRemap = this.buildNameRemap(allFiles, ts);
+    const { tmpFiles, entryTmpPath } = this.writeRewrittenFiles(dir, absPath, allFiles, nameRemap);
     try {
-      for (const [origPath, source] of allFiles) {
-        const base = basename(origPath, '.ts');
-        const tmpPath = join(dir, `${nameRemap.get(base)!}.ts`);
-
-        // Rewrite same-directory imports to point to their corresponding temp files
-        const rewritten = source.replace(
-          /(from\s+['"])(\.\/[^?'"]+)(['"])/g,
-          (match, pre: string, spec: string, post: string) => {
-            const specBase = basename(spec.replace(/\.(ts|js)$/, ''));
-            const remapped = nameRemap.get(specBase);
-            return remapped ? `${pre}./${remapped}${post}` : match;
-          },
-        );
-
-        writeFileSync(tmpPath, rewritten, 'utf-8');
-        tmpFiles.push(tmpPath);
-        if (origPath === absPath) entryTmpPath = tmpPath;
-      }
-
       const fileUrl = pathToFileURL(entryTmpPath).href;
       return (await import(fileUrl)) as Record<string, unknown>;
     } finally {
@@ -536,6 +510,59 @@ export class PluginLoader {
         }
       }
     }
+    /* v8 ignore stop */
+  }
+
+  /**
+   * Build a mapping from each file's base name (no ext) to a unique temp base name.
+   * Used to rewrite intra-plugin imports so Node sees each reload as a fresh module.
+   */
+  /* v8 ignore next */
+  private buildNameRemap(allFiles: Map<string, string>, ts: number): Map<string, string> {
+    /* v8 ignore start */
+    const nameRemap = new Map<string, string>();
+    for (const origPath of allFiles.keys()) {
+      const base = basename(origPath, '.ts');
+      nameRemap.set(base, `.reload-${ts}-${base}`);
+    }
+    return nameRemap;
+    /* v8 ignore stop */
+  }
+
+  /**
+   * Write temp copies of all plugin files with intra-plugin imports rewritten
+   * to point to the corresponding temp file names.
+   * Returns the list of temp file paths and the entry temp path.
+   */
+  /* v8 ignore next */
+  private writeRewrittenFiles(
+    dir: string,
+    entryPath: string,
+    allFiles: Map<string, string>,
+    nameRemap: Map<string, string>,
+  ): { tmpFiles: string[]; entryTmpPath: string } {
+    /* v8 ignore start */
+    const tmpFiles: string[] = [];
+    let entryTmpPath = '';
+    for (const [origPath, source] of allFiles) {
+      const base = basename(origPath, '.ts');
+      const tmpPath = join(dir, `${nameRemap.get(base)!}.ts`);
+
+      // Rewrite same-directory imports to point to their corresponding temp files
+      const rewritten = source.replace(
+        /(from\s+['"])(\.\/[^?'"]+)(['"])/g,
+        (match, pre: string, spec: string, post: string) => {
+          const specBase = basename(spec.replace(/\.(ts|js)$/, ''));
+          const remapped = nameRemap.get(specBase);
+          return remapped ? `${pre}./${remapped}${post}` : match;
+        },
+      );
+
+      writeFileSync(tmpPath, rewritten, 'utf-8');
+      tmpFiles.push(tmpPath);
+      if (origPath === entryPath) entryTmpPath = tmpPath;
+    }
+    return { tmpFiles, entryTmpPath };
     /* v8 ignore stop */
   }
 

@@ -24,6 +24,19 @@ import {
 const PUNISH_MAX = 2;
 const PUNISH_COOLDOWN_MS = 30_000;
 
+/**
+ * Bind the mode enforcement handler for a channel.
+ *
+ * Enforces configured channel modes when they are removed:
+ * - Simple modes (e.g. +i, +m, +s) listed in the `channel_modes` setting
+ * - Channel key (+k) stored in `channel_key`
+ * - Bitch mode: re-ops/re-voices users whose modes are removed without permission
+ * - Punish deop: kicks+bans users who deop the bot (if `punish_deop` is enabled)
+ * - Cycle on deop: the bot parts and rejoins to regain ops (if `cycle_on_deop` is enabled)
+ *
+ * All enforcement is gated on `enforce_modes` being set for the channel and
+ * the bot having ops. nodesynch nicks are excluded.
+ */
 export function setupModeEnforce(
   api: PluginAPI,
   config: ChanmodConfig,

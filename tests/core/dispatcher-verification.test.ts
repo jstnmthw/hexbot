@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { requiresVerificationForFlags } from '../../src/bot';
 import { EventDispatcher, type VerificationProvider } from '../../src/dispatcher';
 import type { HandlerContext } from '../../src/types';
+import { requiresVerificationForFlags } from '../../src/utils/verify-flags';
 
 function makeCtx(overrides: Partial<HandlerContext> = {}): HandlerContext {
   return {

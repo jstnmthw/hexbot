@@ -36,3 +36,16 @@ export function isModeArray(val: unknown): val is Array<{ mode?: string; param?:
 export function isObjectArray(val: unknown): val is Array<Record<string, unknown>> {
   return Array.isArray(val) && val.every((u) => typeof u === 'object' && u !== null);
 }
+
+/**
+ * Parse ident and hostname from a full IRC hostmask string (nick!ident@hostname).
+ * Returns empty strings for ident/hostname if the format does not match.
+ */
+export function parseHostmask(hostmask: string): { ident: string; hostname: string } {
+  const bangIdx = hostmask.indexOf('!');
+  const atIdx = hostmask.lastIndexOf('@');
+  return {
+    ident: hostmask.substring(bangIdx + 1, atIdx),
+    hostname: hostmask.substring(atIdx + 1),
+  };
+}

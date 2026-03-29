@@ -5,7 +5,7 @@ import type { MessageQueue } from './core/message-queue';
 import type { EventDispatcher } from './dispatcher';
 import type { Logger } from './logger';
 import type { HandlerContext } from './types';
-import { isModeArray, toEventObject } from './utils/irc-event';
+import { isModeArray, parseHostmask, toEventObject } from './utils/irc-event';
 import { sanitize } from './utils/sanitize';
 import { SlidingWindowCounter } from './utils/sliding-window';
 import { splitMessage } from './utils/split-message';
@@ -269,7 +269,7 @@ export class IRCBridge {
     // Look up the kicked user's hostmask from channel state (more accurate than the kicker's ident/hostname)
     const kickedHostmask = this.channelState?.getUserHostmask(channel, kicked);
     const { ident: kickedIdent, hostname: kickedHostname } = kickedHostmask
-      ? this.splitKickedHostmask(kickedHostmask)
+      ? parseHostmask(kickedHostmask)
       : { ident: '', hostname: '' };
 
     // For kick events, the context nick is the kicked user
@@ -285,16 +285,6 @@ export class IRCBridge {
     });
 
     this.dispatcher.dispatch('kick', ctx).catch(this.dispatchError('kick'));
-  }
-
-  /** Parse ident and hostname from a full hostmask string (nick!ident@hostname). */
-  private splitKickedHostmask(hostmask: string): { ident: string; hostname: string } {
-    const bangIdx = hostmask.indexOf('!');
-    const atIdx = hostmask.lastIndexOf('@');
-    return {
-      ident: hostmask.substring(bangIdx + 1, atIdx),
-      hostname: hostmask.substring(atIdx + 1),
-    };
   }
 
   private onNick(event: Record<string, unknown>): void {

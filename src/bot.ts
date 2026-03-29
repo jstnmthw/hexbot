@@ -15,6 +15,7 @@ import { registerDispatcherCommands } from './core/commands/dispatcher-commands'
 import { registerIRCAdminCommands } from './core/commands/irc-commands-admin';
 import { registerPermissionCommands } from './core/commands/permission-commands';
 import { registerPluginCommands } from './core/commands/plugin-commands';
+import { registerConnectionEvents } from './core/connection-lifecycle';
 import { DCCManager } from './core/dcc';
 import { HelpRegistry } from './core/help-registry';
 import { IRCCommands } from './core/irc-commands';
@@ -29,52 +30,9 @@ import { IRCBridge } from './irc-bridge';
 import { type Logger, createLogger } from './logger';
 import { PluginLoader } from './plugin-loader';
 import type { Casemapping } from './types';
-import type { BotConfig, IdentityConfig, ProxyConfig } from './types';
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Flag hierarchy for require_acc_for checking. */
-const FLAG_LEVEL: Record<string, number> = { n: 4, m: 3, o: 2, v: 1 };
-
-/**
- * Determine whether the bind's required flags are at or above any threshold
- * in `config.identity.require_acc_for`. Used by the VerificationProvider.
- * Exported for unit testing.
- */
-export function requiresVerificationForFlags(
-  bindFlags: string,
-  requireAccFor: IdentityConfig['require_acc_for'],
-): boolean {
-  if (bindFlags === '-' || bindFlags === '') return false;
-  if (!requireAccFor || requireAccFor.length === 0) return false;
-
-  // Find the minimum threshold flag level from require_acc_for (e.g. ["+o", "+n"] → 2)
-  const thresholds = requireAccFor
-    .map((f) => f.replace('+', ''))
-    .map((f) => FLAG_LEVEL[f] ?? 0)
-    .filter((l) => l > 0);
-  if (thresholds.length === 0) return false;
-  const minThreshold = Math.min(...thresholds);
-
-  // Find the highest flag level among the bind's required flags
-  const bindLevel = Math.max(...[...bindFlags].map((f) => FLAG_LEVEL[f] ?? 0));
-  return bindLevel >= minThreshold;
-}
-
-/**
- * Build the `socks` options object expected by irc-framework from a ProxyConfig.
- * Exported for unit testing.
- */
-export function buildSocksOptions(proxy: ProxyConfig): Record<string, unknown> {
-  return {
-    host: proxy.host,
-    port: proxy.port,
-    ...(proxy.username ? { user: proxy.username } : {}),
-    ...(proxy.password ? { pass: proxy.password } : {}),
-  };
-}
+import type { BotConfig } from './types';
+import { buildSocksOptions } from './utils/socks';
+import { requiresVerificationForFlags } from './utils/verify-flags';
 
 // ---------------------------------------------------------------------------
 // Bot
@@ -328,7 +286,27 @@ export class Bot {
     const options = this.buildClientOptions();
     this.botLogger.info(`Connecting to ${this.config.irc.host}:${this.config.irc.port}...`);
     return new Promise<void>((resolve, reject) => {
-      this.registerConnectionEvents(resolve, reject);
+      registerConnectionEvents(
+        {
+          client: this.client,
+          config: this.config,
+          configuredChannels: this.configuredChannels,
+          eventBus: this.eventBus,
+          applyCasemapping: (cm) => {
+            this._casemapping = cm;
+            this.channelState.setCasemapping(cm);
+            this.permissions.setCasemapping(cm);
+            this.dispatcher.setCasemapping(cm);
+            this.services.setCasemapping(cm);
+            if (this._dccManager) this._dccManager.setCasemapping(cm);
+          },
+          messageQueue: this.messageQueue,
+          dispatcher: this.dispatcher,
+          logger: this.botLogger,
+        },
+        resolve,
+        reject,
+      );
       this.client.connect(options);
     });
   }
@@ -388,120 +366,6 @@ export class Bot {
     }
 
     return options;
-  }
-
-  /** Register all IRC connection lifecycle event listeners. */
-  private registerConnectionEvents(resolve: () => void, reject: (err: Error) => void): void {
-    const cfg = this.config.irc;
-    let registered = false;
-
-    this.client.on('registered', () => {
-      registered = true;
-      this.botLogger.info(`Connected to ${cfg.host}:${cfg.port} as ${cfg.nick}`);
-
-      if (cfg.tls) {
-        // Access the TLS socket through irc-framework's internal connection/transport chain.
-        // Using optional chaining throughout since this is private API.
-        type InternalClient = { connection?: { transport?: { socket?: unknown } } };
-        const tlsSocket = (this.client as unknown as InternalClient).connection?.transport?.socket;
-        if (tlsSocket && typeof (tlsSocket as Record<string, unknown>).getCipher === 'function') {
-          const cipher = (
-            tlsSocket as { getCipher(): { name: string; version: string } }
-          ).getCipher();
-          this.botLogger.info(`TLS connected — ${cipher.name} (${cipher.version})`);
-        } else {
-          this.botLogger.info('TLS connected');
-        }
-      }
-
-      this.eventBus.emit('bot:connected');
-
-      // Read CASEMAPPING from ISUPPORT (available after 005)
-      const cm = this.client.network.supports('CASEMAPPING');
-      if (cm === 'ascii' || cm === 'strict-rfc1459' || cm === 'rfc1459') {
-        this._casemapping = cm;
-      } else {
-        this._casemapping = 'rfc1459'; // safe fallback for unknown values
-      }
-      this.botLogger.info(`CASEMAPPING: ${this._casemapping}`);
-
-      // Propagate to modules that use IRC nick/channel key comparison
-      this.channelState.setCasemapping(this._casemapping);
-      this.permissions.setCasemapping(this._casemapping);
-      this.dispatcher.setCasemapping(this._casemapping);
-      this.services.setCasemapping(this._casemapping);
-      if (this._dccManager) this._dccManager.setCasemapping(this._casemapping);
-
-      // Log join failures so the user knows why the bot is not in a channel.
-      // irc-framework maps join error numerics to named 'irc error' events, not numeric strings.
-      const JOIN_ERROR_NAMES: Record<string, string> = {
-        channel_is_full: 'channel is full (+l)',
-        invite_only_channel: 'invite only (+i)',
-        banned_from_channel: 'banned from channel (+b)',
-        bad_channel_key: 'bad channel key (+k)',
-      };
-      this.client.on('irc error', (event: unknown) => {
-        const e = event as Record<string, unknown>;
-        const reason = JOIN_ERROR_NAMES[String(e.error ?? '')];
-        if (reason) {
-          this.botLogger.warn(`Cannot join ${String(e.channel ?? '')}: ${reason}`);
-        }
-      });
-      // 477 (need to register nick) is unknown to irc-framework — catch it via raw numeric.
-      this.client.on('unknown command', (event: unknown) => {
-        const e = event as Record<string, unknown>;
-        if (String(e.command ?? '') === '477') {
-          const params = Array.isArray(e.params) ? (e.params as unknown[]) : [];
-          this.botLogger.warn(`Cannot join ${String(params[1] ?? '')}: need to register nick (+r)`);
-        }
-      });
-
-      // Core INVITE handler — auto-join configured channels on invite (no permission check).
-      // Plugins may add their own 'invite' binds for user-triggered joins with flag checking.
-      this.dispatcher.bind(
-        'invite',
-        '-',
-        '*',
-        (ctx) => {
-          const channel = ctx.channel;
-          if (!channel) return;
-          const ch = this.configuredChannels.find(
-            (c) => c.name.toLowerCase() === channel.toLowerCase(),
-          );
-          if (!ch) return;
-          this.client.join(ch.name, ch.key);
-          this.botLogger.info(`INVITE from ${ctx.nick}: re-joining configured channel ${ch.name}`);
-        },
-        'core',
-      );
-
-      // Join configured channels
-      for (const ch of this.configuredChannels) {
-        this.client.join(ch.name, ch.key);
-        this.botLogger.info(`Joining ${ch.name}`);
-      }
-
-      resolve();
-    });
-
-    this.client.on('close', () => {
-      this.botLogger.info('Connection closed');
-      this.eventBus.emit('bot:disconnected', 'connection closed');
-    });
-
-    this.client.on('reconnecting', () => {
-      this.messageQueue.clear();
-      this.botLogger.info('Reconnecting...');
-    });
-
-    this.client.on('socket error', (err: unknown) => {
-      const error = err instanceof Error ? err : new Error(String(err));
-      this.botLogger.error('Socket error:', error.message);
-      this.eventBus.emit('bot:error', error);
-      if (!registered) {
-        reject(error);
-      }
-    });
   }
 
   // -------------------------------------------------------------------------
