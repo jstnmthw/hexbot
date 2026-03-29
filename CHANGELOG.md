@@ -10,9 +10,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **`chanmod` channel key and limit enforcement**: `channel_key` (string) and `channel_limit` (int) per-channel settings enforce `+k` and `+l` when `enforce_modes` is on — re-applied if removed or changed to a different value; `enforce_channel_key` and `enforce_channel_limit` global config defaults added alongside the existing `enforce_channel_modes`
 - `chanmod` README: new "Per-channel settings (.chanset)" section documents all `.chanset`-configurable keys with syntax examples; "Channel mode enforcement" subsection updated to cover all supported modes (`+imnpst`, `+k`, `+l`) in a unified table
+- **INVITE handling**: `invite` BindType added to dispatcher and irc-bridge; core registers a bind that auto-rejoins any configured channel on invite (key-aware, no permission check); `chanmod` `invite` per-channel setting (default off) accepts invites from users holding `o`/`m`/`n` flags by matching the sender's hostmask directly against the permissions DB — no shared channel required
+- **ChanServ OP recovery in `chanmod`**: new `chanserv_op` per-channel setting (default off); when enabled, sends `PRIVMSG ChanServ :OP <channel>` to recover ops when the bot is deopped and ChanServ is present in the channel; `chanserv_nick` (default `ChanServ`) and `chanserv_op_delay_ms` (default `1000`) global config fields added; also moves `revenge` into per-channel settings; `.chanset <channel>` with no key lists all registered settings
+- **Per-user input flood limiter in dispatcher**: `pub`/`pubm` and `msg`/`msgm` events gated by a per-hostmask sliding-window counter; first blocked message per window sends a one-time NOTICE warning to the user; owners (`n` flag) bypass limits; configurable via optional `flood` block in `bot.json`; also adds `pnpm check` script (typecheck + lint + test) and wires `on`/`removeListener` into `DCCIRCClient` so the DCC manager mirrors incoming private notices/messages to open sessions
 
 ### Changed
 
+- Project display name standardized to "HexBot" (capitalized) in all prose, file headers, and display strings; IRC nick values, package name, and file paths unchanged
+- Unreachable null/`??` defensive guards replaced with TypeScript non-null assertions across `irc-bridge.ts`, `channel-state.ts`, and `chanmod`; `/* v8 ignore */` blocks removed; test suite significantly expanded across `channel-state`, `chanmod`, `flood`, `dispatcher`, DCC, and irc-bridge to cover real code paths
+- Dead `if (!ctx.channel) return` guards removed from all plugins — `pub`/`pubm`/`join`/`topic`/`invite` handlers use `ctx.channel!` since irc-bridge guarantees channel is set for these types; stale `user.global ?? ''` and `ctx.args || ctx.nick` fallbacks also removed
 - `createPluginApi()` refactored into focused sub-factories (`createPluginIrcActionsApi`, `createPluginChannelStateApi`, `createPluginChannelSettingsApi`, `createPluginHelpApi`, `createPluginLogApi`) — drops from 231 to 47 lines; no behaviour change
 - `flood` plugin: extracted `FloodConfig` type and `isFloodTriggered` helper; lifted three bind handlers out of `init()` as module-level functions; `init()` drops from 85 to 33 lines
 - `dcc`: passive-DCC guard moved into `validateDccRequest()` as first check; `onDccCtcp()` drops from 26 to 12 lines
@@ -23,6 +29,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **DCC idle timeout leaves stale session**: after an idle timeout closed a session, the session was not removed from the sessions map — subsequent connect attempts were rejected with "you already have an active session". `close()` now calls `removeSession()` directly so cleanup runs regardless of which path triggers it
 - **Crash on DCC CTCP**: `ctcpRequest()` used instead of the non-existent `ctcp()` method in irc-framework — previously threw an uncaught `TypeError` and crashed the bot
+- **Join error handlers now fire**: irc-framework translates numeric error codes to named events (e.g. `bad_channel_key` instead of `475`) — previous handlers on numeric strings were silently dead; `477` now handled via the `unknown command` event since irc-framework has no entry for it
+- `chanmod` README: corrected inaccurate caveat — commands reply with an error when the bot lacks ops; `!bans` has no ops check
 - Dead code removed (`/deadcode` audit): `Services.identityConfig` private field (stored but never read), `IRCBridge.eventBus` private field (same pattern), unused `_tick` helper in `flood.test.ts`, `isPassiveDcc` `ip` param renamed to `_ip`
 
 ### Added
