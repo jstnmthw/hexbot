@@ -668,6 +668,66 @@ describe('EventDispatcher', () => {
   });
 
   // -------------------------------------------------------------------------
+  // invite type
+  // -------------------------------------------------------------------------
+
+  describe('invite type', () => {
+    it('dispatches on wildcard mask', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('invite', '-', '*', handler, 'test-plugin');
+      await dispatcher.dispatch(
+        'invite',
+        makeCtx({
+          nick: 'inviter',
+          ident: 'u',
+          hostname: 'h.com',
+          channel: '#secret',
+          text: '#secret inviter!u@h.com',
+          command: 'INVITE',
+          args: '',
+        }),
+      );
+      expect(handler).toHaveBeenCalledOnce();
+    });
+
+    it('dispatches when channel + hostmask matches mask', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('invite', '-', '#secret *!u@h.com', handler, 'test-plugin');
+      await dispatcher.dispatch(
+        'invite',
+        makeCtx({
+          nick: 'inviter',
+          ident: 'u',
+          hostname: 'h.com',
+          channel: '#secret',
+          text: '#secret inviter!u@h.com',
+          command: 'INVITE',
+          args: '',
+        }),
+      );
+      expect(handler).toHaveBeenCalledOnce();
+    });
+
+    it('does not dispatch when channel does not match mask', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('invite', '-', '#other *', handler, 'test-plugin');
+      await dispatcher.dispatch(
+        'invite',
+        makeCtx({
+          nick: 'inviter',
+          ident: 'u',
+          hostname: 'h.com',
+          channel: '#secret',
+          text: '#secret inviter!u@h.com',
+          command: 'INVITE',
+          args: '',
+        }),
+      );
+      expect(handler).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Edge cases
   // -------------------------------------------------------------------------
 
