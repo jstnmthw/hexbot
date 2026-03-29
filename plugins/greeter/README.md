@@ -77,6 +77,18 @@ Result when alice joins `#lobby`:
 -Bot- Hi alice! Type !help to see available commands.  (private to alice)
 ```
 
+### Per-channel greeting
+
+The default greeting can be overridden per-channel using `.chanset` (requires `m` flag):
+
+```
+.chanset #chan greet_msg Welcome to {channel}, {nick}! Check !help for commands.
+.chanset #chan greet_msg           — show current value
+.chanset #chan -greet_msg          — revert to global default
+```
+
+Supports the same `{channel}` and `{nick}` substitutions as the global `message` config key.
+
 ### `min_flag` values
 
 Uses the `n > m > o > v` privilege hierarchy. Setting `"o"` means op or higher can set greets.

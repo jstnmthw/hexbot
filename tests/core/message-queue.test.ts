@@ -216,6 +216,24 @@ describe('MessageQueue', () => {
     q.stop();
   });
 
+  it('drain does not send when tokens are insufficient (covers if(tokens>=1) false branch)', () => {
+    // rate=3 → intervalMs=floor(1000/3)=333ms; refill per drain = (333/1000)*3 = 0.999 < 1
+    const q = new MessageQueue({ rate: 3, burst: 0 });
+    const sent: number[] = [];
+
+    q.enqueue(() => sent.push(1));
+    q.enqueue(() => sent.push(2));
+    expect(sent).toEqual([]); // no tokens, nothing sent yet
+    expect(q.pending).toBe(2);
+
+    // Advance exactly one drain interval — drain fires but tokens (0.999) < 1, nothing sends
+    vi.advanceTimersByTime(333);
+    expect(sent).toEqual([]);
+    expect(q.pending).toBe(2);
+
+    q.stop();
+  });
+
   it('logs warning on queue full when logger is provided', () => {
     const warnMsgs: string[] = [];
     const mockLogger = {

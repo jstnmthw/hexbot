@@ -1,8 +1,8 @@
-# Hexbot
+# HexBot - An IRC Bot
 
 ![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/jstnmthw/50c25c1f05168b07d48f34f8c8351ca5/raw/hexbot-coverage.json)
 
-Modular IRC bot written in TypeScript with multi-network bind, hot-reloadable plugin, and hostmask-based permission systems.
+A modern, modular IRC bot for Node.js, written in TypeScript.
 
 ## Quick start
 
@@ -34,6 +34,8 @@ The REPL (`.` prefix) provides admin access without IRC:
 | `.adduser <handle> <hostmask> <flags>` | `+n`     | Add a bot user                              |
 | `.deluser <handle>`                    | `+n`     | Remove a bot user                           |
 | `.users`                               | `+o`     | List all bot users                          |
+| `.chanset <#chan> [key] [value]`       | `+m`     | View or set per-channel plugin settings     |
+| `.chaninfo <#chan>`                    | `+o`     | Show all per-channel settings for a channel |
 | `.binds [plugin]`                      | `+o`     | List active event binds                     |
 | `.plugins`                             | `-`      | List loaded plugins                         |
 | `.load <name>`                         | `+n`     | Load a plugin                               |
@@ -76,6 +78,7 @@ See [plugins/README.md](plugins/README.md) for the full plugin authoring guide, 
 - **SOCKS5 proxy** — tunnel the IRC connection through a SOCKS5 proxy (Tor, SSH dynamic forward, etc.); configure via `proxy` in `bot.json`
 - **DCC CHAT / party line** — users connect directly via DCC CHAT for an admin party-line session; configure via `dcc` in `bot.json` (see [docs/DCC.md](docs/DCC.md))
 - **IRC CASEMAPPING** — reads the server's `CASEMAPPING` ISUPPORT token and applies correct nick/channel folding (`rfc1459`, `strict-rfc1459`, or `ascii`) throughout all core modules and the plugin API (`api.ircLower()`)
+- **IRCv3 identity caps** — negotiates `extended-join`, `account-notify`, and `chghost` for a live nick→account map; privileged commands can require NickServ verification before executing (configure via `identity.require_acc_for` in `bot.json`). SASL PLAIN and SASL EXTERNAL (CertFP) both supported.
 
 ## Deploy with Docker
 

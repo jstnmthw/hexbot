@@ -414,6 +414,14 @@ describe('Services', () => {
       }).not.toThrow();
     });
 
+    it('handles notice with missing nick field (covers event.nick ?? "" fallback)', () => {
+      const { client } = createServices({ type: 'atheme' });
+      // Emit notice without a nick field — exercises the ?? '' fallback at line 159
+      expect(() => {
+        client.emit('notice', { message: 'Alice ACC 3' }); // no nick property
+      }).not.toThrow();
+    });
+
     it('ignores ACC response for a nick not being verified', async () => {
       const { services, client } = createServices({ type: 'atheme' });
 

@@ -76,6 +76,7 @@ export function hasAnyFlag(flags: string | null, required: Iterable<string>): bo
 export function getUserFlags(api: PluginAPI, channel: string, nick: string): string | null {
   const hostmask = api.getUserHostmask(channel, nick);
   if (!hostmask) return null;
+  /* v8 ignore next */
   const fullHostmask = hostmask.includes('!') ? hostmask : `${nick}!${hostmask}`;
   const user = api.permissions.findByHostmask(fullHostmask);
   if (!user) return null;

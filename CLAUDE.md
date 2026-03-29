@@ -11,7 +11,7 @@ hexbot is a modular IRC bot framework for Node.js. Read `DESIGN.md` thoroughly b
 - **TypeScript with ESM modules** — use `import`/`export`, compile with `tsc` or `tsx` for development
 - **irc-framework** is the IRC transport layer — do not reimplement IRC protocol handling
 - **better-sqlite3** for database — synchronous reads are intentional and fine for this workload
-- **Eggdrop-style bind system** — the event dispatcher uses `bind(type, flags, mask, handler)` exactly as described in the design doc
+- **Bind system** — the event dispatcher uses `bind(type, flags, mask, handler)` exactly as described in the design doc
 - **Plugin isolation** — plugins never depend on other plugins, only on core modules via the scoped API
 - **Hot-reload** — plugins must be loadable/unloadable/reloadable without restarting the bot process
 

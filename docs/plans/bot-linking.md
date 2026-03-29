@@ -1,8 +1,8 @@
-# Plan: Bot Linking (Eggdrop-Style Hub/Leaf Botnet)
+# Plan: Bot Linking (Hub/Leaf Botnet)
 
 ## Summary
 
-This feature implements true Eggdrop-style bot-to-bot linking: a TCP link protocol where multiple hexbot instances connect to each other, share channel/user/permission state, relay privileged commands across the network, and form a hub-and-leaf topology. This is entirely separate from the existing DCC CHAT console feature.
+This feature implements bot-to-bot linking: a TCP link protocol where multiple hexbot instances connect to each other, share channel/user/permission state, relay privileged commands across the network, and form a hub-and-leaf topology. This is entirely separate from the existing DCC CHAT console feature.
 
 ---
 

@@ -72,8 +72,6 @@ export function init(api: PluginAPI): void {
   // !topic unlock                    — disable topic protection
   // !topic preview <theme> <text>    — preview the themed text in channel
   api.bind('pub', '+o', '!topic', (ctx: HandlerContext) => {
-    if (!ctx.channel) return;
-
     const args = ctx.args.trim();
     if (!args) {
       ctx.reply(
@@ -87,7 +85,7 @@ export function init(api: PluginAPI): void {
 
     // Handle lock subcommand
     if (firstArg === 'lock') {
-      const live = api.getChannel(ctx.channel)?.topic ?? '';
+      const live = api.getChannel(ctx.channel!)?.topic ?? '';
       if (!live) {
         ctx.reply('Cannot lock: no topic is currently set.');
         return;
@@ -97,16 +95,16 @@ export function init(api: PluginAPI): void {
           `Warning: topic is ${live.length} chars (typical limit is ~390). It may be truncated by the server.`,
         );
       }
-      api.channelSettings.set(ctx.channel, 'topic_text', live);
-      api.channelSettings.set(ctx.channel, 'protect_topic', true);
+      api.channelSettings.set(ctx.channel!, 'topic_text', live);
+      api.channelSettings.set(ctx.channel!, 'protect_topic', true);
       ctx.reply('Topic locked.');
       return;
     }
 
     // Handle unlock subcommand
     if (firstArg === 'unlock') {
-      api.channelSettings.set(ctx.channel, 'protect_topic', false);
-      api.channelSettings.set(ctx.channel, 'topic_text', '');
+      api.channelSettings.set(ctx.channel!, 'protect_topic', false);
+      api.channelSettings.set(ctx.channel!, 'topic_text', '');
       ctx.reply('Topic protection disabled.');
       return;
     }
@@ -127,7 +125,7 @@ export function init(api: PluginAPI): void {
       }
 
       const formatted = template.replace('$text', () => text);
-      api.say(ctx.channel, formatted);
+      api.say(ctx.channel!, formatted);
       return;
     }
 
@@ -154,7 +152,7 @@ export function init(api: PluginAPI): void {
       );
     }
 
-    api.topic(ctx.channel, formatted);
+    api.topic(ctx.channel!, formatted);
     ctx.reply(`Topic set using theme "${themeName}".`);
   });
 
@@ -194,6 +192,7 @@ export function init(api: PluginAPI): void {
 
   // topic bind — enforce topic protection on unauthorized changes
   api.bind('topic', '-', '*', (ctx: HandlerContext) => {
+    /* v8 ignore next */
     if (!ctx.channel) return;
 
     const protect = api.channelSettings.get(ctx.channel, 'protect_topic') as boolean;

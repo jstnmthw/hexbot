@@ -1,14 +1,14 @@
-# Hexbot — Design Document
+# HexBot — Design Document
 
-> A modular IRC bot framework for Node.js, inspired by Eggdrop's 30-year-old bind system but built for the modern stack. The name is a nod to "obnoxious" — fitting for a bot that'll eventually have an AI chat module annoying people in IRC channels.
+> A modular IRC bot framework for Node.js, inspired by Eggdrop's 30-year-old bind system but built for the modern stack. The name is a nod to HexChat — same hex, but we're the bot.
 
-This document describes hexbot's stable architectural decisions. For current feature status, see [README.md](README.md). For implementation history, see [CHANGELOG.md](CHANGELOG.md). For planned features, see [docs/plans/](docs/plans/).
+This document describes HexBot's stable architectural decisions. For current feature status, see [README.md](README.md). For implementation history, see [CHANGELOG.md](CHANGELOG.md). For planned features, see [docs/plans/](docs/plans/).
 
 ---
 
 ## 1. Project overview
 
-hexbot is a single-process, plugin-based IRC bot written in TypeScript. It connects to any IRC network, loads plugins at runtime with hot-reload, and manages channel operations through an Eggdrop-style event bind system and flag-based permissions.
+HexBot is a single-process, plugin-based IRC bot written in TypeScript. It connects to any IRC network, loads plugins at runtime with hot-reload, and manages channel operations through an event bind system and flag-based permissions.
 
 The goal is an open-source alternative to Eggdrop that eliminates the pain of C compilation, Tcl scripting, flat-file databases, and telnet-era admin interfaces — while preserving the design patterns that made Eggdrop successful for three decades.
 
@@ -45,7 +45,7 @@ hexbot/
 │   ├── index.ts              # Entry point, process signals
 │   ├── bot.ts                # Thin orchestrator, wires modules together
 │   ├── irc-bridge.ts         # Translates irc-framework events to dispatcher events
-│   ├── dispatcher.ts         # Eggdrop-style bind/unbind event system
+│   ├── dispatcher.ts         # Bind/unbind event system
 │   ├── plugin-loader.ts      # Discovers, loads, hot-reloads plugins
 │   ├── database.ts           # SQLite key-value store + mod_log, namespaced per plugin
 │   ├── repl.ts               # Attached REPL (--repl flag)
@@ -60,7 +60,7 @@ hexbot/
 │   │   ├── strip-formatting.ts  # Remove IRC control codes
 │   │   └── irc-event.ts      # Type guards for irc-framework event payloads
 │   └── core/                 # Core modules (always loaded)
-│       ├── permissions.ts    # Eggdrop-style n/m/o/v flags, hostmask matching
+│       ├── permissions.ts    # Flag-based permissions: n/m/o/v flags, hostmask matching
 │       ├── services.ts       # NickServ/ChanServ integration, SASL
 │       ├── irc-commands.ts   # Helpers: join, part, kick, ban, mode
 │       ├── channel-state.ts  # Track users, modes, hostmasks per channel
@@ -102,7 +102,7 @@ Inspired by Eggdrop's C modules vs Tcl scripts:
 
 ### 2.3 Event dispatcher (the bind system)
 
-The heart of hexbot. Modeled directly on Eggdrop's `bind` command.
+The heart of HexBot. Modeled directly on Eggdrop's `bind` command.
 
 ```typescript
 dispatcher.bind(type, flags, mask, handler, pluginId);
@@ -229,7 +229,7 @@ Hot-reload works because ESM's `import()` can be cache-busted with `?t=Date.now(
 
 ### 2.6 Permissions (core module)
 
-Eggdrop-style flags with per-channel overrides.
+Flag-based permissions with per-channel overrides.
 
 **Flags:**
 
@@ -347,7 +347,7 @@ Each plugin accesses its own namespace via `api.db`. Core modules use reserved n
     "tls": true,
     "nick": "hexbot",
     "username": "hexbot",
-    "realname": "hexbot IRC Bot",
+    "realname": "HexBot IRC Bot",
     "channels": ["#mychannel"]
   },
   "owner": {
@@ -449,7 +449,7 @@ Console logging uses structured output (timestamp, level, source module/plugin).
 
 ### 2.15 DCC CHAT / Botnet (core module)
 
-Eggdrop-style passive DCC CHAT for remote administration (`src/core/dcc.ts`). This is "Option B" from the CLI/REPL design extensibility note in section 2.12.
+Passive DCC CHAT for remote administration (`src/core/dcc.ts`). This is "Option B" from the CLI/REPL design extensibility note in section 2.12.
 
 **How it works:**
 
@@ -488,7 +488,7 @@ See `docs/DCC.md` for full setup, client instructions, and security notes.
 
 ## 3. Network compatibility
 
-hexbot is network-agnostic. The base IRC protocol (RFC 1459 / RFC 2812) is consistent across all server software. `irc-framework` handles:
+HexBot is network-agnostic. The base IRC protocol (RFC 1459 / RFC 2812) is consistent across all server software. `irc-framework` handles:
 
 - ISUPPORT (005) parsing — auto-detects server capabilities (modes per line, ban list size, channel types, etc.)
 - IRCv3 capability negotiation — SASL, `account-notify`, `extended-join`, `away-notify`, `multi-prefix`
@@ -622,4 +622,4 @@ ngircd -n  # foreground mode
 
 ---
 
-_This document describes hexbot's stable architectural decisions. It is updated as the architecture evolves, not as individual features ship._
+_This document describes HexBot's stable architectural decisions. It is updated as the architecture evolves, not as individual features ship._

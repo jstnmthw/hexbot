@@ -2,7 +2,7 @@
 
 ## Summary
 
-Add full INVITE handling to hexbot in two tiers, following the Eggdrop precedent:
+Add full INVITE handling to hexbot in two tiers:
 
 1. **Core auto-join** — bot automatically rejoins any channel it is already configured to be in when invited (no permission check, matches Eggdrop's core behavior).
 2. **chanmod `invite` channel setting** — when enabled, accept user-triggered invites from users holding the `o` flag in the channel or the global `m`/`n` flag.
@@ -77,7 +77,7 @@ WHOIS is **not** needed for basic flag checking. It would only be warranted if y
 
 ### Phase 5: chanmod invite setting
 
-**Goal:** Plugin-level invite handling with permission checking, per Eggdrop's invite bind pattern.
+**Goal:** Plugin-level invite handling with permission checking, per the invite bind pattern.
 
 - [ ] `plugins/chanmod/state.ts` — add `invite: boolean` to `ChanmodConfig` interface and `readConfig()` (default `false`)
 - [ ] `plugins/chanmod/invite.ts` — new file implementing `setupInvite(api, config, state)`:

@@ -141,6 +141,18 @@ describe('topic plugin', () => {
     expect(reply!.message).toContain(themeNames[0]);
   });
 
+  it('!topics preview with no text — uses default "Sample Topic Text"', async () => {
+    // No text after "preview" — uses fallback sample text
+    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!topics preview');
+    await tick();
+
+    // Should send previews mentioning the default sample text
+    const reply = bot.client.messages.find(
+      (m) => m.type === 'say' && m.message?.includes('Sample Topic Text'),
+    );
+    expect(reply).toBeDefined();
+  });
+
   it('!topics preview cooldown — second call within window is rejected', async () => {
     // First call — succeeds and sets the cooldown
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!topics preview hello');
@@ -286,6 +298,31 @@ describe('topic plugin', () => {
         topic,
       });
     }
+
+    it('protect_topic enabled but no topic_text stored → no restore', async () => {
+      // protect_topic is on but topic_text is empty — guard returns early
+      bot.channelSettings.set('#test', 'protect_topic', true);
+      // do NOT set topic_text — it stays as '' (falsy)
+      await advancePastGrace();
+      bot.client.clearMessages();
+
+      bot.client.simulateEvent('topic', {
+        nick: 'someuser',
+        ident: 'user',
+        hostname: 'user.host',
+        channel: '#test',
+        topic: 'anything',
+      });
+      await tick();
+
+      // No TOPIC restore since there's nothing to enforce
+      expect(
+        bot.client.messages.find((m) => m.type === 'raw' && m.message?.startsWith('TOPIC')),
+      ).toBeUndefined();
+
+      // Cleanup
+      bot.channelSettings.set('#test', 'protect_topic', false);
+    });
 
     it('non-op change after lock → bot restores enforced topic', async () => {
       setLiveTopic(bot, '#test', 'locked topic');

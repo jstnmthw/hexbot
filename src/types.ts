@@ -289,6 +289,12 @@ export interface IrcConfig {
    *  an object with a key (e.g. {"name": "#secret", "key": "pass"}). */
   channels: (string | ChannelEntry)[];
   /**
+   * Verify the server's TLS certificate against the system CA store. Defaults to `true`.
+   * Set to `false` only for networks with self-signed certificates. This disables certificate
+   * validation and exposes the connection to MITM attacks — use with caution.
+   */
+  tls_verify?: boolean;
+  /**
    * Path to a TLS client certificate file (PEM format).
    * Required when `services.sasl_mechanism` is "EXTERNAL" (CertFP authentication).
    */

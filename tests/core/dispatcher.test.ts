@@ -241,6 +241,14 @@ describe('EventDispatcher', () => {
       expect(handler1).not.toHaveBeenCalled();
       expect(handler2).toHaveBeenCalledOnce();
     });
+
+    it('does nothing when handler is not found', async () => {
+      const handler = vi.fn();
+      // Unbind a handler that was never registered — no error, no effect
+      dispatcher.unbind('pub', '!nonexistent', handler);
+      await dispatcher.dispatch('pub', makeCtx({ command: '!nonexistent' }));
+      expect(handler).not.toHaveBeenCalled();
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -612,6 +620,13 @@ describe('EventDispatcher', () => {
       const handler = vi.fn();
       dispatcher.bind('topic', '-', '#other', handler, 'test-plugin');
       await dispatcher.dispatch('topic', makeCtx({ channel: '#test', text: 'new topic' }));
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('does not dispatch when channel is null with a specific channel mask', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('topic', '-', '#test', handler, 'test-plugin');
+      await dispatcher.dispatch('topic', makeCtx({ channel: null, text: 'new topic' }));
       expect(handler).not.toHaveBeenCalled();
     });
   });

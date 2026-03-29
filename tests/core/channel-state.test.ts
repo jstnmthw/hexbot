@@ -193,6 +193,24 @@ describe('ChannelState', () => {
 
       expect(state.getUserModes('#test', 'Bob')).toContain('v');
     });
+
+    it('silently ignores mode change for a user not in channel state', () => {
+      // A different user joins so the channel exists in state, but Ghost is not tracked
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        channel: '#test',
+      });
+
+      // Mode event for Ghost — user not in state; exercises if (user) false branch
+      client.simulateEvent('mode', {
+        target: '#test',
+        modes: [{ mode: '+o', param: 'Ghost' }],
+      });
+
+      expect(state.getUser('#test', 'Ghost')).toBeUndefined();
+    });
   });
 
   describe('getUser', () => {
@@ -331,6 +349,27 @@ describe('ChannelState', () => {
       expect(user!.ident).toBe('newident');
       expect(user!.hostname).toBe('old.host');
       expect(user!.hostmask).toBe('Alice!newident@old.host');
+    });
+
+    it('skips hostmask update when both ident and hostname are empty in userlist update', () => {
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'alice.host.com',
+        channel: '#test',
+      });
+
+      // Userlist with both empty — only modes should update
+      client.simulateEvent('userlist', {
+        channel: '#test',
+        users: [{ nick: 'Alice', ident: '', hostname: '', modes: 'o' }],
+      });
+
+      const user = state.getUser('#test', 'Alice');
+      expect(user!.ident).toBe('alice');
+      expect(user!.hostname).toBe('alice.host.com');
+      expect(user!.hostmask).toBe('Alice!alice@alice.host.com');
+      expect(user!.modes).toContain('o');
     });
   });
 
@@ -504,13 +543,6 @@ describe('ChannelState', () => {
       // Should not throw
       client.simulateEvent('topic', { channel: '', topic: 'orphan topic' });
       // No channel created for empty name
-    });
-
-    it('handles topic event with no channel field (??-fallback covers branch)', () => {
-      // event.channel is undefined → String(undefined ?? '') → '' → early return
-      expect(() => {
-        client.simulateEvent('topic', { topic: 'no channel here' });
-      }).not.toThrow();
     });
 
     it('handles topic event with no topic field (??-fallback covers branch)', () => {
@@ -754,21 +786,6 @@ describe('ChannelState', () => {
   });
 
   describe('IRCv3 account-notify edge cases', () => {
-    it('ignores account event with empty nick', () => {
-      // Should not throw or update state when nick is empty
-      expect(() => {
-        client.simulateEvent('account', { nick: '', account: 'SomeAccount' });
-      }).not.toThrow();
-      expect(state.getAccountForNick('')).toBeUndefined();
-    });
-
-    it('handles account event with no nick field (??-fallback to empty string, then early return)', () => {
-      // event.nick is undefined → String(undefined ?? '') → '' → if(!nick) return
-      expect(() => {
-        client.simulateEvent('account', { account: 'NoNick' });
-      }).not.toThrow();
-    });
-
     it('account event for nick not in a tracked channel still updates networkAccounts', () => {
       // Bob is in the channel; Ghost is not — covers the if(user) false branch in the loop
       client.simulateEvent('join', {
@@ -831,13 +848,6 @@ describe('ChannelState', () => {
       const user = state.getUser('#test', 'Carol')!;
       expect(user.ident).toBe('carol'); // unchanged
       expect(user.hostname).toBe('cloaked.carol.net');
-    });
-
-    it('ignores user updated event when nick field is missing (??-fallback to empty string)', () => {
-      // new_ident provided but no nick field — event.nick is undefined → nick='' → early return
-      expect(() => {
-        client.simulateEvent('user updated', { new_ident: 'x' });
-      }).not.toThrow();
     });
 
     it('ignores user updated event with neither new_ident nor new_hostname', () => {

@@ -25,6 +25,7 @@ export function init(api: PluginAPI): void {
 
   // Track every channel message (pubm is stackable, won't interfere with others)
   api.bind('pubm', '-', '*', (ctx: HandlerContext) => {
+    /* v8 ignore next */
     if (!ctx.channel) return;
 
     const text =

@@ -163,6 +163,18 @@ describe('seen plugin', () => {
     expect(response).toContain('charlie');
   });
 
+  it('should truncate long messages to 200 chars when tracking', async () => {
+    const longText = 'x'.repeat(201);
+    const ctx = makePubCtx('alice', longText);
+    await dispatcher.dispatch('pubm', ctx);
+
+    const raw = db.get('seen', 'seen:alice');
+    expect(raw).toBeTruthy();
+    const record = JSON.parse(raw!);
+    expect(record.text).toBe('x'.repeat(200) + '...');
+    expect(record.text.length).toBe(203);
+  });
+
   it('should isolate data from other plugins', async () => {
     // Track a message via the seen plugin
     const msgCtx = makePubCtx('alice', 'hello');

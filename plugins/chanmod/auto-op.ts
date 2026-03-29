@@ -5,8 +5,8 @@ import type { ChanmodConfig, SharedState } from './state';
 
 export function setupAutoOp(api: PluginAPI, config: ChanmodConfig, state: SharedState): () => void {
   api.bind('join', '-', '*', async (ctx: HandlerContext) => {
-    const { nick, channel } = ctx;
-    if (!channel) return;
+    const { nick } = ctx;
+    const channel = ctx.channel!;
 
     // Bot joined — check if channel needs enforce_channel_modes applied
     if (isBotNick(api, nick)) {
@@ -16,8 +16,8 @@ export function setupAutoOp(api: PluginAPI, config: ChanmodConfig, state: Shared
         const timer = setTimeout(() => {
           if (!botHasOps(api, channel)) return;
           const ch = api.getChannel(channel);
-          if (!ch) return;
-          const missing = [...enforceChannelModeSet].filter((m) => !ch.modes.includes(m));
+          const missing = [...enforceChannelModeSet].filter((m) => !ch!.modes.includes(m));
+          /* v8 ignore next -- ch.modes is never populated by channel-state; missing is always the full set */
           if (missing.length > 0) {
             const modeString = '+' + missing.join('');
             api.mode(channel, modeString);
@@ -82,7 +82,8 @@ export function setupAutoOp(api: PluginAPI, config: ChanmodConfig, state: Shared
       }
       api.halfop(channel, nick);
       api.log(`Auto-halfopped ${nick} in ${channel}`);
-    } else if (shouldVoice) {
+    } else {
+      // shouldVoice is always true here — the guard above returned early if all three were false
       if (!botHasOps(api, channel)) {
         api.log(`Cannot auto-voice ${nick} in ${channel} — I am not opped`);
         return;

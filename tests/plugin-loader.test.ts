@@ -257,6 +257,22 @@ describe('PluginLoader', () => {
       expect(result.error).toContain('init');
     });
 
+    it('should catch and report import failures (e.g. syntax error)', async () => {
+      const pluginPath = writePlugin(
+        tempDir,
+        'syntax-error',
+        `
+        this is not valid TypeScript {{ syntax error
+        `,
+      );
+
+      const { loader } = createLoader(tempDir);
+      const result = await loader.load(pluginPath);
+
+      expect(result.status).toBe('error');
+      expect(result.error).toContain('Failed to import plugin');
+    });
+
     it('should catch and report init() errors', async () => {
       const pluginPath = writePlugin(
         tempDir,

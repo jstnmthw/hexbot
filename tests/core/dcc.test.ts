@@ -9,6 +9,7 @@ import {
   parseDccChatPayload,
 } from '../../src/core/dcc';
 import type { DCCIRCClient } from '../../src/core/dcc';
+import type { Logger } from '../../src/logger';
 import type { DccConfig, HandlerContext, UserRecord } from '../../src/types';
 
 // ---------------------------------------------------------------------------
@@ -31,6 +32,10 @@ describe('ipToDecimal', () => {
   it('returns 0 for invalid input', () => {
     expect(ipToDecimal('not.an.ip')).toBe(0);
     expect(ipToDecimal('')).toBe(0);
+  });
+
+  it('returns 0 when a byte exceeds 255', () => {
+    expect(ipToDecimal('1.2.3.256')).toBe(0);
   });
 });
 
@@ -59,6 +64,11 @@ describe('parseDccChatPayload', () => {
   it('is case-insensitive for the subtype word', () => {
     const result = parseDccChatPayload('chat chat 0 0 9999');
     expect(result).toEqual({ subtype: 'CHAT', ip: 0, port: 0, token: 9999 });
+  });
+
+  it('returns null when ip or port is not a number', () => {
+    expect(parseDccChatPayload('CHAT chat notanumber 50000')).toBeNull();
+    expect(parseDccChatPayload('CHAT chat 16909060 notaport')).toBeNull();
   });
 });
 
@@ -247,6 +257,33 @@ describe('DCCManager', () => {
     expect(client.notices[0].message).toContain('passive');
   });
 
+  it('ignores non-CHAT DCC CTCP subtype (covers lines 474-476)', async () => {
+    const dispatcher = makeDispatcher();
+    let handler!: (ctx: HandlerContext) => Promise<void>;
+    (dispatcher.bind as ReturnType<typeof vi.fn>).mockImplementation(
+      (_t: string, _f: string, _m: string, fn: (ctx: HandlerContext) => Promise<void>) => {
+        handler = fn;
+      },
+    );
+    const m = new DCCManager({
+      client,
+      dispatcher,
+      permissions: makePermissions(makeUser()),
+      services: makeServices(),
+      commandHandler: makeCommandHandler(),
+      config: makeConfig(),
+      version: '1.0.0',
+      botNick: 'hexbot',
+    });
+    m.attach();
+
+    // Non-CHAT DCC types (SEND, FILE) — parseDccChatPayload returns null → ignored
+    await handler(makeCtx('nick', 'SEND foo.txt 0 0'));
+    expect(client.notices).toHaveLength(0);
+    await handler(makeCtx('nick', 'FILE bar.txt 16909060 50000'));
+    expect(client.notices).toHaveLength(0);
+  });
+
   it('rejects unknown hostmask', async () => {
     const dispatcher = makeDispatcher();
     let handler!: (ctx: HandlerContext) => Promise<void>;
@@ -411,6 +448,33 @@ describe('DCCManager', () => {
 
     await handler(makeCtx('testnick'));
     expect(client.notices.some((n) => n.message.includes('active session'))).toBe(true);
+  });
+
+  it('proceeds past NickServ verify when verification succeeds', async () => {
+    const dispatcher = makeDispatcher();
+    let handler!: (ctx: HandlerContext) => Promise<void>;
+    (dispatcher.bind as ReturnType<typeof vi.fn>).mockImplementation(
+      (_t: string, _f: string, _m: string, fn: (ctx: HandlerContext) => Promise<void>) => {
+        handler = fn;
+      },
+    );
+    const m = new DCCManager({
+      client,
+      dispatcher,
+      permissions: makePermissions(makeUser()),
+      services: makeServices(true), // verification succeeds
+      commandHandler: makeCommandHandler(),
+      config: makeConfig({ nickserv_verify: true, port_range: [50000, 50000] }),
+      version: '1.0.0',
+      botNick: 'hexbot',
+    });
+    m.attach();
+    // Exhaust the port range so we bail before real TCP
+    (m as unknown as { allocatedPorts: Set<number> }).allocatedPorts.add(50000);
+
+    await handler(makeCtx());
+    // Port exhausted → notice (proves the NickServ check passed without rejecting)
+    expect(client.notices.some((n) => n.message.includes('no ports available'))).toBe(true);
   });
 
   it('rejects when NickServ verification fails', async () => {
@@ -604,6 +668,40 @@ describe('DCCSession', () => {
     expect(written.length).toBe(before);
   });
 
+  it('close logs with "unknown" fallback when no reason is given (with a logger)', () => {
+    const { socket } = makeMockSocket();
+    const logger = {
+      info: vi.fn(),
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      child: vi.fn(),
+    } as unknown as Logger;
+    const session = new DCCSession({
+      manager: makeMockManagerForSession(),
+      user: makeUser(),
+      nick: 'testnick',
+      ident: 'test',
+      hostname: 'test.host',
+      socket,
+      commandHandler: makeCommandHandler(),
+      idleTimeoutMs: 60000,
+      logger,
+    });
+    session.close(); // no reason → reason ?? 'unknown'
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('unknown'));
+  });
+
+  it('close skips write and destroy when socket is already destroyed', () => {
+    const { socket, written, duplex } = makeMockSocket();
+    const session = buildSession(socket);
+    duplex.destroy(); // destroy before close; no start() so no close-listener
+    const before = written.length;
+    session.close('reason');
+    // No additional writes because socket was already destroyed
+    expect(written.length).toBe(before);
+  });
+
   it('close is idempotent', () => {
     const { socket, written } = makeMockSocket();
     const session = buildSession(socket);
@@ -631,6 +729,26 @@ describe('DCCSession', () => {
     session.start('1.0.0', 'hexbot');
     await flushAsync();
     expect(written.join('')).toContain('owner of this bot');
+    session.close();
+  });
+
+  it('start does not show owner-only message for non-owner flags', async () => {
+    const { socket, written } = makeMockSocket();
+    const session = buildSession(socket, { user: makeUser('admin', 'm') });
+    session.start('1.0.0', 'hexbot');
+    await flushAsync();
+    const output = written.join('');
+    expect(output).not.toContain('owner of this bot');
+    expect(output).toContain('+m');
+    session.close();
+  });
+
+  it('start shows +- for user with no flags', async () => {
+    const { socket, written } = makeMockSocket();
+    const session = buildSession(socket, { user: makeUser('nobody', '') });
+    session.start('1.0.0', 'hexbot');
+    await flushAsync();
+    expect(written.join('')).toContain('+-');
     session.close();
   });
 
@@ -669,6 +787,19 @@ describe('DCCSession', () => {
     duplex.push('.who\n');
     await flushAsync(3);
     expect(written.join('')).toContain('No users on the console');
+    session.close();
+  });
+
+  it('.console shows (you) marker for the current user', async () => {
+    const { socket, written, duplex } = makeMockSocket();
+    const mgr = makeMockManagerForSession({
+      sessionList: [{ handle: 'testuser', nick: 'testnick', connectedAt: Date.now() - 5000 }],
+    });
+    const session = buildSession(socket, { manager: mgr });
+    session.start('1.0.0', 'hexbot');
+    duplex.push('.console\n');
+    await flushAsync(3);
+    expect(written.join('')).toContain('(you)');
     session.close();
   });
 

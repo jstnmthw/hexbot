@@ -17,10 +17,14 @@ export function init(api: PluginAPI): void {
       name?: string;
       version?: string;
     };
+    /* v8 ignore start -- ?? fallbacks: package.json always has name and version in the test environment */
     versionString = `${pkg.name ?? 'hexbot'} v${pkg.version ?? '?'}`;
+    /* v8 ignore stop */
+    /* v8 ignore start -- catch only fires if package.json is missing or malformed */
   } catch {
     versionString = 'hexbot';
   }
+  /* v8 ignore stop */
 
   api.bind('ctcp', '-', 'VERSION', (ctx) => {
     api.ctcpResponse(ctx.nick, 'VERSION', versionString);

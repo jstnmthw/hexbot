@@ -5,8 +5,9 @@
     "tls": true,
     "nick": "Hexbot",
     "username": "hexbot",
-    "realname": "Hexbot IRC Bot",
+    "realname": "HexBot IRC Bot",
     "channels": ["#hexbot", { "name": "#secret", "key": "password" }],
+    "_comment_tls_verify": "tls_verify defaults to true (validates server cert). Set to false only for networks with self-signed certs — disables certificate validation",
     "_comment_tls_cert": "Optional: set tls_cert + tls_key and sasl_mechanism=EXTERNAL for CertFP auth (no password needed)"
   },
   "owner": {
@@ -52,5 +53,5 @@
     "host": "127.0.0.1",
     "port": 9050
   },
-  "quit_message": "Hexbot v0.1.0"
+  "quit_message": "HexBot v0.1.0"
 }

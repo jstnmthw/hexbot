@@ -67,18 +67,19 @@ export function createMockBot(options?: { botNick?: string; currentNick?: string
   const client = new MockIRCClient();
   client.user.nick = currentNick;
 
-  // Wire up bridge
+  // Wire up core modules (channelState must be created before IRCBridge so it can be passed in)
+  const channelState = new ChannelState(client, eventBus, logger);
+  channelState.attach();
+
+  // Wire up bridge — pass channelState so kicked-user hostmask lookup works
   const bridge = new IRCBridge({
     client,
     dispatcher,
     botNick: currentNick,
+    channelState,
     logger,
   });
   bridge.attach();
-
-  // Wire up core modules
-  const channelState = new ChannelState(client, eventBus, logger);
-  channelState.attach();
 
   const ircCommands = new IRCCommands(client, db, undefined, logger);
 

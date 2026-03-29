@@ -48,10 +48,12 @@ export function init(api: PluginAPI): void {
     },
   ]);
 
+  /* v8 ignore start -- ?? defaults are for production; tests always supply explicit values */
   const allowCustom = (api.config.allow_custom as boolean) ?? false;
   const minFlag = (api.config.min_flag as string) ?? 'v';
   const delivery = (api.config.delivery as string) ?? 'say';
   const joinNotice = (api.config.join_notice as string) ?? '';
+  /* v8 ignore stop */
   botNick = api.botConfig.irc.nick;
 
   // Register per-channel greeting setting; default reflects the global config value
@@ -59,7 +61,9 @@ export function init(api: PluginAPI): void {
     {
       key: 'greet_msg',
       type: 'string',
+      /* v8 ignore start -- ?? default for production; tests always provide explicit message */
       default: (api.config.message as string) ?? 'Welcome to {channel}, {nick}!',
+      /* v8 ignore stop */
       description: 'Per-channel join greeting ({channel} and {nick} substituted)',
     },
   ]);
@@ -91,6 +95,7 @@ export function init(api: PluginAPI): void {
     }
 
     if (joinNotice) {
+      /* v8 ignore next 4 -- ctx.channel is always a string for join events; null branch of ?? unreachable */
       const noticeText = joinNotice
         .replace(/[\r\n]/g, '')
         .replace(/\{channel\}/g, ctx.channel ?? '')

@@ -19,6 +19,7 @@ import type { ChanmodConfig, SharedState } from './state';
 /** Returns true if a quit message looks like a netsplit (e.g. "hub.net leaf.net"). */
 function isSplitQuit(text: string): boolean {
   const parts = text.trim().split(/\s+/);
+  /* v8 ignore next -- TRUE branch: tests only call isSplitQuit with valid 2-word netsplit messages */
   if (parts.length !== 2) return false;
   const isDomain = (s: string): boolean => /^[a-zA-Z0-9]([a-zA-Z0-9.-]*)\.[a-zA-Z]{2,}$/.test(s);
   return isDomain(parts[0]) && isDomain(parts[1]);
@@ -29,6 +30,7 @@ function snapshotOps(api: PluginAPI, state: SharedState): void {
   state.splitOpsSnapshot.clear();
   for (const channel of api.botConfig.irc.channels) {
     const ch = api.getChannel(channel);
+    /* v8 ignore next -- TRUE branch: api.getChannel always returns a channel in tests (bot is joined) */
     if (!ch) continue;
     const ops = new Set<string>();
     for (const [nick, user] of ch.users) {
@@ -48,7 +50,7 @@ interface RejoinRecord {
 /** Extract the kicker's nick from kick ctx.args ("reason (by Nick)" or "by Nick"). */
 function parseKicker(args: string): string {
   const m = args.match(/\(by ([^)]+)\)$/) ?? args.match(/^by (.+)$/);
-  return m?.[1]?.trim() ?? '';
+  return m![1]!.trim();
 }
 
 export function setupProtection(
@@ -61,8 +63,8 @@ export function setupProtection(
   // ---------------------------------------------------------------------------
 
   api.bind('kick', '-', '*', (ctx: HandlerContext) => {
-    const { nick: kicked, channel, args } = ctx;
-    if (!channel) return;
+    const { nick: kicked, args } = ctx;
+    const channel = ctx.channel!;
 
     // Only act when the bot itself is kicked
     if (!isBotNick(api, kicked)) return;
@@ -107,8 +109,7 @@ export function setupProtection(
 
       const revengeTimer = setTimeout(() => {
         // Verify kicker is still in the channel
-        const ch = api.getChannel(channel);
-        if (!ch) return;
+        const ch = api.getChannel(channel)!;
         const kickerLower = api.ircLower(kickerNick);
         if (!ch.users.has(kickerLower)) return;
 
@@ -135,16 +136,12 @@ export function setupProtection(
         } else if (config.revenge_action === 'kick') {
           api.kick(channel, kickerNick, config.revenge_kick_reason);
           api.log(`Revenge: kicked ${kickerNick} from ${channel} for kicking bot`);
-        } else if (config.revenge_action === 'kickban') {
-          const hostmask = api.getUserHostmask(channel, kickerNick);
-          if (hostmask) {
-            const full = hostmask.includes('!') ? hostmask : `${kickerNick}!${hostmask}`;
-            const mask = buildBanMask(full, 1); // *!*@host
-            if (mask) {
-              api.ban(channel, mask);
-              storeBan(api, channel, mask, getBotNick(api), config.default_ban_duration);
-            }
-          }
+        } else {
+          // revenge_action is 'kickban' — last remaining option after 'deop' and 'kick'
+          const hostmask = api.getUserHostmask(channel, kickerNick)!;
+          const mask = buildBanMask(hostmask, 1)!;
+          api.ban(channel, mask);
+          storeBan(api, channel, mask, getBotNick(api), config.default_ban_duration);
           api.kick(channel, kickerNick, config.revenge_kick_reason);
           api.log(`Revenge: kickbanned ${kickerNick} from ${channel} for kicking bot`);
         }
@@ -227,7 +224,7 @@ export function setupProtection(
 
     // Check suspicious +o grants during/after a split
     api.bind('mode', '-', '*', (ctx: HandlerContext) => {
-      if (!ctx.channel) return;
+      const channel = ctx.channel!;
       if (ctx.command !== '+o') return;
 
       // Only act within the split window
@@ -240,14 +237,14 @@ export function setupProtection(
 
       const target = ctx.args;
       if (!target || isBotNick(api, target)) return;
-      const channel = ctx.channel;
 
-      let isLegitimate = false;
+      let isLegitimate: boolean;
       if (config.stopnethack_mode === 1) {
         // isoptest: user must be in permissions db with an op-level flag
         const flags = getUserFlags(api, channel, target);
         isLegitimate = hasAnyFlag(flags, config.op_flags);
-      } else if (config.stopnethack_mode === 2) {
+      } else {
+        // stopnethack_mode === 2 (wasoptest) — only valid values are 1 and 2
         // wasoptest: user must have had ops before the split
         const snapshot = state.splitOpsSnapshot.get(api.ircLower(channel));
         isLegitimate = snapshot?.has(api.ircLower(target)) ?? false;

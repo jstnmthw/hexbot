@@ -1,4 +1,4 @@
-// hexbot — Bot class
+// HexBot — Bot class
 // Thin orchestrator that wires modules together. Creates and connects the
 // pieces but delegates all real work to the individual modules.
 import chalk from 'chalk';
@@ -310,7 +310,7 @@ export class Bot {
     this.messageQueue.stop();
 
     if (this.client.connected) {
-      const quitMsg = this.config.quit_message ?? `Hexbot v${this.readPackageVersion()}`;
+      const quitMsg = this.config.quit_message ?? `HexBot v${this.readPackageVersion()}`;
       this.client.quit(quitMsg);
       // Give the QUIT message a moment to send
       await new Promise<void>((r) => setTimeout(r, 500));
@@ -337,10 +337,18 @@ export class Bot {
   private buildClientOptions(): Record<string, unknown> {
     const cfg = this.config.irc;
 
+    if (cfg.tls && cfg.tls_verify === false) {
+      console.warn(
+        '[bot] WARNING: tls_verify is false — TLS certificate validation is DISABLED. ' +
+          'This connection is vulnerable to MITM attacks.',
+      );
+    }
+
     const options: Record<string, unknown> = {
       host: cfg.host,
       port: cfg.port,
       tls: cfg.tls,
+      rejectUnauthorized: cfg.tls_verify ?? true,
       nick: cfg.nick,
       username: cfg.username,
       gecos: cfg.realname,
@@ -390,6 +398,22 @@ export class Bot {
     this.client.on('registered', () => {
       registered = true;
       this.botLogger.info(`Connected to ${cfg.host}:${cfg.port} as ${cfg.nick}`);
+
+      if (cfg.tls) {
+        // Access the TLS socket through irc-framework's internal connection/transport chain.
+        // Using optional chaining throughout since this is private API.
+        type InternalClient = { connection?: { transport?: { socket?: unknown } } };
+        const tlsSocket = (this.client as unknown as InternalClient).connection?.transport?.socket;
+        if (tlsSocket && typeof (tlsSocket as Record<string, unknown>).getCipher === 'function') {
+          const cipher = (
+            tlsSocket as { getCipher(): { name: string; version: string } }
+          ).getCipher();
+          this.botLogger.info(`TLS connected — ${cipher.name} (${cipher.version})`);
+        } else {
+          this.botLogger.info('TLS connected');
+        }
+      }
+
       this.eventBus.emit('bot:connected');
 
       // Read CASEMAPPING from ISUPPORT (available after 005)
@@ -531,7 +555,7 @@ export class Bot {
     const channels = this.configuredChannels.map((c) => c.name).join(', ') || 'none';
 
     console.log();
-    console.log(`${lime('◆')} ${lime('hexbot')} ${lime(`v${version}`)}`);
+    console.log(`${lime('◆')} ${lime('HexBot')} ${lime(`v${version}`)}`);
     console.log(`${dim('-')} Server:      ${cfg.host}:${cfg.port}${tls}`);
     console.log(`${dim('-')} Nick:        ${cfg.nick}`);
     console.log(`${dim('-')} Channels:    ${channels}`);

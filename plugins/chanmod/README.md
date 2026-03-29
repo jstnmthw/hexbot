@@ -32,18 +32,19 @@ Most chanmod behaviors can be tuned per-channel using `.chanset` (requires `m` f
 .chanset #chan                     — list all settings with current values
 ```
 
-| Setting         | Type   | Default | Description                                           |
-| --------------- | ------ | ------- | ----------------------------------------------------- |
-| `enforce_modes` | flag   | off     | Re-apply channel modes and user modes if removed      |
-| `channel_modes` | string | `""`    | Simple modes to enforce, e.g. `"imnpst"`              |
-| `channel_key`   | string | `""`    | Channel key (`+k`) to enforce (empty = disabled)      |
-| `channel_limit` | int    | `0`     | Channel user limit (`+l`) to enforce (0 = disabled)   |
-| `bitch`         | flag   | off     | Strip `+o`/`+h` from anyone without the required flag |
-| `auto_op`       | flag   | on      | Auto-op/halfop/voice flagged users on join            |
-| `protect_ops`   | flag   | off     | Kick/kickban anyone who deops a flagged user          |
-| `enforcebans`   | flag   | off     | Kick users whose hostmask matches a newly-set ban     |
-| `revenge`       | flag   | off     | Kick/deop/kickban whoever kicks the bot               |
-| `chanserv_op`   | flag   | off     | Ask ChanServ to re-op the bot when it loses ops       |
+| Setting         | Type   | Default | Description                                             |
+| --------------- | ------ | ------- | ------------------------------------------------------- |
+| `enforce_modes` | flag   | off     | Re-apply channel modes and user modes if removed        |
+| `channel_modes` | string | `""`    | Simple modes to enforce, e.g. `"imnpst"`                |
+| `channel_key`   | string | `""`    | Channel key (`+k`) to enforce (empty = disabled)        |
+| `channel_limit` | int    | `0`     | Channel user limit (`+l`) to enforce (0 = disabled)     |
+| `bitch`         | flag   | off     | Strip `+o`/`+h` from anyone without the required flag   |
+| `auto_op`       | flag   | on      | Auto-op/halfop/voice flagged users on join              |
+| `protect_ops`   | flag   | off     | Kick/kickban anyone who deops a flagged user            |
+| `enforcebans`   | flag   | off     | Kick users whose hostmask matches a newly-set ban       |
+| `revenge`       | flag   | off     | Kick/deop/kickban whoever kicks the bot                 |
+| `chanserv_op`   | flag   | off     | Ask ChanServ to re-op the bot when it loses ops         |
+| `invite`        | flag   | off     | Accept IRC INVITE from ops/masters and join the channel |
 
 **Example** — set up Rizon-style mode enforcement for `#mychan`:
 
@@ -142,6 +143,28 @@ Ban masks are built from the target's hostmask according to `default_ban_type`:
 
 Cloaked hosts (containing `/`) always use type 1 regardless of the setting.
 
+## Nick recovery
+
+With `nick_recovery: true` (default), chanmod watches for NICK and QUIT events. When the configured nick becomes free, the bot reclaims it after a 30-second backoff. If `nick_recovery_ghost: true` and `nick_recovery_password` is set, it first sends `GHOST <nick> <password>` to NickServ, then changes nick 2 seconds later.
+
+The NickServ password is never written to logs.
+
+## Stopnethack
+
+Stopnethack detects netsplits and deops suspicious operator grants that arrive during or just after the split window. Set `stopnethack_mode` to enable:
+
+| Mode | Behavior                                                                       |
+| ---- | ------------------------------------------------------------------------------ |
+| `0`  | Disabled (default)                                                             |
+| `1`  | **isoptest** — deop anyone granted `+o` who is not in the permissions database |
+| `2`  | **wasoptest** — deop anyone granted `+o` who did not have ops before the split |
+
+A netsplit is detected when 3+ split-format quit messages arrive within 5 seconds. Once detected, the bot monitors `+o` grants for `split_timeout_ms` (default 5 minutes).
+
+## Invite
+
+With `invite: true` (or `.chanset #chan +invite`), the bot accepts IRC INVITE messages from registered users with `+o`, `+m`, or `+n` flags and joins the invited channel. If the bot is already in the channel, the invite is silently ignored.
+
 ## Cycle on deop
 
 With `cycle_on_deop: true`, if the bot itself is deopped three times within 10 seconds in a channel (without invite-only mode set), it will part and rejoin after `cycle_delay_ms` to attempt to regain ops via ChanServ. This is a recovery mechanism for channels with auto-op services.
@@ -196,6 +219,35 @@ With `cycle_on_deop: true`, if the bot itself is deopped three times within 10 s
 | `revenge_kick_reason`      | string                    | `"Don't kick me."` | Kick reason used for kick/kickban revenge                                |
 | `revenge_exempt_flags`     | string                    | `"nm"`             | Flags that exempt the kicker from revenge (each char is a separate flag) |
 
+### Nick recovery
+
+| Key                      | Type    | Default | Description                                                       |
+| ------------------------ | ------- | ------- | ----------------------------------------------------------------- |
+| `nick_recovery`          | boolean | `true`  | Reclaim the configured nick when the holder changes nick or quits |
+| `nick_recovery_ghost`    | boolean | `false` | Send `GHOST` to NickServ before reclaiming (requires a password)  |
+| `nick_recovery_password` | string  | `""`    | NickServ password used for GHOST (never logged)                   |
+
+### Stopnethack
+
+| Key                | Type   | Default  | Description                                                                 |
+| ------------------ | ------ | -------- | --------------------------------------------------------------------------- |
+| `stopnethack_mode` | number | `0`      | `0` = off, `1` = isoptest (db check), `2` = wasoptest (pre-split ops check) |
+| `split_timeout_ms` | number | `300000` | How long after a detected split to monitor suspicious `+o` grants, in ms    |
+
+### ChanServ integration
+
+| Key                    | Type    | Default      | Description                                          |
+| ---------------------- | ------- | ------------ | ---------------------------------------------------- |
+| `chanserv_op`          | boolean | `false`      | Request ops from ChanServ when the bot is deopped    |
+| `chanserv_nick`        | string  | `"ChanServ"` | Nick of the ChanServ service to message for ops      |
+| `chanserv_op_delay_ms` | number  | `1000`       | Delay before sending the op request, in milliseconds |
+
+### Invite
+
+| Key      | Type    | Default | Description                                           |
+| -------- | ------- | ------- | ----------------------------------------------------- |
+| `invite` | boolean | `false` | Accept IRC INVITE from registered ops/masters to join |
+
 ### Cycle on deop
 
 | Key              | Type    | Default | Description                                         |
@@ -223,7 +275,13 @@ With `cycle_on_deop: true`, if the bot itself is deopped three times within 10 s
       "revenge_on_kick": false,
       "revenge_action": "deop",
       "cycle_on_deop": true,
-      "default_ban_duration": 60
+      "default_ban_duration": 60,
+      "nick_recovery": true,
+      "nick_recovery_ghost": false,
+      "nick_recovery_password": "",
+      "chanserv_op": false,
+      "stopnethack_mode": 0,
+      "invite": false
     }
   }
 }

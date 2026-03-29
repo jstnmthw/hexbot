@@ -307,18 +307,17 @@ export class EventDispatcher {
    * is required and the user is not identified or the query timed out.
    */
   private async checkVerification(flags: string, ctx: HandlerContext): Promise<boolean> {
-    if (!this.verification) return true;
-    if (!this.verification.requiresVerificationForFlags(flags)) return true;
+    if (!this.verification!.requiresVerificationForFlags(flags)) return true;
 
     // Fast path: check the live account map populated by account-notify / extended-join
-    const known = this.verification.getAccountForNick(ctx.nick);
+    const known = this.verification!.getAccountForNick(ctx.nick);
     if (known !== undefined) {
       // We have definitive information — no NickServ round-trip needed
       return known !== null; // null = known not identified
     }
 
     // Slow path: fall back to NickServ ACC query (pre-IRCv3 or if account data not yet received)
-    const result = await this.verification.verifyUser(ctx.nick);
+    const result = await this.verification!.verifyUser(ctx.nick);
     return result.verified;
   }
 

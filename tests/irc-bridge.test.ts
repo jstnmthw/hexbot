@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ChannelState } from '../src/core/channel-state';
 import { EventDispatcher } from '../src/dispatcher';
+import { BotEventBus } from '../src/event-bus';
 import { IRCBridge } from '../src/irc-bridge';
 import { Logger, createLogger } from '../src/logger';
 import type { HandlerContext } from '../src/types';
@@ -292,6 +294,26 @@ describe('IRCBridge', () => {
       const ctx2: HandlerContext = handler.mock.calls[1][0];
       expect(ctx2.command).toBe('+v');
       expect(ctx2.args).toBe('user2');
+
+      dispatcher.unbindAll('test');
+    });
+
+    it('should skip mode event when modes array contains a null entry (isModeEntry null check)', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('mode', '-', '*', handler, 'test');
+
+      client.simulateEvent('mode', {
+        nick: 'chanop',
+        ident: 'op',
+        hostname: 'op.host',
+        target: '#test',
+        modes: [null],
+      });
+
+      await Promise.resolve();
+
+      // isModeArray([null]) returns false → onMode returns early → no dispatch
+      expect(handler).not.toHaveBeenCalled();
 
       dispatcher.unbindAll('test');
     });
@@ -760,6 +782,41 @@ describe('IRCBridge', () => {
       const ctx: HandlerContext = handler.mock.calls[0][0];
       expect(ctx.text).toBe('');
       expect(ctx.args).toBe('');
+
+      dispatcher.unbindAll('test');
+    });
+  });
+
+  describe('ctcp rate limiter', () => {
+    it('blocks the 4th CTCP from the same nick within the rate window', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('ctcp', '-', 'VERSION', handler, 'test');
+
+      // Fire 3 CTCP requests — all should be dispatched (max is 3 per 10s)
+      for (let i = 0; i < 3; i++) {
+        client.simulateEvent('ctcp request', {
+          nick: 'spammer',
+          ident: 'user',
+          hostname: 'host.com',
+          type: 'VERSION',
+          message: 'VERSION',
+        });
+        await Promise.resolve();
+      }
+      expect(handler).toHaveBeenCalledTimes(3);
+      handler.mockClear();
+
+      // 4th request should be blocked by rate limiter
+      client.simulateEvent('ctcp request', {
+        nick: 'spammer',
+        ident: 'user',
+        hostname: 'host.com',
+        type: 'VERSION',
+        message: 'VERSION',
+      });
+      await Promise.resolve();
+
+      expect(handler).not.toHaveBeenCalled();
 
       dispatcher.unbindAll('test');
     });
@@ -1626,6 +1683,64 @@ describe('IRCBridge', () => {
       expect(handler).not.toHaveBeenCalled();
 
       dispatcher.unbindAll('test');
+    });
+  });
+
+  describe('kick with channelState — splitKickedHostmask', () => {
+    let csClient: MockIRCClient;
+    let csBridge: IRCBridge;
+    let csDispatcher: EventDispatcher;
+    let csChannelState: ChannelState;
+
+    beforeEach(() => {
+      csClient = new MockIRCClient();
+      csDispatcher = new EventDispatcher();
+      csChannelState = new ChannelState(csClient, new BotEventBus());
+      // Bridge attaches before channelState so its onKick fires first and can still look up the
+      // kicked user's hostmask before ChannelState's onKick removes them from state.
+      csBridge = new IRCBridge({
+        client: csClient,
+        dispatcher: csDispatcher,
+        botNick: 'testbot',
+        channelState: csChannelState,
+      });
+      csBridge.attach();
+      csChannelState.attach();
+    });
+
+    afterEach(() => {
+      csBridge.detach();
+      csChannelState.detach();
+    });
+
+    it('populates kicked user ident/hostname from channelState hostmask lookup', async () => {
+      const handler = vi.fn();
+      csDispatcher.bind('kick', '-', '*', handler, 'test');
+
+      // Pre-join the user so ChannelState has their hostmask
+      csClient.simulateEvent('join', {
+        nick: 'baduser',
+        ident: 'bad',
+        hostname: 'bad.host.com',
+        channel: '#test',
+      });
+
+      csClient.simulateEvent('kick', {
+        nick: 'op',
+        channel: '#test',
+        kicked: 'baduser',
+        message: 'goodbye',
+      });
+
+      await Promise.resolve();
+
+      expect(handler).toHaveBeenCalledOnce();
+      const ctx: HandlerContext = handler.mock.calls[0][0];
+      expect(ctx.nick).toBe('baduser');
+      expect(ctx.ident).toBe('bad');
+      expect(ctx.hostname).toBe('bad.host.com');
+
+      csDispatcher.unbindAll('test');
     });
   });
 });
