@@ -260,7 +260,7 @@ export function setupModeEnforce(
       if (chanservOp) {
         const ch = api.getChannel(channel);
         const csNickLower = api.ircLower(config.chanserv_nick);
-        const present = ch?.users.has(csNickLower) ?? false;
+        const present = ch?.users.has(csNickLower);
         api.log(
           `Requesting ops from ${config.chanserv_nick} in ${channel}${present ? '' : ` (${config.chanserv_nick} not present in channel, sending anyway)`}`,
         );
