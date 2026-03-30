@@ -230,7 +230,8 @@ export class ChannelState {
     if (!isModeArray(event.modes)) return;
     const modes = event.modes;
 
-    const ch = this.channels.get(ircLower(target, this.casemapping))!;
+    const ch = this.channels.get(ircLower(target, this.casemapping));
+    if (!ch) return;
 
     for (const m of modes) {
       const mode = m.mode ?? '';

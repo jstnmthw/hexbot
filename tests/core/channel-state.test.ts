@@ -141,6 +141,17 @@ describe('ChannelState', () => {
   });
 
   describe('mode changes', () => {
+    it('ignores mode events for untracked targets (e.g. user modes)', () => {
+      // MODE BotNick +i — target is not a channel we track
+      client.simulateEvent('mode', {
+        target: 'BotNick',
+        modes: [{ mode: '+i', param: '' }],
+      });
+
+      // Should not throw and should not create a channel entry
+      expect(state.getChannel('BotNick')).toBeUndefined();
+    });
+
     it('should add mode o on +o', () => {
       client.simulateEvent('join', {
         nick: 'Alice',
