@@ -175,7 +175,6 @@ export function init(api: PluginAPI): void {
 
       const sampleText = parts.length > 1 ? parts.slice(1).join(' ') : 'Sample Topic Text';
       const nick = ctx.nick;
-      ctx.reply(`Sending ${themeNames.length} theme previews to your PM...`);
       api.say(nick, `Theme previews using: "${sampleText}"`);
       for (const themeName of themeNames) {
         const formatted = themes[themeName].replace('$text', sampleText);
