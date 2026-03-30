@@ -2,6 +2,7 @@
 // Registers .chanset and .chaninfo with the command handler.
 import type { CommandHandler } from '../../command-handler';
 import { sanitize } from '../../utils/sanitize';
+import { formatTable } from '../../utils/table';
 import type { ChannelSettings } from '../channel-settings';
 
 /**
@@ -39,18 +40,17 @@ export function registerChannelCommands(
           return;
         }
         ctx.reply(`Settings for ${channel} — use .chanset ${channel} [+/-]key [value] to change:`);
-        for (const { entry, value, isDefault } of snapshot) {
+        const rows = snapshot.map(({ entry, value, isDefault }) => {
           let display: string;
           if (entry.type === 'flag') {
             display = value ? 'ON' : 'OFF';
           } else {
             display = String(value) || '(not set)';
           }
-          const marker = isDefault ? '' : ' *';
-          ctx.reply(
-            `  ${entry.key.padEnd(16)} ${entry.type.padEnd(6)} ${display.padEnd(8)}${marker}  ${entry.description}`,
-          );
-        }
+          const marker = isDefault ? '' : '*';
+          return [entry.key, entry.type, display + (marker ? ` ${marker}` : ''), entry.description];
+        });
+        ctx.reply(formatTable(rows));
         return;
       }
 
@@ -158,9 +158,10 @@ export function registerChannelCommands(
         byPlugin.set(item.entry.pluginId, list);
       }
 
+      const rows: string[][] = [];
       for (const [pluginId, items] of byPlugin) {
         for (const { entry, value, isDefault } of items) {
-          const marker = isDefault ? '' : ' *';
+          const marker = isDefault ? '' : '*';
           let displayValue: string;
           if (entry.type === 'flag') {
             displayValue = value ? 'ON' : 'OFF';
@@ -171,11 +172,16 @@ export function registerChannelCommands(
           } else {
             displayValue = String(value);
           }
-          ctx.reply(
-            `  [${pluginId}] ${entry.key.padEnd(18)} ${entry.type.padEnd(6)} ${displayValue}${marker}  ${entry.description}`,
-          );
+          rows.push([
+            `[${pluginId}]`,
+            entry.key,
+            entry.type,
+            displayValue + (marker ? ` ${marker}` : ''),
+            entry.description,
+          ]);
         }
       }
+      ctx.reply(formatTable(rows));
     },
   );
 }

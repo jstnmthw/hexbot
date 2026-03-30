@@ -1,6 +1,7 @@
 // HexBot — Permission management commands
 // Registers .adduser, .deluser, .flags, .users with the command handler.
 import type { CommandHandler } from '../../command-handler';
+import { formatTable } from '../../utils/table';
 import type { Permissions } from '../permissions';
 
 /**
@@ -120,11 +121,12 @@ export function registerPermissionCommands(
         return;
       }
 
-      const lines = users.map((u) => {
-        const masks = u.hostmasks.join(', ');
-        return `  ${u.handle}: flags=${u.global || '(none)'} hostmasks=[${masks}]`;
-      });
-      ctx.reply(`Users (${users.length}):\n${lines.join('\n')}`);
+      const rows = users.map((u) => [
+        u.handle,
+        `flags=${u.global || '(none)'}`,
+        `hostmasks=[${u.hostmasks.join(', ')}]`,
+      ]);
+      ctx.reply(`Users (${users.length}):\n${formatTable(rows)}`);
     },
   );
 }

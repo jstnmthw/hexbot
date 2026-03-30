@@ -2,7 +2,7 @@
 import type { HandlerContext, PluginAPI, UserRecord } from '../../src/types';
 
 export const name = 'greeter';
-export const version = '2.1.0';
+export const version = '3.0.0';
 export const description = 'Greets users when they join; lets registered users set a custom greet';
 
 /** Flag hierarchy order: n > m > o > v (lower index = higher privilege). */
@@ -49,7 +49,6 @@ export function init(api: PluginAPI): void {
   ]);
 
   /* v8 ignore start -- ?? defaults are for production; tests always supply explicit values */
-  const allowCustom = (api.config.allow_custom as boolean) ?? false;
   const minFlag = (api.config.min_flag as string) ?? 'v';
   const delivery = (api.config.delivery as string) ?? 'say';
   const joinNotice = (api.config.join_notice as string) ?? '';
@@ -77,13 +76,11 @@ export function init(api: PluginAPI): void {
     // Precedence: user custom greet > channel greet_msg setting > global default
     let greeting = api.channelSettings.get(channel, 'greet_msg') as string;
 
-    if (allowCustom) {
-      const hostmask = `${ctx.nick}!${ctx.ident}@${ctx.hostname}`;
-      const record = api.permissions.findByHostmask(hostmask);
-      if (record) {
-        const custom = api.db.get(`greet:${record.handle}`);
-        if (custom !== undefined) greeting = custom;
-      }
+    const hostmask = `${ctx.nick}!${ctx.ident}@${ctx.hostname}`;
+    const record = api.permissions.findByHostmask(hostmask);
+    if (record) {
+      const custom = api.db.get(`greet:${record.handle}`);
+      if (custom !== undefined) greeting = custom;
     }
 
     const text = greeting
@@ -107,11 +104,6 @@ export function init(api: PluginAPI): void {
 
   // --- !greet command ---
   api.bind('pub', '-', '!greet', async (ctx: HandlerContext) => {
-    if (!allowCustom) {
-      ctx.replyPrivate('Custom greets are disabled.');
-      return;
-    }
-
     const sub = ctx.args.trim();
 
     // !greet (no args) — show current greet

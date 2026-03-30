@@ -141,7 +141,6 @@ On connect you will see a banner:
 *** Logged in as yourhandle (yournick!~ident@your.host)
 *** Botnet: 1 other(s): adminhandle
 *** Lines starting with . are commands (.help). Plain text is broadcast.
-hexbot>
 ```
 
 ### Commands
@@ -149,11 +148,11 @@ hexbot>
 Any line beginning with `.` is treated as a bot command — the same commands available in the REPL:
 
 ```
-hexbot> .help
-hexbot> .plugins
-hexbot> .reload chanmod
-hexbot> .say #channel hello
-hexbot> .flags yourhandle
+.help
+.plugins
+.reload chanmod
+.say #channel hello
+.flags yourhandle
 ```
 
 Your permission flags are enforced — you can only run commands you have flags for.
@@ -174,7 +173,7 @@ These work only inside a DCC session:
 Any line that does **not** start with `.` is broadcast to all other connected users:
 
 ```
-hexbot> hello everyone
+hello everyone
 <yourhandle> hello everyone          ← echoed back to you
                                      ← other sessions see: <yourhandle> hello everyone
 ```

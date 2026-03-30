@@ -2,6 +2,7 @@
 // Registers .binds with the command handler.
 import type { CommandHandler } from '../../command-handler';
 import type { EventDispatcher } from '../../dispatcher';
+import { formatTable } from '../../utils/table';
 
 /**
  * Register dispatcher inspection commands on the given command handler.
@@ -29,11 +30,15 @@ export function registerDispatcherCommands(
         return;
       }
 
-      const lines = binds.map(
-        (b) => `  ${b.type} ${b.flags} "${b.mask}" → ${b.pluginId} (hits: ${b.hits})`,
-      );
+      const rows = binds.map((b) => [
+        b.type,
+        b.flags,
+        `"${b.mask}"`,
+        `→ ${b.pluginId}`,
+        `(hits: ${b.hits})`,
+      ]);
       const header = pluginId ? `Binds for "${pluginId}"` : 'All binds';
-      ctx.reply(`${header} (${binds.length}):\n${lines.join('\n')}`);
+      ctx.reply(`${header} (${binds.length}):\n${formatTable(rows)}`);
     },
   );
 }

@@ -2,6 +2,5 @@
   "message": "Welcome to {channel}, {nick}!",
   "delivery": "say",
   "join_notice": "",
-  "allow_custom": false,
   "min_flag": "v"
 }

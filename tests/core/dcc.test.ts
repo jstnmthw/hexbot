@@ -711,7 +711,7 @@ describe('DCCSession', () => {
     expect(written.length).toBe(len);
   });
 
-  it('start sends banner including bot name and prompt', async () => {
+  it('start sends banner including bot name (no prompt)', async () => {
     const { socket, written } = makeMockSocket();
     const session = buildSession(socket);
     session.start('1.0.0', 'hexbot');
@@ -719,7 +719,7 @@ describe('DCCSession', () => {
     const output = written.join('');
     expect(output).toContain('hexbot');
     expect(output).toContain('testuser');
-    expect(output).toContain('hexbot>');
+    expect(output).not.toContain('hexbot>');
     session.close();
   });
 

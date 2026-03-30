@@ -211,26 +211,13 @@ describe('greeter plugin', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // !greet command — disabled
+  // !greet commands (min_flag: v)
   // ---------------------------------------------------------------------------
 
-  it('!greet replies "disabled" when allow_custom is false', async () => {
-    await loadGreeter({ greeter: { enabled: true, config: { allow_custom: false } } });
-
-    const ctx = makePubCtx('user1', 'host.com', '#test', '');
-    await dispatcher.dispatch('pub', ctx);
-
-    expect(ctx.replyPrivate).toHaveBeenCalledWith('Custom greets are disabled.');
-  });
-
-  // ---------------------------------------------------------------------------
-  // !greet commands — enabled (min_flag: v)
-  // ---------------------------------------------------------------------------
-
-  describe('!greet commands (allow_custom: true, min_flag: v)', () => {
+  describe('!greet commands (min_flag: v)', () => {
     beforeEach(async () => {
       await loadGreeter({
-        greeter: { enabled: true, config: { allow_custom: true, min_flag: 'v' } },
+        greeter: { enabled: true, config: { min_flag: 'v' } },
       });
     });
 
@@ -482,7 +469,7 @@ describe('greeter plugin', () => {
   describe('!greet set with min_flag: o', () => {
     beforeEach(async () => {
       await loadGreeter({
-        greeter: { enabled: true, config: { allow_custom: true, min_flag: 'o' } },
+        greeter: { enabled: true, config: { min_flag: 'o' } },
       });
     });
 
@@ -509,11 +496,9 @@ describe('greeter plugin', () => {
   // Join handler — custom greet lookup
   // ---------------------------------------------------------------------------
 
-  describe('join with custom greet (allow_custom: true)', () => {
+  describe('join with custom greet', () => {
     beforeEach(async () => {
-      await loadGreeter({
-        greeter: { enabled: true, config: { allow_custom: true } },
-      });
+      await loadGreeter();
     });
 
     it('uses custom greet when user has one set', async () => {

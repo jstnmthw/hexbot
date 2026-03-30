@@ -1,6 +1,7 @@
 // HexBot — Command router
 // Parses command strings and dispatches to registered handlers.
 // Transport-agnostic — works with REPL, IRC, or any future input source.
+import { formatTable } from './utils/table';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -170,9 +171,8 @@ export class CommandHandler {
     const lines: string[] = ['Available commands:'];
     for (const [category, entries] of byCategory) {
       lines.push(`  [${category}]`);
-      for (const entry of entries) {
-        lines.push(`    .${entry.name} — ${entry.options.description}`);
-      }
+      const rows = entries.map((e) => [`.${e.name}`, `— ${e.options.description}`]);
+      lines.push(formatTable(rows, { indent: '    ' }));
     }
     lines.push('Type .help <command> for details on a specific command.');
     return lines.join('\n');

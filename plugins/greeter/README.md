@@ -7,15 +7,13 @@ that replaces the default message when they join.
 
 Automatic — fires on every JOIN event.
 
-Optional user commands (when `allow_custom: true`):
+Optional user commands:
 
 | Command                | Flags       | Description                    |
 | ---------------------- | ----------- | ------------------------------ |
 | `!greet`               | anyone      | Show your current custom greet |
 | `!greet set <message>` | `min_flag`+ | Set your custom greet          |
 | `!greet del`           | `min_flag`+ | Remove your custom greet       |
-
-`!greet` is listed in `!help` output regardless of the `allow_custom` setting.
 
 Custom greet messages support the same `{channel}` and `{nick}` template substitutions
 as the default message.
@@ -30,20 +28,18 @@ In `config/plugins.json`:
     "enabled": true,
     "config": {
       "message": "Welcome to {channel}, {nick}!",
-      "allow_custom": true,
       "min_flag": "v"
     }
   }
 }
 ```
 
-| Key            | Type    | Default                         | Description                                                |
-| -------------- | ------- | ------------------------------- | ---------------------------------------------------------- |
-| `message`      | string  | `Welcome to {channel}, {nick}!` | Default greeting template. Supports `{channel}`, `{nick}`. |
-| `delivery`     | string  | `"say"`                         | How the public greeting is sent (see below).               |
-| `join_notice`  | string  | `""`                            | Optional private NOTICE to the joining user (empty = off). |
-| `allow_custom` | boolean | `false`                         | Enable user-settable custom greets.                        |
-| `min_flag`     | string  | `"v"`                           | Minimum bot flag required to set/remove a greet.           |
+| Key           | Type   | Default                         | Description                                                |
+| ------------- | ------ | ------------------------------- | ---------------------------------------------------------- |
+| `message`     | string | `Welcome to {channel}, {nick}!` | Default greeting template. Supports `{channel}`, `{nick}`. |
+| `delivery`    | string | `"say"`                         | How the public greeting is sent (see below).               |
+| `join_notice` | string | `""`                            | Optional private NOTICE to the joining user (empty = off). |
+| `min_flag`    | string | `"v"`                           | Minimum bot flag required to set/remove a greet.           |
 
 ### Delivery modes
 

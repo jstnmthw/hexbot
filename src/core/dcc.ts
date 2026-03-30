@@ -122,8 +122,6 @@ export function isPassiveDcc(_ip: number, port: number): boolean {
 // DCCSession
 // ---------------------------------------------------------------------------
 
-const PROMPT = 'hexbot> ';
-
 // ASCII logo placeholder — replace BANNER_LOGO lines with your own art.
 // Each entry is one line of text sent to the user's DCC CHAT window.
 const BANNER_LOGO = [
@@ -131,7 +129,6 @@ const BANNER_LOGO = [
   '|   |   |.-----.--.--.|   __ \\.-----.|  |_ ',
   '|       ||  -__|_   _||   __ <|  _  ||   _|',
   '|___|___||_____|__.__||______/|_____||____|',
-  'ʜᴇʟʟ ɪꜱ ᴇᴍᴘᴛʏ. ᴀʟʟ ᴛʜᴇ ᴅᴇᴍᴏɴꜱ ᴀʀᴇ ʜᴇʀᴇ..',
 ];
 
 export class DCCSession {
@@ -191,7 +188,6 @@ export class DCCSession {
         ? `${others.length} other(s) here: ${others.join(', ')}`
         : 'you are the only one here';
 
-    this.writeLine(`Connected to ${botNick}, running HexBot v${version}`);
     this.writeLine('');
     for (const line of BANNER_LOGO) {
       this.writeLine(line);
@@ -220,14 +216,11 @@ export class DCCSession {
     this.writeLine("Commands start with '.' (like '.quit' or '.help')");
     this.writeLine('Everything else goes out to the console.');
     this.writeLine('');
-    this.write(PROMPT);
 
     this.resetIdle();
 
     rl.on('line', (line: string) => {
-      this.onLine(line).finally(() => {
-        if (!this.closed) this.write(PROMPT);
-      });
+      this.onLine(line);
     });
 
     this.socket.on('close', () => this.onClose());
