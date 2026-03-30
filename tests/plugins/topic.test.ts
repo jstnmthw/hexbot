@@ -164,7 +164,7 @@ describe('topic plugin', () => {
     await tick();
 
     const cooldownReply = bot.client.messages.find(
-      (m) => m.type === 'say' && m.message?.includes('cooldown'),
+      (m) => m.type === 'notice' && m.target === '#test' && m.message?.includes('cooldown'),
     );
     expect(cooldownReply).toBeDefined();
     expect(cooldownReply!.message).toMatch(/Preview cooldown active/);

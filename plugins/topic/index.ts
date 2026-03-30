@@ -168,7 +168,7 @@ export function init(api: PluginAPI): void {
       const cooldownExpires = previewCooldown.get(cooldownKey) ?? 0;
       if (Date.now() < cooldownExpires) {
         const secsLeft = Math.ceil((cooldownExpires - Date.now()) / 1000);
-        ctx.reply(`Preview cooldown active — try again in ${secsLeft}s.`);
+        api.notice(ctx.channel!, `Preview cooldown active — try again in ${secsLeft}s.`);
         return;
       }
       previewCooldown.set(cooldownKey, Date.now() + PREVIEW_COOLDOWN_MS);
