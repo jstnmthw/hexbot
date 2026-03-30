@@ -319,11 +319,8 @@ export class DCCSession {
     if (this.closed) return;
     this.closed = true;
 
-    /* v8 ignore next -- FALSE branch: idleTimer is always set by resetIdle() in start() before socket events fire */
-    if (this.idleTimer !== null) {
-      clearTimeout(this.idleTimer);
-      this.idleTimer = null;
-    }
+    clearTimeout(this.idleTimer!);
+    this.idleTimer = null;
 
     // Remove from manager and announce departure
     this.manager.removeSession(this.nick);
@@ -565,7 +562,7 @@ export class DCCManager {
       this.client.notice(nick, 'DCC CHAT: no ports available, try again later.');
       return;
     }
-    /* v8 ignore next */
+    /* v8 ignore next -- leads directly into TCP server creation; unreachable without real TCP */
     this.openDccServer(port, nick, ident, hostname, user, parsed);
   }
 
@@ -573,7 +570,7 @@ export class DCCManager {
    * Open a TCP server on the given port, send the passive DCC CTCP reply,
    * and register timeout + connection handlers.
    */
-  /* v8 ignore next */
+  /* v8 ignore next -- entire method creates a real TCP server via createServer(); untestable without real TCP */
   private openDccServer(
     port: number,
     nick: string,
@@ -582,7 +579,7 @@ export class DCCManager {
     user: import('../types').UserRecord,
     parsed: DccChatPayload,
   ): void {
-    /* v8 ignore start */
+    /* v8 ignore start -- TCP server lifecycle (listen, connection, timeout, close); requires real TCP */
     const server = createServer();
     this.allocatedPorts.add(port);
 

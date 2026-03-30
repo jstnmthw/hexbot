@@ -215,8 +215,7 @@ export class PluginLoader {
       mod = await this.importWithCacheBust(absPath);
     } catch (err) {
       const name = this.inferPluginName(absPath);
-      /* v8 ignore next -- FALSE branch: errors from import() are always Error instances in Node */
-      const message = err instanceof Error ? err.message : String(err);
+      const message = (err as Error).message;
       return { name, status: 'error', error: `Failed to import plugin: ${message}` };
     }
 
@@ -264,8 +263,7 @@ export class PluginLoader {
         await result;
       }
     } catch (err) {
-      /* v8 ignore next -- FALSE branch: errors thrown by plugin init() are always Error instances */
-      const message = err instanceof Error ? err.message : String(err);
+      const message = (err as Error).message;
       // Clean up any binds registered before the error
       this.dispatcher.unbindAll(pluginName);
       return { name: pluginName, status: 'error', error: `Plugin init() threw: ${message}` };
@@ -349,7 +347,7 @@ export class PluginLoader {
 
     const result = await this.load(filePath);
 
-    /* v8 ignore next -- FALSE branch: reload tests always succeed; error-on-reload not exercised */
+    /* v8 ignore next -- FALSE branch: Vitest module caching prevents testing reload failure */
     if (result.status === 'ok') {
       this.eventBus.emit('plugin:reloaded', pluginName);
     }
@@ -384,9 +382,7 @@ export class PluginLoader {
       irc: {
         ...this.botConfig.irc,
         // Expose only channel names to plugins — never expose channel keys
-        /* v8 ignore start -- FALSE branch: test config always uses string channels, not channel-object form */
         channels: this.botConfig.irc.channels.map((c) => (typeof c === 'string' ? c : c.name)),
-        /* v8 ignore stop */
       },
       owner: { ...this.botConfig.owner },
       identity: { ...this.botConfig.identity },
@@ -507,7 +503,7 @@ export class PluginLoader {
       return (await import(fileUrl)) as Record<string, unknown>;
     }
 
-    /* v8 ignore start */
+    /* v8 ignore start -- multi-file plugin reload: writes temp files and imports them; guarded by process.env.VITEST check above */
     // Multi-file plugin: create uniquely-named temp copies so Node treats each
     // as a new module, bypassing its module cache.
     const nameRemap = this.buildNameRemap(allFiles, ts);
@@ -531,9 +527,9 @@ export class PluginLoader {
    * Build a mapping from each file's base name (no ext) to a unique temp base name.
    * Used to rewrite intra-plugin imports so Node sees each reload as a fresh module.
    */
-  /* v8 ignore next */
+  /* v8 ignore next -- only called from multi-file production reload path above */
   private buildNameRemap(allFiles: Map<string, string>, ts: number): Map<string, string> {
-    /* v8 ignore start */
+    /* v8 ignore start -- only called from multi-file production reload path above */
     const nameRemap = new Map<string, string>();
     for (const origPath of allFiles.keys()) {
       const base = basename(origPath, '.ts');
@@ -548,14 +544,14 @@ export class PluginLoader {
    * to point to the corresponding temp file names.
    * Returns the list of temp file paths and the entry temp path.
    */
-  /* v8 ignore next */
+  /* v8 ignore next -- only called from multi-file production reload path above */
   private writeRewrittenFiles(
     dir: string,
     entryPath: string,
     allFiles: Map<string, string>,
     nameRemap: Map<string, string>,
   ): { tmpFiles: string[]; entryTmpPath: string } {
-    /* v8 ignore start */
+    /* v8 ignore start -- only called from multi-file production reload path above */
     const tmpFiles: string[] = [];
     let entryTmpPath = '';
     for (const [origPath, source] of allFiles) {
@@ -588,7 +584,7 @@ export class PluginLoader {
     try {
       source = readFileSync(absPath, 'utf-8');
     } catch {
-      /* v8 ignore next */
+      /* v8 ignore next -- readFileSync catch: file may be unreadable or deleted between readdirSync and read */
       return;
     }
 
@@ -601,7 +597,6 @@ export class PluginLoader {
       const spec = m[1];
       if (!spec.startsWith('./')) continue; // skip parent-dir imports (e.g. ../../src/types)
       const resolved = resolve(join(dirname(absPath), spec.replace(/\.(ts|js)$/, '') + '.ts'));
-      /* v8 ignore next -- FALSE branch: resolved imports in tests always stay within plugin dir */
       if (resolved.startsWith(pluginDir + '/') && existsSync(resolved)) {
         this.collectLocalModules(resolved, pluginDir, seen);
       }
@@ -771,11 +766,9 @@ function createPluginIrcActionsApi(
     topic(channel: string, text: string): void {
       ircCommands?.topic(channel, text);
     },
-    /* v8 ignore start -- invite is not exercised through plugin tests */
     invite(channel: string, nick: string): void {
       ircCommands?.invite(channel, nick);
     },
-    /* v8 ignore stop */
     join(channel: string, key?: string): void {
       ircCommands?.join(channel, key);
     },
@@ -855,15 +848,13 @@ function createPluginChannelSettingsApi(
       channelSettings?.register(pluginId, defs);
     },
     get(channel: string, key: string): ChannelSettingValue {
-      /* v8 ignore next -- ?? fallback: channelSettings.get() always returns a value when registered */
-      return channelSettings?.get(channel, key) ?? '';
+      return channelSettings!.get(channel, key);
     },
     set(channel: string, key: string, value: ChannelSettingValue): void {
       channelSettings?.set(channel, key, value);
     },
     isSet(channel: string, key: string): boolean {
-      /* v8 ignore next */
-      return channelSettings?.isSet(channel, key) ?? false;
+      return channelSettings!.isSet(channel, key);
     },
     onChange(callback: (channel: string, key: string, value: ChannelSettingValue) => void): void {
       channelSettings?.onChange(pluginId, callback);
@@ -880,8 +871,7 @@ function createPluginHelpApi(
       helpRegistry?.register(pluginId, entries);
     },
     getHelpEntries(): HelpEntry[] {
-      /* v8 ignore next -- ?? fallback: helpRegistry.getAll() always returns an array, never null */
-      return helpRegistry?.getAll() ?? [];
+      return helpRegistry!.getAll();
     },
   };
 }

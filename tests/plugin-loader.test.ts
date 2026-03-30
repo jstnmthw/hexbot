@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ChannelSettings } from '../src/core/channel-settings';
 import { ChannelState } from '../src/core/channel-state';
 import { IRCCommands } from '../src/core/irc-commands';
 import { Permissions } from '../src/core/permissions';
@@ -798,6 +799,7 @@ describe('PluginLoader', () => {
       expect(() => api.ban('#test', '*!*@bad.host')).not.toThrow();
       expect(() => api.mode('#test', '+o', 'nick')).not.toThrow();
       expect(() => api.topic('#test', 'new topic')).not.toThrow();
+      expect(() => api.invite('#test', 'nick')).not.toThrow();
     });
   });
 
@@ -823,6 +825,7 @@ describe('PluginLoader', () => {
       vi.spyOn(ircCommands, 'ban');
       vi.spyOn(ircCommands, 'mode');
       vi.spyOn(ircCommands, 'topic');
+      vi.spyOn(ircCommands, 'invite');
       await loader.load(pluginPath);
 
       const api = getTestPluginApi();
@@ -850,6 +853,9 @@ describe('PluginLoader', () => {
 
       api.topic('#ch', 'new topic');
       expect(ircCommands.topic).toHaveBeenCalledWith('#ch', 'new topic');
+
+      api.invite('#ch', 'someuser');
+      expect(ircCommands.invite).toHaveBeenCalledWith('#ch', 'someuser');
     });
   });
 
@@ -1437,6 +1443,115 @@ describe('PluginLoader', () => {
       const result = await api.services.verifyUser('someone');
       expect(result).toEqual({ verified: true, account: 'testacct' });
       expect(services.verifyUser).toHaveBeenCalledWith('someone');
+    });
+  });
+
+  describe('scoped API — channelSettings.get()', () => {
+    it('should return the correct value from channelSettings', async () => {
+      const pluginPath = writePlugin(
+        tempDir,
+        'chanset-get',
+        `
+        export const name = 'chanset-get';
+        export const version = '1.0.0';
+        export const description = '';
+        export function init(api) {
+          api.channelSettings.register([
+            { key: 'greeting', type: 'string', default: 'hello' },
+          ]);
+          globalThis.__testPluginApi = api;
+        }
+      `,
+      );
+
+      const db = new BotDatabase(':memory:');
+      db.open();
+      const chanSettings = new ChannelSettings(db);
+
+      const { loader } = createLoaderFull(tempDir, { channelSettings: chanSettings });
+      await loader.load(pluginPath);
+
+      const api = getTestPluginApi();
+
+      // Should return the default value when nothing is stored
+      expect(api.channelSettings.get('#test', 'greeting')).toBe('hello');
+
+      // isSet should return false before any explicit set
+      expect(api.channelSettings.isSet('#test', 'greeting')).toBe(false);
+
+      // Set a value and confirm get() returns the stored value
+      api.channelSettings.set('#test', 'greeting', 'howdy');
+      expect(api.channelSettings.get('#test', 'greeting')).toBe('howdy');
+      expect(api.channelSettings.isSet('#test', 'greeting')).toBe(true);
+    });
+  });
+
+  describe('collectLocalModules — import to non-existent file', () => {
+    it('should skip imports that resolve to non-existent files', async () => {
+      const pluginPath = writePlugin(
+        tempDir,
+        'bad-import',
+        `
+        import { helper } from './does-not-exist.js';
+        export const name = 'bad-import';
+        export const version = '1.0.0';
+        export function init() {}
+        `,
+      );
+      const { loader } = createLoader(tempDir);
+      // collectLocalModules scans this import but does not find the file — the false
+      // branch of existsSync is hit. The plugin still loads because the import is
+      // only scanned for multi-file reload discovery, not actually required at runtime.
+      const result = await loader.load(pluginPath);
+      expect(result.status).toBe('ok');
+    });
+  });
+
+  describe('channel object form in botConfig', () => {
+    it('should expose channel names when config uses object form', async () => {
+      const pluginPath = writePlugin(
+        tempDir,
+        'chanobj-test',
+        `
+        export const name = 'chanobj-test';
+        export const version = '1.0.0';
+        export function init(api) {
+          globalThis.__testPluginApi = api;
+        }
+        `,
+      );
+
+      const botConfig = {
+        ...MINIMAL_BOT_CONFIG,
+        irc: {
+          ...MINIMAL_BOT_CONFIG.irc,
+          channels: ['#plain', { name: '#keyed', key: 'secret' }] as (
+            | string
+            | { name: string; key: string }
+          )[],
+        },
+      };
+
+      const database = new BotDatabase(':memory:');
+      database.open();
+      const dispatcher = new EventDispatcher();
+      const eventBus = new BotEventBus();
+      const permissions = new Permissions(database);
+      const loader = new PluginLoader({
+        pluginDir: tempDir,
+        dispatcher,
+        eventBus,
+        db: database,
+        permissions,
+        botConfig: botConfig as BotConfig,
+        ircClient: null,
+      });
+
+      await loader.load(pluginPath);
+      const api = getTestPluginApi();
+      // Plugin should see channel names only, not keys
+      expect(api.botConfig.irc.channels).toEqual(['#plain', '#keyed']);
+      database.close();
     });
   });
 

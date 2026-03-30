@@ -222,7 +222,6 @@ export class EventDispatcher {
           text: '',
           command: '',
           args: '',
-          /* v8 ignore next 2 -- no-op stubs; timer handlers never call reply */
           reply: () => {},
           replyPrivate: () => {},
         };

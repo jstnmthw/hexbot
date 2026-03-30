@@ -81,8 +81,7 @@ function botHasOps(channel: string): boolean {
   if (!ch) return false;
   const botNick = api.ircLower(getBotNick());
   const botUser = ch.users.get(botNick);
-  /* v8 ignore next -- botUser.modes is always string[] when bot is in channel; ?? false unreachable */
-  return botUser?.modes.includes('o') ?? false;
+  return botUser!.modes.includes('o');
 }
 
 /** Return true if the nick has any privileged flag (n/m/o) in the channel. */
@@ -91,7 +90,6 @@ function isPrivileged(nick: string, channel: string, ignoreOps: boolean): boolea
   const hostmask = api.getUserHostmask(channel, nick);
   if (!hostmask) return false;
   const user = api.permissions.findByHostmask(hostmask);
-  /* v8 ignore next -- null guard; non-null path covered by privileged-user tests but masked by shared module state */
   if (!user) return false;
   const flags = user.global + (user.channels[channel] ?? '');
   return /[nmo]/.test(flags);
@@ -103,10 +101,8 @@ function isPrivileged(nick: string, channel: string, ignoreOps: boolean): boolea
  */
 function buildFloodBanMask(hostmask: string): string | null {
   const atIdx = hostmask.lastIndexOf('@');
-  /* v8 ignore next -- hostmask always contains '@' (IRC protocol); atIdx === -1 unreachable */
   if (atIdx === -1) return null;
   const host = hostmask.substring(atIdx + 1);
-  /* v8 ignore next -- IRC hostnames are always non-empty; empty host unreachable */
   if (!host) return null;
   return `*!*@${host}`;
 }
@@ -144,7 +140,6 @@ function liftExpiredFloodBans(): void {
 // ---------------------------------------------------------------------------
 
 function getAction(actions: string[], offenceCount: number): string {
-  /* v8 ignore next -- defensive guard; actions is always non-empty (defaults to ['warn','kick','tempban']) */
   if (actions.length === 0) return 'warn';
   return actions[Math.min(offenceCount, actions.length - 1)];
 }
@@ -188,7 +183,6 @@ async function applyAction(
       return;
     }
     const banMask = buildFloodBanMask(hostmask);
-    /* v8 ignore next 3 */
     if (!banMask) {
       api.kick(channel, nick, `[flood] ${reason}`);
       return;

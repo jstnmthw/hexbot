@@ -17,13 +17,11 @@ function boldTrigger(usage: string): string {
 }
 
 export function init(api: PluginAPI): void {
-  /* v8 ignore start -- ?? defaults are for production; tests always supply explicit values */
   const cooldownMs = (api.config.cooldown_ms as number | undefined) ?? 30000;
   const replyType = (api.config.reply_type as string | undefined) ?? 'notice';
   const compactIndex = (api.config.compact_index as boolean | undefined) ?? true;
   const header = (api.config.header as string | undefined) ?? 'HexBot Commands';
   const footer = (api.config.footer as string | undefined) ?? '*** End of Help ***';
-  /* v8 ignore stop */
 
   /**
    * Send a message to the appropriate target based on reply_type.

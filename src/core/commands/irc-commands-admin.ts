@@ -143,11 +143,6 @@ export function registerIRCAdminCommands(
         ctx.reply('Usage: .invite <#channel> <nick>');
         return;
       }
-      /* v8 ignore next 3 -- unreachable: \r\n check above prevents whitespace-only nicks from reaching here */
-      if (!/^[^\s]+$/.test(nick)) {
-        ctx.reply('Invalid nick.');
-        return;
-      }
       client.raw(`INVITE ${sanitize(nick)} ${sanitize(channel)}`);
       ctx.reply(`Invited ${nick} to ${channel}`);
     },

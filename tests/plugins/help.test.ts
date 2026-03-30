@@ -480,6 +480,130 @@ describe('help plugin', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // ?? fallback defaults — config values explicitly null
+  // ---------------------------------------------------------------------------
+
+  describe('config ?? fallback defaults (null config values)', () => {
+    it('cooldown_ms defaults to 30000 when config value is null', async () => {
+      await loadHelp({
+        help: { enabled: true, config: { cooldown_ms: null } },
+      });
+      helpRegistry.register('8ball', [BALL_ENTRY]);
+
+      // First call should work
+      const ctx1 = makeCtx();
+      await dispatcher.dispatch('pub', ctx1);
+      const firstCount = mockNotice.mock.calls.length;
+      expect(firstCount).toBeGreaterThan(0);
+
+      // Second call immediately — should be silently dropped due to 30s default cooldown
+      const ctx2 = makeCtx();
+      await dispatcher.dispatch('pub', ctx2);
+      expect(mockNotice.mock.calls.length).toBe(firstCount);
+    });
+
+    it('reply_type defaults to "notice" when config value is null', async () => {
+      await loadHelp({
+        help: { enabled: true, config: { reply_type: null, cooldown_ms: 0 } },
+      });
+      helpRegistry.register('8ball', [BALL_ENTRY]);
+
+      const ctx = makeCtx({ channel: '#test' });
+      await dispatcher.dispatch('pub', ctx);
+
+      // Default reply_type is 'notice' — messages sent via api.notice to nick
+      expect(mockNotice).toHaveBeenCalled();
+      expect(mockSay).not.toHaveBeenCalled();
+      for (const call of mockNotice.mock.calls) {
+        expect(call[0]).toBe('user1');
+      }
+    });
+
+    it('compact_index defaults to true when config value is null', async () => {
+      await loadHelp({
+        help: { enabled: true, config: { compact_index: null, cooldown_ms: 0 } },
+      });
+      helpRegistry.register('8ball', [BALL_ENTRY]);
+      helpRegistry.register('seen', [SEEN_ENTRY]);
+
+      const ctx = makeCtx();
+      await dispatcher.dispatch('pub', ctx);
+
+      const messages = mockNotice.mock.calls.map((c) => c[1]);
+      // Compact index: first line is bold intro with usage hint
+      expect(messages[0].startsWith('\x02')).toBe(true);
+      expect(messages[0]).toContain('— !help <category> or !help <command>');
+      // One line per category, no verbose footer
+      expect(messages.some((m: string) => m.includes('\x02fun\x02'))).toBe(true);
+      expect(messages).not.toContain('*** End of Help ***');
+    });
+
+    it('header defaults to "HexBot Commands" when config value is null', async () => {
+      await loadHelp({
+        help: {
+          enabled: true,
+          config: { header: null, compact_index: false, cooldown_ms: 0 },
+        },
+      });
+      helpRegistry.register('8ball', [BALL_ENTRY]);
+
+      const ctx = makeCtx();
+      await dispatcher.dispatch('pub', ctx);
+
+      const messages = mockNotice.mock.calls.map((c) => c[1]);
+      expect(messages[0]).toBe('\x02HexBot Commands\x02');
+    });
+
+    it('footer defaults to "*** End of Help ***" when config value is null', async () => {
+      await loadHelp({
+        help: {
+          enabled: true,
+          config: { footer: null, compact_index: false, cooldown_ms: 0 },
+        },
+      });
+      helpRegistry.register('8ball', [BALL_ENTRY]);
+
+      const ctx = makeCtx();
+      await dispatcher.dispatch('pub', ctx);
+
+      const messages = mockNotice.mock.calls.map((c) => c[1]);
+      expect(messages[messages.length - 1]).toBe('*** End of Help ***');
+    });
+
+    it('all config values null — full defaults work together', async () => {
+      await loadHelp({
+        help: {
+          enabled: true,
+          config: {
+            cooldown_ms: null,
+            reply_type: null,
+            compact_index: null,
+            header: null,
+            footer: null,
+          },
+        },
+      });
+      helpRegistry.register('8ball', [BALL_ENTRY]);
+
+      const ctx = makeCtx({ channel: '#test' });
+      await dispatcher.dispatch('pub', ctx);
+
+      // Defaults: reply_type=notice, compact_index=true, header=HexBot Commands
+      expect(mockNotice).toHaveBeenCalled();
+      expect(mockSay).not.toHaveBeenCalled();
+
+      const messages = mockNotice.mock.calls.map((c) => c[1]);
+      // Compact index with default header
+      expect(messages[0]).toContain('HexBot Commands');
+      expect(messages[0]).toContain('— !help <category> or !help <command>');
+      // All notices go to nick (default reply_type=notice)
+      for (const call of mockNotice.mock.calls) {
+        expect(call[0]).toBe('user1');
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Entries without explicit category (fallback to pluginId)
   // ---------------------------------------------------------------------------
 

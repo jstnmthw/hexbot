@@ -249,8 +249,7 @@ export class Services {
     this.pending.delete(lower);
 
     if (verified) {
-      /* v8 ignore next */
-      this.eventBus.emit('user:identified', nick, account ?? nick);
+      this.eventBus.emit('user:identified', nick, account!);
     }
 
     pending.resolve({ verified, account });

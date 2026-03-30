@@ -537,4 +537,102 @@ describe('greeter plugin', () => {
       expect(ctx.reply).toHaveBeenCalledWith('Welcome to #test, stranger!');
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // ?? fallback defaults — config values explicitly null
+  // ---------------------------------------------------------------------------
+
+  describe('config ?? fallback defaults (null config values)', () => {
+    it('min_flag defaults to "v" when config value is null', async () => {
+      await loadGreeter({
+        greeter: { enabled: true, config: { min_flag: null } },
+      });
+
+      // User with +v should be allowed to set a greet (min_flag falls back to 'v')
+      permissions.addUser('jake', '*!user@host.com', 'v');
+      const ctx = makePubCtx('jake', 'host.com', '#test', 'set Hello!');
+      await dispatcher.dispatch('pub', ctx);
+
+      expect(ctx.replyPrivate).toHaveBeenCalledWith('Custom greet set.');
+    });
+
+    it('min_flag "v" default rejects user with no flags', async () => {
+      await loadGreeter({
+        greeter: { enabled: true, config: { min_flag: null } },
+      });
+
+      permissions.addUser('noflag', '*!user@host.com', '');
+      const ctx = makePubCtx('noflag', 'host.com', '#test', 'set Hello!');
+      await dispatcher.dispatch('pub', ctx);
+
+      expect(ctx.replyPrivate).toHaveBeenCalledWith('You need at least +v to set a custom greet.');
+    });
+
+    it('delivery defaults to "say" when config value is null', async () => {
+      const mockIrc = { notice: vi.fn(), say: vi.fn() };
+      await loadGreeter({ greeter: { enabled: true, config: { delivery: null } } }, mockIrc);
+
+      const ctx = makeJoinCtx('alice', '#test');
+      await dispatcher.dispatch('join', ctx);
+
+      // 'say' delivery uses ctx.reply (PRIVMSG to channel), not api.notice
+      expect(ctx.reply).toHaveBeenCalledWith('Welcome to #test, alice!');
+      expect(mockIrc.notice).not.toHaveBeenCalled();
+    });
+
+    it('join_notice defaults to empty string when config value is null (no notice sent)', async () => {
+      const mockIrc = { notice: vi.fn(), say: vi.fn() };
+      await loadGreeter({ greeter: { enabled: true, config: { join_notice: null } } }, mockIrc);
+
+      const ctx = makeJoinCtx('alice', '#test');
+      await dispatcher.dispatch('join', ctx);
+
+      // Public greeting still fires, but no private notice
+      expect(ctx.reply).toHaveBeenCalled();
+      expect(mockIrc.notice).not.toHaveBeenCalled();
+    });
+
+    it('message defaults to "Welcome to {channel}, {nick}!" when config value is null', async () => {
+      await loadGreeter({
+        greeter: { enabled: true, config: { message: null } },
+      });
+
+      const ctx = makeJoinCtx('bob', '#lobby');
+      await dispatcher.dispatch('join', ctx);
+
+      expect(ctx.reply).toHaveBeenCalledWith('Welcome to #lobby, bob!');
+    });
+
+    it('all config values null — full defaults work together', async () => {
+      const mockIrc = { notice: vi.fn(), say: vi.fn() };
+      await loadGreeter(
+        {
+          greeter: {
+            enabled: true,
+            config: {
+              min_flag: null,
+              delivery: null,
+              join_notice: null,
+              message: null,
+            },
+          },
+        },
+        mockIrc,
+      );
+
+      // Join greeting fires with default message and 'say' delivery
+      const joinCtx = makeJoinCtx('charlie', '#test');
+      await dispatcher.dispatch('join', joinCtx);
+
+      expect(joinCtx.reply).toHaveBeenCalledWith('Welcome to #test, charlie!');
+      expect(mockIrc.notice).not.toHaveBeenCalled();
+
+      // !greet set works for +v user (default min_flag)
+      permissions.addUser('charlie', '*!user@host.com', 'v');
+      const setCtx = makePubCtx('charlie', 'host.com', '#test', 'set Hi all!');
+      await dispatcher.dispatch('pub', setCtx);
+
+      expect(setCtx.replyPrivate).toHaveBeenCalledWith('Custom greet set.');
+    });
+  });
 });

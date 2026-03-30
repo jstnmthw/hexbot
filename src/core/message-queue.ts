@@ -103,7 +103,7 @@ export class MessageQueue {
     this.stop();
     this.timer = setInterval(() => this.drain(), this.intervalMs);
     // Don't keep the process alive just for the queue timer
-    /* v8 ignore next 3 */
+    /* v8 ignore next 3 -- unref() guard for cross-runtime portability (Bun/Deno may return a number from setInterval) */
     if (this.timer && typeof this.timer === 'object' && 'unref' in this.timer) {
       this.timer.unref();
     }

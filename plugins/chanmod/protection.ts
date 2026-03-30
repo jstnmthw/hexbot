@@ -19,7 +19,6 @@ import type { ChanmodConfig, SharedState } from './state';
 /** Returns true if a quit message looks like a netsplit (e.g. "hub.net leaf.net"). */
 function isSplitQuit(text: string): boolean {
   const parts = text.trim().split(/\s+/);
-  /* v8 ignore next -- TRUE branch: tests only call isSplitQuit with valid 2-word netsplit messages */
   if (parts.length !== 2) return false;
   const isDomain = (s: string): boolean => /^[a-zA-Z0-9]([a-zA-Z0-9.-]*)\.[a-zA-Z]{2,}$/.test(s);
   return isDomain(parts[0]) && isDomain(parts[1]);
@@ -30,7 +29,6 @@ function snapshotOps(api: PluginAPI, state: SharedState): void {
   state.splitOpsSnapshot.clear();
   for (const channel of api.botConfig.irc.channels) {
     const ch = api.getChannel(channel);
-    /* v8 ignore next -- TRUE branch: api.getChannel always returns a channel in tests (bot is joined) */
     if (!ch) continue;
     const ops = new Set<string>();
     for (const [nick, user] of ch.users) {
@@ -50,7 +48,6 @@ interface RejoinRecord {
 /** Extract the kicker's nick from kick ctx.args ("reason (by Nick)" or "by Nick"). */
 function parseKicker(args: string): string {
   const m = args.match(/\(by ([^)]+)\)$/) ?? args.match(/^by (.+)$/);
-  /* v8 ignore next -- m is always truthy given the two-pattern format produced by irc-bridge */
   return m?.[1]?.trim() ?? '';
 }
 

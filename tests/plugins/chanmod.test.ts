@@ -4322,3 +4322,353 @@ describe('chanmod plugin — parameter modes stripped from channel_modes', () =>
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Channel key +k changed to wrong value (mode-enforce.ts line 201 branch)
+// ---------------------------------------------------------------------------
+describe('chanmod plugin — +k changed to different value than configured', () => {
+  it('re-enforces configured key when someone sets +k with a different key', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      giveBotOps(freshBot, '#test');
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: {
+            enforce_modes: true,
+            enforce_delay_ms: 5,
+            enforce_channel_key: 'correctkey',
+          },
+        },
+      });
+      giveBotOps(freshBot, '#test');
+      freshBot.client.clearMessages();
+
+      // Someone sets +k with a different key than the configured one
+      simulateMode(freshBot, 'EvilOp', '#test', '+k', 'badkey');
+      await tick(20);
+
+      expect(
+        freshBot.client.messages.find(
+          (m) => m.type === 'raw' && m.message?.includes('MODE #test +k correctkey'),
+        ),
+      ).toBeDefined();
+    } finally {
+      freshBot.cleanup();
+    }
+  });
+
+  it('does not re-enforce key on unrelated mode change (else-if false branch)', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      giveBotOps(freshBot, '#test');
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: {
+            enforce_modes: true,
+            enforce_delay_ms: 5,
+            enforce_channel_key: 'mykey',
+          },
+        },
+      });
+      giveBotOps(freshBot, '#test');
+      freshBot.client.clearMessages();
+
+      // Someone sets +m — this enters the channelKey && canEnforce block but
+      // modeStr is '+m' which is neither '-k' nor '+k', so the else-if at
+      // line 201 evaluates to false (covering the false branch)
+      simulateMode(freshBot, 'EvilOp', '#test', '+m', '');
+      await tick(20);
+
+      // No +k enforcement should fire (the mode change is unrelated to keys)
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('+k')),
+      ).toBeUndefined();
+    } finally {
+      freshBot.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Channel limit +l changed to wrong value (mode-enforce.ts line 231 branch)
+// ---------------------------------------------------------------------------
+describe('chanmod plugin — +l changed to different value than configured', () => {
+  it('re-enforces configured limit when someone sets +l with a different value', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      giveBotOps(freshBot, '#test');
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: {
+            enforce_modes: true,
+            enforce_delay_ms: 5,
+            enforce_channel_limit: 25,
+          },
+        },
+      });
+      giveBotOps(freshBot, '#test');
+      freshBot.client.clearMessages();
+
+      // Someone sets +l with a different limit than the configured one
+      simulateMode(freshBot, 'EvilOp', '#test', '+l', '99');
+      await tick(20);
+
+      expect(
+        freshBot.client.messages.find(
+          (m) => m.type === 'raw' && m.message?.includes('MODE #test +l 25'),
+        ),
+      ).toBeDefined();
+    } finally {
+      freshBot.cleanup();
+    }
+  });
+
+  it('does not re-enforce limit on unrelated mode change (else-if false branch)', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      giveBotOps(freshBot, '#test');
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: {
+            enforce_modes: true,
+            enforce_delay_ms: 5,
+            enforce_channel_limit: 25,
+          },
+        },
+      });
+      giveBotOps(freshBot, '#test');
+      freshBot.client.clearMessages();
+
+      // Someone sets +m — this enters the channelLimit > 0 && canEnforce block but
+      // modeStr is '+m' which is neither '-l' nor '+l', so the else-if at
+      // line 231 evaluates to false (covering the false branch)
+      simulateMode(freshBot, 'EvilOp', '#test', '+m', '');
+      await tick(20);
+
+      // No +l enforcement should fire (the mode change is unrelated to limits)
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('+l')),
+      ).toBeUndefined();
+    } finally {
+      freshBot.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cycle on deop skipped when channel has +i (mode-enforce.ts line 276 branch)
+// ---------------------------------------------------------------------------
+describe('chanmod plugin — cycle_on_deop skipped when channel is +i', () => {
+  it('does NOT cycle when channel has invite-only mode (+i)', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      giveBotOps(freshBot, '#test');
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: { cycle_on_deop: true, cycle_delay_ms: 10 },
+        },
+      });
+      giveBotOps(freshBot, '#test');
+
+      // Set the channel to invite-only (+i)
+      simulateMode(freshBot, 'ChanServ', '#test', '+i', '');
+      await tick(5);
+      freshBot.client.clearMessages();
+
+      // Three bot self-deops to reach MAX_ENFORCEMENTS (3)
+      for (let i = 0; i < 3; i++) {
+        simulateMode(freshBot, 'SomeOp', '#test', '-o', 'hexbot');
+      }
+      // Advance past cycle_delay_ms (10ms) + rejoin delay (2000ms)
+      await tick(2200);
+
+      // Bot should NOT have parted or rejoined because the channel is +i
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'part' && m.target === '#test'),
+      ).toBeUndefined();
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'join' && m.target === '#test'),
+      ).toBeUndefined();
+    } finally {
+      freshBot.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isSplitQuit returns false for non-2-word input (protection.ts line 22 branch)
+// ---------------------------------------------------------------------------
+describe('chanmod plugin — isSplitQuit rejects non-2-word quit messages', () => {
+  it('does not count a single-word quit towards the split threshold', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      giveBotOps(freshBot, '#test');
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: { stopnethack_mode: 1, split_timeout_ms: 60000, enforce_delay_ms: 10 },
+        },
+      });
+      // Fire quits with a single word (1 part, not 2) — isSplitQuit returns false at line 22
+      for (let i = 0; i < 5; i++) {
+        freshBot.client.simulateEvent('quit', {
+          nick: `user${i}`,
+          ident: 'u',
+          hostname: 'h',
+          message: 'Disconnected',
+        });
+        await flush();
+      }
+      freshBot.permissions.addUser('noflag', '*!noflag@noflag.host', 'v', 'test');
+      addToChannel(freshBot, 'noflag', 'noflag', 'noflag.host', '#test');
+      giveBotOps(freshBot, '#test');
+      freshBot.client.clearMessages();
+      // No split active — +o should not trigger deop
+      simulateMode(freshBot, 'server.net', '#test', '+o', 'noflag');
+      await tick(20);
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'mode' && m.message === '-o'),
+      ).toBeUndefined();
+    } finally {
+      freshBot.cleanup();
+    }
+  });
+
+  it('does not count a three-word quit towards the split threshold', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      giveBotOps(freshBot, '#test');
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: { stopnethack_mode: 1, split_timeout_ms: 60000, enforce_delay_ms: 10 },
+        },
+      });
+      // Fire quits with three words — isSplitQuit returns false at line 22
+      for (let i = 0; i < 5; i++) {
+        freshBot.client.simulateEvent('quit', {
+          nick: `user${i}`,
+          ident: 'u',
+          hostname: 'h',
+          message: 'hub.net leaf.net extra.net',
+        });
+        await flush();
+      }
+      freshBot.permissions.addUser('noflag2', '*!noflag2@noflag2.host', 'v', 'test');
+      addToChannel(freshBot, 'noflag2', 'noflag2', 'noflag2.host', '#test');
+      giveBotOps(freshBot, '#test');
+      freshBot.client.clearMessages();
+      simulateMode(freshBot, 'server.net', '#test', '+o', 'noflag2');
+      await tick(20);
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'mode' && m.message === '-o'),
+      ).toBeUndefined();
+    } finally {
+      freshBot.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// snapshotOps when getChannel returns undefined (protection.ts line 32 branch)
+// ---------------------------------------------------------------------------
+describe('chanmod plugin — snapshotOps handles missing channel gracefully', () => {
+  it('skips channels where getChannel returns undefined during split snapshot', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      // Load plugin with stopnethack — bot does NOT join #test, so getChannel('#test') = undefined
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: { stopnethack_mode: 1, split_timeout_ms: 60000, enforce_delay_ms: 10 },
+        },
+      });
+
+      // Trigger split — snapshotOps iterates channels (['#test']) but getChannel returns
+      // undefined because the bot hasn't joined → hits the `if (!ch) continue` branch
+      for (let i = 0; i < 3; i++) {
+        freshBot.client.simulateEvent('quit', {
+          nick: `srv${i}`,
+          ident: 'u',
+          hostname: 'h',
+          message: 'hub.net leaf.net',
+        });
+        await flush();
+      }
+
+      // Give bot ops AFTER the split snapshot
+      giveBotOps(freshBot, '#test');
+      freshBot.permissions.addUser('stranger', '*!stranger@stranger.host', 'v', 'test');
+      addToChannel(freshBot, 'stranger', 'stranger', 'stranger.host', '#test');
+      freshBot.client.clearMessages();
+
+      // +o during split — no snapshot for #test → isLegitimate=false → deops
+      simulateMode(freshBot, 'server.net', '#test', '+o', 'stranger');
+      await tick(20);
+      // Verify the split was still detected and acted upon (deop fires)
+      expect(
+        freshBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '-o' && m.args?.includes('stranger'),
+        ),
+      ).toBeDefined();
+    } finally {
+      freshBot.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseKicker when neither regex matches (protection.ts line 51 branch)
+// ---------------------------------------------------------------------------
+describe('chanmod plugin — parseKicker with non-matching kick reason', () => {
+  it('does not crash or revenge when kicker nick is empty (parseKicker returns empty)', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      giveBotOps(freshBot, '#test');
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: {
+            rejoin_on_kick: true,
+            rejoin_delay_ms: 10,
+            revenge_action: 'deop',
+            revenge_delay_ms: 10,
+          },
+        },
+      });
+      freshBot.channelSettings.set('#test', 'revenge', true);
+      giveBotOps(freshBot, '#test');
+      freshBot.client.clearMessages();
+
+      // Simulate bot being kicked with an empty kicker nick.
+      // IRC bridge formats reason as "message (by )" when nick is empty — the regex
+      // \(by ([^)]+)\)$ requires 1+ chars inside parens, so it fails. The fallback
+      // regex ^by (.+)$ also fails. parseKicker returns '' (line 51 branch).
+      freshBot.client.simulateEvent('kick', {
+        nick: '',
+        ident: '',
+        hostname: '',
+        channel: '#test',
+        kicked: 'hexbot',
+        message: 'some reason',
+      });
+      await tick(3500);
+
+      // Bot should rejoin but NOT revenge (kickerNick is empty string)
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'join' && m.target === '#test'),
+      ).toBeDefined();
+      // No deop should have been sent (no kicker to revenge against)
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'mode' && m.message === '-o'),
+      ).toBeUndefined();
+    } finally {
+      freshBot.cleanup();
+    }
+  });
+});

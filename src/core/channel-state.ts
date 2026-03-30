@@ -139,8 +139,7 @@ export class ChannelState {
     const nick = String(event.nick ?? '');
     const ident = String(event.ident ?? '');
     const hostname = String(event.hostname ?? '');
-    /* v8 ignore next -- irc-framework always provides channel */
-    const channel = String(event.channel ?? '');
+    const channel = String(event.channel);
 
     // IRCv3 extended-join: account field is present when the cap is negotiated.
     // irc-framework sets it to false (not the string '*') when the user is not identified.
@@ -202,10 +201,8 @@ export class ChannelState {
   }
 
   private onNick(event: Record<string, unknown>): void {
-    /* v8 ignore next -- irc-framework always provides nick */
-    const oldNick = String(event.nick ?? '');
-    /* v8 ignore next -- irc-framework always provides new_nick */
-    const newNick = String(event.new_nick ?? '');
+    const oldNick = String(event.nick);
+    const newNick = String(event.new_nick);
 
     const oldLower = ircLower(oldNick, this.casemapping);
     const newLower = ircLower(newNick, this.casemapping);
@@ -214,8 +211,7 @@ export class ChannelState {
     if (this.networkAccounts.has(oldLower)) {
       const account = this.networkAccounts.get(oldLower);
       this.networkAccounts.delete(oldLower);
-      /* v8 ignore next -- Map.get always returns a value when has() is true */
-      this.networkAccounts.set(newLower, account ?? null);
+      this.networkAccounts.set(newLower, account!);
     }
 
     for (const ch of this.channels.values()) {
@@ -230,16 +226,13 @@ export class ChannelState {
   }
 
   private onMode(event: Record<string, unknown>): void {
-    /* v8 ignore next -- irc-framework always provides target */
-    const target = String(event.target ?? '');
-    /* v8 ignore next -- irc-framework always provides a valid modes array */
+    const target = String(event.target);
     if (!isModeArray(event.modes)) return;
     const modes = event.modes;
 
     const ch = this.channels.get(ircLower(target, this.casemapping))!;
 
     for (const m of modes) {
-      /* v8 ignore next -- irc-framework always provides mode in mode entries */
       const mode = m.mode ?? '';
       const param = m.param ? String(m.param) : '';
 
@@ -286,8 +279,7 @@ export class ChannelState {
         }
       } else if (modeChar === 'l') {
         if (adding) {
-          /* v8 ignore next -- || 0: parseInt on a valid limit string never returns NaN */
-          ch.limit = parseInt(param, 10) || 0;
+          ch.limit = parseInt(param, 10);
           if (!ch.modes.includes('l')) ch.modes += 'l';
         } else {
           ch.limit = 0;
@@ -308,7 +300,6 @@ export class ChannelState {
 
   private onUserlist(event: Record<string, unknown>): void {
     const channel = event.channel as string;
-    /* v8 ignore next -- irc-framework always provides a valid users array */
     if (!isObjectArray(event.users)) return;
     const users = event.users;
 
@@ -379,8 +370,7 @@ export class ChannelState {
    * irc-framework emits { channel, modes: [{mode, param}], raw_modes, raw_params }.
    */
   private onChannelInfo(event: Record<string, unknown>): void {
-    /* v8 ignore next -- ?? fallback: irc-framework always provides channel */
-    const channel = String(event.channel ?? '');
+    const channel = String(event.channel);
     // RPL_CREATIONTIME and RPL_CHANNEL_URL also emit 'channel info' without modes
     if (!isModeArray(event.modes)) return;
 
@@ -390,14 +380,11 @@ export class ChannelState {
     let limit = 0;
 
     for (const m of event.modes) {
-      /* v8 ignore next -- ?? fallback: irc-framework always provides mode */
-      const mode = String(m.mode ?? '');
+      const mode = String(m.mode);
       const modeChar = mode.charAt(1);
       modeChars += modeChar;
-      /* v8 ignore next -- ?? fallback: param always present for +k in RPL_CHANNELMODEIS */
-      if (modeChar === 'k') key = String(m.param ?? '');
-      /* v8 ignore next -- ?? fallback: param always present for +l in RPL_CHANNELMODEIS */
-      if (modeChar === 'l') limit = parseInt(String(m.param ?? '0'), 10) || 0;
+      if (modeChar === 'k') key = String(m.param);
+      if (modeChar === 'l') limit = parseInt(String(m.param), 10);
     }
 
     ch.modes = modeChars;

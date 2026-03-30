@@ -81,8 +81,7 @@ export class ChannelSettings {
     this.db.del(NAMESPACE, `${channel}:${key}`);
     // Notify with the new effective value (the default)
     const def = this.defs.get(key);
-    /* v8 ignore next -- '' fallback: unset is only called for registered keys */
-    this.notifyChange(channel, key, def ? def.default : '');
+    this.notifyChange(channel, key, def!.default);
   }
 
   /**

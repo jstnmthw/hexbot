@@ -618,6 +618,131 @@ describe('flood plugin — isPrivileged with DB lookup', () => {
 });
 
 // ---------------------------------------------------------------------------
+// isPrivileged / buildFloodBanMask / getAction edge cases
+// ---------------------------------------------------------------------------
+
+describe('flood plugin — isPrivileged and buildFloodBanMask edge cases', () => {
+  it('does NOT skip flood for a user with hostmask but no permissions entry', async () => {
+    const bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    try {
+      await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            msg_threshold: 2,
+            msg_window_secs: 10,
+            actions: ['warn'],
+            ignore_ops: true,
+          },
+        },
+      });
+      bot.client.simulateEvent('join', {
+        nick: 'UnknownUser',
+        ident: 'unk',
+        hostname: 'unknown.host',
+        channel: '#test',
+      });
+      // Do NOT add UnknownUser to permissions DB
+      bot.client.clearMessages();
+
+      for (let i = 0; i < 5; i++) {
+        simulatePrivmsg(bot, 'UnknownUser', 'unk', 'unknown.host', '#test', `msg ${i}`);
+      }
+      await flush();
+
+      // Flood action fires because isPrivileged returns false (user not in DB)
+      expect(
+        bot.client.messages.find((m) => m.type === 'notice' && m.target === 'UnknownUser'),
+      ).toBeDefined();
+    } finally {
+      bot.cleanup();
+    }
+  });
+
+  it('falls back to kick when hostmask ends with @ (empty host)', async () => {
+    const bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    try {
+      await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            msg_threshold: 1,
+            msg_window_secs: 10,
+            actions: ['tempban'],
+            ignore_ops: false,
+          },
+        },
+      });
+      bot.client.simulateEvent('join', {
+        nick: 'EmptyHost',
+        ident: 'e',
+        hostname: 'real.host',
+        channel: '#test',
+      });
+      // Mutate hostmask to end with @ (empty host after @)
+      const userInfo = bot.channelState.getUser('#test', 'EmptyHost');
+      userInfo!.hostmask = 'EmptyHost!e@';
+      bot.client.clearMessages();
+
+      simulatePrivmsg(bot, 'EmptyHost', 'e', 'real.host', '#test', 'msg1');
+      simulatePrivmsg(bot, 'EmptyHost', 'e', 'real.host', '#test', 'msg2');
+      await flush();
+
+      // Should kick (fallback) but no ban
+      const kickMsg = bot.client.messages.find(
+        (m) => m.type === 'raw' && m.message?.includes('KICK') && m.message?.includes('EmptyHost'),
+      );
+      expect(kickMsg).toBeDefined();
+      const banMsg = bot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('+b'));
+      expect(banMsg).toBeUndefined();
+    } finally {
+      bot.cleanup();
+    }
+  });
+
+  it('getAction returns warn for empty actions array', async () => {
+    const bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    try {
+      await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            msg_threshold: 1,
+            msg_window_secs: 10,
+            actions: [],
+            ignore_ops: false,
+          },
+        },
+      });
+      bot.client.simulateEvent('join', {
+        nick: 'EmptyAct',
+        ident: 'e',
+        hostname: 'empty.host',
+        channel: '#test',
+      });
+      bot.client.clearMessages();
+
+      simulatePrivmsg(bot, 'EmptyAct', 'e', 'empty.host', '#test', 'msg1');
+      simulatePrivmsg(bot, 'EmptyAct', 'e', 'empty.host', '#test', 'msg2');
+      await flush();
+
+      // With empty actions, getAction falls back to 'warn'
+      expect(
+        bot.client.messages.find((m) => m.type === 'notice' && m.target === 'EmptyAct'),
+      ).toBeDefined();
+    } finally {
+      bot.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // nick flood — isPrivileged skips punishment (flood/index.ts line 246)
 // ---------------------------------------------------------------------------
 
@@ -657,6 +782,68 @@ describe('flood plugin — nick flood skips privileged user', () => {
       expect(
         bot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('KICK')),
       ).toBeUndefined();
+    } finally {
+      bot.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tempban with malformed hostmask (no '@') — falls back to plain kick
+// Covers flood/index.ts lines 186-188
+// ---------------------------------------------------------------------------
+
+describe('flood plugin — tempban fallback when buildFloodBanMask returns null', () => {
+  it('falls back to kick when getUserHostmask returns a hostmask without @', async () => {
+    const bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    try {
+      await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            msg_threshold: 1,
+            msg_window_secs: 10,
+            actions: ['tempban'], // first offence goes straight to tempban
+            ignore_ops: false,
+          },
+        },
+      });
+
+      // Join the user so they exist in channel state
+      bot.client.simulateEvent('join', {
+        nick: 'BadMask',
+        ident: 'bad',
+        hostname: 'bad.host',
+        channel: '#test',
+      });
+
+      // Mutate the stored hostmask to one without '@' so buildFloodBanMask returns null
+      const userInfo = bot.channelState.getUser('#test', 'BadMask');
+      expect(userInfo).toBeDefined();
+      userInfo!.hostmask = 'badmask-no-at-sign';
+
+      bot.client.clearMessages();
+
+      // Trigger flood: 2 messages exceed threshold of 1
+      simulatePrivmsg(bot, 'BadMask', 'bad', 'bad.host', '#test', 'msg1');
+      simulatePrivmsg(bot, 'BadMask', 'bad', 'bad.host', '#test', 'msg2');
+      await flush();
+
+      // Should have kicked (fallback) but NOT set a ban
+      const kickMsg = bot.client.messages.find(
+        (m) => m.type === 'raw' && m.message?.includes('KICK') && m.message?.includes('BadMask'),
+      );
+      expect(kickMsg).toBeDefined();
+
+      // No ban mode should be set since banMask was null
+      const banMsg = bot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('+b'));
+      expect(banMsg).toBeUndefined();
+
+      // No ban record in DB
+      const bans = bot.db.list('flood', 'ban:');
+      expect(bans.length).toBe(0);
     } finally {
       bot.cleanup();
     }

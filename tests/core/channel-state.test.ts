@@ -640,6 +640,29 @@ describe('ChannelState', () => {
 
       expect(state.getUserModes('#test', 'Empty')).toEqual([]);
     });
+
+    it('returns early when event.users is not an array of objects', () => {
+      // Should not throw or create any channel state
+      expect(() => {
+        client.simulateEvent('userlist', {
+          channel: '#test',
+          users: 'not-an-array',
+        });
+      }).not.toThrow();
+
+      expect(state.getChannel('#test')).toBeUndefined();
+    });
+
+    it('returns early when event.users is undefined', () => {
+      expect(() => {
+        client.simulateEvent('userlist', {
+          channel: '#test',
+          // no users field
+        });
+      }).not.toThrow();
+
+      expect(state.getChannel('#test')).toBeUndefined();
+    });
   });
 
   describe('setCasemapping', () => {
@@ -1220,6 +1243,113 @@ describe('ChannelState', () => {
       });
       const ch = state.getChannel('#test')!;
       expect(ch.modes).not.toContain('b');
+    });
+
+    it('returns early when event.modes is not a valid mode array (string)', () => {
+      client.simulateEvent('join', { nick: 'Bot', ident: 'b', hostname: 'h', channel: '#test' });
+
+      // Give the channel a mode so we can verify it wasn't wiped
+      client.simulateEvent('mode', {
+        target: '#test',
+        modes: [{ mode: '+n', param: '' }],
+      });
+      expect(state.getChannel('#test')!.modes).toContain('n');
+
+      // Fire a mode event with modes as a string instead of an array
+      expect(() => {
+        client.simulateEvent('mode', {
+          target: '#test',
+          modes: '+o Alice',
+        });
+      }).not.toThrow();
+
+      // Channel modes should be unchanged — handler returned early
+      expect(state.getChannel('#test')!.modes).toContain('n');
+    });
+
+    it('returns early when event.modes is undefined', () => {
+      client.simulateEvent('join', { nick: 'Bot', ident: 'b', hostname: 'h', channel: '#test' });
+
+      expect(() => {
+        client.simulateEvent('mode', {
+          target: '#test',
+          // modes field is absent — isModeArray(undefined) → false
+        });
+      }).not.toThrow();
+    });
+
+    it('returns early when event.modes contains non-object entries', () => {
+      client.simulateEvent('join', { nick: 'Bot', ident: 'b', hostname: 'h', channel: '#test' });
+
+      expect(() => {
+        client.simulateEvent('mode', {
+          target: '#test',
+          modes: ['not', 'objects'],
+        });
+      }).not.toThrow();
+    });
+
+    it('handles mode entry with undefined mode property', () => {
+      client.simulateEvent('join', { nick: 'Alice', ident: 'a', hostname: 'h', channel: '#test' });
+
+      // mode entry with no mode property — hits the m.mode ?? '' fallback
+      expect(() => {
+        client.simulateEvent('mode', {
+          target: '#test',
+          modes: [{ param: 'Alice' }],
+        });
+      }).not.toThrow();
+    });
+
+    it('does not duplicate user mode when +o is set twice', () => {
+      client.simulateEvent('join', { nick: 'Alice', ident: 'a', hostname: 'h', channel: '#test' });
+
+      client.simulateEvent('mode', {
+        target: '#test',
+        modes: [{ mode: '+o', param: 'Alice' }],
+      });
+      expect(state.getUserModes('#test', 'Alice')).toEqual(['o']);
+
+      // Set +o again — should not duplicate
+      client.simulateEvent('mode', {
+        target: '#test',
+        modes: [{ mode: '+o', param: 'Alice' }],
+      });
+      expect(state.getUserModes('#test', 'Alice')).toEqual(['o']);
+      expect(state.getUserModes('#test', 'Alice')).toHaveLength(1);
+    });
+  });
+
+  describe('channel info with +l mode (parseInt branch)', () => {
+    it('parses numeric +l param from channel info', () => {
+      client.simulateEvent('join', { nick: 'Bot', ident: 'b', hostname: 'h', channel: '#limited' });
+
+      client.simulateEvent('channel info', {
+        channel: '#limited',
+        modes: [{ mode: '+l', param: 100 }], // numeric param, not string
+        raw_modes: '+l',
+        raw_params: ['100'],
+      });
+
+      const ch = state.getChannel('#limited');
+      expect(ch).toBeDefined();
+      expect(ch!.limit).toBe(100);
+      expect(ch!.modes).toContain('l');
+    });
+
+    it('parses +l as the only mode in channel info', () => {
+      client.simulateEvent('channel info', {
+        channel: '#onlylimit',
+        modes: [{ mode: '+l', param: '42' }],
+        raw_modes: '+l',
+        raw_params: ['42'],
+      });
+
+      const ch = state.getChannel('#onlylimit');
+      expect(ch).toBeDefined();
+      expect(ch!.limit).toBe(42);
+      expect(ch!.modes).toBe('l');
+      expect(ch!.key).toBe('');
     });
   });
 });
