@@ -56,7 +56,9 @@ export function syncChannelModes(
   const timer = setTimeout(() => {
     if (!botHasOps(api, channel)) return;
 
+    const enforceModes = api.channelSettings.get(channel, 'enforce_modes') as boolean;
     const channelModes = api.channelSettings.get(channel, 'channel_modes') as string;
+    /* v8 ignore next 3 -- warning for misconfiguration: param modes in channel_modes string */
     if (hasParamModes(channelModes)) {
       api.warn(
         `channel_modes for ${channel} contains parameter modes (k/l) which are stripped — use channel_key and channel_limit instead`,
@@ -66,13 +68,12 @@ export function syncChannelModes(
 
     // Read current channel modes from channel-state
     const ch = api.getChannel(channel);
-    /* v8 ignore next -- ch.modes is never populated by channel-state in tests; always '' */
+    /* v8 ignore next -- ?? fallback: ch is always defined when bot has ops (botHasOps checks channel-state) */
     const currentModes = ch?.modes ?? '';
 
     // Add missing modes
     if (desiredModes.size > 0) {
       const missing = [...desiredModes].filter((m) => !currentModes.includes(m));
-      /* v8 ignore next -- missing is always the full set in tests (ch.modes is always '') */
       if (missing.length > 0) {
         const modeString = '+' + missing.join('');
         api.mode(channel, modeString);
@@ -80,18 +81,43 @@ export function syncChannelModes(
       }
     }
 
+    // Remove unauthorized simple modes (modes present on channel but not in configured set)
+    if (enforceModes && desiredModes.size > 0 && currentModes) {
+      const unauthorized = [...currentModes].filter(
+        (m) => !desiredModes.has(m) && !PARAM_MODES.has(m),
+      );
+      if (unauthorized.length > 0) {
+        const modeString = '-' + unauthorized.join('');
+        api.mode(channel, modeString);
+        api.log(`Removed unauthorized modes ${modeString} on ${channel}`);
+      }
+    }
+
     // Enforce channel key
     const channelKey = api.channelSettings.get(channel, 'channel_key') as string;
     if (channelKey) {
-      api.mode(channel, '+k', channelKey);
-      api.log(`Synced channel key on ${channel}`);
+      // Set or overwrite the key if it doesn't match
+      if (!ch?.key || ch.key !== channelKey) {
+        api.mode(channel, '+k', channelKey);
+        api.log(`Synced channel key on ${channel}`);
+      }
+    } else if (enforceModes && ch?.key) {
+      // No key configured — remove the unauthorized key
+      api.mode(channel, '-k', ch.key);
+      api.log(`Removed unauthorized channel key on ${channel}`);
     }
 
     // Enforce channel limit
     const channelLimit = api.channelSettings.get(channel, 'channel_limit') as number;
     if (channelLimit > 0) {
-      api.mode(channel, '+l', String(channelLimit));
-      api.log(`Synced channel limit (+l ${channelLimit}) on ${channel}`);
+      if (!ch?.limit || ch.limit !== channelLimit) {
+        api.mode(channel, '+l', String(channelLimit));
+        api.log(`Synced channel limit (+l ${channelLimit}) on ${channel}`);
+      }
+    } else if (enforceModes && ch?.limit && ch.limit > 0) {
+      // No limit configured — remove the unauthorized limit
+      api.mode(channel, '-l');
+      api.log(`Removed unauthorized channel limit on ${channel}`);
     }
   }, config.enforce_delay_ms);
   state.enforcementTimers.push(timer);
@@ -184,6 +210,15 @@ export function setupModeEnforce(
         state.enforcementTimers.push(timer);
       }
       /* v8 ignore stop */
+    } else if (!channelKey && canEnforce && modeStr === '+k' && target) {
+      // No key configured — remove the unauthorized key
+      api.log(
+        `Removing unauthorized +k on ${channel} (no channel_key configured, set by ${setter})`,
+      );
+      const timer = setTimeout(() => {
+        api.mode(channel, '-k', target);
+      }, config.enforce_delay_ms);
+      state.enforcementTimers.push(timer);
     }
 
     // --- Channel limit enforcement (+l / -l) ---
@@ -207,6 +242,15 @@ export function setupModeEnforce(
         state.enforcementTimers.push(timer);
       }
       /* v8 ignore stop */
+    } else if (channelLimit === 0 && canEnforce && modeStr === '+l') {
+      // No limit configured — remove the unauthorized limit
+      api.log(
+        `Removing unauthorized +l on ${channel} (no channel_limit configured, set by ${setter})`,
+      );
+      const timer = setTimeout(() => {
+        api.mode(channel, '-l');
+      }, config.enforce_delay_ms);
+      state.enforcementTimers.push(timer);
     }
 
     // --- Bot self-deop → ChanServ OP recovery + cycle ---
@@ -384,6 +428,13 @@ export function setupModeEnforce(
     if (MODE_SETTING_KEYS.has(key)) {
       syncChannelModes(api, config, state, channel);
     }
+  });
+
+  // --- Sync on bot join (chained to RPL_CHANNELMODEIS reply) ---
+  // auto-op.ts sends MODE #channel on bot join; channel-state populates modes/key/limit
+  // from the reply and emits channel:modesReady. We sync here so state is guaranteed current.
+  api.onModesReady((channel: string) => {
+    syncChannelModes(api, config, state, channel);
   });
 
   return () => {

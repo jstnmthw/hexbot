@@ -300,7 +300,7 @@ Config:
 
 ### 2.8 Channel state (core module)
 
-Tracks who is in each channel, their modes (@/+), hostmasks, and join times. Updated via JOIN, PART, QUIT, KICK, NICK, MODE, and WHO/NAMES responses. Exposed to plugins via `api.getChannel()` and `api.getUsers()`.
+Tracks who is in each channel, their modes (@/+), hostmasks, and join times. Also tracks channel-level modes (mode string, key, and limit) via RPL_CHANNELMODEIS and MODE events. Updated via JOIN, PART, QUIT, KICK, NICK, MODE, WHO/NAMES, and `channel info` responses. Exposed to plugins via `api.getChannel()`, `api.getUsers()`, `api.requestChannelModes()`, and `api.onModesReady()`.
 
 ### 2.9 IRC commands (core module)
 
@@ -426,6 +426,7 @@ Separate from the IRC dispatcher, the bot maintains a simple `EventEmitter` for 
 - `mod:op`, `mod:deop`, `mod:kick`, `mod:ban`
 - `bot:connected`, `bot:disconnected`, `bot:error`
 - `user:identified`, `user:added`, `user:removed`
+- `channel:modesReady` — fired after RPL_CHANNELMODEIS populates channel-state modes/key/limit
 
 This is how the future web panel (phase 3) will tap into bot state without modifying the core. It's also useful for plugins that want to react to bot-level events rather than IRC events.
 

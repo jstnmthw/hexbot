@@ -1,17 +1,22 @@
 // chanmod — auto-op/halfop/voice on join, with optional NickServ verification
 import type { HandlerContext, PluginAPI } from '../../src/types';
 import { botCanHalfop, botHasOps, hasAnyFlag, isBotNick } from './helpers';
-import { syncChannelModes } from './mode-enforce';
 import type { ChanmodConfig, SharedState } from './state';
 
-export function setupAutoOp(api: PluginAPI, config: ChanmodConfig, state: SharedState): () => void {
+export function setupAutoOp(
+  api: PluginAPI,
+  config: ChanmodConfig,
+  _state: SharedState,
+): () => void {
   api.bind('join', '-', '*', async (ctx: HandlerContext) => {
     const { nick } = ctx;
     const channel = ctx.channel!;
 
-    // Bot joined — sync channel modes (enforce_channel_modes, key, limit)
+    // Bot joined — request current channel modes from the server.
+    // The MODE reply triggers channel:modesReady, which chains to syncChannelModes
+    // (set up in setupModeEnforce). This guarantees channel state is populated before sync.
     if (isBotNick(api, nick)) {
-      syncChannelModes(api, config, state, channel);
+      api.requestChannelModes(channel);
       return;
     }
 

@@ -43,13 +43,15 @@ export function init(api: PluginAPI): void {
       key: 'channel_key',
       type: 'string',
       default: config.enforce_channel_key,
-      description: 'Channel key (+k) to enforce when enforce_modes is on (empty = disabled)',
+      description:
+        'Channel key (+k) to enforce (empty = remove unauthorized keys when enforce_modes is on)',
     },
     {
       key: 'channel_limit',
       type: 'int',
       default: config.enforce_channel_limit,
-      description: 'Channel user limit (+l) to enforce when enforce_modes is on (0 = disabled)',
+      description:
+        'Channel user limit (+l) to enforce (0 = remove unauthorized limits when enforce_modes is on)',
     },
     {
       key: 'auto_op',

@@ -32,19 +32,19 @@ Most chanmod behaviors can be tuned per-channel using `.chanset` (requires `m` f
 .chanset #chan                     — list all settings with current values
 ```
 
-| Setting         | Type   | Default | Description                                             |
-| --------------- | ------ | ------- | ------------------------------------------------------- |
-| `enforce_modes` | flag   | off     | Re-apply channel modes and user modes if removed        |
-| `channel_modes` | string | `""`    | Simple modes to enforce, e.g. `"imnpst"`                |
-| `channel_key`   | string | `""`    | Channel key (`+k`) to enforce (empty = disabled)        |
-| `channel_limit` | int    | `0`     | Channel user limit (`+l`) to enforce (0 = disabled)     |
-| `bitch`         | flag   | off     | Strip `+o`/`+h` from anyone without the required flag   |
-| `auto_op`       | flag   | on      | Auto-op/halfop/voice flagged users on join              |
-| `protect_ops`   | flag   | off     | Kick/kickban anyone who deops a flagged user            |
-| `enforcebans`   | flag   | off     | Kick users whose hostmask matches a newly-set ban       |
-| `revenge`       | flag   | off     | Kick/deop/kickban whoever kicks the bot                 |
-| `chanserv_op`   | flag   | off     | Ask ChanServ to re-op the bot when it loses ops         |
-| `invite`        | flag   | off     | Accept IRC INVITE from ops/masters and join the channel |
+| Setting         | Type   | Default | Description                                                           |
+| --------------- | ------ | ------- | --------------------------------------------------------------------- |
+| `enforce_modes` | flag   | off     | Re-apply channel modes and user modes if removed                      |
+| `channel_modes` | string | `""`    | Simple modes to enforce, e.g. `"imnpst"`                              |
+| `channel_key`   | string | `""`    | Channel key (`+k`) to enforce (empty = remove unauthorized keys)      |
+| `channel_limit` | int    | `0`     | Channel user limit (`+l`) to enforce (0 = remove unauthorized limits) |
+| `bitch`         | flag   | off     | Strip `+o`/`+h` from anyone without the required flag                 |
+| `auto_op`       | flag   | on      | Auto-op/halfop/voice flagged users on join                            |
+| `protect_ops`   | flag   | off     | Kick/kickban anyone who deops a flagged user                          |
+| `enforcebans`   | flag   | off     | Kick users whose hostmask matches a newly-set ban                     |
+| `revenge`       | flag   | off     | Kick/deop/kickban whoever kicks the bot                               |
+| `chanserv_op`   | flag   | off     | Ask ChanServ to re-op the bot when it loses ops                       |
+| `invite`        | flag   | off     | Accept IRC INVITE from ops/masters and join the channel               |
 
 **Example** — set up Rizon-style mode enforcement for `#mychan`:
 
@@ -82,6 +82,8 @@ When `enforce_modes` is on, the bot also enforces a set of channel modes. Three 
 | `channel_limit` | int    | Channel user limit (`+l`) — re-applied if removed or changed to a different value    |
 
 All three are independent. You can enforce just `+nt`, just `+k`, just `+l`, or any combination.
+
+When `enforce_modes` is on and `channel_key` is empty, any `+k` set by a user is treated as unauthorized and removed (using `-k <the_key>`). Likewise, when `channel_limit` is `0`, any `+l` is removed. This applies both reactively (the bot sees the mode change and reverts it) and proactively (on join, the bot queries the server for current modes and cleans up stale keys/limits).
 
 Nicks in `nodesynch_nicks` (default: `["ChanServ"]`) are always exempt as setters, so ChanServ mode grants are never overridden.
 
@@ -173,20 +175,20 @@ With `cycle_on_deop: true`, if the bot itself is deopped three times within 10 s
 
 ### Auto-op / mode enforcement
 
-| Key                     | Type     | Default         | Description                                                     |
-| ----------------------- | -------- | --------------- | --------------------------------------------------------------- |
-| `auto_op`               | boolean  | `true`          | Auto-op/halfop/voice flagged users on join                      |
-| `op_flags`              | string[] | `["n","m","o"]` | Flags that grant auto-op                                        |
-| `halfop_flags`          | string[] | `[]`            | Flags that grant auto-halfop (disabled by default)              |
-| `voice_flags`           | string[] | `["v"]`         | Flags that grant auto-voice (when no op/halfop flag matches)    |
-| `notify_on_fail`        | boolean  | `false`         | NOTICE the user if NickServ verification fails on join          |
-| `enforce_modes`         | boolean  | `false`         | Re-op/halfop/voice flagged users if externally deopped/devoiced |
-| `enforce_channel_modes` | string   | `""`            | Simple channel modes to enforce globally (e.g. `"imnpst"`)      |
-| `enforce_channel_key`   | string   | `""`            | Channel key (`+k`) to enforce globally (empty = disabled)       |
-| `enforce_channel_limit` | number   | `0`             | Channel user limit (`+l`) to enforce globally (0 = disabled)    |
-| `nodesynch_nicks`       | string[] | `["ChanServ"]`  | Nicks exempt from bitch mode and channel mode enforcement       |
-| `enforce_delay_ms`      | number   | `500`           | Delay before re-applying a mode, in milliseconds                |
-| `bitch`                 | boolean  | `false`         | Strip `+o`/`+h` from anyone without the appropriate flag        |
+| Key                     | Type     | Default         | Description                                                                                             |
+| ----------------------- | -------- | --------------- | ------------------------------------------------------------------------------------------------------- |
+| `auto_op`               | boolean  | `true`          | Auto-op/halfop/voice flagged users on join                                                              |
+| `op_flags`              | string[] | `["n","m","o"]` | Flags that grant auto-op                                                                                |
+| `halfop_flags`          | string[] | `[]`            | Flags that grant auto-halfop (disabled by default)                                                      |
+| `voice_flags`           | string[] | `["v"]`         | Flags that grant auto-voice (when no op/halfop flag matches)                                            |
+| `notify_on_fail`        | boolean  | `false`         | NOTICE the user if NickServ verification fails on join                                                  |
+| `enforce_modes`         | boolean  | `false`         | Re-op/halfop/voice flagged users if externally deopped/devoiced                                         |
+| `enforce_channel_modes` | string   | `""`            | Simple channel modes to enforce globally (e.g. `"imnpst"`)                                              |
+| `enforce_channel_key`   | string   | `""`            | Channel key (`+k`) to enforce globally (empty = remove unauthorized keys when enforce_modes is on)      |
+| `enforce_channel_limit` | number   | `0`             | Channel user limit (`+l`) to enforce globally (0 = remove unauthorized limits when enforce_modes is on) |
+| `nodesynch_nicks`       | string[] | `["ChanServ"]`  | Nicks exempt from bitch mode and channel mode enforcement                                               |
+| `enforce_delay_ms`      | number   | `500`           | Delay before re-applying a mode, in milliseconds                                                        |
+| `bitch`                 | boolean  | `false`         | Strip `+o`/`+h` from anyone without the appropriate flag                                                |
 
 ### Kick / ban defaults
 

@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Enforce unauthorized `+k`/`+l` removal**: when `enforce_modes` is on and no `channel_key`/`channel_limit` is configured, the bot now removes unauthorized `+k` and `+l` mode changes — both reactively (real-time) and proactively (on join via RPL_CHANNELMODEIS)
+- **Channel mode tracking in channel-state**: `ChannelInfo` now tracks the channel mode string, key, and limit; updated from `MODE` events and the `channel info` (RPL_CHANNELMODEIS) reply; new `channel:modesReady` event on the internal event bus
+- **`requestChannelModes(channel)`** on PluginAPI: sends `MODE #channel` to query the server; response populates channel-state and fires `channel:modesReady`
+- **`onModesReady(callback)`** on PluginAPI: register a callback for when channel modes are received from the server; auto-cleaned on plugin unload
+- **Proactive mode sync on join**: bot sends `MODE #channel` on join; `syncChannelModes()` chains to `channel:modesReady` instead of a timer, guaranteeing channel-state is populated before enforcement runs
+
+### Changed
+
+- `syncChannelModes()` now removes unauthorized simple modes, keys, and limits (previously only added missing ones)
+- `channel_key` and `channel_limit` setting descriptions updated to clarify that empty/zero means "remove unauthorized" when `enforce_modes` is on
+
 ## [0.1.0] - 2026-03-29
 
 ### Added

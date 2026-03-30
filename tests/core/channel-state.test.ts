@@ -1047,4 +1047,179 @@ describe('ChannelState', () => {
       }).not.toThrow();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Channel mode tracking (modes, key, limit)
+  // -------------------------------------------------------------------------
+
+  describe('channel mode tracking', () => {
+    it('populates modes, key, and limit from channel info event', () => {
+      client.simulateEvent('join', { nick: 'Bot', ident: 'b', hostname: 'h', channel: '#test' });
+      client.simulateEvent('channel info', {
+        channel: '#test',
+        modes: [
+          { mode: '+n', param: null },
+          { mode: '+t', param: null },
+          { mode: '+s', param: null },
+          { mode: '+k', param: 'secret' },
+          { mode: '+l', param: '50' },
+        ],
+        raw_modes: '+ntskl',
+        raw_params: ['secret', '50'],
+      });
+
+      const ch = state.getChannel('#test');
+      expect(ch).toBeDefined();
+      expect(ch!.modes).toBe('ntskl');
+      expect(ch!.key).toBe('secret');
+      expect(ch!.limit).toBe(50);
+    });
+
+    it('emits channel:modesReady after processing channel info', () => {
+      let readyChannel = '';
+      eventBus.on('channel:modesReady', (ch) => {
+        readyChannel = ch;
+      });
+
+      client.simulateEvent('join', { nick: 'Bot', ident: 'b', hostname: 'h', channel: '#test' });
+      client.simulateEvent('channel info', {
+        channel: '#test',
+        modes: [{ mode: '+n', param: null }],
+        raw_modes: '+n',
+        raw_params: [],
+      });
+
+      expect(readyChannel).toBe('#test');
+    });
+
+    it('ignores channel info events without modes array (e.g. RPL_CREATIONTIME)', () => {
+      client.simulateEvent('join', { nick: 'Bot', ident: 'b', hostname: 'h', channel: '#test' });
+      // RPL_CREATIONTIME sends channel info with created_at instead of modes
+      client.simulateEvent('channel info', {
+        channel: '#test',
+        created_at: 1234567890,
+      });
+
+      const ch = state.getChannel('#test');
+      expect(ch).toBeDefined();
+      expect(ch!.modes).toBe('');
+      expect(ch!.key).toBe('');
+      expect(ch!.limit).toBe(0);
+    });
+
+    it('tracks +k / -k mode changes', () => {
+      client.simulateEvent('join', { nick: 'Bot', ident: 'b', hostname: 'h', channel: '#test' });
+
+      // Set key
+      client.simulateEvent('mode', {
+        target: '#test',
+        modes: [{ mode: '+k', param: 'newkey' }],
+      });
+      let ch = state.getChannel('#test')!;
+      expect(ch.key).toBe('newkey');
+      expect(ch.modes).toContain('k');
+
+      // Change key (already has 'k' in modes — should not duplicate)
+      client.simulateEvent('mode', {
+        target: '#test',
+        modes: [{ mode: '+k', param: 'changed' }],
+      });
+      ch = state.getChannel('#test')!;
+      expect(ch.key).toBe('changed');
+      expect(ch.modes.split('k').length - 1).toBe(1);
+
+      // Remove key
+      client.simulateEvent('mode', {
+        target: '#test',
+        modes: [{ mode: '-k', param: 'changed' }],
+      });
+      ch = state.getChannel('#test')!;
+      expect(ch.key).toBe('');
+      expect(ch.modes).not.toContain('k');
+    });
+
+    it('tracks +l / -l mode changes', () => {
+      client.simulateEvent('join', { nick: 'Bot', ident: 'b', hostname: 'h', channel: '#test' });
+
+      // Set limit
+      client.simulateEvent('mode', {
+        target: '#test',
+        modes: [{ mode: '+l', param: '25' }],
+      });
+      let ch = state.getChannel('#test')!;
+      expect(ch.limit).toBe(25);
+      expect(ch.modes).toContain('l');
+
+      // Change limit (already has 'l' in modes — should not duplicate)
+      client.simulateEvent('mode', {
+        target: '#test',
+        modes: [{ mode: '+l', param: '50' }],
+      });
+      ch = state.getChannel('#test')!;
+      expect(ch.limit).toBe(50);
+      expect(ch.modes.split('l').length - 1).toBe(1);
+
+      // Remove limit
+      client.simulateEvent('mode', {
+        target: '#test',
+        modes: [{ mode: '-l' }],
+      });
+      ch = state.getChannel('#test')!;
+      expect(ch.limit).toBe(0);
+      expect(ch.modes).not.toContain('l');
+    });
+
+    it('tracks simple channel mode changes (+i, -i, +s, -s, etc.)', () => {
+      client.simulateEvent('join', { nick: 'Bot', ident: 'b', hostname: 'h', channel: '#test' });
+
+      client.simulateEvent('mode', {
+        target: '#test',
+        modes: [{ mode: '+i', param: '' }],
+      });
+      let ch = state.getChannel('#test')!;
+      expect(ch.modes).toContain('i');
+
+      client.simulateEvent('mode', {
+        target: '#test',
+        modes: [{ mode: '+s', param: '' }],
+      });
+      ch = state.getChannel('#test')!;
+      expect(ch.modes).toContain('s');
+      expect(ch.modes).toContain('i');
+
+      client.simulateEvent('mode', {
+        target: '#test',
+        modes: [{ mode: '-i', param: '' }],
+      });
+      ch = state.getChannel('#test')!;
+      expect(ch.modes).not.toContain('i');
+      expect(ch.modes).toContain('s');
+    });
+
+    it('does not duplicate mode chars when set twice', () => {
+      client.simulateEvent('join', { nick: 'Bot', ident: 'b', hostname: 'h', channel: '#test' });
+
+      client.simulateEvent('mode', {
+        target: '#test',
+        modes: [{ mode: '+n', param: '' }],
+      });
+      client.simulateEvent('mode', {
+        target: '#test',
+        modes: [{ mode: '+n', param: '' }],
+      });
+      const ch = state.getChannel('#test')!;
+      expect(ch.modes.split('n').length - 1).toBe(1); // exactly one 'n'
+    });
+
+    it('ignores ban/except/invite list modes in ch.modes', () => {
+      client.simulateEvent('join', { nick: 'Bot', ident: 'b', hostname: 'h', channel: '#test' });
+
+      client.simulateEvent('mode', {
+        target: '#test',
+        modes: [{ mode: '+b', param: '*!*@evil.host' }],
+      });
+      const ch = state.getChannel('#test')!;
+      expect(ch.modes).not.toContain('b');
+    });
+  });
 });

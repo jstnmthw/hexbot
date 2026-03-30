@@ -30,7 +30,9 @@ export interface UserInfo {
 export interface ChannelInfo {
   name: string;
   topic: string;
-  modes: string;
+  modes: string; // channel mode chars (e.g. 'ntsk'), updated from MODE events and RPL_CHANNELMODEIS
+  key: string; // current channel key ('' if none)
+  limit: number; // current channel user limit (0 if none)
   users: Map<string, UserInfo>;
 }
 
@@ -70,6 +72,8 @@ export class ChannelState {
     this.listen('userlist', this.onUserlist.bind(this));
     this.listen('wholist', this.onWholist.bind(this));
     this.listen('topic', this.onTopic.bind(this));
+    // RPL_CHANNELMODEIS (324): server response to MODE #channel query
+    this.listen('channel info', this.onChannelInfo.bind(this));
     // IRCv3: account-notify (fires when a user identifies or deidentifies)
     this.listen('account', this.onAccount.bind(this));
     // IRCv3: chghost (fires when a user's ident/hostname changes — requires enable_chghost: true)
@@ -239,7 +243,7 @@ export class ChannelState {
       const mode = m.mode ?? '';
       const param = m.param ? String(m.param) : '';
 
-      // User modes: +o, -o, +v, -v, etc. have a nick as param
+      // User prefix modes: +o, -o, +v, -v, etc. have a nick as param
       if (
         param &&
         (mode === '+o' ||
@@ -264,6 +268,39 @@ export class ChannelState {
             user.modes = user.modes.filter((m) => m !== modeChar);
           }
           this.eventBus.emit('channel:modeChanged', target, param, mode);
+        }
+        continue;
+      }
+
+      // Channel modes: update ch.modes, ch.key, ch.limit
+      const adding = mode.charAt(0) === '+';
+      const modeChar = mode.charAt(1);
+
+      if (modeChar === 'k') {
+        if (adding) {
+          ch.key = param;
+          if (!ch.modes.includes('k')) ch.modes += 'k';
+        } else {
+          ch.key = '';
+          ch.modes = ch.modes.replace('k', '');
+        }
+      } else if (modeChar === 'l') {
+        if (adding) {
+          /* v8 ignore next -- || 0: parseInt on a valid limit string never returns NaN */
+          ch.limit = parseInt(param, 10) || 0;
+          if (!ch.modes.includes('l')) ch.modes += 'l';
+        } else {
+          ch.limit = 0;
+          ch.modes = ch.modes.replace('l', '');
+        }
+      } else if (modeChar === 'b' || modeChar === 'e' || modeChar === 'I') {
+        // Ban/except/invite list modes — don't track in ch.modes (they're lists, not flags)
+      } else {
+        // Simple channel mode flag (i, m, n, p, s, t, etc.)
+        if (adding) {
+          if (!ch.modes.includes(modeChar)) ch.modes += modeChar;
+        } else {
+          ch.modes = ch.modes.replace(modeChar, '');
         }
       }
     }
@@ -336,6 +373,43 @@ export class ChannelState {
     ch.topic = topic;
   }
 
+  /**
+   * RPL_CHANNELMODEIS (324): server response to MODE #channel query.
+   * Populates ch.modes, ch.key, and ch.limit from the full channel mode state.
+   * irc-framework emits { channel, modes: [{mode, param}], raw_modes, raw_params }.
+   */
+  private onChannelInfo(event: Record<string, unknown>): void {
+    /* v8 ignore next -- ?? fallback: irc-framework always provides channel */
+    const channel = String(event.channel ?? '');
+    // RPL_CREATIONTIME and RPL_CHANNEL_URL also emit 'channel info' without modes
+    if (!isModeArray(event.modes)) return;
+
+    const ch = this.ensureChannel(channel);
+    let modeChars = '';
+    let key = '';
+    let limit = 0;
+
+    for (const m of event.modes) {
+      /* v8 ignore next -- ?? fallback: irc-framework always provides mode */
+      const mode = String(m.mode ?? '');
+      const modeChar = mode.charAt(1);
+      modeChars += modeChar;
+      /* v8 ignore next -- ?? fallback: param always present for +k in RPL_CHANNELMODEIS */
+      if (modeChar === 'k') key = String(m.param ?? '');
+      /* v8 ignore next -- ?? fallback: param always present for +l in RPL_CHANNELMODEIS */
+      if (modeChar === 'l') limit = parseInt(String(m.param ?? '0'), 10) || 0;
+    }
+
+    ch.modes = modeChars;
+    ch.key = key;
+    ch.limit = limit;
+
+    this.eventBus.emit('channel:modesReady', channel);
+    this.logger?.debug(
+      `channel info: ${channel} modes=${modeChars} key=${key || '(none)'} limit=${limit || '(none)'}`,
+    );
+  }
+
   /** IRCv3 account-notify: fires when a user's identification status changes. */
   private onAccount(event: Record<string, unknown>): void {
     const nick = String(event.nick ?? '');
@@ -387,7 +461,7 @@ export class ChannelState {
     const lower = ircLower(name, this.casemapping);
     let ch = this.channels.get(lower);
     if (!ch) {
-      ch = { name, topic: '', modes: '', users: new Map() };
+      ch = { name, topic: '', modes: '', key: '', limit: 0, users: new Map() };
       this.channels.set(lower, ch);
     }
     return ch;

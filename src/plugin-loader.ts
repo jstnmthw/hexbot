@@ -122,6 +122,7 @@ export class PluginLoader {
   private rootLogger: Logger | null;
   private getCasemapping: () => Casemapping;
   private getServerSupports: () => Record<string, string>;
+  private modesReadyListeners: Map<string, Array<(channel: string) => void>> = new Map();
 
   constructor(deps: PluginLoaderDeps) {
     this.pluginDir = resolve(deps.pluginDir);
@@ -322,6 +323,13 @@ export class PluginLoader {
     this.channelSettings?.unregister(pluginName);
     this.channelSettings?.offChange(pluginName);
 
+    // Remove modesReady listeners
+    const modesListeners = this.modesReadyListeners.get(pluginName);
+    if (modesListeners) {
+      for (const fn of modesListeners) this.eventBus.off('channel:modesReady', fn);
+      this.modesReadyListeners.delete(pluginName);
+    }
+
     // Remove from loaded map
     this.loaded.delete(pluginName);
 
@@ -405,7 +413,12 @@ export class PluginLoader {
         dispatcher.unbind(type, mask, handler);
       },
       ...createPluginIrcActionsApi(this.ircClient, this.messageQueue, this.ircCommands),
-      ...createPluginChannelStateApi(this.channelState),
+      ...createPluginChannelStateApi(
+        this.channelState,
+        this.eventBus,
+        pluginId,
+        this.modesReadyListeners,
+      ),
       permissions: createPluginPermissionsApi(this.permissions),
       services: createPluginServicesApi(this.services),
       db: createPluginDbApi(this.db, pluginId),
@@ -694,6 +707,7 @@ function createPluginIrcActionsApi(
   | 'kick'
   | 'ban'
   | 'mode'
+  | 'requestChannelModes'
   | 'topic'
   | 'invite'
   | 'join'
@@ -751,6 +765,9 @@ function createPluginIrcActionsApi(
     mode(channel: string, modes: string, ...params: string[]): void {
       ircCommands?.mode(channel, modes, ...params);
     },
+    requestChannelModes(channel: string): void {
+      ircCommands?.requestChannelModes(channel);
+    },
     topic(channel: string, text: string): void {
       ircCommands?.topic(channel, text);
     },
@@ -773,8 +790,18 @@ function createPluginIrcActionsApi(
 
 function createPluginChannelStateApi(
   channelState: ChannelState | null | undefined,
-): Pick<PluginAPI, 'getChannel' | 'getUsers' | 'getUserHostmask'> {
+  eventBus: BotEventBus,
+  pluginId: string,
+  modesReadyListeners: Map<string, Array<(channel: string) => void>>,
+): Pick<PluginAPI, 'getChannel' | 'getUsers' | 'getUserHostmask' | 'onModesReady'> {
   return {
+    onModesReady(callback: (channel: string) => void): void {
+      const wrappedListener = (...args: unknown[]) => callback(args[0] as string);
+      eventBus.on('channel:modesReady', wrappedListener);
+      const list = modesReadyListeners.get(pluginId) ?? [];
+      list.push(wrappedListener);
+      modesReadyListeners.set(pluginId, list);
+    },
     getChannel(name: string) {
       if (!channelState) return undefined;
       const ch = channelState.getChannel(name);
@@ -791,7 +818,14 @@ function createPluginChannelStateApi(
           accountName: u.accountName,
         });
       }
-      return { name: ch.name, topic: ch.topic, modes: ch.modes, users };
+      return {
+        name: ch.name,
+        topic: ch.topic,
+        modes: ch.modes,
+        key: ch.key,
+        limit: ch.limit,
+        users,
+      };
     },
     getUsers(channel: string): ChannelUser[] {
       if (!channelState) return [];

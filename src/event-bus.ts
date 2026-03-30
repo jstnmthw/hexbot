@@ -20,6 +20,7 @@ export interface BotEvents {
   'channel:userJoined': [channel: string, nick: string];
   'channel:userLeft': [channel: string, nick: string];
   'channel:modeChanged': [channel: string, nick: string, mode: string];
+  'channel:modesReady': [channel: string];
 }
 
 // ---------------------------------------------------------------------------

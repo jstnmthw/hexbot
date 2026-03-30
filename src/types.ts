@@ -162,6 +162,8 @@ export interface PluginAPI {
   kick(channel: string, nick: string, reason?: string): void;
   ban(channel: string, mask: string): void;
   mode(channel: string, modes: string, ...params: string[]): void;
+  /** Request the current channel modes from the server (triggers RPL_CHANNELMODEIS / channel:modesReady). */
+  requestChannelModes(channel: string): void;
   topic(channel: string, text: string): void;
   /** Invite a user to a channel. */
   invite(channel: string, nick: string): void;
@@ -169,6 +171,8 @@ export interface PluginAPI {
   changeNick(nick: string): void;
 
   // Channel state
+  /** Register a callback for when channel modes are received from the server (RPL_CHANNELMODEIS). Auto-cleaned on unload. */
+  onModesReady(callback: (channel: string) => void): void;
   getChannel(name: string): ChannelState | undefined;
   getUsers(channel: string): ChannelUser[];
   getUserHostmask(channel: string, nick: string): string | undefined;
@@ -251,8 +255,12 @@ export interface ChannelUser {
 export interface ChannelState {
   name: string;
   topic: string;
-  /** Channel modes as a string (e.g. `"+mnt"`). */
+  /** Channel mode chars (e.g. `"mntsk"`). */
   modes: string;
+  /** Current channel key (empty string if none). */
+  key: string;
+  /** Current channel user limit (0 if none). */
+  limit: number;
   /** All users currently in the channel, keyed by lowercased nick. */
   users: Map<string, ChannelUser>;
 }

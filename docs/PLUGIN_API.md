@@ -209,6 +209,10 @@ Send an arbitrary MODE command. Respects the server's MODES limit by batching au
 api.mode('#channel', '+oo', 'nick1', 'nick2');
 ```
 
+#### `requestChannelModes(channel)`
+
+Request the current channel modes from the server (`MODE #channel` with no args). The server replies with RPL_CHANNELMODEIS (324), which populates channel-state (`ch.modes`, `ch.key`, `ch.limit`) and fires `channel:modesReady`. This is automatically sent on bot join.
+
 ---
 
 ### Channel state
@@ -221,7 +225,9 @@ Get the state for a channel the bot is in.
 interface ChannelState {
   name: string;
   topic: string;
-  modes: string;
+  modes: string; // channel mode chars, e.g. "ntsk"
+  key: string; // current channel key ('' if none)
+  limit: number; // current channel user limit (0 if none)
   users: Map<string, ChannelUser>;
 }
 ```
@@ -243,6 +249,19 @@ interface ChannelUser {
 #### `getUserHostmask(channel, nick): string | undefined`
 
 Get the full `nick!ident@host` hostmask for a user in a channel. Returns `undefined` if the user is not found.
+
+#### `onModesReady(callback)`
+
+Register a callback that fires when channel modes are received from the server (RPL_CHANNELMODEIS). Callbacks are automatically cleaned up on plugin unload.
+
+```typescript
+api.onModesReady((channel: string) => {
+  const ch = api.getChannel(channel);
+  if (ch) {
+    api.log(`${channel} modes=${ch.modes} key=${ch.key} limit=${ch.limit}`);
+  }
+});
+```
 
 ---
 

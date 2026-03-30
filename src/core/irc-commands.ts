@@ -125,6 +125,11 @@ export class IRCCommands {
     this.sendMode(channel, '+q', mask);
   }
 
+  /** Request the current channel modes from the server (triggers RPL_CHANNELMODEIS). */
+  requestChannelModes(channel: string): void {
+    this.client.raw(`MODE ${sanitize(channel)}`);
+  }
+
   /**
    * Raw mode change. Respects ISUPPORT MODES limit by batching.
    * @param channel - Target channel

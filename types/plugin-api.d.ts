@@ -490,6 +490,13 @@ export interface PluginAPI {
   mode(channel: string, modes: string, ...params: string[]): void;
 
   /**
+   * Request the current channel modes from the server.
+   * Triggers RPL_CHANNELMODEIS (324) which populates channel-state and emits `channel:modesReady`.
+   * @param channel Channel to query.
+   */
+  requestChannelModes(channel: string): void;
+
+  /**
    * Set the channel topic.
    * @param text New topic text.
    */
@@ -511,6 +518,13 @@ export interface PluginAPI {
   // -------------------------------------------------------------------------
   // Channel state
   // -------------------------------------------------------------------------
+
+  /**
+   * Register a callback for when channel modes are received from the server (RPL_CHANNELMODEIS).
+   * Fires after `requestChannelModes()` reply arrives. Auto-cleaned on plugin unload.
+   * @param callback Called with the channel name when its mode state is ready.
+   */
+  onModesReady(callback: (channel: string) => void): void;
 
   /**
    * Get the current state of a channel.
