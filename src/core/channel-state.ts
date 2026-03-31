@@ -98,6 +98,42 @@ export class ChannelState {
     return this.channels.get(ircLower(name, this.casemapping));
   }
 
+  /** Return all tracked channels (used by bot-link sync). */
+  getAllChannels(): ChannelInfo[] {
+    return Array.from(this.channels.values());
+  }
+
+  /**
+   * Inject a full channel state snapshot from a bot-link CHAN sync frame.
+   * Creates or replaces the channel and all its users.
+   */
+  injectChannelSync(data: {
+    channel: string;
+    topic: string;
+    modes: string;
+    key?: string;
+    limit?: number;
+    users: Array<{ nick: string; ident: string; hostname: string; modes: string[] }>;
+  }): void {
+    const ch = this.ensureChannel(data.channel);
+    ch.topic = data.topic;
+    ch.modes = data.modes;
+    ch.key = data.key ?? '';
+    ch.limit = data.limit ?? 0;
+    ch.users.clear();
+
+    for (const u of data.users) {
+      ch.users.set(ircLower(u.nick, this.casemapping), {
+        nick: u.nick,
+        ident: u.ident,
+        hostname: u.hostname,
+        hostmask: `${u.nick}!${u.ident}@${u.hostname}`,
+        modes: [...u.modes],
+        joinedAt: new Date(),
+      });
+    }
+  }
+
   getUser(channel: string, nick: string): UserInfo | undefined {
     const ch = this.channels.get(ircLower(channel, this.casemapping));
     if (!ch) return undefined;

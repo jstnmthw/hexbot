@@ -405,6 +405,24 @@ export interface DccConfig {
   nickserv_verify: boolean;
 }
 
+/** Bot-to-bot link settings. */
+export interface BotlinkConfig {
+  enabled: boolean;
+  role: 'hub' | 'leaf';
+  botname: string;
+  hub?: { host: string; port: number };
+  listen?: { host: string; port: number };
+  password: string;
+  reconnect_delay_ms?: number;
+  reconnect_max_delay_ms?: number;
+  max_leaves?: number;
+  sync_permissions?: boolean;
+  sync_channel_state?: boolean;
+  sync_bans?: boolean;
+  ping_interval_ms?: number;
+  link_timeout_ms?: number;
+}
+
 /** Shape for config/bot.json. */
 export interface BotConfig {
   irc: IrcConfig;
@@ -418,6 +436,7 @@ export interface BotConfig {
   flood?: FloodConfig;
   proxy?: ProxyConfig;
   dcc?: DccConfig;
+  botlink?: BotlinkConfig;
   quit_message?: string;
   /** Interval in ms for the periodic channel presence check (rejoin missing channels). Default: 30000. Set to 0 to disable. */
   channel_rejoin_interval_ms?: number;

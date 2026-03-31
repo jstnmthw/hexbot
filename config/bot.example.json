@@ -53,6 +53,28 @@
     "host": "127.0.0.1",
     "port": 9050
   },
+  "botlink": {
+    "enabled": false,
+    "role": "leaf",
+    "botname": "mybot",
+    "hub": {
+      "host": "192.168.1.10",
+      "port": 5051
+    },
+    "listen": {
+      "host": "0.0.0.0",
+      "port": 5051
+    },
+    "password": "changeme-shared-secret",
+    "reconnect_delay_ms": 5000,
+    "reconnect_max_delay_ms": 60000,
+    "max_leaves": 10,
+    "sync_permissions": true,
+    "sync_channel_state": true,
+    "sync_bans": true,
+    "ping_interval_ms": 30000,
+    "link_timeout_ms": 90000
+  },
   "quit_message": "HexBot",
   "_comment_channel_rejoin": "channel_rejoin_interval_ms: how often (ms) to check for missing channels and attempt rejoin. Default 30000. Set to 0 to disable.",
   "channel_rejoin_interval_ms": 30000

@@ -605,6 +605,7 @@ function makeMockManagerForSession(
     broadcast: vi.fn(),
     removeSession: vi.fn(),
     announce: vi.fn(),
+    notifyPartyPart: vi.fn(),
   } as unknown as DCCManager;
 }
 
@@ -894,5 +895,202 @@ describe('DCCSession', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DCCSession — relay mode
+// ---------------------------------------------------------------------------
+
+describe('DCCSession relay mode', () => {
+  it('enterRelay forwards input to callback', async () => {
+    const { socket, duplex } = makeMockSocket();
+    const mgr = makeMockManagerForSession();
+    const session = buildSession(socket, { manager: mgr });
+    session.start('1.0.0', 'hexbot');
+
+    const relayed: string[] = [];
+    session.enterRelay('leaf1', (line) => relayed.push(line));
+
+    expect(session.isRelaying).toBe(true);
+    expect(session.relayTarget).toBe('leaf1');
+
+    duplex.push('hello world\r\n');
+    await flushAsync();
+
+    expect(relayed).toEqual(['hello world']);
+    // broadcast should NOT be called — we're in relay mode
+    expect(mgr.broadcast).not.toHaveBeenCalled();
+  });
+
+  it('.relay end exits relay mode', async () => {
+    const { socket, written, duplex } = makeMockSocket();
+    const mgr = makeMockManagerForSession();
+    (mgr as unknown as Record<string, unknown>).getBotName = vi.fn().mockReturnValue('mybot');
+    (mgr as unknown as Record<string, unknown>).onRelayEnd = vi.fn();
+    const session = buildSession(socket, { manager: mgr });
+    session.start('1.0.0', 'hexbot');
+
+    session.enterRelay('leaf1', () => {});
+    duplex.push('.relay end\r\n');
+    await flushAsync();
+
+    expect(session.isRelaying).toBe(false);
+    expect(session.relayTarget).toBeNull();
+    expect(written.join('')).toContain('Relay ended');
+  });
+
+  it('.quit exits relay mode', async () => {
+    const { socket, written, duplex } = makeMockSocket();
+    const mgr = makeMockManagerForSession();
+    (mgr as unknown as Record<string, unknown>).getBotName = vi.fn().mockReturnValue('mybot');
+    (mgr as unknown as Record<string, unknown>).onRelayEnd = vi.fn();
+    const session = buildSession(socket, { manager: mgr });
+    session.start('1.0.0', 'hexbot');
+
+    session.enterRelay('leaf1', () => {});
+    duplex.push('.quit\r\n');
+    await flushAsync();
+
+    expect(session.isRelaying).toBe(false);
+    expect(written.join('')).toContain('Relay ended');
+  });
+
+  it('exitRelay returns to normal mode', async () => {
+    const { socket, duplex } = makeMockSocket();
+    const mgr = makeMockManagerForSession();
+    const session = buildSession(socket, { manager: mgr });
+    session.start('1.0.0', 'hexbot');
+
+    session.enterRelay('leaf1', () => {});
+    session.exitRelay();
+
+    expect(session.isRelaying).toBe(false);
+    expect(session.relayTarget).toBeNull();
+
+    // Normal input should now go to broadcast
+    duplex.push('normal text\r\n');
+    await flushAsync();
+    expect(mgr.broadcast).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DCCManager — new methods
+// ---------------------------------------------------------------------------
+
+describe('DCCManager new methods', () => {
+  it('getSession returns undefined for unknown nick', () => {
+    const client = {
+      notice: vi.fn(),
+      ctcpRequest: vi.fn(),
+      ctcpResponse: vi.fn(),
+      on: vi.fn(),
+      removeListener: vi.fn(),
+    };
+    const mgr = new DCCManager({
+      client: client as unknown as import('../../src/core/dcc').DCCIRCClient,
+      dispatcher: {
+        bind: vi.fn(),
+        unbindAll: vi.fn(),
+      } as unknown as import('../../src/dispatcher').EventDispatcher,
+      permissions: {
+        findByHostmask: vi.fn(),
+        checkFlags: vi.fn(),
+      } as unknown as import('../../src/core/permissions').Permissions,
+      services: { verifyUser: vi.fn() } as unknown as import('../../src/core/services').Services,
+      commandHandler: makeCommandHandler(),
+      config: {
+        enabled: true,
+        ip: '127.0.0.1',
+        port_range: [50000, 50010] as [number, number],
+        require_flags: 'm',
+        max_sessions: 5,
+        idle_timeout_ms: 300000,
+        nickserv_verify: false,
+      },
+      version: '1.0.0',
+      botNick: 'hexbot',
+    });
+    expect(mgr.getSession('nobody')).toBeUndefined();
+    expect(mgr.getBotName()).toBe('hexbot');
+  });
+
+  it('onPartyChat callback fires on broadcast', () => {
+    const client = {
+      notice: vi.fn(),
+      ctcpRequest: vi.fn(),
+      ctcpResponse: vi.fn(),
+      on: vi.fn(),
+      removeListener: vi.fn(),
+    };
+    const mgr = new DCCManager({
+      client: client as unknown as import('../../src/core/dcc').DCCIRCClient,
+      dispatcher: {
+        bind: vi.fn(),
+        unbindAll: vi.fn(),
+      } as unknown as import('../../src/dispatcher').EventDispatcher,
+      permissions: {
+        findByHostmask: vi.fn(),
+        checkFlags: vi.fn(),
+      } as unknown as import('../../src/core/permissions').Permissions,
+      services: { verifyUser: vi.fn() } as unknown as import('../../src/core/services').Services,
+      commandHandler: makeCommandHandler(),
+      config: {
+        enabled: true,
+        ip: '127.0.0.1',
+        port_range: [50000, 50010] as [number, number],
+        require_flags: 'm',
+        max_sessions: 5,
+        idle_timeout_ms: 300000,
+        nickserv_verify: false,
+      },
+      version: '1.0.0',
+      botNick: 'hexbot',
+    });
+
+    const chats: string[] = [];
+    mgr.onPartyChat = (handle, msg) => chats.push(`${handle}: ${msg}`);
+    mgr.broadcast('admin', 'hello');
+    expect(chats).toEqual(['admin: hello']);
+  });
+
+  it('notifyPartyPart calls onPartyPart callback', () => {
+    const client = {
+      notice: vi.fn(),
+      ctcpRequest: vi.fn(),
+      ctcpResponse: vi.fn(),
+      on: vi.fn(),
+      removeListener: vi.fn(),
+    };
+    const mgr = new DCCManager({
+      client: client as unknown as import('../../src/core/dcc').DCCIRCClient,
+      dispatcher: {
+        bind: vi.fn(),
+        unbindAll: vi.fn(),
+      } as unknown as import('../../src/dispatcher').EventDispatcher,
+      permissions: {
+        findByHostmask: vi.fn(),
+        checkFlags: vi.fn(),
+      } as unknown as import('../../src/core/permissions').Permissions,
+      services: { verifyUser: vi.fn() } as unknown as import('../../src/core/services').Services,
+      commandHandler: makeCommandHandler(),
+      config: {
+        enabled: true,
+        ip: '127.0.0.1',
+        port_range: [50000, 50010] as [number, number],
+        require_flags: 'm',
+        max_sessions: 5,
+        idle_timeout_ms: 300000,
+        nickserv_verify: false,
+      },
+      version: '1.0.0',
+      botNick: 'hexbot',
+    });
+
+    const parts: string[] = [];
+    mgr.onPartyPart = (handle, nick) => parts.push(`${handle}:${nick}`);
+    mgr.notifyPartyPart('admin', 'AdminNick');
+    expect(parts).toEqual(['admin:AdminNick']);
   });
 });

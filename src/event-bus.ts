@@ -17,10 +17,18 @@ export interface BotEvents {
   'mod:kick': [channel: string, nick: string, by: string, reason: string];
   'mod:ban': [channel: string, mask: string, by: string];
   'user:identified': [nick: string, handle: string];
+  'user:added': [handle: string];
+  'user:removed': [handle: string];
+  'user:flagsChanged': [handle: string, globalFlags: string, channelFlags: Record<string, string>];
+  'user:hostmaskAdded': [handle: string, hostmask: string];
+  'user:hostmaskRemoved': [handle: string, hostmask: string];
   'channel:userJoined': [channel: string, nick: string];
   'channel:userLeft': [channel: string, nick: string];
   'channel:modeChanged': [channel: string, nick: string, mode: string];
   'channel:modesReady': [channel: string];
+  'botlink:connected': [botname: string];
+  'botlink:disconnected': [botname: string, reason: string];
+  'botlink:syncComplete': [botname: string];
 }
 
 // ---------------------------------------------------------------------------

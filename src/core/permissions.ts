@@ -1,6 +1,7 @@
 // HexBot — Permissions system
 // Hostmask-based identity, n/m/o/v flags with per-channel overrides.
 import type { BotDatabase } from '../database';
+import type { BotEventBus } from '../event-bus';
 import type { Logger } from '../logger';
 import type { HandlerContext, UserRecord } from '../types';
 import { type Casemapping, ircLower, wildcardMatch } from '../utils/wildcard';
@@ -26,11 +27,13 @@ export class Permissions {
   private users: Map<string, UserRecord> = new Map();
   private db: BotDatabase | null;
   private logger: Logger | null;
+  private eventBus: BotEventBus | null;
   private casemapping: Casemapping = 'rfc1459';
 
-  constructor(db?: BotDatabase | null, logger?: Logger | null) {
+  constructor(db?: BotDatabase | null, logger?: Logger | null, eventBus?: BotEventBus | null) {
     this.db = db ?? null;
     this.logger = logger?.child('permissions') ?? null;
+    this.eventBus = eventBus ?? null;
   }
 
   setCasemapping(cm: Casemapping): void {
@@ -62,6 +65,28 @@ export class Permissions {
 
     const by = source ?? 'unknown';
     this.logger?.info(`User added: ${handle} (${hostmask}, flags: ${flags}) by ${by}`);
+    this.eventBus?.emit('user:added', handle);
+  }
+
+  /**
+   * Add or replace a user from a bot-link sync frame.
+   * Unlike addUser(), does not throw if the user already exists.
+   */
+  syncUser(
+    handle: string,
+    hostmasks: string[],
+    globalFlags: string,
+    channelFlags: Record<string, string>,
+    source?: string,
+  ): void {
+    const lower = handle.toLowerCase();
+    const flags = this.normalizeFlags(globalFlags);
+    this.users.set(lower, { handle, hostmasks, global: flags, channels: channelFlags });
+    this.persist();
+
+    /* v8 ignore next */
+    const by = source ?? 'botlink';
+    this.logger?.info(`User synced: ${handle} (flags: ${flags}) from ${by}`);
   }
 
   /** Remove a user by handle. */
@@ -75,6 +100,7 @@ export class Permissions {
 
     const by = source ?? 'unknown';
     this.logger?.info(`User removed: ${handle} by ${by}`);
+    this.eventBus?.emit('user:removed', handle);
   }
 
   /** Add an additional hostmask to an existing user. */
@@ -93,6 +119,7 @@ export class Permissions {
 
     const by = source ?? 'unknown';
     this.logger?.info(`Hostmask added to ${handle}: ${hostmask} by ${by}`);
+    this.eventBus?.emit('user:hostmaskAdded', handle, hostmask);
   }
 
   /** Remove a hostmask from a user. */
@@ -112,6 +139,7 @@ export class Permissions {
 
     const by = source ?? 'unknown';
     this.logger?.info(`Hostmask removed from ${handle}: ${hostmask} by ${by}`);
+    this.eventBus?.emit('user:hostmaskRemoved', handle, hostmask);
   }
 
   /** Set global flags for a user (replaces existing). */
@@ -126,6 +154,7 @@ export class Permissions {
 
     const by = source ?? 'unknown';
     this.logger?.info(`Global flags for ${handle} set to "${record.global}" by ${by}`);
+    this.eventBus?.emit('user:flagsChanged', handle, record.global, record.channels);
   }
 
   /** Set per-channel flags for a user (replaces existing for that channel). */
@@ -146,6 +175,7 @@ export class Permissions {
 
     const by = source ?? 'unknown';
     this.logger?.info(`Channel flags for ${handle} in ${channel} set to "${normalized}" by ${by}`);
+    this.eventBus?.emit('user:flagsChanged', handle, record.global, record.channels);
   }
 
   // -------------------------------------------------------------------------
@@ -232,6 +262,21 @@ export class Permissions {
       }
     }
 
+    return false;
+  }
+
+  /**
+   * Check flags by user handle (for bot-link command relay).
+   * Skips hostmask lookup — the user is already identified by handle.
+   */
+  checkFlagsByHandle(requiredFlags: string, handle: string, channel: string | null): boolean {
+    if (requiredFlags === '-' || requiredFlags === '') return true;
+    const record = this.getUser(handle);
+    if (!record) return false;
+    const alternatives = requiredFlags.split('|').map((s) => s.trim().replace(/^\+/, ''));
+    for (const required of alternatives) {
+      if (this.userHasFlags(record, required, channel)) return true;
+    }
     return false;
   }
 

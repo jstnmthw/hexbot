@@ -18,6 +18,7 @@ export function registerPermissionCommands(
       description: 'Add a user to the bot',
       usage: '.adduser <handle> <hostmask> <flags>',
       category: 'permissions',
+      relayToHub: true,
     },
     (args, ctx) => {
       const parts = args.split(/\s+/);
@@ -40,6 +41,7 @@ export function registerPermissionCommands(
       description: 'Remove a user from the bot',
       usage: '.deluser <handle>',
       category: 'permissions',
+      relayToHub: true,
     },
     (args, ctx) => {
       const handle = args.trim();
@@ -61,6 +63,7 @@ export function registerPermissionCommands(
       description: 'View or set user flags',
       usage: '.flags [handle] [+flags [#channel]]',
       category: 'permissions',
+      relayToHub: true,
     },
     (args, ctx) => {
       const parts = args.split(/\s+/);

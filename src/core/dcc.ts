@@ -239,11 +239,49 @@ export class DCCSession {
     }
   }
 
+  /** Relay callback — when set, all input is forwarded here instead of processed locally. */
+  private _relayCallback: ((line: string) => void) | null = null;
+  private _relayTarget: string | null = null;
+
+  /** Put this session into relay mode. All input goes to the callback. */
+  enterRelay(targetBot: string, callback: (line: string) => void): void {
+    this._relayCallback = callback;
+    this._relayTarget = targetBot;
+  }
+
+  /** Exit relay mode. */
+  exitRelay(): void {
+    this._relayCallback = null;
+    this._relayTarget = null;
+  }
+
+  /** True if the session is currently relayed to a remote bot. */
+  get isRelaying(): boolean {
+    return this._relayCallback !== null;
+  }
+
+  get relayTarget(): string | null {
+    return this._relayTarget;
+  }
+
   private async onLine(line: string): Promise<void> {
     const trimmed = line.trim();
     this.resetIdle();
 
     if (!trimmed) return;
+
+    // Relay mode: forward input to remote bot
+    if (this._relayCallback) {
+      if (trimmed === '.relay end' || trimmed === '.quit') {
+        const target = this._relayTarget;
+        this.exitRelay();
+        this.writeLine(`*** Relay ended. Back on ${this.manager.getBotName()}.`);
+        this.manager.onRelayEnd?.(this.handle, target!);
+        return;
+      }
+      this._relayCallback(trimmed);
+      return;
+    }
 
     // DCC-only session management commands
     if (trimmed === '.quit' || trimmed === '.exit') {
@@ -312,6 +350,7 @@ export class DCCSession {
 
     this.manager.removeSession(this.nick);
     this.manager.announce(`*** ${this.handle} has left the console`);
+    this.manager.notifyPartyPart(this.handle, this.nick);
     this.logger?.info(`DCC session closed: ${this.handle} (${reason ?? 'unknown'})`);
   }
 
@@ -325,6 +364,7 @@ export class DCCSession {
     // Remove from manager and announce departure
     this.manager.removeSession(this.nick);
     this.manager.announce(`*** ${this.handle} has left the console`);
+    this.manager.notifyPartyPart(this.handle, this.nick);
     this.logger?.info(`DCC disconnected: ${this.handle} (${this.nick})`);
   }
 }
@@ -429,6 +469,16 @@ export class DCCManager {
   // Botnet broadcast
   // -------------------------------------------------------------------------
 
+  /** Callback: relay session ended by user. */
+  onRelayEnd: ((handle: string, targetBot: string) => void) | null = null;
+
+  /** Callback: local user sent party line chat. Wired to botlink by bot.ts. */
+  onPartyChat: ((handle: string, message: string) => void) | null = null;
+  /** Callback: local DCC session opened. */
+  onPartyJoin: ((handle: string, nick: string) => void) | null = null;
+  /** Callback: local DCC session closed. */
+  onPartyPart: ((handle: string, nick: string) => void) | null = null;
+
   /** Send a message to all sessions except the one with the given handle. */
   broadcast(fromHandle: string, message: string): void {
     for (const session of this.sessions.values()) {
@@ -436,6 +486,7 @@ export class DCCManager {
         session.writeLine(`<${fromHandle}> ${message}`);
       }
     }
+    this.onPartyChat?.(fromHandle, message);
   }
 
   /** Send a message to all connected sessions. */
@@ -445,6 +496,11 @@ export class DCCManager {
     }
   }
 
+  /** Notify botlink that a DCC session closed. Called by DCCSession. */
+  notifyPartyPart(handle: string, nick: string): void {
+    this.onPartyPart?.(handle, nick);
+  }
+
   /** Return a snapshot of the current session list. */
   getSessionList(): Array<{ handle: string; nick: string; connectedAt: number }> {
     return Array.from(this.sessions.values()).map((s) => ({
@@ -452,6 +508,16 @@ export class DCCManager {
       nick: s.nick,
       connectedAt: s.connectedAt,
     }));
+  }
+
+  /** Get a session by IRC nick. */
+  getSession(nick: string): DCCSession | undefined {
+    return this.sessions.get(ircLower(nick, this.casemapping));
+  }
+
+  /** Get the bot's name (for relay display). */
+  getBotName(): string {
+    return this.botNick;
   }
 
   /** Remove a session by IRC nick (called by DCCSession.onClose). */
@@ -642,6 +708,7 @@ export class DCCManager {
 
     this.sessions.set(ircLower(pending.nick, this.casemapping), session);
     this.announce(`*** ${pending.user.handle} has joined the console`);
+    this.onPartyJoin?.(pending.user.handle, pending.nick);
     this.logger?.info(`DCC session opened: ${pending.user.handle} (${pending.nick})`);
 
     session.start(this.version, this.botNick);

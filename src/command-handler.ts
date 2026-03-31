@@ -9,7 +9,7 @@ import { formatTable } from './utils/table';
 
 /** Context passed to command handlers. */
 export interface CommandContext {
-  source: 'repl' | 'irc' | 'dcc';
+  source: 'repl' | 'irc' | 'dcc' | 'botlink';
   nick: string;
   ident?: string;
   hostname?: string;
@@ -41,6 +41,8 @@ export interface CommandOptions {
   description: string;
   usage: string;
   category: string;
+  /** If true, leaf bots relay this command to the hub for execution (bot-link). */
+  relayToHub?: boolean;
 }
 
 /** Signature for command handler functions. */
@@ -60,9 +62,17 @@ const COMMAND_PREFIX = '.';
 // CommandHandler
 // ---------------------------------------------------------------------------
 
+/** Pre-execute hook signature. Return true if the command was handled (e.g., relayed to hub). */
+export type PreExecuteHook = (
+  entry: CommandEntry,
+  args: string,
+  ctx: CommandContext,
+) => Promise<boolean>;
+
 export class CommandHandler {
   private commands: Map<string, CommandEntry> = new Map();
   private permissions: CommandPermissionsProvider | null;
+  private preExecuteHook: PreExecuteHook | null = null;
 
   constructor(permissions?: CommandPermissionsProvider | null) {
     this.permissions = permissions ?? null;
@@ -84,6 +94,16 @@ export class CommandHandler {
   /** Register a command. */
   registerCommand(name: string, options: CommandOptions, handler: CommandHandlerFn): void {
     this.commands.set(name.toLowerCase(), { name, options, handler });
+  }
+
+  /** Look up a single command by name. */
+  getCommand(name: string): CommandEntry | undefined {
+    return this.commands.get(name.toLowerCase());
+  }
+
+  /** Set a pre-execute hook for command relay. Returns true if the command was handled. */
+  setPreExecuteHook(hook: PreExecuteHook | null): void {
+    this.preExecuteHook = hook;
   }
 
   /** Parse and execute a command string. */
@@ -112,8 +132,13 @@ export class CommandHandler {
       return;
     }
 
-    // Check permission flags for non-REPL sources
-    if (ctx.source !== 'repl' && entry.options.flags !== '-' && entry.options.flags !== '') {
+    // Check permission flags (skip for REPL and botlink — botlink checks on the hub side)
+    if (
+      ctx.source !== 'repl' &&
+      ctx.source !== 'botlink' &&
+      entry.options.flags !== '-' &&
+      entry.options.flags !== ''
+    ) {
       if (!this.permissions) {
         ctx.reply('Permission denied.');
         return;
@@ -133,6 +158,12 @@ export class CommandHandler {
         ctx.reply('Permission denied.');
         return;
       }
+    }
+
+    // Pre-execute hook: relay to hub if configured
+    if (entry.options.relayToHub && this.preExecuteHook) {
+      const handled = await this.preExecuteHook(entry, args, ctx);
+      if (handled) return;
     }
 
     // Execute the handler
