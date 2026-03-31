@@ -65,6 +65,9 @@ hexbot/
 │       ├── irc-commands.ts   # Helpers: join, part, kick, ban, mode
 │       ├── channel-state.ts  # Track users, modes, hostmasks per channel
 │       ├── channel-settings.ts  # Per-channel typed setting registry (DB-backed)
+│       ├── botlink.ts        # Bot link protocol: hub/leaf, handshake, heartbeat
+│       ├── botlink-sync.ts   # State sync: permissions + channel state → link frames
+│       ├── botlink-sharing.ts # Ban/exempt list sharing across linked bots
 │       ├── dcc.ts            # DCC CHAT + console (shared admin sessions)
 │       ├── help-registry.ts  # Stores/retrieves command help entries
 │       ├── message-queue.ts  # Token-bucket flood protection for outgoing messages
@@ -73,7 +76,8 @@ hexbot/
 │           ├── dispatcher-commands.ts
 │           ├── irc-commands-admin.ts
 │           ├── plugin-commands.ts
-│           └── channel-commands.ts   # .chanset, .chaninfo
+│           ├── channel-commands.ts   # .chanset, .chaninfo
+│           └── botlink-commands.ts   # .botlink, .bots, .bottree, .relay, .whom
 ├── plugins/                  # Optional plugins (user-installable)
 │   ├── 8ball/                # Magic 8-ball command
 │   ├── chanmod/              # Channel moderation: auto-op/voice, mode enforcement, bans
@@ -485,6 +489,44 @@ Passive DCC CHAT for remote administration (`src/core/dcc.ts`). This is "Option 
 
 See `docs/DCC.md` for full setup, client instructions, and security notes.
 
+### 2.16 Bot linking (core module)
+
+Hub-and-leaf multi-bot networking (`src/core/botlink.ts`, `botlink-sync.ts`, `botlink-sharing.ts`). Inspired by Eggdrop's botnet but using a JSON-over-TCP protocol instead of Eggdrop's binary format.
+
+**Topology:**
+
+```
+              Hub bot
+            /    |    \
+        Leaf1  Leaf2  Leaf3
+```
+
+One hub, N leaves. Star topology — leaves never talk directly to each other. The hub fans out non-hub-only frames to all other leaves. There is no multi-hop routing.
+
+**Protocol:**
+
+- JSON frames, one per line, delimited by `\r\n`.
+- 64KB max frame size. Frames exceeding this are protocol errors.
+- Handshake: leaf sends `HELLO` (botname + SHA-256 password hash), hub replies `WELCOME` or `ERROR`.
+- Heartbeat: hub pings leaves periodically. Missed pongs trigger timeout disconnect.
+- Rate limiting: CMD frames capped at 10/sec, PARTY_CHAT at 5/sec per leaf.
+
+**State sync (Phase 4):**
+
+After handshake, hub sends `SYNC_START`, then pushes `ADDUSER` (permissions), `CHAN` (channel state), and `CHAN_BAN_SYNC`/`CHAN_EXEMPT_SYNC` (ban lists) frames, then `SYNC_END`. Permission mutations are broadcast in real-time via `ADDUSER`/`DELUSER`/`SETFLAGS` frames.
+
+**Command relay (Phase 5):**
+
+Commands marked `relayToHub: true` are intercepted on the leaf, sent as `CMD` frames to the hub, executed there with the hub's permissions database, and results returned via `CMD_RESULT`. This ensures consistent permission enforcement across the botnet.
+
+**Key decisions:**
+
+- **Hub-authoritative trust model** — the hub is the single source of truth for permissions, and executes all relayed commands. A compromised hub means total compromise. See `docs/SECURITY.md`.
+- **Core module, not plugin** — needs direct access to `CommandHandler`, `Permissions`, `ChannelState`, and `DCCManager`.
+- **Wired in `bot.ts`** — hub/leaf created based on `botlink.role` in config. Enabled via `botlink.enabled` in `bot.json`.
+
+See `docs/BOTLINK.md` for setup instructions and command reference.
+
 ---
 
 ## 3. Network compatibility
@@ -513,10 +555,11 @@ All core infrastructure is implemented and production-ready. See [CHANGELOG.md](
 
 **Shipped plugins:** `8ball`, `chanmod`, `ctcp`, `flood`, `greeter`, `help`, `seen`, `topic`
 
+**Shipped core features:** bot linking (hub/leaf), DCC CHAT console, channel takeover protection, persistent channel rejoin
+
 **Planned features** (design documents in `docs/plans/`):
 
 - [`ai-chat-plugin.md`](docs/plans/ai-chat-plugin.md) — AI chat integration (Gemini/Claude/OpenAI adapter)
-- [`bot-linking.md`](docs/plans/bot-linking.md) — Multi-bot mesh networking
 - [`deployment.md`](docs/plans/deployment.md) — Docker, systemd, GitHub Actions
 - [`xdcc-plugin.md`](docs/plans/xdcc-plugin.md) — XDCC file serving
 - [`idlerpg-plugin.md`](docs/plans/idlerpg-plugin.md) — IdleRPG game plugin

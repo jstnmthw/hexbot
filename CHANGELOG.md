@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Bot linking protocol**: hub-and-leaf multi-bot networking inspired by Eggdrop botnet. Hub accepts leaf connections over TCP with JSON-framed protocol, SHA-256 password authentication, heartbeat/timeout, and rate limiting. See `docs/BOTLINK.md` for the full user guide.
+  - **State sync**: hub pushes permissions, channel state, and shared ban/exempt lists to leaves on connect; permission mutations broadcast in real-time via `ADDUSER`/`DELUSER`/`SETFLAGS` frames
+  - **Command relay**: leaf bots forward flagged commands to hub for execution; hub verifies permissions and returns results
+  - **Party line chat**: DCC console messages bridged across all linked bots via `PARTY_CHAT`/`PARTY_JOIN`/`PARTY_PART` frames
+  - **Session relay**: `.relay <botname>` (DCC-only) proxies a console session to a remote bot
+  - **Protection frames**: `PROTECT_TAKEOVER`/`PROTECT_REGAIN` let bots request cross-network channel protection from peers
+  - **Ban sharing**: per-channel `shared` setting syncs ban/exempt lists across linked bots with optional enforcement
+  - **Admin commands**: `.botlink status|disconnect|reconnect`, `.bots`, `.bottree`, `.relay`, `.whom`
 - **Persistent channel rejoin**: the bot now periodically checks (every 30s by default) that it is in all configured channels and attempts to rejoin any it is missing from — handles kick+ban, channel full, invite-only, bad key, and any other join failure that previously left the bot permanently locked out until reconnect. Configurable via `channel_rejoin_interval_ms` in `bot.json` (set to `0` to disable)
 - **Enforce unauthorized `+k`/`+l` removal**: when `enforce_modes` is on and no `channel_key`/`channel_limit` is configured, the bot now removes unauthorized `+k` and `+l` mode changes — both reactively (real-time) and proactively (on join via RPL_CHANNELMODEIS)
 - **Channel mode tracking in channel-state**: `ChannelInfo` now tracks the channel mode string, key, and limit; updated from `MODE` events and the `channel info` (RPL_CHANNELMODEIS) reply; new `channel:modesReady` event on the internal event bus

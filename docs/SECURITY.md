@@ -239,7 +239,45 @@ const userRole = ctx.tags?.['+role']; // attacker can set this to anything
 const record = api.permissions.findByHostmask(`${ctx.nick}!${ctx.ident}@${ctx.hostname}`);
 ```
 
-## 9. Security checklist for code review
+## 9. Bot linking security
+
+The bot link protocol (`src/core/botlink.ts`) introduces a trusted TCP channel between bots. Security considerations:
+
+### Trust model
+
+**Hub-authoritative.** The hub is the single source of truth for permissions and executes all relayed commands. A compromised hub means total compromise of the botnet. Leaves trust frames from the hub unconditionally (permission syncs, command results, party line messages).
+
+**Leaf trust is limited.** The hub validates leaf identity via password hash and enforces rate limits. Hub-only frame types (`CMD`, `RELAY_*`, `PROTECT_ACK`) are never fanned out to other leaves — the hub processes them internally.
+
+### Authentication
+
+- Passwords are **never sent in plaintext**. Leaves send `sha256:<hex>` hashes in the `HELLO` frame.
+- The hub compares against the pre-computed expected hash. Failed auth produces `AUTH_FAILED` and the connection is closed.
+- All bots in a botnet share the same password. Use a strong, unique password per botnet.
+
+### Frame validation
+
+- All string values in incoming frames are sanitized (stripped of `\r`, `\n`, `\0`) via `sanitizeFrame()` before processing.
+- Frame size is capped at 64KB. Oversized frames are protocol errors and cause immediate disconnect.
+- Rate limiting: CMD frames at 10/sec, PARTY_CHAT at 5/sec per leaf. Exceeding limits returns an error or silently drops.
+
+### Relay sessions
+
+When a DCC user runs `.relay <botname>`, their input is proxied to the remote bot. The remote bot trusts the originating bot's authentication — it does not re-verify the user's identity. This means:
+
+- A relay session inherits the permissions of the user's handle on the **hub's** permission database.
+- If the user is removed from the hub's permissions while relaying, the relay continues until explicitly ended.
+
+### Protection frames
+
+`PROTECT_TAKEOVER` and `PROTECT_REGAIN` frames request cross-network channel protection from peers. The receiving bot verifies the requested nick exists in its local permissions database before acting. Protection frames cannot be used to op arbitrary nicks — only known users.
+
+### Network considerations
+
+- Bot link connections are **unencrypted TCP**. For WAN deployments, use a VPN or SSH tunnel.
+- The `listen.host` config should be set to a private IP or `127.0.0.1` when bots are co-located. Do not expose the link port to the public internet without transport encryption.
+
+## 10. Security checklist for code review
 
 Use this checklist when reviewing any PR or code change:
 
