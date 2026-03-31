@@ -29,6 +29,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **`channel_modes` now uses Eggdrop-style additive/subtractive format**: `"+nt-s"` means "ensure `+n` and `+t` are set, ensure `+s` is removed, leave everything else alone." Modes not mentioned are no longer treated as unauthorized. Old format (`"nt"`) auto-detected and treated as `"+nt"` (additive only, no removals)
+- `enforce_modes` now gates both sides: when off, neither `+` additions nor `-` removals run
+- `CHANMODES` ISUPPORT token now exposed via `getServerSupports()`; parameter modes dynamically determined from CHANMODES categories A/B/C (hardcoded `k`/`l` fallback retained)
 - `syncChannelModes()` now removes unauthorized simple modes, keys, and limits (previously only added missing ones)
 - `channel_key` and `channel_limit` setting descriptions updated to clarify that empty/zero means "remove unauthorized" when `enforce_modes` is on
 

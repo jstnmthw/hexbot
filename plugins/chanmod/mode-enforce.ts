@@ -3,17 +3,17 @@ import type { HandlerContext, PluginAPI } from '../../src/types';
 import { wildcardMatch } from '../../src/utils/wildcard';
 import { storeBan } from './bans';
 import {
-  PARAM_MODES,
   botCanHalfop,
   botHasOps,
   buildBanMask,
   getBotNick,
+  getParamModes,
   getUserFlags,
   hasAnyFlag,
   hasParamModes,
   isBotNick,
   markIntentional,
-  parseModesSet,
+  parseChannelModes,
   wasIntentional,
 } from './helpers';
 import {
@@ -58,36 +58,35 @@ export function syncChannelModes(
 
     const enforceModes = api.channelSettings.get(channel, 'enforce_modes') as boolean;
     const channelModes = api.channelSettings.get(channel, 'channel_modes') as string;
+    const paramModes = getParamModes(api);
     if (hasParamModes(channelModes)) {
       api.warn(
         `channel_modes for ${channel} contains parameter modes (k/l) which are stripped — use channel_key and channel_limit instead`,
       );
     }
-    const desiredModes = parseModesSet(channelModes);
+    const parsed = parseChannelModes(channelModes, paramModes);
 
     // Read current channel modes from channel-state
     const ch = api.getChannel(channel);
     const currentModes = ch!.modes;
 
-    // Add missing modes
-    if (desiredModes.size > 0) {
-      const missing = [...desiredModes].filter((m) => !currentModes.includes(m));
+    // Add missing modes (only when enforcement is on)
+    if (enforceModes && parsed.add.size > 0) {
+      const missing = [...parsed.add].filter((m) => !currentModes.includes(m));
       if (missing.length > 0) {
         const modeString = '+' + missing.join('');
         api.mode(channel, modeString);
-        api.log(`Synced channel modes ${modeString} on ${channel}`);
+        api.log(`Enforcing ${modeString} on ${channel}`);
       }
     }
 
-    // Remove unauthorized simple modes (modes present on channel but not in configured set)
-    if (enforceModes && desiredModes.size > 0 && currentModes) {
-      const unauthorized = [...currentModes].filter(
-        (m) => !desiredModes.has(m) && !PARAM_MODES.has(m),
-      );
-      if (unauthorized.length > 0) {
-        const modeString = '-' + unauthorized.join('');
+    // Remove modes explicitly listed in the remove set
+    if (enforceModes && parsed.remove.size > 0 && currentModes) {
+      const toRemove = [...currentModes].filter((m) => parsed.remove.has(m) && !paramModes.has(m));
+      if (toRemove.length > 0) {
+        const modeString = '-' + toRemove.join('');
         api.mode(channel, modeString);
-        api.log(`Removed unauthorized modes ${modeString} on ${channel}`);
+        api.log(`Enforcing ${modeString} on ${channel}`);
       }
     }
 
@@ -102,7 +101,7 @@ export function syncChannelModes(
     } else if (enforceModes && ch?.key) {
       // No key configured — remove the unauthorized key
       api.mode(channel, '-k', ch.key);
-      api.log(`Removed unauthorized channel key on ${channel}`);
+      api.log(`Removing unauthorized channel key on ${channel}`);
     }
 
     // Enforce channel limit
@@ -115,7 +114,7 @@ export function syncChannelModes(
     } else if (enforceModes && ch?.limit && ch.limit > 0) {
       // No limit configured — remove the unauthorized limit
       api.mode(channel, '-l');
-      api.log(`Removed unauthorized channel limit on ${channel}`);
+      api.log(`Removing unauthorized channel limit on ${channel}`);
     }
   }, config.enforce_delay_ms);
   state.enforcementTimers.push(timer);
@@ -145,7 +144,8 @@ export function setupModeEnforce(
 
     // Read per-channel settings (fall back to config default via channelSettings)
     const channelModes = api.channelSettings.get(channel, 'channel_modes') as string;
-    const enforceChannelModeSet = parseModesSet(channelModes);
+    const paramModes = getParamModes(api);
+    const parsed = parseChannelModes(channelModes, paramModes);
 
     // Shared guards reused by all channel-mode enforcement blocks below.
     const enforceModes = api.channelSettings.get(channel, 'enforce_modes') as boolean;
@@ -155,10 +155,10 @@ export function setupModeEnforce(
     const canEnforce =
       enforceModes && !isNodesynch && !isBotNick(api, setter) && botHasOps(api, channel);
 
-    // --- Simple channel mode enforcement (e.g. +imnpst) ---
-    if (enforceChannelModeSet.size > 0 && modeStr.startsWith('-') && modeStr.length === 2) {
+    // --- Re-apply removed modes that are in the add set ---
+    if (parsed.add.size > 0 && modeStr.startsWith('-') && modeStr.length === 2 && canEnforce) {
       const modeChar = modeStr[1];
-      if (enforceChannelModeSet.has(modeChar) && canEnforce) {
+      if (parsed.add.has(modeChar)) {
         api.log(`Re-enforcing +${modeChar} on ${channel} (removed by ${setter})`);
         const timer = setTimeout(() => {
           api.mode(channel, '+' + modeChar);
@@ -167,19 +167,14 @@ export function setupModeEnforce(
       }
     }
 
-    // --- Unauthorized mode reversal: remove simple modes not in the configured set ---
+    // --- Remove modes that are in the remove set ---
     // Only triggers for parameterless +X modes (user modes like +o/+v have a param, so they're skipped).
-    if (
-      enforceChannelModeSet.size > 0 &&
-      modeStr.startsWith('+') &&
-      modeStr.length === 2 &&
-      !target &&
-      canEnforce
-    ) {
+    // Modes not in the remove set are left alone (unmentioned = ignored).
+    if (modeStr.startsWith('+') && modeStr.length === 2 && !target && canEnforce) {
       const modeChar = modeStr[1];
-      if (!enforceChannelModeSet.has(modeChar) && !PARAM_MODES.has(modeChar)) {
+      if (parsed.remove.has(modeChar)) {
         api.log(
-          `Removing unauthorized +${modeChar} on ${channel} (not in channel_modes, set by ${setter})`,
+          `Removing unauthorized +${modeChar} on ${channel} (in remove set, set by ${setter})`,
         );
         const timer = setTimeout(() => {
           api.mode(channel, '-' + modeChar);

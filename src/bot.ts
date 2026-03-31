@@ -182,6 +182,7 @@ export class Bot {
           'TOPICLEN',
           'KICKLEN',
           'NETWORK',
+          'CHANMODES',
         ];
         const result: Record<string, string> = {};
         for (const k of known) {

@@ -1,6 +1,11 @@
 import { resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// ---------------------------------------------------------------------------
+// parseChannelModes() unit tests (helpers.ts)
+// ---------------------------------------------------------------------------
+
+import { PARAM_MODES, getParamModes, parseChannelModes } from '../../plugins/chanmod/helpers';
 import type { BotConfig } from '../../src/types';
 import { type MockBot, createMockBot } from '../helpers/mock-bot';
 
@@ -2435,7 +2440,10 @@ describe('chanmod plugin — channel_modes enforcement on bot join', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { enforce_channel_modes: 'n', enforce_delay_ms: 5 } },
+        chanmod: {
+          enabled: true,
+          config: { enforce_channel_modes: 'n', enforce_modes: true, enforce_delay_ms: 5 },
+        },
       });
       giveBotOps(freshBot, '#newchan');
       freshBot.client.clearMessages();
@@ -3844,20 +3852,24 @@ describe('chanmod plugin — proactive removal of unauthorized modes on join', (
     }
   });
 
-  it('removes unauthorized simple modes on join', async () => {
+  it('removes modes in remove set on join', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       await freshBot.pluginLoader.load(PLUGIN_PATH, {
         chanmod: {
           enabled: true,
-          config: { enforce_modes: true, enforce_channel_modes: 'nt', enforce_delay_ms: 5 },
+          config: {
+            enforce_modes: true,
+            enforce_channel_modes: '+nt-si',
+            enforce_delay_ms: 5,
+          },
         },
       });
       giveBotOps(freshBot, '#chan');
       freshBot.channelSettings.set('#chan', 'enforce_modes', true);
       freshBot.client.clearMessages();
 
-      // Server reports channel has +ntsi — 's' and 'i' are unauthorized
+      // Server reports channel has +ntsi — 's' and 'i' are in the remove set
       simulateChannelInfo(freshBot, '#chan', '+ntsi');
       await tick(20);
 
@@ -4109,20 +4121,20 @@ describe('chanmod plugin — immediate mode enforcement on .chanset', () => {
 // ---------------------------------------------------------------------------
 
 describe('chanmod plugin — unauthorized mode reversal', () => {
-  it('removes +i when channel_modes is +nt (i is not configured)', async () => {
+  it('removes +i when i is in the remove set (+nt-i)', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
       await freshBot.pluginLoader.load(PLUGIN_PATH, {
         chanmod: {
           enabled: true,
-          config: { enforce_channel_modes: '+nt', enforce_modes: true, enforce_delay_ms: 5 },
+          config: { enforce_channel_modes: '+nt-i', enforce_modes: true, enforce_delay_ms: 5 },
         },
       });
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
-      // User sets +i which is not in the configured +nt
+      // User sets +i which is in the remove set
       simulateMode(freshBot, 'SomeOp', '#test', '+i', '');
       await tick(20);
 
@@ -4666,6 +4678,403 @@ describe('chanmod plugin — parseKicker with non-matching kick reason', () => {
       // No deop should have been sent (no kicker to revenge against)
       expect(
         freshBot.client.messages.find((m) => m.type === 'mode' && m.message === '-o'),
+      ).toBeUndefined();
+    } finally {
+      freshBot.cleanup();
+    }
+  });
+});
+
+describe('parseChannelModes()', () => {
+  it('parses "+nt-s" into add: {n, t}, remove: {s}', () => {
+    const result = parseChannelModes('+nt-s');
+    expect(result.add).toEqual(new Set(['n', 't']));
+    expect(result.remove).toEqual(new Set(['s']));
+  });
+
+  it('parses legacy "nt" as "+nt" (backward compat)', () => {
+    const result = parseChannelModes('nt');
+    expect(result.add).toEqual(new Set(['n', 't']));
+    expect(result.remove).toEqual(new Set());
+  });
+
+  it('parses "+nt" (explicit additive only)', () => {
+    const result = parseChannelModes('+nt');
+    expect(result.add).toEqual(new Set(['n', 't']));
+    expect(result.remove).toEqual(new Set());
+  });
+
+  it('parses "-si" (remove only)', () => {
+    const result = parseChannelModes('-si');
+    expect(result.add).toEqual(new Set());
+    expect(result.remove).toEqual(new Set(['s', 'i']));
+  });
+
+  it('parses "+nt-si+m" (mixed)', () => {
+    const result = parseChannelModes('+nt-si+m');
+    expect(result.add).toEqual(new Set(['n', 't', 'm']));
+    expect(result.remove).toEqual(new Set(['s', 'i']));
+  });
+
+  it('handles conflict: "+n-n" — last wins (remove)', () => {
+    const result = parseChannelModes('+n-n');
+    expect(result.add).toEqual(new Set());
+    expect(result.remove).toEqual(new Set(['n']));
+  });
+
+  it('handles conflict: "-n+n" — last wins (add)', () => {
+    const result = parseChannelModes('-n+n');
+    expect(result.add).toEqual(new Set(['n']));
+    expect(result.remove).toEqual(new Set());
+  });
+
+  it('returns empty sets for empty string', () => {
+    const result = parseChannelModes('');
+    expect(result.add).toEqual(new Set());
+    expect(result.remove).toEqual(new Set());
+  });
+
+  it('strips param modes from add set', () => {
+    const result = parseChannelModes('+ntk');
+    expect(result.add).toEqual(new Set(['n', 't']));
+    expect(result.remove).toEqual(new Set());
+  });
+
+  it('strips param modes from remove set', () => {
+    const result = parseChannelModes('-kl');
+    expect(result.add).toEqual(new Set());
+    expect(result.remove).toEqual(new Set());
+  });
+
+  it('uses custom paramModes set when provided', () => {
+    const customParam = new Set(['b', 'e', 'I', 'k', 'l']);
+    const result = parseChannelModes('+ntb-eI', customParam);
+    expect(result.add).toEqual(new Set(['n', 't']));
+    expect(result.remove).toEqual(new Set());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getParamModes() — dynamic ISUPPORT CHANMODES parsing
+// ---------------------------------------------------------------------------
+
+describe('getParamModes()', () => {
+  it('parses CHANMODES ISUPPORT into param mode set', () => {
+    const mockApi = {
+      getServerSupports: () => ({ CHANMODES: 'beI,k,l,imnpst' }),
+    } as unknown as import('../../src/types').PluginAPI;
+    const result = getParamModes(mockApi);
+    expect(result.has('b')).toBe(true);
+    expect(result.has('e')).toBe(true);
+    expect(result.has('I')).toBe(true);
+    expect(result.has('k')).toBe(true);
+    expect(result.has('l')).toBe(true);
+    // Category D (no-param) should NOT be included
+    expect(result.has('i')).toBe(false);
+    expect(result.has('n')).toBe(false);
+  });
+
+  it('handles short CHANMODES with missing categories', () => {
+    const mockApi = {
+      getServerSupports: () => ({ CHANMODES: 'beI,k' }),
+    } as unknown as import('../../src/types').PluginAPI;
+    const result = getParamModes(mockApi);
+    expect(result.has('b')).toBe(true);
+    expect(result.has('e')).toBe(true);
+    expect(result.has('I')).toBe(true);
+    expect(result.has('k')).toBe(true);
+    // Categories C and D missing — no crash
+    expect(result.size).toBe(4);
+  });
+
+  it('falls back to PARAM_MODES when CHANMODES is unavailable', () => {
+    const mockApi = {
+      getServerSupports: () => ({}),
+    } as unknown as import('../../src/types').PluginAPI;
+    const result = getParamModes(mockApi);
+    expect(result).toBe(PARAM_MODES);
+    expect(result.has('k')).toBe(true);
+    expect(result.has('l')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Additive/subtractive sync behavior tests
+// ---------------------------------------------------------------------------
+
+describe('chanmod plugin — additive/subtractive sync on join', () => {
+  it('leaves unmentioned modes alone (channel has +ntsz, config "+nt-s")', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: {
+            enforce_modes: true,
+            enforce_channel_modes: '+nt-s',
+            enforce_delay_ms: 5,
+          },
+        },
+      });
+      giveBotOps(freshBot, '#chan');
+      freshBot.channelSettings.set('#chan', 'enforce_modes', true);
+      freshBot.client.clearMessages();
+
+      // Channel has +ntsz — should remove -s, leave z alone
+      simulateChannelInfo(freshBot, '#chan', '+ntsz');
+      await tick(20);
+
+      // -s should be sent
+      expect(
+        freshBot.client.messages.find(
+          (m) => m.type === 'raw' && m.message?.includes('MODE #chan -s'),
+        ),
+      ).toBeDefined();
+      // -z should NOT be sent (not in remove set)
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('-z')),
+      ).toBeUndefined();
+    } finally {
+      freshBot.cleanup();
+    }
+  });
+
+  it('sends nothing when no modes to add or remove (+nt already set, -s not present)', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: {
+            enforce_modes: true,
+            enforce_channel_modes: '+nt-s',
+            enforce_delay_ms: 5,
+          },
+        },
+      });
+      giveBotOps(freshBot, '#chan');
+      freshBot.channelSettings.set('#chan', 'enforce_modes', true);
+      freshBot.client.clearMessages();
+
+      simulateChannelInfo(freshBot, '#chan', '+nt');
+      await tick(20);
+
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('MODE #chan')),
+      ).toBeUndefined();
+    } finally {
+      freshBot.cleanup();
+    }
+  });
+
+  it('adds missing mode from add set (+n present, +t missing)', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: {
+            enforce_modes: true,
+            enforce_channel_modes: '+nt-s',
+            enforce_delay_ms: 5,
+          },
+        },
+      });
+      giveBotOps(freshBot, '#chan');
+      freshBot.channelSettings.set('#chan', 'enforce_modes', true);
+      freshBot.client.clearMessages();
+
+      simulateChannelInfo(freshBot, '#chan', '+n');
+      await tick(20);
+
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'raw' && m.message === 'MODE #chan +t'),
+      ).toBeDefined();
+    } finally {
+      freshBot.cleanup();
+    }
+  });
+
+  it('legacy format with extra modes does NOT remove them (additive only)', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: {
+            enforce_modes: true,
+            enforce_channel_modes: 'nt',
+            enforce_delay_ms: 5,
+          },
+        },
+      });
+      giveBotOps(freshBot, '#chan');
+      freshBot.channelSettings.set('#chan', 'enforce_modes', true);
+      freshBot.client.clearMessages();
+
+      // Legacy "nt" = "+nt" — s is unmentioned, should be left alone
+      simulateChannelInfo(freshBot, '#chan', '+nts');
+      await tick(20);
+
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('-s')),
+      ).toBeUndefined();
+    } finally {
+      freshBot.cleanup();
+    }
+  });
+
+  it('additive-only config "+nt" leaves extra modes alone', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: {
+            enforce_modes: true,
+            enforce_channel_modes: '+nt',
+            enforce_delay_ms: 5,
+          },
+        },
+      });
+      giveBotOps(freshBot, '#chan');
+      freshBot.channelSettings.set('#chan', 'enforce_modes', true);
+      freshBot.client.clearMessages();
+
+      simulateChannelInfo(freshBot, '#chan', '+nts');
+      await tick(20);
+
+      // s should NOT be removed (not in remove set)
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('-s')),
+      ).toBeUndefined();
+    } finally {
+      freshBot.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Additive/subtractive reactive handler tests
+// ---------------------------------------------------------------------------
+
+describe('chanmod plugin — additive/subtractive reactive enforcement', () => {
+  it('removes +s when s is in the remove set (+nt-s)', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      giveBotOps(freshBot, '#test');
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: { enforce_channel_modes: '+nt-s', enforce_modes: true, enforce_delay_ms: 5 },
+        },
+      });
+      giveBotOps(freshBot, '#test');
+      freshBot.client.clearMessages();
+
+      simulateMode(freshBot, 'SomeOp', '#test', '+s', '');
+      await tick(20);
+
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'raw' && m.message === 'MODE #test -s'),
+      ).toBeDefined();
+    } finally {
+      freshBot.cleanup();
+    }
+  });
+
+  it('ignores +i when i is not mentioned in config (+nt-s)', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      giveBotOps(freshBot, '#test');
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: { enforce_channel_modes: '+nt-s', enforce_modes: true, enforce_delay_ms: 5 },
+        },
+      });
+      giveBotOps(freshBot, '#test');
+      freshBot.client.clearMessages();
+
+      simulateMode(freshBot, 'SomeOp', '#test', '+i', '');
+      await tick(20);
+
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'raw' && m.message === 'MODE #test -i'),
+      ).toBeUndefined();
+    } finally {
+      freshBot.cleanup();
+    }
+  });
+
+  it('re-applies +t when removed (t is in add set)', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      giveBotOps(freshBot, '#test');
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: { enforce_channel_modes: '+nt-s', enforce_modes: true, enforce_delay_ms: 5 },
+        },
+      });
+      giveBotOps(freshBot, '#test');
+      freshBot.client.clearMessages();
+
+      simulateMode(freshBot, 'SomeOp', '#test', '-t', '');
+      await tick(20);
+
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'raw' && m.message === 'MODE #test +t'),
+      ).toBeDefined();
+    } finally {
+      freshBot.cleanup();
+    }
+  });
+
+  it('does nothing when -s is removed (s is in remove set — removal is desired)', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      giveBotOps(freshBot, '#test');
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: { enforce_channel_modes: '+nt-s', enforce_modes: true, enforce_delay_ms: 5 },
+        },
+      });
+      giveBotOps(freshBot, '#test');
+      freshBot.client.clearMessages();
+
+      simulateMode(freshBot, 'SomeOp', '#test', '-s', '');
+      await tick(20);
+
+      // Should NOT re-apply +s (s is in remove set, its removal is desired)
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'raw' && m.message === 'MODE #test +s'),
+      ).toBeUndefined();
+    } finally {
+      freshBot.cleanup();
+    }
+  });
+
+  it('does nothing when -i is removed (i is not mentioned)', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      giveBotOps(freshBot, '#test');
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: { enforce_channel_modes: '+nt-s', enforce_modes: true, enforce_delay_ms: 5 },
+        },
+      });
+      giveBotOps(freshBot, '#test');
+      freshBot.client.clearMessages();
+
+      simulateMode(freshBot, 'SomeOp', '#test', '-i', '');
+      await tick(20);
+
+      // Should NOT re-apply +i (i is not mentioned at all)
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'raw' && m.message === 'MODE #test +i'),
       ).toBeUndefined();
     } finally {
       freshBot.cleanup();

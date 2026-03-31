@@ -37,7 +37,8 @@ export function init(api: PluginAPI): void {
       key: 'channel_modes',
       type: 'string',
       default: config.enforce_channel_modes,
-      description: 'Mode string to enforce when enforce_modes is on (e.g. "imnpst")',
+      description:
+        'Mode string to enforce (e.g. "+nt-s"); modes not mentioned are left alone. Legacy format "nt" treated as "+nt".',
     },
     {
       key: 'channel_key',

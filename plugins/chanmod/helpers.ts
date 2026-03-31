@@ -118,15 +118,59 @@ export function buildBanMask(hostmask: string, banType: number): string | null {
 export const PARAM_MODES = new Set(['k', 'l']);
 
 /**
- * Parse a mode string like "+nt" into a Set of mode chars.
- * Strips parameter modes (k, l) since they have dedicated settings.
+ * Structured result of parsing an Eggdrop-style additive/subtractive mode string.
+ * Modes in `add` should be ensured set; modes in `remove` should be ensured unset.
+ * Modes not mentioned in either set are left alone.
  */
-export function parseModesSet(modeStr: string): Set<string> {
-  const set = new Set<string>();
+export interface ParsedChannelModes {
+  add: Set<string>;
+  remove: Set<string>;
+}
+
+/**
+ * Parse an Eggdrop-style mode string like "+nt-s" into structured add/remove sets.
+ *
+ * - Characters after `+` go into `add`, characters after `-` go into `remove`.
+ * - Backward compat: if the string contains no `+` or `-` at all (e.g. "nt"),
+ *   every character is treated as additive (`+nt`). No warning emitted.
+ * - A mode cannot be in both sets — last occurrence wins (e.g. "+n-n" → remove: {n}).
+ * - Parameter modes (from `paramModes` arg) are stripped from both sets with a warning.
+ * - Empty string → both sets empty.
+ */
+export function parseChannelModes(
+  modeStr: string,
+  paramModes: Set<string> = PARAM_MODES,
+): ParsedChannelModes {
+  const add = new Set<string>();
+  const remove = new Set<string>();
+
+  if (!modeStr) return { add, remove };
+
+  // Backward compat: no +/- prefix means treat everything as additive
+  const hasDirection = modeStr.includes('+') || modeStr.includes('-');
+  let direction: '+' | '-' = '+';
+
   for (const ch of modeStr) {
-    if (ch !== '+' && ch !== '-' && !PARAM_MODES.has(ch)) set.add(ch);
+    if (ch === '+' || ch === '-') {
+      direction = ch;
+      continue;
+    }
+    if (!hasDirection || direction === '+') {
+      remove.delete(ch);
+      add.add(ch);
+    } else {
+      add.delete(ch);
+      remove.add(ch);
+    }
   }
-  return set;
+
+  // Strip parameter modes from both sets
+  for (const pm of paramModes) {
+    add.delete(pm);
+    remove.delete(pm);
+  }
+
+  return { add, remove };
 }
 
 /** Returns true if a mode string contains parameter modes (k, l). */
@@ -135,6 +179,23 @@ export function hasParamModes(modeStr: string): boolean {
     if (PARAM_MODES.has(ch)) return true;
   }
   return false;
+}
+
+/**
+ * Build the set of parameter modes dynamically from the server's CHANMODES ISUPPORT token.
+ * Categories A (list), B (always-param), and C (param-on-set) all require parameters.
+ * Falls back to the hardcoded PARAM_MODES set when CHANMODES is unavailable.
+ */
+export function getParamModes(api: PluginAPI): Set<string> {
+  const chanmodes = api.getServerSupports()['CHANMODES'];
+  if (!chanmodes) return PARAM_MODES;
+  const parts = chanmodes.split(',');
+  const set = new Set<string>();
+  // Categories A (list), B (always-param), C (param-on-set) — indices 0, 1, 2
+  for (let i = 0; i < 3 && i < parts.length; i++) {
+    for (const c of parts[i]) set.add(c);
+  }
+  return set;
 }
 
 /** Format a ban expiry for display. */

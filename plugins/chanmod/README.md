@@ -35,7 +35,7 @@ Most chanmod behaviors can be tuned per-channel using `.chanset` (requires `m` f
 | Setting         | Type   | Default | Description                                                           |
 | --------------- | ------ | ------- | --------------------------------------------------------------------- |
 | `enforce_modes` | flag   | off     | Re-apply channel modes and user modes if removed                      |
-| `channel_modes` | string | `""`    | Simple modes to enforce, e.g. `"imnpst"`                              |
+| `channel_modes` | string | `""`    | Mode string to enforce, e.g. `"+nt-s"`; unmentioned modes left alone  |
 | `channel_key`   | string | `""`    | Channel key (`+k`) to enforce (empty = remove unauthorized keys)      |
 | `channel_limit` | int    | `0`     | Channel user limit (`+l`) to enforce (0 = remove unauthorized limits) |
 | `bitch`         | flag   | off     | Strip `+o`/`+h` from anyone without the required flag                 |
@@ -46,11 +46,11 @@ Most chanmod behaviors can be tuned per-channel using `.chanset` (requires `m` f
 | `chanserv_op`   | flag   | off     | Ask ChanServ to re-op the bot when it loses ops                       |
 | `invite`        | flag   | off     | Accept IRC INVITE from ops/masters and join the channel               |
 
-**Example** — set up Rizon-style mode enforcement for `#mychan`:
+**Example** — set up mode enforcement for `#mychan`:
 
 ```
 .chanset #mychan +enforce_modes
-.chanset #mychan channel_modes imnpst
+.chanset #mychan channel_modes +nt-s
 .chanset #mychan channel_key s3cr3t
 .chanset #mychan channel_limit 50
 ```
@@ -73,15 +73,23 @@ Modes applied by `!deop`, `!dehalfop`, and `!devoice` are marked intentional and
 
 ### Channel mode enforcement
 
-When `enforce_modes` is on, the bot also enforces a set of channel modes. Three settings control what gets enforced — all configurable globally via the config file or per-channel via `.chanset`:
+When `enforce_modes` is on, the bot enforces channel modes using an Eggdrop-style additive/subtractive model. The `channel_modes` setting uses `"+nt-s"` syntax:
 
-| Setting         | Type   | What it enforces                                                                     |
-| --------------- | ------ | ------------------------------------------------------------------------------------ |
-| `channel_modes` | string | Simple flag modes — e.g. `"imnpst"` re-applies any of `+i +m +n +p +s +t` if removed |
-| `channel_key`   | string | Channel key (`+k`) — re-applied if removed or changed to a different value           |
-| `channel_limit` | int    | Channel user limit (`+l`) — re-applied if removed or changed to a different value    |
+- Modes after `+` are ensured set (re-applied if removed)
+- Modes after `-` are ensured unset (removed if added)
+- **Modes not mentioned are left alone** — the bot won't fight server-set modes, ChanServ MLOCK, or network-specific modes (e.g. `+z` on Rizon/UnrealIRCd)
 
-All three are independent. You can enforce just `+nt`, just `+k`, just `+l`, or any combination.
+Three settings control what gets enforced — all configurable globally via the config file or per-channel via `.chanset`:
+
+| Setting         | Type   | What it enforces                                                                  |
+| --------------- | ------ | --------------------------------------------------------------------------------- |
+| `channel_modes` | string | Additive/subtractive modes — e.g. `"+nt-s"` ensures `+n +t` and removes `+s`      |
+| `channel_key`   | string | Channel key (`+k`) — re-applied if removed or changed to a different value        |
+| `channel_limit` | int    | Channel user limit (`+l`) — re-applied if removed or changed to a different value |
+
+All three are independent. You can enforce just `+nt-s`, just `+k`, just `+l`, or any combination.
+
+**Migration from legacy format:** The old format `"nt"` (no `+`/`-` prefix) is auto-detected and treated as `"+nt"` — additive only, with no removals. To also remove specific modes, switch to the new format: `"+nt-si"`. Operators who relied on the old exact-match behavior (where unmentioned modes were removed) must now explicitly list modes to remove.
 
 When `enforce_modes` is on and `channel_key` is empty, any `+k` set by a user is treated as unauthorized and removed (using `-k <the_key>`). Likewise, when `channel_limit` is `0`, any `+l` is removed. This applies both reactively (the bot sees the mode change and reverts it) and proactively (on join, the bot queries the server for current modes and cleans up stale keys/limits).
 
@@ -183,7 +191,7 @@ With `cycle_on_deop: true`, if the bot itself is deopped three times within 10 s
 | `voice_flags`           | string[] | `["v"]`         | Flags that grant auto-voice (when no op/halfop flag matches)                                            |
 | `notify_on_fail`        | boolean  | `false`         | NOTICE the user if NickServ verification fails on join                                                  |
 | `enforce_modes`         | boolean  | `false`         | Re-op/halfop/voice flagged users if externally deopped/devoiced                                         |
-| `enforce_channel_modes` | string   | `""`            | Simple channel modes to enforce globally (e.g. `"imnpst"`)                                              |
+| `enforce_channel_modes` | string   | `""`            | Channel modes to enforce globally (e.g. `"+nt-s"`)                                                      |
 | `enforce_channel_key`   | string   | `""`            | Channel key (`+k`) to enforce globally (empty = remove unauthorized keys when enforce_modes is on)      |
 | `enforce_channel_limit` | number   | `0`             | Channel user limit (`+l`) to enforce globally (0 = remove unauthorized limits when enforce_modes is on) |
 | `nodesynch_nicks`       | string[] | `["ChanServ"]`  | Nicks exempt from bitch mode and channel mode enforcement                                               |
@@ -266,7 +274,7 @@ With `cycle_on_deop: true`, if the bot itself is deopped three times within 10 s
     "config": {
       "auto_op": true,
       "enforce_modes": true,
-      "enforce_channel_modes": "imnpst",
+      "enforce_channel_modes": "+nt-s",
       "enforce_channel_key": "",
       "enforce_channel_limit": 0,
       "bitch": false,
