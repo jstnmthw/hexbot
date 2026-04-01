@@ -25,6 +25,13 @@ export interface BindEntry {
   hits: number;
 }
 
+/** Minimal bind management interface for consumers that only register/remove binds. */
+export interface BindRegistrar {
+  bind(type: BindType, flags: string, mask: string, handler: BindHandler, pluginId: string): void;
+  unbind(type: BindType, mask: string, handler: BindHandler): void;
+  unbindAll(pluginId: string): void;
+}
+
 /** Optional permissions interface — if provided, used for flag checking. */
 export interface PermissionsProvider {
   checkFlags(requiredFlags: string, ctx: HandlerContext): boolean;

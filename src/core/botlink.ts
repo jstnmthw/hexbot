@@ -6,10 +6,10 @@ import { connect, createServer } from 'node:net';
 import type { Server as NetServer, Socket } from 'node:net';
 import { createInterface as createReadline } from 'node:readline';
 
-import type { CommandContext, CommandHandler } from '../command-handler';
+import type { CommandContext, CommandEntry, PreExecuteHook } from '../command-handler';
 import type { BotEventBus } from '../event-bus';
 import type { Logger } from '../logger';
-import type { BotlinkConfig } from '../types';
+import type { BotlinkConfig, UserRecord } from '../types';
 import { sanitize } from '../utils/sanitize';
 import { PermissionSyncer } from './botlink-sync';
 import type { Permissions } from './permissions';
@@ -92,6 +92,20 @@ export interface PartyLineUser {
   botname: string;
   connectedAt: number;
   idle: number;
+}
+
+/** Minimal permissions interface needed by BotLink for command relay flag checks. */
+export interface LinkPermissions {
+  getUser(handle: string): UserRecord | null;
+  findByHostmask(fullHostmask: string): UserRecord | null;
+  checkFlagsByHandle(requiredFlags: string, handle: string, channel: string | null): boolean;
+}
+
+/** Minimal command handler interface needed by BotLink for command relay. */
+export interface CommandRelay {
+  execute(commandString: string, ctx: CommandContext): Promise<void>;
+  getCommand(name: string): CommandEntry | undefined;
+  setPreExecuteHook(hook: PreExecuteHook | null): void;
 }
 
 /** Factory for creating TCP connections (override in tests). */
@@ -313,12 +327,12 @@ export class BotLinkHub {
   // Command relay wiring (Phase 5)
   // -----------------------------------------------------------------------
 
-  private cmdHandler: CommandHandler | null = null;
-  private cmdPermissions: Permissions | null = null;
+  private cmdHandler: CommandRelay | null = null;
+  private cmdPermissions: LinkPermissions | null = null;
 
   /** Wire command relay: hub executes CMD frames and broadcasts permission changes. */
   setCommandRelay(
-    commandHandler: CommandHandler,
+    commandHandler: CommandRelay,
     permissions: Permissions,
     eventBus: BotEventBus,
   ): void {
@@ -878,8 +892,8 @@ export class BotLinkLeaf {
   private pendingWhom: Map<string, { resolve: (users: PartyLineUser[]) => void }> = new Map();
   private pendingProtect: Map<string, { resolve: (success: boolean) => void }> = new Map();
   private cmdRefCounter = 0;
-  private cmdHandler: CommandHandler | null = null;
-  private cmdPermissions: Permissions | null = null;
+  private cmdHandler: CommandRelay | null = null;
+  private cmdPermissions: LinkPermissions | null = null;
 
   /** Fired when handshake completes. */
   onConnected: ((hubBotname: string) => void) | null = null;
@@ -1002,7 +1016,7 @@ export class BotLinkLeaf {
   // -----------------------------------------------------------------------
 
   /** Wire command relay: relayToHub commands are sent to hub instead of executing locally. */
-  setCommandRelay(commandHandler: CommandHandler, permissions: Permissions): void {
+  setCommandRelay(commandHandler: CommandRelay, permissions: LinkPermissions): void {
     this.cmdHandler = commandHandler;
     this.cmdPermissions = permissions;
     commandHandler.setPreExecuteHook(async (entry, args, ctx) => {

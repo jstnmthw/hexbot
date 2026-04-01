@@ -12,15 +12,19 @@ import { createServer } from 'node:net';
 import type { Server as NetServer, Socket } from 'node:net';
 import { createInterface as createReadline } from 'node:readline';
 
-import type { CommandHandler } from '../command-handler';
-import type { EventDispatcher } from '../dispatcher';
+import type { CommandExecutor } from '../command-handler';
+import type { BindRegistrar } from '../dispatcher';
 import type { Logger } from '../logger';
-import type { DccConfig, HandlerContext, UserRecord } from '../types';
+import type {
+  DccConfig,
+  HandlerContext,
+  PluginPermissions,
+  PluginServices,
+  UserRecord,
+} from '../types';
 import { toEventObject } from '../utils/irc-event';
 import { sanitize } from '../utils/sanitize';
 import { type Casemapping, ircLower } from '../utils/wildcard';
-import type { Permissions } from './permissions';
-import type { Services } from './services';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -81,10 +85,10 @@ export interface DCCSessionManager {
 
 export interface DCCManagerDeps {
   client: DCCIRCClient;
-  dispatcher: EventDispatcher;
-  permissions: Permissions;
-  services: Services;
-  commandHandler: CommandHandler;
+  dispatcher: BindRegistrar;
+  permissions: PluginPermissions;
+  services: PluginServices;
+  commandHandler: CommandExecutor;
   config: DccConfig;
   version: string;
   botNick: string;
@@ -189,7 +193,7 @@ export class DCCSession {
 
   private socket: Socket;
   private manager: DCCSessionManager;
-  private commandHandler: CommandHandler;
+  private commandHandler: CommandExecutor;
   private idleTimeoutMs: number;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
@@ -202,7 +206,7 @@ export class DCCSession {
     ident: string;
     hostname: string;
     socket: Socket;
-    commandHandler: CommandHandler;
+    commandHandler: CommandExecutor;
     idleTimeoutMs: number;
     logger?: Logger | null;
   }) {
@@ -426,10 +430,10 @@ const PLUGIN_ID = 'core:dcc';
 
 export class DCCManager implements DCCSessionManager {
   private client: DCCIRCClient;
-  private dispatcher: EventDispatcher;
-  private permissions: Permissions;
-  private services: Services;
-  private commandHandler: CommandHandler;
+  private dispatcher: BindRegistrar;
+  private permissions: PluginPermissions;
+  private services: PluginServices;
+  private commandHandler: CommandExecutor;
   private config: DccConfig;
   private version: string;
   private logger: Logger | null;

@@ -48,6 +48,11 @@ export interface CommandOptions {
 /** Signature for command handler functions. */
 export type CommandHandlerFn = (args: string, ctx: CommandContext) => void | Promise<void>;
 
+/** Minimal command execution interface for consumers that only run commands. */
+export interface CommandExecutor {
+  execute(commandString: string, ctx: CommandContext): Promise<void>;
+}
+
 /** A registered command entry. */
 export interface CommandEntry {
   name: string;

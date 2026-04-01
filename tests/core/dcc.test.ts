@@ -1,7 +1,7 @@
 import type { Socket } from 'node:net';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { CommandHandler } from '../../src/command-handler';
+import type { CommandExecutor } from '../../src/command-handler';
 import {
   DCCManager,
   DCCSession,
@@ -11,10 +11,14 @@ import {
   parseDccChatPayload,
 } from '../../src/core/dcc';
 import type { DCCIRCClient, DCCSessionManager } from '../../src/core/dcc';
-import type { Permissions } from '../../src/core/permissions';
-import type { Services } from '../../src/core/services';
-import type { EventDispatcher } from '../../src/dispatcher';
-import type { DccConfig, HandlerContext, UserRecord } from '../../src/types';
+import type { BindRegistrar } from '../../src/dispatcher';
+import type {
+  DccConfig,
+  HandlerContext,
+  PluginPermissions,
+  PluginServices,
+  UserRecord,
+} from '../../src/types';
 import { createMockLogger } from '../helpers/mock-logger';
 import { createMockSocket } from '../helpers/mock-socket';
 
@@ -149,31 +153,32 @@ class MockIRCClient implements DCCIRCClient {
   removeListener(_event: string, _listener: (...args: unknown[]) => void): void {}
 }
 
-function makePermissions(user: UserRecord | null) {
+function makePermissions(user: UserRecord | null): PluginPermissions {
   return {
     findByHostmask: vi.fn().mockReturnValue(user),
     checkFlags: vi.fn().mockReturnValue(true),
-  } as unknown as Permissions;
+  };
 }
 
-function makeServices(verified = true) {
+function makeServices(verified = true): PluginServices {
   return {
     verifyUser: vi.fn().mockResolvedValue({ verified, account: 'testaccount' }),
     isAvailable: vi.fn().mockReturnValue(true),
-  } as unknown as Services;
+  };
 }
 
-function makeDispatcher() {
+function makeDispatcher(): BindRegistrar {
   return {
     bind: vi.fn(),
+    unbind: vi.fn(),
     unbindAll: vi.fn(),
-  } as unknown as EventDispatcher;
+  };
 }
 
-function makeCommandHandler() {
+function makeCommandHandler(): CommandExecutor {
   return {
     execute: vi.fn(),
-  } as unknown as CommandHandler;
+  };
 }
 
 describe('DCCManager', () => {
@@ -610,7 +615,7 @@ function buildSession(
   socket: Socket,
   overrides: {
     manager?: DCCSessionManager;
-    commandHandler?: CommandHandler;
+    commandHandler?: CommandExecutor;
     idleTimeoutMs?: number;
     user?: UserRecord;
   } = {},
@@ -972,34 +977,13 @@ describe('DCCSession relay mode', () => {
 
 describe('DCCManager new methods', () => {
   it('getSession returns undefined for unknown nick', () => {
-    const client = {
-      notice: vi.fn(),
-      ctcpRequest: vi.fn(),
-      ctcpResponse: vi.fn(),
-      on: vi.fn(),
-      removeListener: vi.fn(),
-    };
     const mgr = new DCCManager({
-      client: client as unknown as DCCIRCClient,
-      dispatcher: {
-        bind: vi.fn(),
-        unbindAll: vi.fn(),
-      } as unknown as EventDispatcher,
-      permissions: {
-        findByHostmask: vi.fn(),
-        checkFlags: vi.fn(),
-      } as unknown as Permissions,
-      services: { verifyUser: vi.fn() } as unknown as Services,
+      client: new MockIRCClient(),
+      dispatcher: makeDispatcher(),
+      permissions: makePermissions(null),
+      services: makeServices(),
       commandHandler: makeCommandHandler(),
-      config: {
-        enabled: true,
-        ip: '127.0.0.1',
-        port_range: [50000, 50010] as [number, number],
-        require_flags: 'm',
-        max_sessions: 5,
-        idle_timeout_ms: 300000,
-        nickserv_verify: false,
-      },
+      config: makeConfig({ ip: '127.0.0.1', port_range: [50000, 50010] }),
       version: '1.0.0',
       botNick: 'hexbot',
     });
@@ -1008,34 +992,13 @@ describe('DCCManager new methods', () => {
   });
 
   it('onPartyChat callback fires on broadcast', () => {
-    const client = {
-      notice: vi.fn(),
-      ctcpRequest: vi.fn(),
-      ctcpResponse: vi.fn(),
-      on: vi.fn(),
-      removeListener: vi.fn(),
-    };
     const mgr = new DCCManager({
-      client: client as unknown as DCCIRCClient,
-      dispatcher: {
-        bind: vi.fn(),
-        unbindAll: vi.fn(),
-      } as unknown as EventDispatcher,
-      permissions: {
-        findByHostmask: vi.fn(),
-        checkFlags: vi.fn(),
-      } as unknown as Permissions,
-      services: { verifyUser: vi.fn() } as unknown as Services,
+      client: new MockIRCClient(),
+      dispatcher: makeDispatcher(),
+      permissions: makePermissions(null),
+      services: makeServices(),
       commandHandler: makeCommandHandler(),
-      config: {
-        enabled: true,
-        ip: '127.0.0.1',
-        port_range: [50000, 50010] as [number, number],
-        require_flags: 'm',
-        max_sessions: 5,
-        idle_timeout_ms: 300000,
-        nickserv_verify: false,
-      },
+      config: makeConfig({ ip: '127.0.0.1', port_range: [50000, 50010] }),
       version: '1.0.0',
       botNick: 'hexbot',
     });
@@ -1047,34 +1010,13 @@ describe('DCCManager new methods', () => {
   });
 
   it('notifyPartyPart calls onPartyPart callback', () => {
-    const client = {
-      notice: vi.fn(),
-      ctcpRequest: vi.fn(),
-      ctcpResponse: vi.fn(),
-      on: vi.fn(),
-      removeListener: vi.fn(),
-    };
     const mgr = new DCCManager({
-      client: client as unknown as DCCIRCClient,
-      dispatcher: {
-        bind: vi.fn(),
-        unbindAll: vi.fn(),
-      } as unknown as EventDispatcher,
-      permissions: {
-        findByHostmask: vi.fn(),
-        checkFlags: vi.fn(),
-      } as unknown as Permissions,
-      services: { verifyUser: vi.fn() } as unknown as Services,
+      client: new MockIRCClient(),
+      dispatcher: makeDispatcher(),
+      permissions: makePermissions(null),
+      services: makeServices(),
       commandHandler: makeCommandHandler(),
-      config: {
-        enabled: true,
-        ip: '127.0.0.1',
-        port_range: [50000, 50010] as [number, number],
-        require_flags: 'm',
-        max_sessions: 5,
-        idle_timeout_ms: 300000,
-        nickserv_verify: false,
-      },
+      config: makeConfig({ ip: '127.0.0.1', port_range: [50000, 50010] }),
       version: '1.0.0',
       botNick: 'hexbot',
     });
