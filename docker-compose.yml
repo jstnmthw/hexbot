@@ -8,3 +8,15 @@ services:
       - ./config:/app/config
       - ./plugins:/app/plugins
       - ./data:/app/data
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'sh',
+          '-c',
+          '[ -f /tmp/.hexbot-healthy ] && [ $$(( $$(date +%s) - $$(stat -c %Y /tmp/.hexbot-healthy) )) -lt 120 ]',
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

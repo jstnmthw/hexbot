@@ -1,7 +1,45 @@
 // HexBot — Entry point
 // Parses CLI args, starts the bot, optionally starts the REPL.
+import { unlinkSync, writeFileSync } from 'node:fs';
+
 import { Bot } from './bot';
 import { BotREPL } from './repl';
+
+// ---------------------------------------------------------------------------
+// Healthcheck heartbeat file
+// ---------------------------------------------------------------------------
+
+const HEALTHCHECK_FILE = '/tmp/.hexbot-healthy';
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+function touchHealthcheck(): void {
+  try {
+    writeFileSync(HEALTHCHECK_FILE, String(Date.now()));
+  } catch {
+    // Best-effort — /tmp may be read-only in exotic containers
+  }
+}
+
+function removeHealthcheck(): void {
+  try {
+    unlinkSync(HEALTHCHECK_FILE);
+  } catch {
+    // File may not exist
+  }
+}
+
+function startHeartbeat(): void {
+  touchHealthcheck();
+  heartbeatTimer = setInterval(touchHealthcheck, 30_000);
+}
+
+function stopHeartbeat(): void {
+  if (heartbeatTimer !== null) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+  removeHealthcheck();
+}
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
@@ -21,6 +59,11 @@ let bot: Bot | null = null;
 async function main(): Promise<void> {
   bot = new Bot(configPath);
 
+  // Wire healthcheck heartbeat to connection events before start()
+  // so the initial bot:connected is not missed.
+  bot.eventBus.on('bot:connected', startHeartbeat);
+  bot.eventBus.on('bot:disconnected', stopHeartbeat);
+
   await bot.start();
 
   if (useRepl) {
@@ -35,6 +78,7 @@ async function main(): Promise<void> {
 
 async function gracefulShutdown(signal: string): Promise<void> {
   bot?.logger.child('bot').info(`Received ${signal}, shutting down...`);
+  stopHeartbeat();
   if (bot) {
     await bot.shutdown();
   }

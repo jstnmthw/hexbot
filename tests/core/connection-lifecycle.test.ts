@@ -238,6 +238,43 @@ describe('registerConnectionEvents', () => {
       expect(registeredEvents).toContain('irc error');
       expect(registeredEvents).toContain('unknown command');
     });
+
+    it('does not stack listeners on reconnect', () => {
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+      try {
+        const { client, deps } = makeContext({
+          configuredChannels: [{ name: '#test' }],
+        });
+        const onSpy = vi.spyOn(client, 'on');
+        registerConnectionEvents(
+          deps,
+          () => {},
+          () => {},
+        );
+
+        // First connect
+        client.emit('registered');
+        const countAfterFirst = onSpy.mock.calls.filter(
+          (c) => c[0] === 'irc error' || c[0] === 'unknown command',
+        ).length;
+
+        // Simulate reconnect cycle
+        client.emit('reconnecting');
+        client.emit('close');
+        client.emit('registered');
+        const countAfterSecond = onSpy.mock.calls.filter(
+          (c) => c[0] === 'irc error' || c[0] === 'unknown command',
+        ).length;
+
+        // Should not have added more listeners
+        expect(countAfterSecond).toBe(countAfterFirst);
+
+        // Dispatcher bind (invite handler) should also only be called once
+        expect(deps.dispatcher.bind).toHaveBeenCalledTimes(1);
+      } finally {
+        exitSpy.mockRestore();
+      }
+    });
   });
 
   describe('close event', () => {
@@ -252,6 +289,60 @@ describe('registerConnectionEvents', () => {
       );
       client.emit('close');
       expect(handler).toHaveBeenCalledWith('connection closed');
+    });
+
+    it('exits when close fires after registration with no pending reconnect', () => {
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+      try {
+        const { client, deps, eventBus } = makeContext();
+        const handler = vi.fn();
+        eventBus.on('bot:disconnected', handler);
+        registerConnectionEvents(
+          deps,
+          () => {},
+          () => {},
+        );
+        client.emit('registered');
+        client.emit('close'); // no preceding 'reconnecting' → retries exhausted
+        expect(exitSpy).toHaveBeenCalledWith(1);
+        expect(handler).toHaveBeenCalledWith('reconnect attempts exhausted');
+      } finally {
+        exitSpy.mockRestore();
+      }
+    });
+
+    it('does not exit when close follows a reconnecting event', () => {
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+      try {
+        const { client, deps } = makeContext();
+        registerConnectionEvents(
+          deps,
+          () => {},
+          () => {},
+        );
+        client.emit('registered');
+        client.emit('reconnecting'); // irc-framework signals retry
+        client.emit('close');
+        expect(exitSpy).not.toHaveBeenCalled();
+      } finally {
+        exitSpy.mockRestore();
+      }
+    });
+
+    it('does not exit on close before registration (startup failure)', () => {
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+      try {
+        const { client, deps } = makeContext();
+        registerConnectionEvents(
+          deps,
+          () => {},
+          () => {},
+        );
+        client.emit('close'); // before registered — not a zombie
+        expect(exitSpy).not.toHaveBeenCalled();
+      } finally {
+        exitSpy.mockRestore();
+      }
     });
   });
 

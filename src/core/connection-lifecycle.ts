@@ -65,9 +65,15 @@ export function registerConnectionEvents(
   const cfg = config.irc;
   let registered = false;
   let presenceTimer: ReturnType<typeof setInterval> | null = null;
+  let listenersRegistered = false;
+  // Tracks whether irc-framework signalled another reconnect attempt is coming.
+  // Set to true by 'reconnecting', cleared by 'close'. If 'close' fires after
+  // registration without a preceding 'reconnecting', retries are exhausted.
+  let expectingReconnect = false;
 
   client.on('registered', () => {
     registered = true;
+    expectingReconnect = false;
     logger.info(`Connected to ${cfg.host}:${cfg.port} as ${cfg.nick}`);
 
     if (cfg.tls) {
@@ -76,8 +82,16 @@ export function registerConnectionEvents(
 
     deps.eventBus.emit('bot:connected');
     applyCasemapping(deps);
-    registerJoinErrorListeners(client, logger);
-    bindCoreInviteHandler(deps);
+
+    // Register IRC error and invite listeners once — they don't depend on
+    // connection state and stacking duplicates on every reconnect leaks
+    // memory and causes duplicate joins/warnings.
+    if (!listenersRegistered) {
+      registerJoinErrorListeners(client, logger);
+      bindCoreInviteHandler(deps);
+      listenersRegistered = true;
+    }
+
     joinConfiguredChannels(deps);
 
     // (Re)start the periodic channel presence check.
@@ -89,11 +103,19 @@ export function registerConnectionEvents(
   });
 
   client.on('close', () => {
+    if (registered && !expectingReconnect) {
+      // irc-framework exhausted all reconnect attempts — the bot is a zombie.
+      logger.error('Reconnect attempts exhausted — exiting');
+      deps.eventBus.emit('bot:disconnected', 'reconnect attempts exhausted');
+      process.exit(1);
+    }
+    expectingReconnect = false;
     logger.info('Connection closed');
     deps.eventBus.emit('bot:disconnected', 'connection closed');
   });
 
   client.on('reconnecting', () => {
+    expectingReconnect = true;
     deps.messageQueue.clear();
     logger.info('Reconnecting...');
   });
