@@ -112,6 +112,10 @@ async function setupLinkedPair(): Promise<{
   pushFrame(leafDuplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
   await tick();
 
+  // Register admin's party line session on the hub (required for CMD session verification)
+  pushFrame(hubDuplex, { type: 'PARTY_JOIN', handle: 'admin', fromBot: 'leaf1' });
+  await tick();
+
   // Clear handshake frames
   hubWritten.length = 0;
   leafWritten.length = 0;
@@ -218,7 +222,7 @@ describe('Command relay', () => {
       hub.close();
     });
 
-    it('rejects CMD from unknown user handle', async () => {
+    it('rejects CMD from handle without active session', async () => {
       const { hub, hubSocket } = await setupLinkedPair();
 
       pushFrame(hubSocket.duplex, {
@@ -235,7 +239,7 @@ describe('Command relay', () => {
 
       const result = parseWritten(hubSocket.written).find((f) => f.type === 'CMD_RESULT');
       expect(result).toBeDefined();
-      expect(result!.output).toContain('Permission denied.');
+      expect((result!.output as string[])[0]).toMatch(/No active session/);
 
       hub.close();
     });
@@ -245,6 +249,10 @@ describe('Command relay', () => {
 
       // Add a user with only 'v' flag (insufficient for .adduser which needs +n)
       hubPerms.addUser('viewer', '*!v@host', 'v');
+      // Register their party line session
+      pushFrame(hubSocket.duplex, { type: 'PARTY_JOIN', handle: 'viewer', fromBot: 'leaf1' });
+      await tick();
+      hubSocket.written.length = 0;
 
       pushFrame(hubSocket.duplex, {
         type: 'CMD',

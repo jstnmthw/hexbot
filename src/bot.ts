@@ -8,7 +8,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { CommandHandler } from './command-handler';
-import { BotLinkHub, BotLinkLeaf } from './core/botlink';
+import { BotLinkHub, BotLinkLeaf, type LinkFrame } from './core/botlink';
+import { handleProtectFrame } from './core/botlink-protect';
 import { BanListSyncer, SharedBanList } from './core/botlink-sharing';
 import { ChannelStateSyncer, PermissionSyncer } from './core/botlink-sync';
 import { ChannelSettings } from './core/channel-settings';
@@ -39,6 +40,7 @@ import { PluginLoader } from './plugin-loader';
 import type { Casemapping } from './types';
 import type { BotConfig } from './types';
 import { buildSocksOptions } from './utils/socks';
+import { stripFormatting } from './utils/strip-formatting';
 import { requiresVerificationForFlags } from './utils/verify-flags';
 
 // ---------------------------------------------------------------------------
@@ -285,35 +287,8 @@ export class Bot {
           this.eventBus.emit('botlink:connected', botname);
         this._botLinkHub.onLeafDisconnected = (botname, reason) =>
           this.eventBus.emit('botlink:disconnected', botname, reason);
-        // Party line: deliver incoming PARTY_CHAT/JOIN/PART to local DCC
         this._botLinkHub.onLeafFrame = (_botname, frame) => {
-          if (frame.type === 'PARTY_CHAT' && this._dccManager) {
-            this._dccManager.announce(`<${frame.handle}@${frame.fromBot}> ${frame.message}`);
-          }
-          if (frame.type === 'PARTY_JOIN' && this._dccManager) {
-            this._dccManager.announce(
-              `*** ${frame.handle} has joined the console (on ${frame.fromBot})`,
-            );
-          }
-          if (frame.type === 'PARTY_PART' && this._dccManager) {
-            this._dccManager.announce(
-              `*** ${frame.handle} has left the console (on ${frame.fromBot})`,
-            );
-          }
-          // System announcements from linked bots
-          if (frame.type === 'ANNOUNCE' && this._dccManager) {
-            this._dccManager.announce(String(frame.message ?? ''));
-          }
-          // Ban sharing: apply incoming ban frames
-          if (frame.type.startsWith('CHAN_BAN') || frame.type.startsWith('CHAN_EXEMPT')) {
-            if (this._sharedBanList) {
-              BanListSyncer.applyFrame(frame, this._sharedBanList, isShared);
-            }
-          }
-          // Relay: handle frames targeted at this bot
-          this.handleRelayFrame(frame);
-          // Protection: act on PROTECT_* if we have ops
-          this.handleProtectFrame(frame);
+          this.handleIncomingBotlinkFrame(frame, isShared);
         };
         // BSAY: when a linked bot asks the hub to send an IRC message
         this._botLinkHub.onBsay = (target, message) => this.client.say(target, message);
@@ -336,44 +311,18 @@ export class Bot {
         this._botLinkLeaf = new BotLinkLeaf(this.config.botlink, version, this.logger);
         this._botLinkLeaf.setCommandRelay(this.commandHandler, this.permissions);
         this._botLinkLeaf.onFrame = (frame) => {
+          // Leaf applies state sync (hub is authoritative, so hub doesn't need this)
           ChannelStateSyncer.applyFrame(frame, this.channelState);
           PermissionSyncer.applyFrame(frame, this.permissions);
           // Sync complete notification
           if (frame.type === 'SYNC_END') {
             this.eventBus.emit('botlink:syncComplete', this.config.botlink!.botname);
           }
-          // Party line: deliver incoming to local DCC
-          if (frame.type === 'PARTY_CHAT' && this._dccManager) {
-            this._dccManager.announce(`<${frame.handle}@${frame.fromBot}> ${frame.message}`);
-          }
-          if (frame.type === 'PARTY_JOIN' && this._dccManager) {
-            this._dccManager.announce(
-              `*** ${frame.handle} has joined the console (on ${frame.fromBot})`,
-            );
-          }
-          if (frame.type === 'PARTY_PART' && this._dccManager) {
-            this._dccManager.announce(
-              `*** ${frame.handle} has left the console (on ${frame.fromBot})`,
-            );
-          }
-          // System announcements from hub
-          if (frame.type === 'ANNOUNCE' && this._dccManager) {
-            this._dccManager.announce(String(frame.message ?? ''));
-          }
           // BSAY: hub asks this leaf to send an IRC message
           if (frame.type === 'BSAY') {
             this.client.say(String(frame.target ?? ''), String(frame.message ?? ''));
           }
-          // Ban sharing: apply incoming ban frames
-          if (frame.type.startsWith('CHAN_BAN') || frame.type.startsWith('CHAN_EXEMPT')) {
-            if (this._sharedBanList) {
-              BanListSyncer.applyFrame(frame, this._sharedBanList, isShared);
-            }
-          }
-          // Relay: handle frames targeted at this bot
-          this.handleRelayFrame(frame);
-          // Protection: act on PROTECT_* if we have ops
-          this.handleProtectFrame(frame);
+          this.handleIncomingBotlinkFrame(frame, isShared);
         };
         this._botLinkLeaf.onConnected = (hubName) =>
           this.eventBus.emit('botlink:connected', hubName);
@@ -623,7 +572,7 @@ export class Bot {
   // -------------------------------------------------------------------------
 
   /** Handle incoming RELAY_* frames (as the target or origin bot). */
-  private handleRelayFrame(frame: import('./core/botlink').LinkFrame): void {
+  private handleRelayFrame(frame: LinkFrame): void {
     const handle = String(frame.handle ?? '');
 
     if (frame.type === 'RELAY_REQUEST' && this._dccManager) {
@@ -659,7 +608,7 @@ export class Bot {
           const user = this.permissions.getUser(handle);
           this.commandHandler
             .execute(line, {
-              source: 'dcc',
+              source: 'botlink',
               nick: user?.hostmasks[0]?.split('!')[0] || handle,
               ident: 'relay',
               hostname: 'relay',
@@ -670,11 +619,13 @@ export class Bot {
             })
             .catch(() => {});
         } else {
-          // Party line chat from relayed user
+          // Party line chat from relayed user — strip formatting to prevent injection
+          const safeHandle = stripFormatting(handle);
+          const safeLine = stripFormatting(line);
           if (this._dccManager) {
-            this._dccManager.announce(`<${handle}@relay> ${line}`);
+            this._dccManager.announce(`<${safeHandle}@relay> ${safeLine}`);
           }
-          vs.sendOutput(`<${handle}> ${line}`);
+          vs.sendOutput(`<${safeHandle}> ${safeLine}`);
         }
       }
     }
@@ -707,67 +658,53 @@ export class Bot {
     }
   }
 
-  /** Handle incoming PROTECT_* frames — act if this bot has ops. */
-  private handleProtectFrame(frame: import('./core/botlink').LinkFrame): void {
-    if (!frame.type.startsWith('PROTECT_') || frame.type === 'PROTECT_ACK') return;
+  /** Handle incoming PROTECT_* frames — delegates to extracted handler with permission guards. */
+  private handleProtectFrame(frame: LinkFrame): void {
+    handleProtectFrame(frame, {
+      channelState: this.channelState,
+      permissions: this.permissions,
+      ircCommands: this.ircCommands,
+      botNick: this.config.irc.nick,
+      casemapping: this._casemapping,
+      sendAck: (ack) => {
+        if (this._botLinkHub) this._botLinkHub.broadcast(ack);
+        else this._botLinkLeaf?.send(ack);
+      },
+    });
+  }
 
-    const channel = String(frame.channel ?? '');
-    const nick = String(frame.nick ?? '');
-    const ref = String(frame.ref ?? '');
-    const requestedBy = String(frame.requestedBy ?? '');
-
-    if (!channel || !nick) return;
-
-    // Check if this bot has ops in the channel
-    const ch = this.channelState.getChannel(channel);
-    if (!ch) return;
-    const botUser = ch.users.get(this.config.irc.nick.toLowerCase());
-    const hasOps = botUser?.modes.includes('o') ?? false;
-
-    const sendAck = (success: boolean, message?: string) => {
-      const ack = { type: 'PROTECT_ACK', ref, success, message };
-      if (this._botLinkHub) this._botLinkHub.broadcast(ack);
-      else this._botLinkLeaf?.send(ack);
-    };
-
-    switch (frame.type) {
-      case 'PROTECT_OP': {
-        if (!hasOps) return;
-        // Guard: only op nicks in the permissions DB
-        if (!this.permissions.findByNick(nick)) {
-          sendAck(false, `Nick "${nick}" not in permissions DB`);
-          return;
-        }
-        this.ircCommands.op(channel, nick);
-        sendAck(true);
-        break;
-      }
-      case 'PROTECT_DEOP': {
-        if (!hasOps) return;
-        this.ircCommands.deop(channel, nick);
-        sendAck(true);
-        break;
-      }
-      case 'PROTECT_UNBAN': {
-        if (!hasOps) return;
-        // Unban is best-effort — we can't know all matching bans without querying the server
-        this.ircCommands.mode(channel, '-b', nick);
-        sendAck(true);
-        break;
-      }
-      case 'PROTECT_INVITE': {
-        this.ircCommands.invite(channel, nick);
-        sendAck(true);
-        break;
-      }
-      case 'PROTECT_KICK': {
-        if (!hasOps) return;
-        const reason = String(frame.reason ?? `Requested by ${requestedBy}`);
-        this.ircCommands.kick(channel, nick, reason);
-        sendAck(true);
-        break;
+  /** Process an incoming botlink frame — shared between hub and leaf roles. */
+  private handleIncomingBotlinkFrame(frame: LinkFrame, isShared: (ch: string) => boolean): void {
+    // Party line: deliver incoming PARTY_CHAT/JOIN/PART to local DCC.
+    // Strip IRC formatting from all frame fields to prevent control character injection.
+    if (frame.type === 'PARTY_CHAT' && this._dccManager) {
+      const handle = stripFormatting(String(frame.handle ?? ''));
+      const bot = stripFormatting(String(frame.fromBot ?? ''));
+      const msg = stripFormatting(String(frame.message ?? ''));
+      this._dccManager.announce(`<${handle}@${bot}> ${msg}`);
+    }
+    if (frame.type === 'PARTY_JOIN' && this._dccManager) {
+      const handle = stripFormatting(String(frame.handle ?? ''));
+      const bot = stripFormatting(String(frame.fromBot ?? ''));
+      this._dccManager.announce(`*** ${handle} has joined the console (on ${bot})`);
+    }
+    if (frame.type === 'PARTY_PART' && this._dccManager) {
+      const handle = stripFormatting(String(frame.handle ?? ''));
+      const bot = stripFormatting(String(frame.fromBot ?? ''));
+      this._dccManager.announce(`*** ${handle} has left the console (on ${bot})`);
+    }
+    // System announcements from linked bots
+    if (frame.type === 'ANNOUNCE' && this._dccManager) {
+      this._dccManager.announce(String(frame.message ?? ''));
+    }
+    // Ban sharing: apply incoming ban frames
+    if (frame.type.startsWith('CHAN_BAN') || frame.type.startsWith('CHAN_EXEMPT')) {
+      if (this._sharedBanList) {
+        BanListSyncer.applyFrame(frame, this._sharedBanList, isShared);
       }
     }
+    this.handleRelayFrame(frame);
+    this.handleProtectFrame(frame);
   }
 
   /** Virtual relay sessions on this bot (as target). */
@@ -780,7 +717,7 @@ export class Bot {
   private wirePartyLine(link: BotLinkHub | BotLinkLeaf): void {
     if (!this._dccManager) return;
     const botname = this.config.botlink!.botname;
-    const sendFrame = (frame: import('./core/botlink').LinkFrame) => {
+    const sendFrame = (frame: LinkFrame) => {
       if (link instanceof BotLinkHub) {
         link.broadcast(frame);
       } else {

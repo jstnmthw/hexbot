@@ -160,7 +160,7 @@ export class IRCCommands {
 
   private sendMode(channel: string, mode: string, param: string): void {
     if (this.client.mode) {
-      this.client.mode(channel, mode, param);
+      this.client.mode(sanitize(channel), sanitize(mode), sanitize(param));
     } else {
       this.client.raw(`MODE ${sanitize(channel)} ${sanitize(mode)} ${sanitize(param)}`);
     }

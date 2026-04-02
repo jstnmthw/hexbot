@@ -736,7 +736,7 @@ describe('BotLinkHub', () => {
       hub.close();
     });
 
-    it('does NOT rate-limit PROTECT_* frames', async () => {
+    it('rate-limits PROTECT_* frames at 20/sec', async () => {
       const hub = new BotLinkHub(hubConfig(), '1.0.0');
       const { socket, duplex } = createMockSocket();
       hub.addConnection(socket);
@@ -746,8 +746,8 @@ describe('BotLinkHub', () => {
       const received: LinkFrame[] = [];
       hub.onLeafFrame = (_b, f) => received.push(f);
 
-      // Send 20 PROTECT_OP frames rapidly
-      for (let i = 0; i < 20; i++) {
+      // Send 25 PROTECT_OP frames rapidly — first 20 pass, rest silently dropped
+      for (let i = 0; i < 25; i++) {
         pushFrame(duplex, {
           type: 'PROTECT_OP',
           channel: '#chan',
@@ -758,6 +758,56 @@ describe('BotLinkHub', () => {
       await tick();
 
       expect(received.filter((f) => f.type === 'PROTECT_OP')).toHaveLength(20);
+
+      hub.close();
+    });
+  });
+
+  describe('identity enforcement', () => {
+    it('hub overwrites fromBot with authenticated botname', async () => {
+      const hub = new BotLinkHub(hubConfig(), '1.0.0');
+      const { socket, duplex } = createMockSocket();
+      hub.addConnection(socket);
+      pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+      await tick();
+
+      const received: LinkFrame[] = [];
+      hub.onLeafFrame = (_b, f) => received.push(f);
+
+      // Send a PARTY_CHAT with a spoofed fromBot
+      pushFrame(duplex, {
+        type: 'PARTY_CHAT',
+        handle: 'admin',
+        fromBot: 'spoofed-bot',
+        message: 'hello',
+      });
+      await tick();
+
+      // The hub should have overwritten fromBot to 'leaf1'
+      const chat = received.find((f) => f.type === 'PARTY_CHAT');
+      expect(chat).toBeDefined();
+      expect(chat!.fromBot).toBe('leaf1');
+
+      hub.close();
+    });
+
+    it('frames without fromBot are passed through unchanged', async () => {
+      const hub = new BotLinkHub(hubConfig(), '1.0.0');
+      const { socket, duplex } = createMockSocket();
+      hub.addConnection(socket);
+      pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+      await tick();
+
+      const received: LinkFrame[] = [];
+      hub.onLeafFrame = (_b, f) => received.push(f);
+
+      // PROTECT_ACK has no fromBot field
+      pushFrame(duplex, { type: 'PROTECT_ACK', ref: 'r1', success: true });
+      await tick();
+
+      const ack = received.find((f) => f.type === 'PROTECT_ACK');
+      expect(ack).toBeDefined();
+      expect(ack!.fromBot).toBeUndefined();
 
       hub.close();
     });
@@ -1644,6 +1694,9 @@ describe('BotLinkHub handleCmdRelay edge cases', () => {
     hub.addConnection(socket);
     pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
     await tick();
+    // Register admin's party line session (required for CMD session verification)
+    pushFrame(duplex, { type: 'PARTY_JOIN', handle: 'admin', fromBot: 'leaf1' });
+    await tick();
     written.length = 0;
 
     // Send CMD for a command that does not exist
@@ -1685,6 +1738,8 @@ describe('BotLinkHub handleCmdRelay edge cases', () => {
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
     pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    await tick();
+    pushFrame(duplex, { type: 'PARTY_JOIN', handle: 'admin', fromBot: 'leaf1' });
     await tick();
     written.length = 0;
 
@@ -1728,6 +1783,8 @@ describe('BotLinkHub handleCmdRelay edge cases', () => {
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
     pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    await tick();
+    pushFrame(duplex, { type: 'PARTY_JOIN', handle: 'admin', fromBot: 'leaf1' });
     await tick();
     written.length = 0;
 

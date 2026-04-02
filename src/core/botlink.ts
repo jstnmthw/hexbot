@@ -232,6 +232,7 @@ interface LeafConnection {
   connectedAt: number;
   cmdRate: RateCounter;
   partyRate: RateCounter;
+  protectRate: RateCounter;
   lastMessageAt: number;
   pingTimer: ReturnType<typeof setInterval> | null;
   pingSeq: number;
@@ -411,6 +412,18 @@ export class BotLinkHub {
       }
       this.cmdRoutes.set(ref, fromBot);
       this.send(toBot, frame);
+      return;
+    }
+
+    // Verify the handle has an active DCC session on the sending leaf.
+    // This prevents a compromised leaf from forging commands as arbitrary handles.
+    const sessionKey = `${handle}@${fromBot}`;
+    if (!this.remotePartyUsers.has(sessionKey)) {
+      this.send(fromBot, {
+        type: 'CMD_RESULT',
+        ref,
+        output: [`No active session for "${handle}" on ${fromBot}.`],
+      });
       return;
     }
 
@@ -698,6 +711,7 @@ export class BotLinkHub {
       connectedAt: Date.now(),
       cmdRate: new RateCounter(10, 1_000),
       partyRate: new RateCounter(5, 1_000),
+      protectRate: new RateCounter(20, 1_000),
       lastMessageAt: Date.now(),
       pingTimer: null,
       pingSeq: 0,
@@ -731,6 +745,9 @@ export class BotLinkHub {
 
     conn.lastMessageAt = Date.now();
 
+    // Enforce authenticated identity — prevent a leaf from spoofing another leaf's name
+    if ('fromBot' in frame) frame.fromBot = botname;
+
     // Heartbeat — handled internally
     if (frame.type === 'PONG') return;
     if (frame.type === 'PING') {
@@ -749,6 +766,9 @@ export class BotLinkHub {
     }
     if (frame.type === 'PARTY_CHAT' && !conn.partyRate.check()) {
       return; // Silently drop
+    }
+    if (frame.type.startsWith('PROTECT_') && frame.type !== 'PROTECT_ACK') {
+      if (!conn.protectRate.check()) return; // Silently drop
     }
 
     // Fan-out to other leaves (unless hub-only)

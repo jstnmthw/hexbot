@@ -13,76 +13,87 @@ export interface BanEntry {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Validate that a mask looks like a ban mask (contains ! and @) and is not dangerously broad. */
+function isValidMask(mask: string): boolean {
+  return mask.includes('!') && mask.includes('@') && mask !== '*!*@*';
+}
+
+/** Per-channel mask list (bans or exempts). */
+class MaskList {
+  private entries: Map<string, BanEntry[]> = new Map();
+
+  get(channel: string): BanEntry[] {
+    return this.entries.get(channel.toLowerCase()) ?? [];
+  }
+
+  add(channel: string, mask: string, setBy: string, setAt: number): void {
+    const lower = channel.toLowerCase();
+    if (!this.entries.has(lower)) this.entries.set(lower, []);
+    const list = this.entries.get(lower)!;
+    if (!list.some((b) => b.mask === mask)) {
+      list.push({ mask, setBy, setAt });
+    }
+  }
+
+  remove(channel: string, mask: string): void {
+    const lower = channel.toLowerCase();
+    const list = this.entries.get(lower);
+    if (!list) return;
+    const idx = list.findIndex((b) => b.mask === mask);
+    if (idx !== -1) list.splice(idx, 1);
+  }
+
+  sync(channel: string, entries: BanEntry[]): void {
+    this.entries.set(channel.toLowerCase(), [...entries]);
+  }
+
+  channels(): IterableIterator<string> {
+    return this.entries.keys();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // SharedBanList — in-memory ban/exempt tracking for shared channels
 // ---------------------------------------------------------------------------
 
 export class SharedBanList {
-  private bans: Map<string, BanEntry[]> = new Map();
-  private exempts: Map<string, BanEntry[]> = new Map();
-
-  // -----------------------------------------------------------------------
-  // Bans
-  // -----------------------------------------------------------------------
+  private bans = new MaskList();
+  private exempts = new MaskList();
 
   getBans(channel: string): BanEntry[] {
-    return this.bans.get(channel.toLowerCase()) ?? [];
+    return this.bans.get(channel);
   }
-
   addBan(channel: string, mask: string, setBy: string, setAt: number): void {
-    const lower = channel.toLowerCase();
-    if (!this.bans.has(lower)) this.bans.set(lower, []);
-    const list = this.bans.get(lower)!;
-    if (!list.some((b) => b.mask === mask)) {
-      list.push({ mask, setBy, setAt });
-    }
+    this.bans.add(channel, mask, setBy, setAt);
   }
-
   removeBan(channel: string, mask: string): void {
-    const lower = channel.toLowerCase();
-    const list = this.bans.get(lower);
-    if (!list) return;
-    const idx = list.findIndex((b) => b.mask === mask);
-    if (idx !== -1) list.splice(idx, 1);
+    this.bans.remove(channel, mask);
   }
-
   syncBans(channel: string, bans: BanEntry[]): void {
-    this.bans.set(channel.toLowerCase(), [...bans]);
+    this.bans.sync(channel, bans);
   }
-
-  // -----------------------------------------------------------------------
-  // Exempts
-  // -----------------------------------------------------------------------
 
   getExempts(channel: string): BanEntry[] {
-    return this.exempts.get(channel.toLowerCase()) ?? [];
+    return this.exempts.get(channel);
   }
-
   addExempt(channel: string, mask: string, setBy: string, setAt: number): void {
-    const lower = channel.toLowerCase();
-    if (!this.exempts.has(lower)) this.exempts.set(lower, []);
-    const list = this.exempts.get(lower)!;
-    if (!list.some((b) => b.mask === mask)) {
-      list.push({ mask, setBy, setAt });
-    }
+    this.exempts.add(channel, mask, setBy, setAt);
   }
-
   removeExempt(channel: string, mask: string): void {
-    const lower = channel.toLowerCase();
-    const list = this.exempts.get(lower);
-    if (!list) return;
-    const idx = list.findIndex((b) => b.mask === mask);
-    if (idx !== -1) list.splice(idx, 1);
+    this.exempts.remove(channel, mask);
   }
-
   syncExempts(channel: string, exempts: BanEntry[]): void {
-    this.exempts.set(channel.toLowerCase(), [...exempts]);
+    this.exempts.sync(channel, exempts);
   }
 
   /** Get all channels that have ban or exempt entries. */
   getChannels(): string[] {
     const channels = new Set<string>();
-    for (const ch of this.bans.keys()) channels.add(ch);
-    for (const ch of this.exempts.keys()) channels.add(ch);
+    for (const ch of this.bans.channels()) channels.add(ch);
+    for (const ch of this.exempts.channels()) channels.add(ch);
     return Array.from(channels);
   }
 }
@@ -131,12 +142,16 @@ export class BanListSyncer {
     switch (frame.type) {
       case 'CHAN_BAN_SYNC': {
         const bans = Array.isArray(frame.bans) ? (frame.bans as BanEntry[]) : [];
-        banList.syncBans(channel, bans);
+        banList.syncBans(
+          channel,
+          bans.filter((b) => isValidMask(b.mask)),
+        );
         return null;
       }
 
       case 'CHAN_BAN_ADD': {
         const mask = String(frame.mask ?? '');
+        if (!isValidMask(mask)) return null;
         banList.addBan(channel, mask, String(frame.setBy ?? ''), Number(frame.setAt ?? 0));
         if (frame.enforce) {
           return { action: 'enforce_ban', channel, mask };
@@ -151,17 +166,17 @@ export class BanListSyncer {
 
       case 'CHAN_EXEMPT_SYNC': {
         const exempts = Array.isArray(frame.exempts) ? (frame.exempts as BanEntry[]) : [];
-        banList.syncExempts(channel, exempts);
+        banList.syncExempts(
+          channel,
+          exempts.filter((e) => isValidMask(e.mask)),
+        );
         return null;
       }
 
       case 'CHAN_EXEMPT_ADD': {
-        banList.addExempt(
-          channel,
-          String(frame.mask ?? ''),
-          String(frame.setBy ?? ''),
-          Number(frame.setAt ?? 0),
-        );
+        const mask = String(frame.mask ?? '');
+        if (!isValidMask(mask)) return null;
+        banList.addExempt(channel, mask, String(frame.setBy ?? ''), Number(frame.setAt ?? 0));
         return null;
       }
 

@@ -240,8 +240,22 @@ describe('BanListSyncer', () => {
       );
       expect(list.getExempts('#ch')).toHaveLength(1);
 
+      // Add another exempt without setBy/setAt (exercises ?? fallbacks on wire data)
+      BanListSyncer.applyFrame(
+        { type: 'CHAN_EXEMPT_ADD', channel: '#ch', mask: '*!*@other' },
+        list,
+        alwaysShared,
+      );
+      expect(list.getExempts('#ch')).toHaveLength(2);
+
       BanListSyncer.applyFrame(
         { type: 'CHAN_EXEMPT_DEL', channel: '#ch', mask: '*!*@good' },
+        list,
+        alwaysShared,
+      );
+      expect(list.getExempts('#ch')).toHaveLength(1); // *!*@other remains
+      BanListSyncer.applyFrame(
+        { type: 'CHAN_EXEMPT_DEL', channel: '#ch', mask: '*!*@other' },
         list,
         alwaysShared,
       );
@@ -254,14 +268,21 @@ describe('BanListSyncer', () => {
       BanListSyncer.applyFrame({ type: 'CHAN_BAN_SYNC', channel: '#ch' }, list, alwaysShared);
       expect(list.getBans('#ch')).toEqual([]);
 
-      // CHAN_BAN_ADD with missing fields (uses ?? defaults)
+      // CHAN_BAN_ADD with missing/invalid mask is rejected (mask validation)
       BanListSyncer.applyFrame(
         { type: 'CHAN_BAN_ADD', channel: '#ch', enforce: false },
         list,
         alwaysShared,
       );
+      expect(list.getBans('#ch')).toHaveLength(0);
+
+      // CHAN_BAN_ADD with valid mask is accepted
+      BanListSyncer.applyFrame(
+        { type: 'CHAN_BAN_ADD', channel: '#ch', mask: '*!*@bad.host', enforce: false },
+        list,
+        alwaysShared,
+      );
       expect(list.getBans('#ch')).toHaveLength(1);
-      expect(list.getBans('#ch')[0].mask).toBe('');
 
       // CHAN_BAN_DEL with missing mask
       BanListSyncer.applyFrame({ type: 'CHAN_BAN_DEL', channel: '#ch' }, list, alwaysShared);
@@ -270,9 +291,9 @@ describe('BanListSyncer', () => {
       BanListSyncer.applyFrame({ type: 'CHAN_EXEMPT_SYNC', channel: '#ch' }, list, alwaysShared);
       expect(list.getExempts('#ch')).toEqual([]);
 
-      // CHAN_EXEMPT_ADD with missing fields
+      // CHAN_EXEMPT_ADD with missing/invalid mask is rejected
       BanListSyncer.applyFrame({ type: 'CHAN_EXEMPT_ADD', channel: '#ch' }, list, alwaysShared);
-      expect(list.getExempts('#ch')).toHaveLength(1);
+      expect(list.getExempts('#ch')).toHaveLength(0);
 
       // CHAN_EXEMPT_DEL with missing mask
       BanListSyncer.applyFrame({ type: 'CHAN_EXEMPT_DEL', channel: '#ch' }, list, alwaysShared);
