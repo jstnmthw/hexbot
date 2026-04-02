@@ -33,6 +33,7 @@ export interface MockBot {
   services: Services;
   channelSettings: ChannelSettings;
   pluginLoader: PluginLoader;
+  botConfig: BotConfig;
   logger: Logger;
   cleanup(): void;
 }
@@ -151,6 +152,7 @@ export function createMockBot(options?: { botNick?: string; currentNick?: string
     services,
     channelSettings,
     pluginLoader,
+    botConfig,
     logger,
     cleanup() {
       services.detach();

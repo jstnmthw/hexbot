@@ -1970,6 +1970,8 @@ describe('chanmod plugin — nick recovery', () => {
 
   it('sends GHOST + deferred NICK when ghost mode is enabled', async () => {
     const ghostBot = createMockBot({ botNick: 'hexbot' });
+    // Password stored in bot.json (not plugins.json) per SECURITY.md §6
+    ghostBot.botConfig.chanmod = { nick_recovery_password: 's3cr3t' };
     try {
       await ghostBot.pluginLoader.load(PLUGIN_PATH, {
         chanmod: {
@@ -1977,7 +1979,6 @@ describe('chanmod plugin — nick recovery', () => {
           config: {
             nick_recovery: true,
             nick_recovery_ghost: true,
-            nick_recovery_password: 's3cr3t',
           },
         },
       });

@@ -394,6 +394,7 @@ export class PluginLoader {
       },
       // database and pluginDir intentionally omitted — plugins don't need filesystem paths
       logging: { ...this.botConfig.logging },
+      chanmod: this.botConfig.chanmod ? { ...this.botConfig.chanmod } : undefined,
     };
 
     const dispatcher = this.dispatcher;

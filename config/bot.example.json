@@ -75,6 +75,9 @@
     "ping_interval_ms": 30000,
     "link_timeout_ms": 90000
   },
+  "chanmod": {
+    "nick_recovery_password": ""
+  },
   "quit_message": "HexBot",
   "_comment_channel_rejoin": "channel_rejoin_interval_ms: how often (ms) to check for missing channels and attempt rejoin. Default 30000. Set to 0 to disable.",
   "channel_rejoin_interval_ms": 30000

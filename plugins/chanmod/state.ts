@@ -132,7 +132,8 @@ export function readConfig(api: PluginAPI): ChanmodConfig {
     enforcebans: cfg(c, 'enforcebans', false),
     nick_recovery: cfg(c, 'nick_recovery', true),
     nick_recovery_ghost: cfg(c, 'nick_recovery_ghost', false),
-    nick_recovery_password: cfg(c, 'nick_recovery_password', ''),
+    // Password read from bot.json (not plugins.json) per SECURITY.md §6
+    nick_recovery_password: api.botConfig.chanmod?.nick_recovery_password ?? '',
     stopnethack_mode: cfg(c, 'stopnethack_mode', 0),
     split_timeout_ms: cfg(c, 'split_timeout_ms', 300_000),
     chanserv_op: cfg(c, 'chanserv_op', false),

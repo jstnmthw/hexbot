@@ -231,11 +231,12 @@ With `cycle_on_deop: true`, if the bot itself is deopped three times within 10 s
 
 ### Nick recovery
 
-| Key                      | Type    | Default | Description                                                       |
-| ------------------------ | ------- | ------- | ----------------------------------------------------------------- |
-| `nick_recovery`          | boolean | `true`  | Reclaim the configured nick when the holder changes nick or quits |
-| `nick_recovery_ghost`    | boolean | `false` | Send `GHOST` to NickServ before reclaiming (requires a password)  |
-| `nick_recovery_password` | string  | `""`    | NickServ password used for GHOST (never logged)                   |
+| Key                   | Type    | Default | Description                                                       |
+| --------------------- | ------- | ------- | ----------------------------------------------------------------- |
+| `nick_recovery`       | boolean | `true`  | Reclaim the configured nick when the holder changes nick or quits |
+| `nick_recovery_ghost` | boolean | `false` | Send `GHOST` to NickServ before reclaiming (requires a password)  |
+
+> **Note:** The NickServ password for GHOST is stored in `config/bot.json` under `chanmod.nick_recovery_password`, not in the plugin config. This follows SECURITY.md §6: plugin configs should not contain secrets.
 
 ### Stopnethack
 
@@ -288,7 +289,6 @@ With `cycle_on_deop: true`, if the bot itself is deopped three times within 10 s
       "default_ban_duration": 60,
       "nick_recovery": true,
       "nick_recovery_ghost": false,
-      "nick_recovery_password": "",
       "chanserv_op": false,
       "stopnethack_mode": 0,
       "invite": false

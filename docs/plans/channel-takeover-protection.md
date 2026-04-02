@@ -412,7 +412,9 @@ New flow:
 
 **Goal:** Save the pre-attack channel topic and restore it after takeover recovery if it was vandalized.
 
-- [ ] Add `topic_protect` per-channel setting (default: false)
+**Note:** This extends the existing `protect_topic` setting in the topic plugin rather than adding a new setting. The topic plugin's lock/unlock behavior is preserved; takeover recovery is an additional behavior when protect_topic is enabled.
+
+- [ ] Extend existing `protect_topic` in the topic plugin (no new setting needed)
 - [ ] Track "known-good" topic per channel in `SharedState`:
 
   ```typescript
@@ -453,7 +455,12 @@ New per-channel settings (via `.chanset`):
 | `mass_reop_on_recovery`  | flag   | `true`   | Mass re-op flagged users after regaining ops during elevated threat           |
 | `takeover_punish`        | string | `'deop'` | `'none'` \| `'deop'` \| `'kickban'` \| `'akick'` — response to hostile actors |
 | `takeover_detection`     | flag   | `true`   | Enable threat scoring and automatic escalation                                |
-| `topic_protect`          | flag   | `false`  | Save and restore topic after takeover recovery                                |
+
+Existing settings enhanced (no new setting needed):
+
+| Setting         | Plugin | Change                                                                       |
+| --------------- | ------ | ---------------------------------------------------------------------------- |
+| `protect_topic` | topic  | Extended: also snapshots topic during normal ops and restores after recovery |
 
 New plugin config options (in `plugins.json` or chanmod `config.json`):
 
@@ -528,13 +535,17 @@ None. Threat state is ephemeral (in-memory). Takeover events are logged to the e
 7. **Topic recovery** (`tests/plugins/chanmod-takeover.test.ts`):
    - Topic changes at threat level 0 update the known-good snapshot
    - Topic changes at elevated threat are ignored (snapshot frozen)
-   - Post-recovery restores pre-attack topic when `topic_protect` is enabled
-   - No restoration when `topic_protect` is disabled
+   - Post-recovery restores pre-attack topic when `protect_topic` is enabled (topic plugin setting)
+   - No restoration when `protect_topic` is disabled
 
-## Open Questions
+## Resolved Questions
 
-1. **Botnet backend message types**: The bot-linking protocol (bot-linking.md) needs new frame types for protection requests — e.g., `{ type: 'PROTECT_OP', channel: '#chan', nick: 'hexbot' }`. Should these be dedicated frame types, or should they reuse the existing `CMD` relay frame (sending `.op #chan hexbot` as a relayed command)? Dedicated frames are cleaner and can bypass the CMD rate limit; relayed commands reuse existing infrastructure but are subject to the 10 CMD/sec rate limit which could matter during a fast-moving takeover.
+1. **Botnet backend message types**: Resolved — **use dedicated PROTECT\_\* frames.** The bot-linking protocol already has `PROTECT_OP`, `PROTECT_DEOP`, `PROTECT_UNBAN`, `PROTECT_INVITE`, `PROTECT_KICK` frame types implemented with 20/sec rate limiting, permission guards (DEOP/KICK refuse to act on recognized users), and ACK routing. The `BotnetBackend` will use these directly. No new frame types needed for Phase 1.
 
-2. **Coordinated mass-deop detection**: When all linked bots lose ops simultaneously (the one scenario botnet can't self-recover from), how quickly should we detect this and skip straight to ChanServ? The current threat scoring is per-channel on a single bot — it doesn't know that peers also lost ops until the next channel-state sync frame arrives. Should bots broadcast a "lost ops" alert frame so peers (and the hub) can aggregate the situation faster?
+2. **Coordinated mass-deop detection**: Resolved — **broadcast a `PROTECT_LOST_OPS` alert frame.** When a bot is deopped in a channel, it broadcasts `{ type: 'PROTECT_LOST_OPS', channel: '#chan' }` to peers. The hub aggregates these — if all peers report lost ops for a channel, escalation skips straight to ChanServ without waiting for the channel-state sync timer. This will be implemented alongside the `BotnetBackend` (Phase 1 or as a follow-up to Phase 2's threat detection).
 
 3. **Botnet recovery ordering**: Resolved — first responder wins. Any opped peer acts immediately; duplicate MODEs are harmless. Matches Eggdrop's approach. See bot-linking.md decision #12.
+
+4. **Topic protection overlap**: Resolved — **extend the existing `protect_topic` setting** in the topic plugin. Rather than adding a separate `topic_protect` in chanmod, the topic plugin's existing protect_topic will be enhanced to also snapshot the topic during normal operation and restore it after takeover recovery. One flag covers both lock/unlock and attack recovery.
+
+5. **Plugin credentials location**: Resolved — **move `nick_recovery_password` to `bot.json`** under a chanmod section before Phase 1. This sets the correct pattern per SECURITY.md §6 before adding ChanServ credential handling.

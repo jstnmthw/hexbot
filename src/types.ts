@@ -423,6 +423,12 @@ export interface BotlinkConfig {
   link_timeout_ms: number;
 }
 
+/** Plugin-specific credentials stored in bot.json (not plugins.json) per SECURITY.md §6. */
+export interface ChanmodBotConfig {
+  /** NickServ password for GHOST command during nick recovery. Never logged. */
+  nick_recovery_password?: string;
+}
+
 /** Shape for config/bot.json. */
 export interface BotConfig {
   irc: IrcConfig;
@@ -440,6 +446,8 @@ export interface BotConfig {
   quit_message?: string;
   /** Interval in ms for the periodic channel presence check (rejoin missing channels). Default: 30000. Set to 0 to disable. */
   channel_rejoin_interval_ms?: number;
+  /** Chanmod plugin credentials (passwords belong here, not in plugins.json). */
+  chanmod?: ChanmodBotConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -525,6 +533,8 @@ export interface PluginBotConfig {
   /** NickServ config with password omitted. */
   readonly services: Readonly<Pick<ServicesConfig, 'type' | 'nickserv' | 'sasl'>>;
   readonly logging: Readonly<LoggingConfig>;
+  /** Chanmod plugin credentials from bot.json. Only exposed to chanmod — other plugins ignore this. */
+  readonly chanmod?: Readonly<ChanmodBotConfig>;
 }
 
 /** Shape for a single plugin entry in config/plugins.json. */
