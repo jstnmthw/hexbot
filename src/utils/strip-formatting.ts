@@ -9,9 +9,10 @@
  * - \x02 bold, \x0F reset, \x11 monospace, \x16 reverse, \x1D italic,
  *   \x1E strikethrough, \x1F underline: no trailing parameters consumed
  */
-/* eslint-disable-next-line no-control-regex -- IRC formatting codes are intentional control characters */
+/* eslint-disable no-control-regex -- IRC formatting codes are intentional control characters */
 const IRC_FORMAT_RE =
   /\x03(\d{1,2}(,\d{1,2})?)?|\x04([0-9a-fA-F]{6}(,[0-9a-fA-F]{6})?)?|[\x02\x0F\x11\x16\x1D\x1E\x1F]/g;
+/* eslint-enable no-control-regex */
 
 /**
  * Strip IRC formatting and control characters from a string.
