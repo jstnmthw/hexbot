@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.2.0] - 2026-04-02
 
 ### Added
 
@@ -22,10 +22,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`requestChannelModes(channel)`** on PluginAPI: sends `MODE #channel` to query the server; response populates channel-state and fires `channel:modesReady`
 - **`onModesReady(callback)`** on PluginAPI: register a callback for when channel modes are received from the server; auto-cleaned on plugin unload
 - **Proactive mode sync on join**: bot sends `MODE #channel` on join; `syncChannelModes()` chains to `channel:modesReady` instead of a timer, guaranteeing channel-state is populated before enforcement runs
+- **ChanServ-based channel takeover protection** in `chanmod`: detects unauthorized mass deop/mode changes and responds with configurable escalation (deop, kickban, akick); supports ChanServ backend for persistent akick; rate-limited hostile response tracking per actor
+- **Dockerfile multi-stage build**: separate build and production stages for smaller images; Docker healthcheck added for orchestration tools
+- **Plugin config and channel settings validation**: unknown or invalid config keys and channel setting values are now rejected on load with descriptive errors
 
 ### Fixed
 
 - **`chanserv_op` broken on networks where ChanServ doesn't join channels** (e.g. Rizon): the OP request was gated on ChanServ being present in the channel user list; now always sends the request when `chanserv_op` is enabled, with a diagnostic log note when ChanServ isn't visible
+- **DCC TOCTOU race**: rapid duplicate DCC CHAT requests could bypass the session-exists check because the pending map was not consulted; now rejects when a connection is already pending for the same nick
+- **`!seen` cross-channel information disclosure**: queries from a different channel than where the user was last seen now omit the channel name and message text, showing only the nick and relative time
+- **Zombie process on exhausted reconnects**: bot now exits cleanly when maximum reconnect attempts are reached instead of hanging indefinitely
+- **Bot-link security hardening**: fixed 1 critical and 5 warning findings from bot-link security audit (permission bypass, frame validation, rate limiting)
+- **Codebase security audit**: fixed 8 additional warnings identified in full-codebase security sweep
 
 ### Changed
 
@@ -34,6 +42,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `CHANMODES` ISUPPORT token now exposed via `getServerSupports()`; parameter modes dynamically determined from CHANMODES categories A/B/C (hardcoded `k`/`l` fallback retained)
 - `syncChannelModes()` now removes unauthorized simple modes, keys, and limits (previously only added missing ones)
 - `channel_key` and `channel_limit` setting descriptions updated to clarify that empty/zero means "remove unauthorized" when `enforce_modes` is on
+- `nick_recovery_password` moved from `chanmod` plugin config to `bot.json` services block
+- `v8 ignore` pragmas removed across codebase — previously hidden branches now covered by real tests
+- DI interfaces extracted to eliminate unsafe type casts in tests; 33 unsafe test casts replaced
+- `chanmod` hostile response: `kickban` and `akick` paths consolidated to reduce duplication
+- Dependency bump: typescript-eslint 8.57.2 → 8.58.0
 
 ## [0.1.0] - 2026-03-29
 
