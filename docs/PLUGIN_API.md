@@ -58,9 +58,9 @@ The merged config for this plugin. Values come from the plugin's own `config.jso
 const greeting = (api.config.greeting as string) ?? 'Hi';
 ```
 
-#### `botConfig: Record<string, unknown>`
+#### `botConfig: PluginBotConfig`
 
-Read-only bot configuration. Deep-frozen copy of `config/bot.json` with the NickServ password omitted from `services`. Contains `irc`, `owner`, `identity`, `services`, `database`, `pluginDir`, and `logging` keys.
+Read-only, deep-frozen view of `config/bot.json`. The NickServ password is omitted from `services`. Contains: `irc` (host, port, tls, nick, username, realname, channels), `owner` (handle, hostmask), `identity` (method, require_acc_for), `services` (type, nickserv, sasl), and `logging` (level, mod_actions). The `chanmod` key is present only for the chanmod plugin.
 
 #### `permissions: PluginPermissions`
 
@@ -159,15 +159,23 @@ Send a CTCP ACTION (`/me` style).
 
 Send a NOTICE to a channel or nick.
 
-#### `raw(line)`
+#### `ctcpResponse(target, type, message)`
 
-Send a raw IRC protocol line. Newlines (`\r`, `\n`) are automatically stripped for safety. Prefer the typed methods above when possible.
+Send a CTCP reply. Used to respond to CTCP requests like VERSION or TIME.
 
 ---
 
 ### IRC channel operations
 
 These are delegated to the IRCCommands core module, which handles mode batching and mod action logging.
+
+#### `join(channel, key?)`
+
+Join a channel, optionally with a key.
+
+#### `part(channel, message?)`
+
+Leave a channel with an optional part message.
 
 #### `op(channel, nick)`
 
@@ -212,6 +220,18 @@ api.mode('#channel', '+oo', 'nick1', 'nick2');
 #### `requestChannelModes(channel)`
 
 Request the current channel modes from the server (`MODE #channel` with no args). The server replies with RPL_CHANNELMODEIS (324), which populates channel-state (`ch.modes`, `ch.key`, `ch.limit`) and fires `channel:modesReady`. This is automatically sent on bot join.
+
+#### `topic(channel, text)`
+
+Set the channel topic.
+
+#### `invite(channel, nick)`
+
+Invite a user to a channel.
+
+#### `changeNick(nick)`
+
+Change the bot's own IRC nick. Used primarily for nick recovery when the desired nick becomes available.
 
 ---
 
