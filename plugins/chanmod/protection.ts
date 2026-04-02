@@ -102,7 +102,6 @@ export function setupProtection(
       // If channel had +i or +k, also request invite
       const lastModes = state.lastKnownModes.get(chanKey);
       if (lastModes && (lastModes.modes.includes('i') || lastModes.key)) {
-        /* v8 ignore next -- canInvite mirrors canUnban (same access level); if canUnban passed, canInvite will too */
         if (chain.canInvite(channel)) {
           chain.requestInvite(channel);
           api.log(`Backend recovery: sent INVITE for ${channel} (+i or +k detected)`);
@@ -154,7 +153,6 @@ export function setupProtection(
           // Only retry if we're not in the channel yet
           if (!api.getChannel(channel)) {
             api.log(`Retry rejoin for ${channel} (first attempt may have failed due to ban)`);
-            /* v8 ignore next -- canUnban was true when we entered this path */
             if (chain!.canUnban(channel)) {
               chain!.requestUnban(channel);
             }

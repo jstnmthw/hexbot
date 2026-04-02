@@ -661,7 +661,6 @@ function performHostileResponse(
     if (isBotNick(api, actor)) continue;
 
     // Skip nodesynch nicks
-    /* v8 ignore next -- nodesynch actors are filtered out in assessThreat's input path */
     if (config.nodesynch_nicks.some((n) => api.ircLower(n) === api.ircLower(actor))) continue;
 
     // Respect revenge_exempt_flags — n/m users are never counter-attacked
@@ -687,10 +686,8 @@ function performHostileResponse(
       }
     } else if (punishMode === 'kickban') {
       const hostmask = api.getUserHostmask(channel, actor);
-      /* v8 ignore next -- defensive: actor confirmed present via ch.users.has() above */
       if (hostmask) {
         const mask = buildBanMask(hostmask, config.default_ban_type);
-        /* v8 ignore next -- defensive: buildBanMask only returns null for empty host */
         if (mask) {
           api.ban(channel, mask);
           storeBan(api, channel, mask, getBotNick(api), config.default_ban_duration);
@@ -703,10 +700,8 @@ function performHostileResponse(
       // AKICK via backend (persistent — survives rejoin)
       if (chain?.canAkick(channel)) {
         const hostmask = api.getUserHostmask(channel, actor);
-        /* v8 ignore next -- defensive: actor confirmed present via ch.users.has() above */
         if (hostmask) {
           const mask = buildBanMask(hostmask, config.default_ban_type);
-          /* v8 ignore next -- defensive: buildBanMask only returns null for empty host */
           if (mask) {
             chain.requestAkick(channel, mask, 'Takeover response');
             api.log(`Hostile response: AKICK ${mask} in ${channel} via backend`);
@@ -715,10 +710,8 @@ function performHostileResponse(
       } else {
         // Fallback to kickban when AKICK is not available
         const hostmask = api.getUserHostmask(channel, actor);
-        /* v8 ignore next -- defensive: actor confirmed present via ch.users.has() above */
         if (hostmask) {
           const mask = buildBanMask(hostmask, config.default_ban_type);
-          /* v8 ignore next -- defensive: buildBanMask only returns null for empty host */
           if (mask) {
             api.ban(channel, mask);
             storeBan(api, channel, mask, getBotNick(api), config.default_ban_duration);
@@ -756,10 +749,8 @@ function punishDeop(
 
   if (config.punish_action === 'kickban') {
     const hostmask = api.getUserHostmask(channel, setter);
-    /* v8 ignore next -- defensive: setter always in channel state when punishDeop is called */
     if (hostmask) {
       const mask = buildBanMask(hostmask, 1);
-      /* v8 ignore next -- defensive: buildBanMask only returns null for empty host */
       if (mask) {
         api.ban(channel, mask);
         storeBan(api, channel, mask, getBotNick(api), config.default_ban_duration);

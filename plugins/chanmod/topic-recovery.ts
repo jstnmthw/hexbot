@@ -64,7 +64,6 @@ export function restoreTopicIfNeeded(
   /* v8 ignore next -- guard for race: channel parted between recovery trigger and execution */
   if (!ch) return false;
 
-  /* v8 ignore next -- ch.topic is '' when unset, ?? '' is defensive */
   const currentTopic = ch.topic ?? '';
   if (currentTopic === snapshot.topic) return false;
 

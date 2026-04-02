@@ -44,7 +44,6 @@ export function registerBotlinkCommands(
               const leafInfo = leaves
                 .map((name) => {
                   const info = hub.getLeafInfo(name);
-                  /* v8 ignore next -- guard for race: leaf disconnects between getLeaves() and getLeafInfo() */
                   if (!info) return `  ${name} (disconnecting)`;
                   const ago = Math.floor((Date.now() - info.connectedAt) / 1000);
                   return `  ${name} (connected ${ago}s ago)`;
@@ -212,7 +211,6 @@ export function registerBotlinkCommands(
         return;
       }
 
-      /* v8 ignore next 4 -- relay send helper only called from enterRelay callback during active relay; requires live DCC session */
       const sendFrame = (frame: import('../botlink').LinkFrame) => {
         if (hub) hub.send(targetBot, frame);
         else if (leaf) leaf.send(frame);
@@ -240,14 +238,11 @@ export function registerBotlinkCommands(
           return;
         }
         hub.send(targetBot, requestFrame);
-        /* v8 ignore start -- FALSE branch unreachable: hub ?? leaf guard at line 208 ensures at least one is non-null */
       } else if (leaf) {
         leaf.send(requestFrame);
       }
-      /* v8 ignore stop */
 
       // Enter relay mode — input goes to the remote bot
-      /* v8 ignore next 3 -- enterRelay callback only fires during active relay input; requires live DCC session */
       session.enterRelay(targetBot, (line: string) => {
         sendFrame({ type: 'RELAY_INPUT', handle: session.handle, line });
       });

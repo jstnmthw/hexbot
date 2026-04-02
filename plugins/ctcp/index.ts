@@ -18,11 +18,9 @@ export function init(api: PluginAPI): void {
       version?: string;
     };
     versionString = `${pkg.name!} v${pkg.version!}`;
-    /* v8 ignore start -- catch only fires if package.json is missing or malformed */
   } catch {
     versionString = 'HexBot';
   }
-  /* v8 ignore stop */
 
   api.bind('ctcp', '-', 'VERSION', (ctx) => {
     api.ctcpResponse(ctx.nick, 'VERSION', versionString);

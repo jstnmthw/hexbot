@@ -167,7 +167,6 @@ function onLevelEscalation(
   channel: string,
   level: number,
 ): void {
-  /* v8 ignore next -- onLevelEscalation is only called when newLevel > prevLevel, so level is always >= THREAT_ALERT */
   if (level >= THREAT_ALERT) {
     // Level 1+: request ops via first available backend
     if (chain.canOp(channel)) {

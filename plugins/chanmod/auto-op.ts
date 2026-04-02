@@ -22,7 +22,6 @@ export function setupAutoOp(
       api.requestChannelModes(channel);
 
       // Set and verify ChanServ access level for the protection chain
-      /* v8 ignore next -- chain is always passed from index.ts init */
       if (chain) {
         const accessStr = api.channelSettings.getString(channel, 'chanserv_access');
         const validLevels = new Set(['none', 'op', 'superop', 'founder']);

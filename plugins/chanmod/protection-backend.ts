@@ -231,7 +231,6 @@ export class ProtectionChain {
   /** Set access level on a specific backend by name. */
   setAccess(channel: string, backendName: string, level: BackendAccess): void {
     const b = this.backends.find((be) => be.name === backendName);
-    /* v8 ignore next -- defensive: callers always use names from registered backends */
     if (b) b.setAccess(channel, level);
   }
 

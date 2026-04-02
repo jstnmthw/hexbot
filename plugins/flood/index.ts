@@ -222,7 +222,6 @@ function handleJoinFlood(ctx: HandlerContext): void {
   if (!isFloodTriggered(joinTracker, key, cfg.joinWindowMs, cfg.joinThreshold)) return;
   if (isPrivileged(ctx.nick, channel, cfg.ignoreOps)) return;
   const action = recordOffence(cfg.actions, cfg.offenceWindowMs, key);
-  /* v8 ignore start -- .catch callback only fires on IRC error; never rejects in tests */
   applyAction(
     cfg.banDurationMinutes,
     action,
@@ -230,7 +229,6 @@ function handleJoinFlood(ctx: HandlerContext): void {
     ctx.nick,
     `join flood (${cfg.joinThreshold}+ joins/${cfg.joinWindowSecs}s)`,
   ).catch((err) => api.error('Join flood action error:', err));
-  /* v8 ignore stop */
 }
 
 function handleNickFlood(ctx: HandlerContext): void {
@@ -246,7 +244,6 @@ function handleNickFlood(ctx: HandlerContext): void {
     if (isPrivileged(newNick, channel, cfg.ignoreOps)) return;
     if (!botHasOps(channel)) continue;
     const action = recordOffence(cfg.actions, cfg.offenceWindowMs, key);
-    /* v8 ignore start -- .catch callback only fires on IRC error; never rejects in tests */
     applyAction(
       cfg.banDurationMinutes,
       action,
@@ -254,7 +251,6 @@ function handleNickFlood(ctx: HandlerContext): void {
       newNick,
       `nick-change spam (${cfg.nickThreshold}+ changes/${cfg.nickWindowSecs}s)`,
     ).catch((err) => api.error('Nick flood action error:', err));
-    /* v8 ignore stop */
     break;
   }
 }
@@ -272,7 +268,6 @@ export function init(pluginApi: PluginAPI): void {
   nickTracker = new SlidingWindowCounter();
   offenceTracker = new Map();
 
-  /* v8 ignore start -- ?? defaults are for production; tests always supply explicit values */
   const msgWindowSecs = (api.config.msg_window_secs as number | undefined) ?? 3;
   const joinWindowSecs = (api.config.join_window_secs as number | undefined) ?? 60;
   const nickWindowSecs = (api.config.nick_window_secs as number | undefined) ?? 60;
@@ -291,7 +286,6 @@ export function init(pluginApi: PluginAPI): void {
     actions: (api.config.actions as string[] | undefined) ?? ['warn', 'kick', 'tempban'],
     offenceWindowMs: (api.config.offence_window_ms as number | undefined) ?? 300_000,
   };
-  /* v8 ignore stop */
 
   api.bind('pubm', '-', '*', handleMsgFlood);
   api.bind('join', '-', '*', handleJoinFlood);
