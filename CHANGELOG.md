@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.2] - 2026-04-03
+
+### Changed
+
+- Simplified Dockerfile to single-stage build using tsx at runtime instead of compiling to JS
+- Moved tsx from devDependencies to dependencies
+- Removed `start:prod` script — `pnpm start` is the single entry point
+
 ## [0.2.1] - 2026-04-03
 
 ### Added
