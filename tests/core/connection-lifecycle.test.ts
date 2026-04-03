@@ -280,7 +280,7 @@ describe('registerConnectionEvents', () => {
   });
 
   describe('close event', () => {
-    it('emits bot:disconnected with reason', () => {
+    it('emits bot:disconnected with reason when close fires before registration', () => {
       const { client, deps, eventBus } = makeContext();
       const handler = vi.fn();
       eventBus.on('bot:disconnected', handler);
@@ -290,7 +290,35 @@ describe('registerConnectionEvents', () => {
         () => {},
       );
       client.emit('close');
-      expect(handler).toHaveBeenCalledWith('connection closed');
+      expect(handler).toHaveBeenCalledWith('connection failed: no error detail from server');
+    });
+
+    it('includes IRC ERROR reason when close fires before registration', () => {
+      const { client, deps, eventBus } = makeContext();
+      const handler = vi.fn();
+      eventBus.on('bot:disconnected', handler);
+      const reject = vi.fn();
+      registerConnectionEvents(deps, () => {}, reject);
+      // Server sends ERROR before closing
+      client.emit('irc error', { error: 'irc', reason: 'Closing Link: (Throttled)' });
+      client.emit('close');
+      expect(handler).toHaveBeenCalledWith('connection failed: Closing Link: (Throttled)');
+      expect(reject).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Connection failed: Closing Link: (Throttled)' }),
+      );
+    });
+
+    it('includes socket error reason when close fires before registration', () => {
+      const { client, deps, eventBus } = makeContext();
+      const handler = vi.fn();
+      eventBus.on('bot:disconnected', handler);
+      const reject = vi.fn();
+      registerConnectionEvents(deps, () => {}, reject);
+      client.emit('socket error', new Error('unable to verify the first certificate'));
+      client.emit('close');
+      expect(handler).toHaveBeenCalledWith(
+        'connection failed: unable to verify the first certificate',
+      );
     });
 
     it('exits when close fires after registration with no pending reconnect', () => {

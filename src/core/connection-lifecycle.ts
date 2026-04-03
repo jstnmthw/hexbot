@@ -70,10 +70,14 @@ export function registerConnectionEvents(
   // Set to true by 'reconnecting', cleared by 'close'. If 'close' fires after
   // registration without a preceding 'reconnecting', retries are exhausted.
   let expectingReconnect = false;
+  // Captures the last IRC ERROR reason or socket error so we can include it
+  // in the 'close' log — irc-framework's 'close' event only passes a boolean.
+  let lastCloseReason: string | null = null;
 
   client.on('registered', () => {
     registered = true;
     expectingReconnect = false;
+    lastCloseReason = null;
     logger.info(`Connected to ${cfg.host}:${cfg.port} as ${cfg.nick}`);
 
     if (cfg.tls) {
@@ -102,12 +106,34 @@ export function registerConnectionEvents(
     resolve();
   });
 
+  // Capture the server's IRC ERROR message (e.g. "Closing Link: ... (Throttled)")
+  // which fires just before the socket closes. irc-framework emits this as 'irc error'
+  // with error === 'irc' and reason containing the server message.
+  client.on('irc error', (event: unknown) => {
+    const e = toEventObject(event);
+    if (String(e.error ?? '') === 'irc') {
+      const reason = String(e.reason ?? '');
+      lastCloseReason = reason;
+      logger.warn(`Server ERROR: ${reason}`);
+    }
+  });
+
   client.on('close', () => {
     if (registered && !expectingReconnect) {
       // irc-framework exhausted all reconnect attempts — the bot is a zombie.
-      logger.error('Reconnect attempts exhausted — exiting');
+      const detail = lastCloseReason ? ` (${lastCloseReason})` : '';
+      logger.error(`Reconnect attempts exhausted${detail} — exiting`);
       deps.eventBus.emit('bot:disconnected', 'reconnect attempts exhausted');
       process.exit(1);
+    }
+    if (!registered) {
+      // Connection failed before registration — log the reason so the user
+      // can diagnose throttling, bans, TLS rejection, etc.
+      const reason = lastCloseReason ?? 'no error detail from server';
+      logger.error(`Connection failed: ${reason}`);
+      deps.eventBus.emit('bot:disconnected', `connection failed: ${reason}`);
+      reject(new Error(`Connection failed: ${reason}`));
+      return;
     }
     expectingReconnect = false;
     logger.info('Connection closed');
@@ -116,12 +142,14 @@ export function registerConnectionEvents(
 
   client.on('reconnecting', () => {
     expectingReconnect = true;
+    lastCloseReason = null;
     deps.messageQueue.clear();
     logger.info('Reconnecting...');
   });
 
   client.on('socket error', (err: unknown) => {
     const error = err instanceof Error ? err : new Error(String(err));
+    lastCloseReason = error.message;
     logger.error('Socket error:', error.message);
     deps.eventBus.emit('bot:error', error);
     if (!registered) {
