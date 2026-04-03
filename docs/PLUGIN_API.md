@@ -120,6 +120,9 @@ Remove a specific handler. Rarely needed since unload cleans up automatically.
 | `time`   | Timer (interval) | Seconds as string (e.g. `"60"`)  | Yes       |
 | `ctcp`   | CTCP request     | CTCP type (e.g. `VERSION`)       | Yes       |
 | `notice` | Notice received  | Wildcard on text                 | Yes       |
+| `topic`  | Topic change     | Channel name wildcard            | Yes       |
+| `quit`   | User quit        | `nick!user@host` wildcard        | Yes       |
+| `invite` | Bot invited      | `#channel nick!user@host` or `*` | Yes       |
 
 Non-stackable types (`pub`, `msg`) replace any previous bind on the same mask. Stackable types fire all matching handlers.
 
@@ -263,6 +266,10 @@ interface ChannelUser {
   hostname: string;
   modes: string; // e.g. "ov" for op+voice
   joinedAt: number; // unix timestamp (ms)
+  accountName?: string | null; // NickServ account from IRCv3 account-notify/extended-join
+  // string = identified as this account
+  // null = known not identified
+  // undefined = no IRCv3 data available
 }
 ```
 
@@ -358,19 +365,123 @@ const users = api.db.list('user:');
 
 #### `getServerSupports(): Record<string, string>`
 
-Returns ISUPPORT values from the IRC server. Currently returns an empty object (planned for future enhancement).
+Returns ISUPPORT values from the IRC server (e.g., `MODES`, `PREFIX`, `CHANMODES`, `CASEMAPPING`). Available after the bot connects and receives the server's 005 replies.
+
+---
+
+### Channel settings
+
+Per-channel typed key/value store backed by the database. Plugins register settings with types and defaults; admins configure them at runtime with `.chanset`.
+
+#### `channelSettings.register(key, opts)`
+
+Register a per-channel setting. Call this in `init()`. Settings are automatically unregistered on unload.
+
+```typescript
+api.channelSettings.register('greet_msg', {
+  type: 'string',
+  default: 'Welcome, {nick}!',
+  description: 'Message sent on join',
+});
+
+api.channelSettings.register('auto_op', {
+  type: 'flag',
+  default: false,
+  description: 'Auto-op flagged users on join',
+});
+
+api.channelSettings.register('max_lines', {
+  type: 'int',
+  default: 5,
+  description: 'Maximum response lines',
+});
+```
+
+#### `channelSettings.get(channel, key): string | number | boolean | undefined`
+
+Get the value of a setting for a channel. Returns the configured value or the registered default.
+
+#### `channelSettings.getFlag(channel, key): boolean`
+
+Get a boolean (flag) setting. Returns `false` if not set.
+
+#### `channelSettings.getString(channel, key): string`
+
+Get a string setting. Returns `''` if not set.
+
+#### `channelSettings.getInt(channel, key): number`
+
+Get an integer setting. Returns `0` if not set.
+
+#### `channelSettings.set(channel, key, value)`
+
+Set a per-channel setting value programmatically.
+
+#### `channelSettings.isSet(channel, key): boolean`
+
+Check whether a setting has been explicitly configured for a channel.
+
+#### `channelSettings.onChange(key, callback)`
+
+Register a callback that fires when a setting value changes. Automatically cleaned up on unload.
+
+---
+
+### Help registry
+
+#### `registerHelp(entries)`
+
+Register help entries for the `!help` command. Entries are automatically removed on unload.
+
+```typescript
+api.registerHelp([
+  {
+    trigger: '!mycmd',
+    category: 'fun',
+    description: 'Does something fun',
+    usage: '!mycmd [args]',
+    flags: '-',
+  },
+]);
+```
+
+#### `getHelpEntries(): HelpEntry[]`
+
+Retrieve the help entries registered by this plugin.
+
+---
+
+### Utilities
+
+#### `ircLower(text): string`
+
+IRC-aware case folding using the network's CASEMAPPING setting (rfc1459, strict-rfc1459, or ascii). Use this instead of `toLowerCase()` for nick/channel comparison.
+
+#### `stripFormatting(text): string`
+
+Remove IRC formatting control codes (bold, color, underline, etc.) from a string.
 
 ---
 
 ### Logging
 
+Messages are prefixed with `[plugin:<name>]` and respect the bot's configured log level.
+
 #### `log(...args)`
 
-Log a message prefixed with `[plugin:<name>]`. Uses `console.log`.
+Log an info-level message.
+
+#### `warn(...args)`
+
+Log a warning.
 
 #### `error(...args)`
 
-Log an error prefixed with `[plugin:<name>]`. Uses `console.error`.
+Log an error.
+
+#### `debug(...args)`
+
+Log a debug message. Only visible when the bot's log level is set to `debug`.
 
 ---
 
@@ -385,9 +496,7 @@ export const description = 'Welcomes returning users';
 
 export function init(api: PluginAPI): void {
   api.bind('join', '-', '*', (ctx: HandlerContext) => {
-    if (!ctx.channel) return;
-
-    const key = `joined:${ctx.nick.toLowerCase()}`;
+    const key = `joined:${api.ircLower(ctx.nick)}`;
     const lastVisit = api.db.get(key);
 
     if (lastVisit) {

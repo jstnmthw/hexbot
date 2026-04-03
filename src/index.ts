@@ -1,6 +1,6 @@
 // HexBot — Entry point
 // Parses CLI args, starts the bot, optionally starts the REPL.
-import { unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, openSync, unlinkSync, utimesSync } from 'node:fs';
 
 import { Bot } from './bot';
 import { BotREPL } from './repl';
@@ -14,7 +14,11 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
 function touchHealthcheck(): void {
   try {
-    writeFileSync(HEALTHCHECK_FILE, String(Date.now()));
+    // Create the file if missing, then update its mtime.
+    // The Docker healthcheck uses `stat -c %Y` (mtime in seconds) — no content needed.
+    closeSync(openSync(HEALTHCHECK_FILE, 'a'));
+    const now = new Date();
+    utimesSync(HEALTHCHECK_FILE, now, now);
   } catch {
     // Best-effort — /tmp may be read-only in exotic containers
   }

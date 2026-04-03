@@ -18,7 +18,7 @@ The goal is an open-source alternative to Eggdrop that eliminates the pain of C 
 - **Convention over configuration.** Sane defaults that work on any network out of the box. Tune later if needed.
 - **Plugins are self-contained.** Each plugin ships its own default config, registers its own binds, manages its own database namespace. No plugin depends on another plugin.
 - **Core modules are the foundation.** A small set of core modules (permissions, services, irc-commands, channel-state) provide shared functionality that plugins build on. Core modules can depend on each other.
-- **Modern developer experience.** TypeScript, ESM modules, async/await, `pnpm install && ppnpm start`, hot-reload without restart, attached REPL for development.
+- **Modern developer experience.** TypeScript, ESM modules, async/await, `pnpm install && pnpm start`, hot-reload without restart, attached REPL for development.
 
 ### Tech stack
 
@@ -56,8 +56,12 @@ hexbot/
 │   ├── utils/
 │   │   ├── wildcard.ts       # Wildcard pattern matching (shared by dispatcher + permissions)
 │   │   ├── sanitize.ts       # Strip \r\n for IRC injection prevention
+│   │   ├── sliding-window.ts # Sliding-window rate counter (shared by flood limiter + DCC)
+│   │   ├── socks.ts          # SOCKS5 proxy tunnel for IRC connections
 │   │   ├── split-message.ts  # Word-boundary message splitting for IRC line limits
 │   │   ├── strip-formatting.ts  # Remove IRC control codes
+│   │   ├── table.ts          # Formatted text table output for admin commands
+│   │   ├── verify-flags.ts   # Flag requirement parsing and checking
 │   │   └── irc-event.ts      # Type guards for irc-framework event payloads
 │   └── core/                 # Core modules (always loaded)
 │       ├── permissions.ts    # Flag-based permissions: n/m/o/v flags, hostmask matching
@@ -68,6 +72,8 @@ hexbot/
 │       ├── botlink.ts        # Bot link protocol: hub/leaf, handshake, heartbeat
 │       ├── botlink-sync.ts   # State sync: permissions + channel state → link frames
 │       ├── botlink-sharing.ts # Ban/exempt list sharing across linked bots
+│       ├── botlink-protect.ts # Cross-bot channel protection requests
+│       ├── connection-lifecycle.ts # IRC connection/reconnection state machine
 │       ├── dcc.ts            # DCC CHAT + console (shared admin sessions)
 │       ├── help-registry.ts  # Stores/retrieves command help entries
 │       ├── message-queue.ts  # Token-bucket flood protection for outgoing messages
@@ -190,7 +196,7 @@ export function init(api: PluginAPI): void {
   api.say(target, message);
   api.action(target, message);
   api.notice(target, message);
-  api.raw(line);
+  api.ctcpResponse(target, type, message);
 
   // Channel state
   api.getChannel(name);
@@ -202,15 +208,58 @@ export function init(api: PluginAPI): void {
   api.db.del(key);
   api.db.list(prefix);
 
+  // IRC channel operations
+  api.join(channel, key?);
+  api.part(channel, message?);
+  api.op(channel, nick);
+  api.deop(channel, nick);
+  api.halfop(channel, nick);
+  api.dehalfop(channel, nick);
+  api.voice(channel, nick);
+  api.devoice(channel, nick);
+  api.kick(channel, nick, reason?);
+  api.ban(channel, mask);
+  api.mode(channel, modes, ...params);
+  api.topic(channel, text);
+  api.invite(channel, nick);
+  api.changeNick(nick);
+  api.requestChannelModes(channel);
+  api.onModesReady(callback);
+  api.getUserHostmask(channel, nick);
+
+  // Permissions (read-only)
+  api.permissions.findByHostmask(hostmask);
+  api.permissions.checkFlags(flags, ctx);
+
+  // Services (identity verification)
+  api.services.verifyUser(nick);
+  api.services.isAvailable();
+
   // Config (from plugins.json overrides, falling back to plugin's own config.json)
   api.config;
+  api.botConfig;
+
+  // Channel settings (per-channel typed key/value store)
+  api.channelSettings.register(key, opts);
+  api.channelSettings.get(channel, key);
+  api.channelSettings.set(channel, key, value);
+
+  // Help registry
+  api.registerHelp(entries);
+  api.getHelpEntries();
 
   // Server capabilities (from ISUPPORT)
   api.getServerSupports();
 
+  // Utilities
+  api.ircLower(text);
+  api.stripFormatting(text);
+
   // Logging
   api.log(...args);
+  api.warn(...args);
   api.error(...args);
+  api.debug(...args);
 }
 
 export function teardown(): void {
@@ -381,7 +430,7 @@ Each plugin accesses its own namespace via `api.db`. Core modules use reserved n
 
 ```json
 {
-  "auto-op": {
+  "chanmod": {
     "enabled": true,
     "channels": ["#mychannel", "#otherchannel"]
   },
@@ -479,7 +528,7 @@ Passive DCC CHAT for remote administration (`src/core/dcc.ts`). This is "Option 
 "dcc": {
   "enabled": true,
   "ip": "203.0.113.42",
-  "port_range": [50000, 50010],
+  "port_range": [49152, 49171],
   "require_flags": "m",
   "max_sessions": 5,
   "idle_timeout_ms": 300000,
@@ -560,9 +609,9 @@ All core infrastructure is implemented and production-ready. See [CHANGELOG.md](
 **Planned features** (design documents in `docs/plans/`):
 
 - [`ai-chat-plugin.md`](docs/plans/ai-chat-plugin.md) — AI chat integration (Gemini/Claude/OpenAI adapter)
-- [`deployment.md`](docs/plans/deployment.md) — Docker, systemd, GitHub Actions
 - [`xdcc-plugin.md`](docs/plans/xdcc-plugin.md) — XDCC file serving
 - [`idlerpg-plugin.md`](docs/plans/idlerpg-plugin.md) — IdleRPG game plugin
+- [`rss-feed.md`](docs/plans/rss-feed.md) — RSS feed announcements
 
 ---
 
@@ -609,7 +658,7 @@ pnpm install
 cp config/bot.example.json config/bot.json
 # Edit config/bot.json with your server/nick/owner
 pnpm start          # daemon mode (compiles + runs)
-pnpm run dev        # with --repl and --watch (uses tsx)
+pnpm run dev        # with --repl (uses tsx)
 ```
 
 ### Creating a plugin
