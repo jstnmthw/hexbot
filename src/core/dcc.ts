@@ -265,7 +265,6 @@ export class DCCSession implements DCCSessionEntry {
         ? `${others.length} other(s) here: ${others.join(', ')}`
         : 'you are the only one here';
 
-    this.writeLine('');
     for (const line of BANNER_LOGO) {
       this.writeLine(line);
     }
