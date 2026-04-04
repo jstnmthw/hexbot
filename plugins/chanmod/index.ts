@@ -1,4 +1,4 @@
-// chanmod — Channel operator tools: auto-op/halfop/voice, mode enforcement, timed bans, kick/ban commands, and channel protection.
+// chanmod — Automated channel moderation and operator tools.
 import type { PluginAPI } from '../../src/types';
 import { AnopeBackend } from './anope-backend';
 import { AthemeBackend } from './atheme-backend';
@@ -17,8 +17,7 @@ import { setupTopicRecovery } from './topic-recovery';
 
 export const name = 'chanmod';
 export const version = '3.0.0';
-export const description =
-  'Channel operator tools: auto-op/halfop/voice, mode enforcement, timed bans, kick/ban, cycle, ChanServ protection';
+export const description = 'Automated channel moderation and operator tools';
 
 let teardowns: Array<() => void> = [];
 
