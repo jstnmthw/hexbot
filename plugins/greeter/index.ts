@@ -42,8 +42,26 @@ export function init(api: PluginAPI): void {
     {
       command: '!greet',
       flags: '-',
-      usage: '!greet [set <message>|delete]',
+      usage: '!greet [set <message>|del]',
       description: 'View, set, or delete your custom join greeting',
+      detail: [
+        'Use {nick} and {channel} in your message for substitution.',
+        `Requires +${(api.config.min_flag as string) ?? 'v'} to set or delete.`,
+      ],
+      category: 'general',
+    },
+    {
+      command: '!greet set',
+      flags: '-',
+      usage: '!greet set <message>',
+      description: 'Set a custom join greeting — supports {nick} and {channel}',
+      category: 'general',
+    },
+    {
+      command: '!greet del',
+      flags: '-',
+      usage: '!greet del',
+      description: 'Delete your custom join greeting',
       category: 'general',
     },
   ]);

@@ -114,12 +114,13 @@ Example:
 
 Flag reference:
 
-| Flag | Role   | Access                               |
-| ---- | ------ | ------------------------------------ |
-| `n`  | Owner  | Full access; implies all other flags |
-| `m`  | Master | User management                      |
-| `o`  | Op     | Channel commands, bot admin          |
-| `v`  | Voice  | Reserved for plugin use              |
+| Flag | Role   | Access                                                   |
+| ---- | ------ | -------------------------------------------------------- |
+| `n`  | Owner  | Full access; implies all other flags                     |
+| `m`  | Master | User management                                          |
+| `o`  | Op     | Channel commands, bot admin                              |
+| `v`  | Voice  | Reserved for plugin use                                  |
+| `d`  | Deop   | Suppress auto-op/halfop on join; auto-voice if also `+v` |
 
 Flags can also be scoped to a specific channel:
 

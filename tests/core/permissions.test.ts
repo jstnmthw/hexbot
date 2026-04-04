@@ -45,6 +45,11 @@ describe('Permissions', () => {
       perms.addUser('test', '*!t@h', 'voon', 'REPL');
       expect(perms.getUser('test')!.global).toBe('nov');
     });
+
+    it('should accept d (deop) flag', () => {
+      perms.addUser('deopuser', '*!t@h', 'ovd', 'REPL');
+      expect(perms.getUser('deopuser')!.global).toBe('ovd');
+    });
   });
 
   // -------------------------------------------------------------------------

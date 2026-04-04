@@ -40,7 +40,7 @@ The goal is an open-source alternative to Eggdrop that eliminates the pain of C 
 hexbot/
 ├── config/
 │   ├── bot.json              # Core: server, nick, channels, owner, identity, services
-│   └── plugins.json          # Plugin routing: which plugins enabled, per-channel overrides
+│   └── plugins.json          # Plugin overrides: config, channels, disable specific plugins
 ├── src/
 │   ├── index.ts              # Entry point, process signals
 │   ├── bot.ts                # Thin orchestrator, wires modules together
@@ -290,6 +290,7 @@ Flag-based permissions with per-channel overrides.
 - `m` — master
 - `o` — op
 - `v` — voice
+- `d` — deop (suppress auto-op/halfop on join; auto-voice still works if user also has `+v`)
 - `-` — no flags required (anyone)
 
 **User records:** Each user has a handle, one or more hostmask patterns (with wildcards), global flags, and per-channel flag overrides.
@@ -426,32 +427,31 @@ Each plugin accesses its own namespace via `api.db`. Core modules use reserved n
 }
 ```
 
-`config/plugins.json` — plugin routing and overrides:
+`config/plugins.json` — plugin overrides and disabling (optional):
+
+Plugins are auto-discovered from `plugins/` — any directory with an `index.ts` is loaded on startup. The `plugins.json` file is only needed to override config, restrict channels, or disable specific plugins.
 
 ```json
 {
   "chanmod": {
-    "enabled": true,
     "channels": ["#mychannel", "#otherchannel"]
   },
   "greeter": {
-    "enabled": true,
     "channels": ["#mychannel"],
     "config": {
       "message": "Welcome to {channel}, {nick}!"
     }
   },
-  "seen": {
-    "enabled": true
-  },
   "8ball": {
-    "enabled": true,
     "channels": ["#games"]
+  },
+  "flood": {
+    "enabled": false
   }
 }
 ```
 
-Each plugin also ships its own `config.json` with defaults. The resolution order is: `plugins.json` overrides > plugin's own `config.json` defaults.
+Each plugin also ships its own `config.json` with defaults. The resolution order is: `plugins.json` overrides > plugin's own `config.json` defaults. Plugins not listed in `plugins.json` load with their defaults. To disable a plugin, set `"enabled": false` — omitting it entirely means it will be auto-loaded.
 
 ### 2.12 CLI / REPL
 

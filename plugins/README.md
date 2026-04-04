@@ -112,13 +112,14 @@ api.bind('pub', '-', '!greet', (ctx: HandlerContext) => {
 
 ### Permission flags
 
-| Flag | Role   | Access                               |
-| ---- | ------ | ------------------------------------ |
-| `n`  | Owner  | Full access; implies all other flags |
-| `m`  | Master | User management                      |
-| `o`  | Op     | Channel commands                     |
-| `v`  | Voice  | Reserved for plugin use              |
-| `-`  | Anyone | No restriction                       |
+| Flag | Role   | Access                                                   |
+| ---- | ------ | -------------------------------------------------------- |
+| `n`  | Owner  | Full access; implies all other flags                     |
+| `m`  | Master | User management                                          |
+| `o`  | Op     | Channel commands                                         |
+| `v`  | Voice  | Reserved for plugin use                                  |
+| `d`  | Deop   | Suppress auto-op/halfop on join; auto-voice if also `+v` |
+| `-`  | Anyone | No restriction                                           |
 
 Combine with `|` for OR: `'n|m'` means owner OR master. When a user lacks the required flags, the bind silently doesn't fire.
 

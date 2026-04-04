@@ -72,10 +72,21 @@ export function setupAutoOp(
     const channelFlags = user.channels[api.ircLower(channel)] ?? '';
     const allFlags = globalFlags + channelFlags;
 
-    const shouldOp = hasAnyFlag(allFlags, config.op_flags);
+    // 'd' (deop) flag suppresses auto-op and auto-halfop.
+    // Voice still works but requires an explicit voice flag (n does not imply v).
+    const deop = allFlags.includes('d');
+    const shouldOp = !deop && hasAnyFlag(allFlags, config.op_flags);
     const shouldHalfop =
-      !shouldOp && config.halfop_flags.length > 0 && hasAnyFlag(allFlags, config.halfop_flags);
-    const shouldVoice = !shouldOp && !shouldHalfop && hasAnyFlag(allFlags, config.voice_flags);
+      !shouldOp &&
+      !deop &&
+      config.halfop_flags.length > 0 &&
+      hasAnyFlag(allFlags, config.halfop_flags);
+    const shouldVoice =
+      !shouldOp &&
+      !shouldHalfop &&
+      (deop
+        ? config.voice_flags.some((f) => allFlags.includes(f))
+        : hasAnyFlag(allFlags, config.voice_flags));
 
     if (!shouldOp && !shouldHalfop && !shouldVoice) return;
 

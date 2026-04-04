@@ -13,8 +13,8 @@ import { type Casemapping, ircLower, wildcardMatch } from '../utils/wildcard';
 /** The database namespace for permissions data. */
 const DB_NAMESPACE = '_permissions';
 
-/** All valid flag characters, in descending privilege order. */
-const VALID_FLAGS = 'nmov';
+/** All valid flag characters, in descending privilege order, plus modifiers. */
+const VALID_FLAGS = 'nmovd';
 
 /** Owner flag implies all other flags. */
 const OWNER_FLAG = 'n';

@@ -31,8 +31,8 @@ export type BindType =
   | 'quit' // User quit (not channel-scoped), stackable
   | 'invite'; // Bot invited to a channel, stackable
 
-/** Permission flags: n=owner, m=master, o=op, v=voice, -=anyone. */
-export type Flag = 'n' | 'm' | 'o' | 'v' | '-';
+/** Permission flags: n=owner, m=master, o=op, v=voice, d=deop (suppress auto-op/halfop), -=anyone. */
+export type Flag = 'n' | 'm' | 'o' | 'v' | 'd' | '-';
 
 // ---------------------------------------------------------------------------
 // Handler context

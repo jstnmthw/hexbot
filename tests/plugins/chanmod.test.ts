@@ -293,6 +293,55 @@ describe('chanmod plugin — auto-op', () => {
       noOpsBot.cleanup();
     }
   });
+
+  it('should voice (not op) owner with +dv flag', async () => {
+    giveBotOps(bot, '#test');
+    bot.permissions.addUser('deopowner', '*!downer@downer.host', 'ndv', 'test');
+    simulateJoin(bot, 'DeopOwner', 'downer', 'downer.host', '#test');
+    await tick();
+
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+v' && m.args?.includes('DeopOwner'),
+      ),
+    ).toBeDefined();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('DeopOwner'),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('should give no mode when user has +d without explicit +v', async () => {
+    giveBotOps(bot, '#test');
+    bot.client.clearMessages();
+    bot.permissions.addUser('deoponly', '*!donly@donly.host', 'nd', 'test');
+    simulateJoin(bot, 'DeopOnly', 'donly', 'donly.host', '#test');
+    await tick();
+
+    expect(bot.client.messages.find((m) => m.type === 'mode')).toBeUndefined();
+  });
+
+  it('should not suppress auto-op in channels without +d', async () => {
+    // User has +d only in #test, should still get opped in #other
+    const multiBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(multiBot, '#other');
+    try {
+      await multiBot.pluginLoader.load(PLUGIN_PATH);
+      multiBot.permissions.addUser('selectivedeop', '*!sd@sd.host', 'nmo', 'test');
+      multiBot.permissions.setChannelFlags('selectivedeop', '#test', 'd', 'test');
+      simulateJoin(multiBot, 'SelectiveDeop', 'sd', 'sd.host', '#other');
+      await tick();
+
+      expect(
+        multiBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('SelectiveDeop'),
+        ),
+      ).toBeDefined();
+    } finally {
+      multiBot.cleanup();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

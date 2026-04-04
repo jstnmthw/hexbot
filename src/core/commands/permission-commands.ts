@@ -69,7 +69,7 @@ export function registerPermissionCommands(
       const parts = args.split(/\s+/);
       if (parts.length === 0 || !parts[0]) {
         ctx.reply(
-          'Flag legend: n=owner (all access), m=master (user mgmt), o=op (channel cmds), v=voice',
+          'Flag legend: n=owner (all access), m=master (user mgmt), o=op (channel cmds), v=voice, d=deop (no auto-op, +v if flagged)',
         );
         ctx.reply('Usage: .flags <handle> [+flags [#channel]]');
         return;

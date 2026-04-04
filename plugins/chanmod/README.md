@@ -63,6 +63,8 @@ When a user joins a channel where the bot has ops (or halfop), chanmod checks th
 2. **Auto-halfop** — user has a flag in `halfop_flags` (and no op flag); requires bot to have `+h` or `+o`; disabled by default (`halfop_flags: []`)
 3. **Auto-voice** — user has a flag in `voice_flags` (and no op/halfop flag); requires bot to have `+o`
 
+The `d` (deop) flag suppresses auto-op and auto-halfop. A user with `+d` will not be opped or halfopped on join, regardless of other flags. Auto-voice still works if the user also has an explicit `+v` flag (`n` does not imply `v` when `d` is active). Example: an owner with `+ndv` gets voiced but not opped.
+
 If the bot configuration includes `identity.require_acc_for` containing `+o`, `+h`, or `+v`, chanmod will verify the user with NickServ before applying the mode. If verification fails, the user is silently skipped (or notified if `notify_on_fail` is true).
 
 ## Mode enforcement

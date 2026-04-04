@@ -33,7 +33,7 @@ For a more detailed walkthrough, see the **[Getting Started guide](docs/GETTING_
 
 ## Plugins
 
-Plugins live in `plugins/<name>/` and are enabled via `config/plugins.json`. They register IRC commands through the bind system and can be loaded, unloaded, and reloaded at runtime.
+Plugins live in `plugins/<name>/` and are auto-discovered on startup. Any plugin directory containing an `index.ts` is loaded automatically — no config entry required. To disable a plugin, add it to `config/plugins.json` with `"enabled": false`. Use `plugins.json` to override config, restrict channels, or disable specific plugins.
 
 ### Included plugins
 
@@ -103,12 +103,13 @@ Available inside a DCC CHAT session. See [docs/DCC.md](docs/DCC.md) for setup.
 
 ## Permission flags
 
-| Flag | Role   | Access                               |
-| ---- | ------ | ------------------------------------ |
-| `n`  | Owner  | Full access; implies all other flags |
-| `m`  | Master | User management                      |
-| `o`  | Op     | Channel commands, bot admin          |
-| `v`  | Voice  | Reserved for plugin use              |
+| Flag | Role   | Access                                                   |
+| ---- | ------ | -------------------------------------------------------- |
+| `n`  | Owner  | Full access; implies all other flags                     |
+| `m`  | Master | User management                                          |
+| `o`  | Op     | Channel commands, bot admin                              |
+| `v`  | Voice  | Reserved for plugin use                                  |
+| `d`  | Deop   | Suppress auto-op/halfop on join; auto-voice if also `+v` |
 
 Flags can be set globally or per-channel. The owner defined in `bot.json` is bootstrapped automatically on startup.
 
