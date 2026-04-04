@@ -1,9 +1,15 @@
 // HexBot — Entry point
 // Parses CLI args, starts the bot, optionally starts the REPL.
 import { closeSync, openSync, unlinkSync, utimesSync } from 'node:fs';
+import net from 'node:net';
 
 import { Bot } from './bot';
 import { BotREPL } from './repl';
+
+// Disable Happy Eyeballs (RFC 8305) connection racing. Node.js tries multiple
+// IPs simultaneously by default, which breaks under WireGuard + nftables
+// policy routing where the fwmark-based routing confuses connection racing.
+net.setDefaultAutoSelectFamily(false);
 
 // ---------------------------------------------------------------------------
 // Healthcheck heartbeat file
