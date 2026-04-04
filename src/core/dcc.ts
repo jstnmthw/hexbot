@@ -291,7 +291,6 @@ export class DCCSession implements DCCSessionEntry {
     this.writeLine('');
     this.writeLine("Commands start with '.' (like '.quit' or '.help')");
     this.writeLine('Everything else goes out to the console.');
-    this.writeLine('');
 
     this.resetIdle();
 

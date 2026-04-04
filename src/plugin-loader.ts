@@ -174,22 +174,32 @@ export class PluginLoader {
     }
   }
 
-  /** Load all enabled plugins from the plugins config. */
+  /** Load all enabled plugins from the plugins config + auto-discovered plugins. */
   async loadAll(pluginsConfigPath?: string): Promise<LoadResult[]> {
     this.cleanupOrphanedTempFiles();
     /* v8 ignore next -- ?? fallback: tests always pass an explicit path; default production path unreachable */
     const cfgPath = pluginsConfigPath ?? resolve('./config/plugins.json');
-    const pluginsConfig = this.readPluginsConfig(cfgPath);
+    const pluginsConfig = this.readPluginsConfig(cfgPath) ?? {};
 
-    if (!pluginsConfig) {
-      this.logger?.info('No plugins.json found — skipping plugin loading');
-      return [];
+    // Build the full set of plugin names: configured plugins first, then
+    // auto-discovered plugins from the plugins directory that aren't listed.
+    const pluginNames = new Set(Object.keys(pluginsConfig));
+    try {
+      for (const entry of readdirSync(this.pluginDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        if (existsSync(join(this.pluginDir, entry.name, 'index.ts'))) {
+          pluginNames.add(entry.name);
+        }
+      }
+    } catch {
+      /* plugin dir may not exist or not be readable */
     }
 
     const results: LoadResult[] = [];
 
-    for (const [name, config] of Object.entries(pluginsConfig)) {
-      if (!config.enabled) {
+    for (const name of pluginNames) {
+      const config = pluginsConfig[name];
+      if (config && !config.enabled) {
         this.logger?.debug(`Skipping disabled plugin: ${name}`);
         continue;
       }
