@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `ai-chat` plugin — AI-powered chat via Gemini (free tier). Features provider adapter pattern, layered rate limiting, per-user token budgets, sliding-window context, multiple personality presets, per-channel/language overrides, on-demand game sessions (ships with 20 Questions + Trivia), and ChanServ fantasy-command injection defense
+- `--env-file-if-exists=.env` flag added to `pnpm start` / `pnpm dev` for loading API keys from a `.env` file (Node 20.6+ built-in, no dotenv dep)
 - `d` (deop) permission flag — suppresses auto-op/halfop on join; auto-voice still works with explicit `+v`
 - Per-plugin channel scoping via `channels` array in `plugins.json` — restricts a plugin to specific channels
 - Greeter help now documents `{nick}` and `{channel}` substitution variables and sub-command help for `!greet set` and `!greet del`

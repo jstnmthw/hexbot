@@ -79,5 +79,14 @@
       "header": "HexBot Commands",
       "footer": "*** End of Help ***"
     }
+  },
+  "ai-chat": {
+    "enabled": false,
+    "channels": ["#mychannel"],
+    "config": {
+      "provider": "gemini",
+      "model": "gemini-2.5-flash-lite",
+      "temperature": 0.9
+    }
   }
 }

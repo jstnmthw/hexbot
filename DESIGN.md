@@ -602,13 +602,12 @@ What differs between networks and how we handle it:
 
 All core infrastructure is implemented and production-ready. See [CHANGELOG.md](CHANGELOG.md) for a full implementation history.
 
-**Shipped plugins:** `8ball`, `chanmod`, `ctcp`, `flood`, `greeter`, `help`, `seen`, `topic`
+**Shipped plugins:** `8ball`, `ai-chat`, `chanmod`, `ctcp`, `flood`, `greeter`, `help`, `seen`, `topic`
 
 **Shipped core features:** bot linking (hub/leaf), DCC CHAT console, channel takeover protection, persistent channel rejoin
 
 **Planned features** (design documents in `docs/plans/`):
 
-- [`ai-chat-plugin.md`](docs/plans/ai-chat-plugin.md) — AI chat integration (Gemini/Claude/OpenAI adapter)
 - [`xdcc-plugin.md`](docs/plans/xdcc-plugin.md) — XDCC file serving
 - [`idlerpg-plugin.md`](docs/plans/idlerpg-plugin.md) — IdleRPG game plugin
 - [`rss-feed.md`](docs/plans/rss-feed.md) — RSS feed announcements

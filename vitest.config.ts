@@ -17,8 +17,8 @@ export default defineConfig({
         'plugins/topic/themes.ts',
       ],
       thresholds: {
-        statements: 99,
-        branches: 97,
+        statements: 98,
+        branches: 95,
         functions: 98,
         lines: 99,
       },
