@@ -27,6 +27,7 @@
   },
   "database": "./data/hexbot.db",
   "pluginDir": "./plugins",
+  "_comment_pluginsConfig": "pluginsConfig: path to plugins.json. Defaults to ./config/plugins.json. Useful for multi-bot setups.",
   "logging": {
     "level": "info",
     "mod_actions": true

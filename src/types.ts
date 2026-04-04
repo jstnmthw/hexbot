@@ -437,6 +437,7 @@ export interface BotConfig {
   services: ServicesConfig;
   database: string;
   pluginDir: string;
+  pluginsConfig?: string;
   logging: LoggingConfig;
   queue?: QueueConfig;
   flood?: FloodConfig;

@@ -348,7 +348,9 @@ export class Bot {
 
     // 8. Load plugins (sets up binds before connection so all handlers are
     //    ready when the server starts sending JOIN/MODE/etc responses)
-    await this.pluginLoader.loadAll();
+    await this.pluginLoader.loadAll(
+      this.config.pluginsConfig ? resolve(this.config.pluginsConfig) : undefined,
+    );
 
     // 8. Connect to IRC (all handlers are registered — safe to receive events)
     await this.connect();
