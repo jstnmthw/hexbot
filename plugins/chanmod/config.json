@@ -33,7 +33,6 @@
   "nick_recovery_ghost": false,
   "stopnethack_mode": 0,
   "split_timeout_ms": 300000,
-  "chanserv_op": false,
   "chanserv_nick": "ChanServ",
   "chanserv_op_delay_ms": 1000,
   "chanserv_services_type": "",

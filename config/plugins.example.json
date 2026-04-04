@@ -4,16 +4,51 @@
     "channels": ["#hexbot"],
     "config": {
       "auto_op": true,
+      "op_flags": ["n", "m", "o"],
+      "halfop_flags": [],
+      "voice_flags": ["v"],
+      "notify_on_fail": false,
       "enforce_modes": false,
       "enforce_channel_modes": "+nt",
+      "enforce_channel_key": "",
+      "enforce_channel_limit": 0,
+      "enforce_delay_ms": 500,
       "nodesynch_nicks": ["ChanServ"],
-      "op_flags": ["n", "m", "o"],
-      "voice_flags": ["v"],
-      "default_ban_duration": 120,
-      "default_ban_type": 3,
       "cycle_on_deop": false,
       "cycle_delay_ms": 5000,
-      "enforce_delay_ms": 500
+      "default_kick_reason": "Requested",
+      "default_ban_duration": 120,
+      "default_ban_type": 3,
+      "rejoin_on_kick": true,
+      "rejoin_delay_ms": 5000,
+      "max_rejoin_attempts": 3,
+      "rejoin_attempt_window_ms": 300000,
+      "revenge_on_kick": false,
+      "revenge_action": "deop",
+      "revenge_delay_ms": 3000,
+      "revenge_kick_reason": "Don't kick me.",
+      "revenge_exempt_flags": "nm",
+      "bitch": false,
+      "punish_deop": false,
+      "punish_action": "kick",
+      "punish_kick_reason": "Don't deop my friends.",
+      "enforcebans": false,
+      "nick_recovery": true,
+      "nick_recovery_ghost": false,
+      "stopnethack_mode": 0,
+      "split_timeout_ms": 300000,
+      "chanserv_nick": "ChanServ",
+      "chanserv_op_delay_ms": 1000,
+      "chanserv_services_type": "",
+      "chanserv_unban_retry_ms": 2000,
+      "chanserv_unban_max_retries": 3,
+      "chanserv_recover_cooldown_ms": 60000,
+      "anope_recover_step_delay_ms": 200,
+      "takeover_window_ms": 30000,
+      "takeover_level_1_threshold": 3,
+      "takeover_level_2_threshold": 6,
+      "takeover_level_3_threshold": 10,
+      "takeover_response_delay_ms": 0
     }
   },
   "flood": {
@@ -28,29 +63,28 @@
       "nick_window_secs": 60,
       "ban_duration_minutes": 10,
       "ignore_ops": true,
-      "actions": ["warn", "kick", "tempban"]
+      "actions": ["warn", "kick", "tempban"],
+      "offence_window_ms": 300000
     }
   },
   "greeter": {
     "enabled": true,
     "channels": ["#hexbot"],
     "config": {
-      "message": "Welcome to {channel}, {nick}!"
+      "message": "Welcome to {channel}, {nick}!",
+      "delivery": "say",
+      "join_notice": "",
+      "min_flag": "v"
     }
   },
-  "seen": {
-    "enabled": true
-  },
-  "8ball": {
-    "enabled": true
-  },
-  "topic": {
-    "enabled": true
-  },
-  "ctcp": {
-    "enabled": true
-  },
   "help": {
-    "enabled": true
+    "enabled": true,
+    "config": {
+      "cooldown_ms": 30000,
+      "reply_type": "notice",
+      "compact_index": true,
+      "header": "HexBot Commands",
+      "footer": "*** End of Help ***"
+    }
   }
 }
