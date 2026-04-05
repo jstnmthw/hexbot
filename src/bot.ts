@@ -8,7 +8,12 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { CommandHandler } from './command-handler';
-import { resolveSecrets, validateChannelKeys, validateResolvedSecrets } from './config';
+import {
+  parseBotConfigOnDisk,
+  resolveSecrets,
+  validateChannelKeys,
+  validateResolvedSecrets,
+} from './config';
 import { BotLinkHub } from './core/botlink-hub';
 import { BotLinkLeaf } from './core/botlink-leaf';
 import { handleProtectFrame } from './core/botlink-protect';
@@ -43,7 +48,6 @@ import { type Logger, createLogger } from './logger';
 import { PluginLoader } from './plugin-loader';
 import type { Casemapping } from './types';
 import type { BotConfig } from './types';
-import type { BotConfigOnDisk } from './types';
 import { buildSocksOptions } from './utils/socks';
 import { stripFormatting } from './utils/strip-formatting';
 import { requiresVerificationForFlags } from './utils/verify-flags';
@@ -529,17 +533,19 @@ export class Bot {
       // stat failed — file readable check already passed above, ignore
     }
 
-    let onDisk: BotConfigOnDisk;
     try {
       const raw = readFileSync(configPath, 'utf-8');
-      onDisk = JSON.parse(raw) as BotConfigOnDisk;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`[bot] Failed to parse config: ${message}`);
-      process.exit(1);
-    }
-
-    try {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (err) {
+        const m = err instanceof Error ? err.message : String(err);
+        throw new Error(`[config] Failed to parse JSON in ${configPath}: ${m}`, { cause: err });
+      }
+      // Shape validation: rejects unknown keys, missing required fields, and
+      // wrong primitive types. Catches typos that would otherwise silently
+      // load as undefined and surface as confusing runtime errors later.
+      const onDisk = parseBotConfigOnDisk(parsed);
       // Resolve `_env` suffix fields from process.env into their sibling
       // non-suffixed fields. After this, internal code reads the resolved
       // runtime BotConfig shape (services.password, botlink.password, etc.).

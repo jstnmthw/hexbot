@@ -1,20 +1,219 @@
-// HexBot — Config secret resolution
-// Resolves `<field>_env` suffix fields from process.env into their sibling
-// non-suffixed field. See docs/plans/config-secrets-env.md for the full spec.
+// HexBot — Config shape validation + secret resolution
+// Two-stage pipeline for config/bot.json:
+//   1. parseBotConfigOnDisk() — Zod-validates the parsed JSON against the
+//      BotConfigOnDisk shape. Rejects unknown keys (typo guard) and reports
+//      every mismatch with a field path.
+//   2. resolveSecrets() — walks the validated tree and substitutes
+//      `<field>_env` keys with values read from process.env.
 //
-// Convention: any JSON field with an `_env` suffix names an environment
-// variable. The resolver walks the parsed JSON tree recursively:
-//   1. For each `<field>_env: "VAR_NAME"` pair where the value is a string,
-//      it reads process.env.VAR_NAME.
-//   2. If the env var is set, it emits `<field>: <env value>` in the resolved
-//      output and drops the `_env` key.
-//   3. If the env var is unset, both keys are dropped (field remains
-//      undefined).
+// Convention for (2): any JSON field with an `_env` suffix names an
+// environment variable. The resolver walks the parsed JSON tree recursively:
+//   - For each `<field>_env: "VAR_NAME"` pair where the value is a string,
+//     it reads process.env.VAR_NAME.
+//   - If the env var is set, it emits `<field>: <env value>` in the resolved
+//     output and drops the `_env` key.
+//   - If the env var is unset, both keys are dropped (field remains
+//     undefined).
 //
 // Plugins never read process.env directly — they declare `<field>_env` in
 // their config.json or plugins.json overrides and the plugin loader calls
 // resolveSecrets() before the plugin's init() runs.
-import type { BotConfig } from './types';
+import { z } from 'zod';
+
+import type { BotConfig, BotConfigOnDisk } from './types';
+
+// ---------------------------------------------------------------------------
+// Schemas — shape validation for config/bot.json
+//
+// These mirror the `*OnDisk` interfaces in types.ts. Every schema uses
+// z.strictObject so unrecognized keys are rejected: this catches typos in
+// config files (e.g. "hots" instead of "host") which otherwise silently
+// load as undefined and cause obscure runtime failures later.
+//
+// If you add/rename a field in types.ts, update the matching schema here.
+// The _SchemaMatchesInterface assertion below will flag drift at
+// `tsc --noEmit` time if the two diverge.
+// ---------------------------------------------------------------------------
+
+const ChannelEntryOnDiskSchema = z.strictObject({
+  name: z.string(),
+  key: z.string().optional(),
+  key_env: z.string().optional(),
+});
+
+const ChannelListEntrySchema = z.union([z.string(), ChannelEntryOnDiskSchema], {
+  error: 'channel entry must be a string (e.g. "#chan") or { name, key?, key_env? }',
+});
+
+const IrcConfigOnDiskSchema = z.strictObject({
+  host: z.string(),
+  port: z.number(),
+  tls: z.boolean(),
+  nick: z.string(),
+  username: z.string(),
+  realname: z.string(),
+  channels: z.array(ChannelListEntrySchema),
+  tls_verify: z.boolean().optional(),
+  tls_cert: z.string().optional(),
+  tls_key: z.string().optional(),
+});
+
+const OwnerConfigSchema = z.strictObject({
+  handle: z.string(),
+  hostmask: z.string(),
+});
+
+const IdentityConfigSchema = z.strictObject({
+  method: z.literal('hostmask'),
+  require_acc_for: z.array(z.string()),
+});
+
+const ServicesConfigOnDiskSchema = z.strictObject({
+  type: z.enum(['atheme', 'anope', 'dalnet', 'none']),
+  nickserv: z.string(),
+  password_env: z.string().optional(),
+  sasl: z.boolean(),
+  sasl_mechanism: z.enum(['PLAIN', 'EXTERNAL']).optional(),
+});
+
+const LoggingConfigSchema = z.strictObject({
+  level: z.enum(['debug', 'info', 'warn', 'error']),
+  mod_actions: z.boolean(),
+});
+
+const QueueConfigSchema = z.strictObject({
+  rate: z.number().optional(),
+  burst: z.number().optional(),
+});
+
+const FloodWindowConfigSchema = z.strictObject({
+  count: z.number(),
+  window: z.number(),
+});
+
+const FloodConfigSchema = z.strictObject({
+  pub: FloodWindowConfigSchema.optional(),
+  msg: FloodWindowConfigSchema.optional(),
+});
+
+const ProxyConfigOnDiskSchema = z.strictObject({
+  enabled: z.boolean(),
+  host: z.string(),
+  port: z.number(),
+  username: z.string().optional(),
+  password_env: z.string().optional(),
+});
+
+const DccConfigSchema = z.strictObject({
+  enabled: z.boolean(),
+  ip: z.string(),
+  port_range: z.tuple([z.number(), z.number()]),
+  require_flags: z.string(),
+  max_sessions: z.number(),
+  idle_timeout_ms: z.number(),
+  nickserv_verify: z.boolean(),
+});
+
+const BotlinkEndpointSchema = z.strictObject({
+  host: z.string(),
+  port: z.number(),
+});
+
+const BotlinkConfigOnDiskSchema = z.strictObject({
+  enabled: z.boolean(),
+  role: z.enum(['hub', 'leaf']),
+  botname: z.string(),
+  hub: BotlinkEndpointSchema.optional(),
+  listen: BotlinkEndpointSchema.optional(),
+  password_env: z.string().optional(),
+  reconnect_delay_ms: z.number().optional(),
+  reconnect_max_delay_ms: z.number().optional(),
+  max_leaves: z.number().optional(),
+  sync_permissions: z.boolean().optional(),
+  sync_channel_state: z.boolean().optional(),
+  sync_bans: z.boolean().optional(),
+  ping_interval_ms: z.number(),
+  link_timeout_ms: z.number(),
+});
+
+const ChanmodBotConfigOnDiskSchema = z.strictObject({
+  nick_recovery_password_env: z.string().optional(),
+});
+
+export const BotConfigOnDiskSchema = z.strictObject({
+  irc: IrcConfigOnDiskSchema,
+  owner: OwnerConfigSchema,
+  identity: IdentityConfigSchema,
+  services: ServicesConfigOnDiskSchema,
+  database: z.string(),
+  pluginDir: z.string(),
+  pluginsConfig: z.string().optional(),
+  logging: LoggingConfigSchema,
+  queue: QueueConfigSchema.optional(),
+  flood: FloodConfigSchema.optional(),
+  proxy: ProxyConfigOnDiskSchema.optional(),
+  dcc: DccConfigSchema.optional(),
+  botlink: BotlinkConfigOnDiskSchema.optional(),
+  quit_message: z.string().optional(),
+  channel_rejoin_interval_ms: z.number().optional(),
+  chanmod: ChanmodBotConfigOnDiskSchema.optional(),
+});
+
+// Compile-time guard: if BotConfigOnDisk (types.ts) drifts from the schema
+// above, the `true` assignment fails with one of the branch messages.
+type _SchemaMatchesInterface = [BotConfigOnDisk] extends [z.infer<typeof BotConfigOnDiskSchema>]
+  ? [z.infer<typeof BotConfigOnDiskSchema>] extends [BotConfigOnDisk]
+    ? true
+    : 'Zod schema has fields the BotConfigOnDisk interface does not declare'
+  : 'BotConfigOnDisk interface has fields the Zod schema does not cover';
+const _verifySchemaMatches: _SchemaMatchesInterface = true;
+void _verifySchemaMatches;
+
+// ---------------------------------------------------------------------------
+// Parser
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate that the raw JSON parsed from config/bot.json matches the expected
+ * on-disk shape. Returns the typed config on success, throws on any shape
+ * error with a multi-line message listing every mismatch with its path.
+ * Call this after JSON.parse() and before resolveSecrets().
+ */
+export function parseBotConfigOnDisk(raw: unknown): BotConfigOnDisk {
+  const result = BotConfigOnDiskSchema.safeParse(raw);
+  if (result.success) return result.data;
+  throw new Error(formatZodError(result.error));
+}
+
+function formatZodError(err: z.ZodError): string {
+  const lines = ['[config] Invalid config/bot.json:'];
+  for (const issue of err.issues) {
+    const where = formatPath(issue.path) || '(root)';
+    // Zod reports missing required fields as `invalid_type` with
+    // "received undefined" baked into the message. Rewrite these to a
+    // clearer "is required" form so users don't scan the word "undefined"
+    // and wonder why they have to set undefined.
+    let message = issue.message;
+    if (issue.code === 'invalid_type' && message.includes('received undefined')) {
+      const expected = (issue as { expected?: string }).expected ?? 'value';
+      message = `required field missing (expected ${expected})`;
+    }
+    lines.push(`  - ${where}: ${message}`);
+  }
+  return lines.join('\n');
+}
+
+function formatPath(path: ReadonlyArray<PropertyKey>): string {
+  let out = '';
+  for (const seg of path) {
+    if (typeof seg === 'number') {
+      out += `[${seg}]`;
+    } else {
+      out += out === '' ? String(seg) : `.${String(seg)}`;
+    }
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // Resolver
