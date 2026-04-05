@@ -202,10 +202,16 @@ export function isPassiveDcc(_ip: number, port: number): boolean {
 // ASCII logo placeholder — replace BANNER_LOGO lines with your own art.
 // Each entry is one line of text sent to the user's DCC CHAT window.
 const BANNER_LOGO = [
-  ' _______               ______         __   ',
-  '|   |   |.-----.--.--.|   __ \\.-----.|  |_ ',
-  '|       ||  -__|_   _||   __ <|  _  ||   _|',
-  '|___|___||_____|__.__||______/|_____||____|',
+  '⠀⠀⠀⠀⣠⣤⣶⣶⣶⣤⣄⡀⠀⠀⠀',
+  '⠀⠀⣴⣾⣿⣿⣿⣿⣿⣧⡀⠈⠢⠀⠀',
+  '⠀⣼⣿⣿⣿⣿⣿⣿⣿⡿⠁⠀⠀⠀⠀      dBP dBP dBBBP`Bb  .BP    dBBBBb  dBBBBP dBBBBBBP',
+  '⢰⡿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀                    .BP.P        dBP  dBP.BP    ',
+  "⠘⣽⡿⠿⠿⣿⣿⣿⣿⣿⣦⣤⡀⠀⠀   dBBBBBP dBBP     dBK     dBBBK'  dBP.BP   dBP",
+  "⠀⣟⠀⠀⠀⣸⣿⡏⠀⠀⠀⢹⠗⠀⠀⠀  dBP dBP dBP      dB'dB   dB' db  dBP.BP   dBP",
+  "⠀⣿⣷⣶⣾⡿⠁⠙⣄⣀⣀⣠⡀⠀⠀ dBP dBP dBBBBP   dB' dBP dBBBBP' dBBBBP   dBP",
+  '⠀⠙⠙⢿⡿⣷⣶⣤⣿⣿⡿⠿⠃⠀⠀',
+  '⠀⠀⠀⠺⡏⡏⡏⡏⡏⠉⠁⠀⠀⠀⠀',
+  '⠀⠀⠀⠀⠀⠀⠁⠁⠀⠀⠀⠀⠀⠀⠀⠀',
 ];
 
 export class DCCSession implements DCCSessionEntry {

@@ -590,6 +590,46 @@ describe('PluginLoader', () => {
 
       rmSync(configDir, { recursive: true, force: true });
     });
+
+    it('should log per-plugin load errors to surface failures at startup', async () => {
+      writePlugin(
+        tempDir,
+        'good',
+        `
+        export const name = 'good';
+        export const version = '1.0.0';
+        export const description = '';
+        export function init(api) {}
+      `,
+      );
+      writePlugin(
+        tempDir,
+        'broken',
+        `
+        this is not valid TypeScript {{{
+        `,
+      );
+
+      const configDir = makeTempDir();
+      const cfgPath = writePluginsJson(configDir, {});
+
+      const logs: string[] = [];
+      const logger = {
+        child: () => logger,
+        info: () => {},
+        error: (msg: string) => logs.push(msg),
+        warn: () => {},
+        debug: () => {},
+      } as unknown as import('../src/logger').Logger;
+
+      const { loader } = createLoaderFull(tempDir, { logger });
+      const results = await loader.loadAll(cfgPath);
+
+      expect(results.some((r) => r.status === 'error' && r.name === 'broken')).toBe(true);
+      expect(logs.some((m) => m.includes('Failed to load "broken"'))).toBe(true);
+
+      rmSync(configDir, { recursive: true, force: true });
+    });
   });
 
   describe('scoped API', () => {

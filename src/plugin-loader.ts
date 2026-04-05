@@ -124,6 +124,8 @@ export class PluginLoader {
   private getCasemapping: () => Casemapping;
   private getServerSupports: () => Record<string, string>;
   private modesReadyListeners: Map<string, Array<(channel: string) => void>> = new Map();
+  /** Absolute paths of plugin entry files already imported in this process. */
+  private importedOnce: Set<string> = new Set();
 
   constructor(deps: PluginLoaderDeps) {
     this.pluginDir = resolve(deps.pluginDir);
@@ -210,6 +212,11 @@ export class PluginLoader {
       results.push(result);
     }
 
+    for (const r of results) {
+      if (r.status === 'error') {
+        this.logger?.error(`Failed to load "${r.name}": ${r.error}`);
+      }
+    }
     const ok = results.filter((r) => r.status === 'ok').length;
     const err = results.filter((r) => r.status === 'error').length;
     this.logger?.info(`Loaded ${ok} plugins (${err} errors)`);
@@ -554,6 +561,14 @@ export class PluginLoader {
 
   /** Import a plugin module with cache busting for all local dependencies. */
   private async importWithCacheBust(absPath: string): Promise<Record<string, unknown>> {
+    // First load of this file in this process: nothing is cached yet, so skip the
+    // cache-busting dance entirely. This lets bots run with a read-only plugins/
+    // mount as long as they don't hot-reload.
+    if (!this.importedOnce.has(absPath)) {
+      this.importedOnce.add(absPath);
+      return (await import(pathToFileURL(absPath).href)) as Record<string, unknown>;
+    }
+
     const ts = Date.now();
     const dir = dirname(absPath);
 

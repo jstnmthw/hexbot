@@ -27,6 +27,10 @@ const ATHEME_FLAGS_RE = /^(\d+)\s+(\S+)\s+(\+\S+)$/;
 const ATHEME_FLAGS_ALT_RE = /^Flags for (\S+) in (\S+) are (\+\S+)/;
 /** Match no-access error: "<nick> was not found on the access list of <channel>." */
 const ATHEME_NOT_FOUND_RE = /^(\S+) was not found on the access list of (#\S+?)\.?$/;
+/** Match "The channel #xxx is not registered." — captures the channel name.
+ *  \x02 is IRC bold (ChanServ often bolds channel names). */
+// eslint-disable-next-line no-control-regex
+const ATHEME_NOT_REGISTERED_RE = /channel\s+\x02?(#\S+?)\x02?\s+is\s+not\s+registered/i;
 
 // ---------------------------------------------------------------------------
 // Anope ACCESS LIST response patterns
@@ -37,8 +41,25 @@ const ATHEME_NOT_FOUND_RE = /^(\S+) was not found on the access list of (#\S+?)\
 // End of list:
 //   "End of access list."
 
-/** Match: "  <num>  <nick/mask>  <level>" — e.g. "  1  hexbot  5" */
+/** Match numeric format: "  <num>  <nick/mask>  <level>" — e.g. "  1  hexbot  5" */
 const ANOPE_ACCESS_RE = /^\s*\d+\s+(\S+)\s+(-?\d+)/;
+/** Match XOP format (Rizon/Anope with XOP levels): "  <num>  <XOP>  <nick>" — e.g. "  1  SOP  d3m0n" */
+const ANOPE_XOP_ACCESS_RE = /^\s*\d+\s+(QOP|SOP|AOP|HOP|VOP)\s+(\S+)/i;
+/** Map Anope XOP keyword → equivalent numeric level. */
+const XOP_TO_LEVEL: Record<string, number> = {
+  QOP: 10000,
+  SOP: 10,
+  AOP: 5,
+  HOP: 4,
+  VOP: 3,
+};
+/** Match "Channel #xxx isn't registered" / "is not registered" — captures the channel name.
+ *  \x02 is IRC bold (ChanServ often bolds channel names). */
+// eslint-disable-next-line no-control-regex
+const ANOPE_NOT_REGISTERED_RE = /channel\s+\x02?(#\S+?)\x02?\s+(?:isn't|is not)\s+registered/i;
+/** Match generic "access denied" / "permission denied" / "not authorized" / "must be identified" responses. */
+const ANOPE_DENIED_RE =
+  /(?:access denied|permission denied|not authorized|must be identified|must have a registered)/i;
 
 /** Timeout for ChanServ probe responses (10 seconds). */
 const PROBE_TIMEOUT_MS = 10_000;
@@ -90,6 +111,7 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
     if (api.ircLower(ctx.nick) !== api.ircLower(csNick)) return;
 
     const text = ctx.text;
+    api.debug(`ChanServ notice: ${text}`);
 
     if (isAtheme) {
       handleAthemeNotice(api, backend as AthemeBackend, probeState, text);
@@ -220,6 +242,17 @@ function handleAthemeNotice(
     }
     return;
   }
+
+  // Unregistered-channel error: "The channel #xxx is not registered."
+  m = ATHEME_NOT_REGISTERED_RE.exec(text);
+  if (m) {
+    const channel = m[1];
+    const key = api.ircLower(channel);
+    if (probeState.pendingAthemeProbes.delete(key)) {
+      api.debug(`ChanServ FLAGS response for ${channel}: channel not registered`);
+      backend.handleFlagsResponse(channel, '(none)');
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -234,8 +267,25 @@ function handleAnopeNotice(
 ): void {
   const botNick = getBotNick(api);
 
-  // Try "  <num>  <nick/mask>  <level>" format
-  const m = ANOPE_ACCESS_RE.exec(text);
+  // Try XOP format first (Rizon): "  <num>  <XOP-name>  <nick>"
+  let m = ANOPE_XOP_ACCESS_RE.exec(text);
+  if (m) {
+    const xop = m[1].toUpperCase();
+    const nick = m[2];
+    const level = XOP_TO_LEVEL[xop] ?? 0;
+    if (api.ircLower(nick) === api.ircLower(botNick)) {
+      const channel = consumeFirstPendingProbe(probeState.pendingAnopeProbes);
+      if (channel) {
+        api.debug(`ChanServ ACCESS response for ${channel}: ${nick} ${xop} (level=${level})`);
+        backend.handleAccessResponse(channel, level);
+        syncAccessToSettings(api, backend, channel);
+      }
+    }
+    return;
+  }
+
+  // Try numeric format: "  <num>  <nick/mask>  <level>"
+  m = ANOPE_ACCESS_RE.exec(text);
   if (m) {
     const nick = m[1];
     const level = parseInt(m[2], 10);
@@ -255,6 +305,28 @@ function handleAnopeNotice(
     const channel = consumeFirstPendingProbe(probeState.pendingAnopeProbes);
     if (channel) {
       api.debug(`ChanServ ACCESS response for ${channel}: not in access list`);
+      backend.handleAccessResponse(channel, 0);
+    }
+    return;
+  }
+
+  // "Channel #xxx isn't registered" — resolve the probe for that specific channel.
+  const notReg = ANOPE_NOT_REGISTERED_RE.exec(text);
+  if (notReg) {
+    const channel = notReg[1];
+    const key = api.ircLower(channel);
+    if (probeState.pendingAnopeProbes.delete(key)) {
+      api.debug(`ChanServ ACCESS response for ${channel}: channel not registered`);
+      backend.handleAccessResponse(channel, 0);
+    }
+    return;
+  }
+
+  // Generic denial — resolve the oldest pending probe as no-access.
+  if (ANOPE_DENIED_RE.test(text)) {
+    const channel = consumeFirstPendingProbe(probeState.pendingAnopeProbes);
+    if (channel) {
+      api.debug(`ChanServ ACCESS response for ${channel}: denied (${text.trim()})`);
       backend.handleAccessResponse(channel, 0);
     }
   }

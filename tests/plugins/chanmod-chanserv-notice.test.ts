@@ -160,6 +160,21 @@ describe('ChanServ notice handler — Atheme FLAGS', () => {
     expect(calls[0].flags).toBe('(none)');
   });
 
+  it('resolves probe on "The channel #test is not registered"', () => {
+    const { api, notice } = createMockApi();
+    const { backend, calls } = createMockAthemeBackend();
+    const probeState = createProbeState();
+
+    setupChanServNotice({ api, config: createMockConfig(), backend, probeState });
+    markProbePending(api, probeState, '#test', 'atheme');
+
+    notice('ChanServ', 'The channel #test is not registered.');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].channel).toBe('#test');
+    expect(calls[0].flags).toBe('(none)');
+  });
+
   it('ignores notices from non-ChanServ nicks', () => {
     const { api, notice } = createMockApi();
     const { backend, calls } = createMockAthemeBackend();
@@ -293,6 +308,76 @@ describe('ChanServ notice handler — Anope ACCESS LIST', () => {
     notice('NickServ', '  1  hexbot  5');
 
     expect(calls).toHaveLength(0);
+  });
+
+  it('parses XOP format (SOP) — Rizon/Anope with XOP levels', () => {
+    const { api, notice } = createMockApi();
+    const { backend, calls } = createMockAnopeBackend();
+    const probeState = createProbeState();
+
+    setupChanServNotice({ api, config: createMockConfig('anope'), backend, probeState });
+    markProbePending(api, probeState, '#test', 'anope');
+
+    notice('ChanServ', '    1   SOP  hexbot');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].level).toBe(10);
+  });
+
+  it('parses XOP format (AOP)', () => {
+    const { api, notice } = createMockApi();
+    const { backend, calls } = createMockAnopeBackend();
+    const probeState = createProbeState();
+
+    setupChanServNotice({ api, config: createMockConfig('anope'), backend, probeState });
+    markProbePending(api, probeState, '#test', 'anope');
+
+    notice('ChanServ', '    2   AOP  hexbot');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].level).toBe(5);
+  });
+
+  it('parses XOP format (QOP) as founder', () => {
+    const { api, notice } = createMockApi();
+    const { backend, calls } = createMockAnopeBackend();
+    const probeState = createProbeState();
+
+    setupChanServNotice({ api, config: createMockConfig('anope'), backend, probeState });
+    markProbePending(api, probeState, '#test', 'anope');
+
+    notice('ChanServ', '    1   QOP  hexbot');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].level).toBe(10000);
+  });
+
+  it('resolves probe on "Channel #test isn\'t registered"', () => {
+    const { api, notice } = createMockApi();
+    const { backend, calls } = createMockAnopeBackend();
+    const probeState = createProbeState();
+
+    setupChanServNotice({ api, config: createMockConfig('anope'), backend, probeState });
+    markProbePending(api, probeState, '#test', 'anope');
+
+    notice('ChanServ', "Channel #test isn't registered.");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].level).toBe(0);
+  });
+
+  it('resolves probe on generic "Access denied"', () => {
+    const { api, notice } = createMockApi();
+    const { backend, calls } = createMockAnopeBackend();
+    const probeState = createProbeState();
+
+    setupChanServNotice({ api, config: createMockConfig('anope'), backend, probeState });
+    markProbePending(api, probeState, '#test', 'anope');
+
+    notice('ChanServ', 'Access denied.');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].level).toBe(0);
   });
 });
 

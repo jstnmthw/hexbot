@@ -44,13 +44,16 @@ export function setupAutoOp(
 
       // Warn when takeover detection is on but no ChanServ access after probe completes.
       // Deferred: wait for the probe to finish (or timeout) before warning.
+      // Deduped per channel per bot session so rejoins don't re-nag.
       const takeoverOn = api.channelSettings.getFlag(channel, 'takeover_detection');
       const accessExplicit = api.channelSettings.isSet(channel, 'chanserv_access');
       if (takeoverOn && !accessExplicit) {
+        const channelKey = api.ircLower(channel);
         // Check after 5s — by then the probe should have completed or timed out
         _state.scheduleCycle(5000, () => {
           const access = chain?.getAccess(channel) ?? 'none';
-          if (access === 'none') {
+          if (access === 'none' && !_state.takeoverWarnedChannels.has(channelKey)) {
+            _state.takeoverWarnedChannels.add(channelKey);
             api.warn(
               `Takeover detection enabled for ${channel} but chanserv_access is 'none' — bot cannot self-recover. Set via: .chanset ${channel} chanserv_access op`,
             );

@@ -45,6 +45,8 @@ export interface SharedState {
   // Topic recovery
   /** Known-good topic per channel — updated at threat level 0, frozen during elevated threat. */
   knownGoodTopics: Map<string, { topic: string; setAt: number }>;
+  /** Channels already warned about takeover_detection w/o chanserv_access (dedupe per session). */
+  takeoverWarnedChannels: Set<string>;
 
   /** Schedule a callback on `enforcementTimers` — wraps setTimeout + push. */
   scheduleEnforcement(delayMs: number, fn: () => void): void;
@@ -74,6 +76,7 @@ export function createState(): SharedState {
     lastKnownModes: new Map(),
     unbanRequested: new Set(),
     knownGoodTopics: new Map(),
+    takeoverWarnedChannels: new Set(),
     scheduleEnforcement(delayMs: number, fn: () => void): void {
       const timer = setTimeout(fn, delayMs);
       state.enforcementTimers.push(timer);
