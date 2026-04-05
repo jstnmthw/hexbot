@@ -19,7 +19,7 @@
   "services": {
     "type": "anope",
     "nickserv": "NickServ",
-    "password_env": "NICKSERV_PASSWORD",
+    "password_env": "HEX_NICKSERV_PASSWORD",
     "sasl": true,
     "sasl_mechanism": "PLAIN"
   },
@@ -50,7 +50,7 @@
     "enabled": false,
     "host": "127.0.0.1",
     "port": 9050,
-    "password_env": "PROXY_PASSWORD"
+    "password_env": "HEX_PROXY_PASSWORD"
   },
   "botlink": {
     "enabled": false,
@@ -64,7 +64,7 @@
       "host": "0.0.0.0",
       "port": 5051
     },
-    "password_env": "BOTLINK_PASSWORD",
+    "password_env": "HEX_BOTLINK_PASSWORD",
     "reconnect_delay_ms": 5000,
     "reconnect_max_delay_ms": 60000,
     "max_leaves": 10,
@@ -75,7 +75,7 @@
     "link_timeout_ms": 90000
   },
   "chanmod": {
-    "nick_recovery_password_env": "CHANMOD_RECOVERY_PASSWORD"
+    "nick_recovery_password_env": "HEX_CHANMOD_RECOVERY_PASSWORD"
   },
   "quit_message": "HexBot",
   "channel_rejoin_interval_ms": 30000

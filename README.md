@@ -35,7 +35,7 @@ For a more detailed walkthrough, see the **[Getting Started guide](docs/GETTING_
 
 ### Secrets in `config/bot.env`
 
-Secret values never live in `bot.json`. Each secret field is named via a `_env` suffix — the loader reads the named environment variable at startup and fails loudly if a required secret is missing. `pnpm start` / `pnpm dev` auto-load `config/bot.env`. Default env vars (defined in `config/bot.env.example`): `NICKSERV_PASSWORD`, `BOTLINK_PASSWORD`, `CHANMOD_RECOVERY_PASSWORD`, `PROXY_PASSWORD`, `GEMINI_API_KEY`. Plugin configs may declare their own `<field>_env` fields; the loader resolves them before the plugin sees its config.
+Secret values never live in `bot.json`. Each secret field is named via a `_env` suffix — the loader reads the named environment variable at startup and fails loudly if a required secret is missing. `pnpm start` / `pnpm dev` auto-load `config/bot.env`. Default env vars (defined in `config/bot.env.example`): `HEX_NICKSERV_PASSWORD`, `HEX_BOTLINK_PASSWORD`, `HEX_CHANMOD_RECOVERY_PASSWORD`, `HEX_PROXY_PASSWORD`, `HEX_GEMINI_API_KEY`. The `HEX_` prefix namespaces these so they won't collide with other services on the host. Plugin configs may declare their own `<field>_env` fields; the loader resolves them before the plugin sees its config.
 
 ### Running multiple bots
 

@@ -26,27 +26,27 @@ This is a **hard cutover** — the loader no longer falls back to inline secret 
    Fill in the values from step 1:
 
    ```
-   NICKSERV_PASSWORD=...
-   BOTLINK_PASSWORD=...
-   CHANMOD_RECOVERY_PASSWORD=...
-   PROXY_PASSWORD=...
+   HEX_NICKSERV_PASSWORD=...
+   HEX_BOTLINK_PASSWORD=...
+   HEX_CHANMOD_RECOVERY_PASSWORD=...
+   HEX_PROXY_PASSWORD=...
    ```
 
 4. **Update `config/bot.json`** — replace each inline secret with its `_env` counterpart:
 
-   | Before                                         | After                                                       |
-   | ---------------------------------------------- | ----------------------------------------------------------- |
-   | `"password": "..."` in `services`              | `"password_env": "NICKSERV_PASSWORD"`                       |
-   | `"password": "..."` in `botlink`               | `"password_env": "BOTLINK_PASSWORD"`                        |
-   | `"nick_recovery_password": "..."` in `chanmod` | `"nick_recovery_password_env": "CHANMOD_RECOVERY_PASSWORD"` |
-   | `"password": "..."` in `proxy`                 | `"password_env": "PROXY_PASSWORD"`                          |
+   | Before                                         | After                                                           |
+   | ---------------------------------------------- | --------------------------------------------------------------- |
+   | `"password": "..."` in `services`              | `"password_env": "HEX_NICKSERV_PASSWORD"`                       |
+   | `"password": "..."` in `botlink`               | `"password_env": "HEX_BOTLINK_PASSWORD"`                        |
+   | `"nick_recovery_password": "..."` in `chanmod` | `"nick_recovery_password_env": "HEX_CHANMOD_RECOVERY_PASSWORD"` |
+   | `"password": "..."` in `proxy`                 | `"password_env": "HEX_PROXY_PASSWORD"`                          |
 
-   Channel entries with inline `key` fields stay as-is.
+   Channel entries with inline `key` fields stay as-is. The `HEX_` prefix namespaces these vars so they won't collide with other services on the host.
 
 5. **Restart the bot.** Startup validation will fail loudly with the exact env var name if anything is missed:
 
    ```
-   [config] NICKSERV_PASSWORD must be set (services.sasl is true). Set it in .env or disable SASL.
+   [config] HEX_NICKSERV_PASSWORD must be set (services.sasl is true). Set it in .env or disable SASL.
    ```
 
 6. **Rotate secrets** (recommended). The previous values were in a plaintext JSON file on disk; treat them as compromised and rotate NickServ/botlink passwords after migration.

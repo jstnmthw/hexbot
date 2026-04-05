@@ -316,7 +316,7 @@ export function validateResolvedSecrets(cfg: BotConfig): void {
   if (cfg.services.sasl && saslMech !== 'EXTERNAL') {
     if (!cfg.services.password) {
       throw new Error(
-        '[config] NICKSERV_PASSWORD must be set (services.sasl is true). Set it in .env or disable SASL.',
+        '[config] HEX_NICKSERV_PASSWORD must be set (services.sasl is true). Set it in .env or disable SASL.',
       );
     }
   }
@@ -324,14 +324,14 @@ export function validateResolvedSecrets(cfg: BotConfig): void {
   // BotLink shared secret — required when botlink enabled
   if (cfg.botlink?.enabled) {
     if (!cfg.botlink.password) {
-      throw new Error('[config] BOTLINK_PASSWORD must be set (botlink.enabled is true).');
+      throw new Error('[config] HEX_BOTLINK_PASSWORD must be set (botlink.enabled is true).');
     }
   }
 
   // SOCKS5 proxy password — required when proxy has a username set
   if (cfg.proxy?.enabled && cfg.proxy.username) {
     if (!cfg.proxy.password) {
-      throw new Error('[config] PROXY_PASSWORD must be set (proxy.username is configured).');
+      throw new Error('[config] HEX_PROXY_PASSWORD must be set (proxy.username is configured).');
     }
   }
 }

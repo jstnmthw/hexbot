@@ -1,5 +1,7 @@
 # Plan: Config Secrets Migration to `.env`
 
+> **Superseded (2026-04-05):** this plan shipped with bare env var names (e.g. `NICKSERV_PASSWORD`). They have since been renamed to `HEX_`-prefixed equivalents (`HEX_NICKSERV_PASSWORD`, `HEX_BOTLINK_PASSWORD`, `HEX_CHANMOD_RECOVERY_PASSWORD`, `HEX_PROXY_PASSWORD`, `HEX_GEMINI_API_KEY`) to namespace them on shared hosts. Current canonical names live in `config/bot.env.example`. The rest of this doc is left intact as the historical decision record.
+
 ## Summary
 
 Extract all secrets from `config/bot.json` into environment variables, resolved via a `_env` suffix convention in the JSON schema. Non-secret structure stays in JSON; secrets live in `.env` (loaded by Node's built-in `--env-file` flag). This makes `bot.json` freely shareable/re-copyable without credential loss and scales cleanly to multi-instance deployments via per-bot `.env.<network>` files.

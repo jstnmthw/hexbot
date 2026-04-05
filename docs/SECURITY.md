@@ -206,7 +206,7 @@ api.say(channel, `User ${api.stripFormatting(nick)} has been granted ops`);
 ### 6.1 Env var handling
 
 - **Plugins must never read `process.env` directly.** Declare a `<field>_env` field in the plugin's `config.json` (or in the `plugins.json` override) and read `api.config.<field>` from init. The loader resolves the env var before the plugin sees its config. Plugins reading `process.env` can exfiltrate unrelated ambient secrets (AWS keys, cloud provider creds) that don't belong to the bot.
-- Never log resolved secret values, even at debug level. Log the env var name instead if a breadcrumb is useful ("NICKSERV_PASSWORD missing" — not the value).
+- Never log resolved secret values, even at debug level. Log the env var name instead if a breadcrumb is useful ("HEX_NICKSERV_PASSWORD missing" — not the value).
 - Never reference env vars that don't belong to HexBot just because they're in the ambient environment. Every `_env` field should be documented in `config/bot.env.example`.
 - Rotate secrets after migrating from inline JSON to `_env` (the old values were in a plaintext file on disk).
 

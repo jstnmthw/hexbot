@@ -152,7 +152,7 @@ describe('validateResolvedSecrets', () => {
     const cfg = baseConfig();
     cfg.services.sasl = true;
     cfg.services.password = '';
-    expect(() => validateResolvedSecrets(cfg)).toThrow(/NICKSERV_PASSWORD must be set/);
+    expect(() => validateResolvedSecrets(cfg)).toThrow(/HEX_NICKSERV_PASSWORD must be set/);
   });
 
   it('passes when SASL disabled + NICKSERV_PASSWORD unset', () => {
@@ -180,7 +180,7 @@ describe('validateResolvedSecrets', () => {
       ping_interval_ms: 30000,
       link_timeout_ms: 90000,
     };
-    expect(() => validateResolvedSecrets(cfg)).toThrow(/BOTLINK_PASSWORD must be set/);
+    expect(() => validateResolvedSecrets(cfg)).toThrow(/HEX_BOTLINK_PASSWORD must be set/);
   });
 
   it('passes when botlink enabled + BOTLINK_PASSWORD set', () => {
@@ -217,7 +217,7 @@ describe('validateResolvedSecrets', () => {
       port: 9050,
       username: 'socks-user',
     };
-    expect(() => validateResolvedSecrets(cfg)).toThrow(/PROXY_PASSWORD must be set/);
+    expect(() => validateResolvedSecrets(cfg)).toThrow(/HEX_PROXY_PASSWORD must be set/);
   });
 
   it('passes when proxy enabled but no username', () => {

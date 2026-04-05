@@ -18,7 +18,7 @@ services:
     build: .
     container_name: hexbot-libera-chanbot
     env_file: config/libera/chanbot.env
-    command: ['tsx', 'src/index.ts', '--config=config/libera/chanbot.json']
+    command: ['node_modules/.bin/tsx', 'src/index.ts', '--config=config/libera/chanbot.json']
     ports:
       - '49152-49171:49152-49171'
     volumes:
@@ -43,7 +43,7 @@ services:
     build: .
     container_name: hexbot-rizon-enforcer
     env_file: config/rizon/enforcer.env
-    command: ['tsx', 'src/index.ts', '--config=config/rizon/enforcer.json']
+    command: ['node_modules/.bin/tsx', 'src/index.ts', '--config=config/rizon/enforcer.json']
     ports:
       - '49172-49191:49172-49191'
     volumes:
