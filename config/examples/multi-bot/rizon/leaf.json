@@ -1,0 +1,48 @@
+{
+  "irc": {
+    "host": "irc.rizon.net",
+    "port": 6697,
+    "tls": true,
+    "nick": "Rizon-Helper",
+    "username": "helper",
+    "realname": "Rizon Helper Bot",
+    "channels": ["#help", "#casual"]
+  },
+  "owner": {
+    "handle": "admin",
+    "hostmask": "*!yourident@your.host.here"
+  },
+  "identity": {
+    "method": "hostmask",
+    "require_acc_for": ["+o", "+n"]
+  },
+  "services": {
+    "type": "anope",
+    "nickserv": "NickServ",
+    "password_env": "NICKSERV_PASSWORD",
+    "sasl": true,
+    "sasl_mechanism": "PLAIN"
+  },
+  "database": "./data/rizon-leaf.db",
+  "pluginDir": "./plugins",
+  "pluginsConfig": "./config/rizon/leaf-plugins.json",
+  "logging": {
+    "level": "info",
+    "mod_actions": true
+  },
+  "botlink": {
+    "enabled": true,
+    "role": "leaf",
+    "botname": "rizon-leaf",
+    "hub": { "host": "libera-hub.example.net", "port": 5051 },
+    "password_env": "BOTLINK_PASSWORD",
+    "reconnect_delay_ms": 5000,
+    "reconnect_max_delay_ms": 60000,
+    "sync_permissions": true,
+    "sync_channel_state": true,
+    "sync_bans": true,
+    "ping_interval_ms": 30000,
+    "link_timeout_ms": 90000
+  },
+  "quit_message": "Rizon-Helper signing off"
+}

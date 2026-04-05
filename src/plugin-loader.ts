@@ -4,6 +4,7 @@ import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from
 import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { resolveSecrets } from './config';
 import type { ChannelSettings } from './core/channel-settings';
 import type { ChannelState } from './core/channel-state';
 import { HelpRegistry } from './core/help-registry';
@@ -526,7 +527,10 @@ export class PluginLoader {
     // Overlay with plugins.json overrides
     const overrides = pluginsConfig?.[pluginName]?.config ?? {};
 
-    return { ...defaults, ...overrides };
+    // Resolve any `<field>_env` references from process.env so plugins see
+    // fully-resolved config values and never touch process.env directly.
+    // See docs/plans/config-secrets-env.md and docs/PLUGIN_API.md.
+    return resolveSecrets({ ...defaults, ...overrides });
   }
 
   // -------------------------------------------------------------------------

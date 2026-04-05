@@ -1,0 +1,50 @@
+{
+  "irc": {
+    "host": "irc.libera.chat",
+    "port": 6697,
+    "tls": true,
+    "nick": "Libera-Chanbot",
+    "username": "chanbot",
+    "realname": "Libera Channel Enforcer",
+    "channels": ["#myproject", { "name": "#myproject-admin", "key": "admin-key-here" }]
+  },
+  "owner": {
+    "handle": "admin",
+    "hostmask": "*!yourident@your.host.here"
+  },
+  "identity": {
+    "method": "hostmask",
+    "require_acc_for": ["+o", "+n"]
+  },
+  "services": {
+    "type": "atheme",
+    "nickserv": "NickServ",
+    "password_env": "NICKSERV_PASSWORD",
+    "sasl": true,
+    "sasl_mechanism": "PLAIN"
+  },
+  "database": "./data/libera-hub.db",
+  "pluginDir": "./plugins",
+  "pluginsConfig": "./config/libera/hub-plugins.json",
+  "logging": {
+    "level": "info",
+    "mod_actions": true
+  },
+  "botlink": {
+    "enabled": true,
+    "role": "hub",
+    "botname": "libera-hub",
+    "listen": { "host": "0.0.0.0", "port": 5051 },
+    "password_env": "BOTLINK_PASSWORD",
+    "max_leaves": 5,
+    "sync_permissions": true,
+    "sync_channel_state": true,
+    "sync_bans": true,
+    "ping_interval_ms": 30000,
+    "link_timeout_ms": 90000
+  },
+  "chanmod": {
+    "nick_recovery_password_env": "CHANMOD_RECOVERY_PASSWORD"
+  },
+  "quit_message": "Libera-Chanbot signing off"
+}

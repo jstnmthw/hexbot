@@ -1,0 +1,31 @@
+# HexBot docker-compose snippet for multi-instance deployments.
+#
+# Layout on the host — everything for one bot lives in its own directory:
+#   config/libera/chanbot.json          — per-bot config (nested by network)
+#   config/libera/chanbot-plugins.json
+#   config/libera/chanbot.env           — per-bot secrets (chmod 600)
+#   config/rizon/enforcer.json
+#   config/rizon/enforcer.env
+#   data/libera-chanbot.db              — per-bot database (created on first run)
+#   data/rizon-enforcer.db
+
+services:
+  hexbot-libera-chanbot:
+    build: .
+    env_file: config/libera/chanbot.env
+    command: ['tsx', 'src/index.ts', '--config=config/libera/chanbot.json']
+    volumes:
+      - ./config:/app/config:ro
+      - ./plugins:/app/plugins:ro
+      - ./data:/app/data
+    restart: unless-stopped
+
+  hexbot-rizon-enforcer:
+    build: .
+    env_file: config/rizon/enforcer.env
+    command: ['tsx', 'src/index.ts', '--config=config/rizon/enforcer.json']
+    volumes:
+      - ./config:/app/config:ro
+      - ./plugins:/app/plugins:ro
+      - ./data:/app/data
+    restart: unless-stopped

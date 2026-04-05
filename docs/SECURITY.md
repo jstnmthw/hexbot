@@ -195,10 +195,20 @@ api.say(channel, `User ${api.stripFormatting(nick)} has been granted ops`);
 
 ## 6. Configuration security
 
-- `config/bot.json` contains the NickServ/SASL password — it MUST be in `.gitignore`
-- Example configs (`*.example.json`) must never contain real credentials
-- The bot should refuse to start if `config/bot.json` is world-readable (`chmod` check on startup, at least on Unix)
-- Plugin configs should not contain secrets; if a plugin needs credentials, they should go in the main bot config under a plugin-specific section
+- High-value secrets are **never** stored inline in `config/bot.json`. Each secret field is named via a `<field>_env` suffix that points to an environment variable; the loader resolves it from `process.env` at startup. Fields covered: `services.password_env` (NickServ/SASL password), `botlink.password_env` (bot-link shared secret), `chanmod.nick_recovery_password_env` (NickServ GHOST password), `proxy.password_env` (SOCKS5 auth). See [docs/plans/config-secrets-env.md](plans/config-secrets-env.md) for the full spec.
+- **Channel `+k` keys are an exception**: they're low-sensitivity join tokens shared with every channel member and visible to any channel op via `/mode`. They may live inline on a channel entry (`{"name": "#chan", "key": "..."}`). For operators who want them out of the config anyway, `key_env` is available as an alternative.
+- `.env` files hold the actual secret values and MUST be in `.gitignore` (they are, via `.env` and `.env.*` patterns).
+- `config/bot.json` still MUST be in `.gitignore` — while it no longer contains secrets directly, it does contain operational details (hostmasks, connection details) that should not be public.
+- Example configs (`config/bot.example.json`, `config/bot.env.example`) must never contain real credentials. By construction, `*.example.json` can only reference env var _names_, not secrets.
+- The bot refuses to start if `config/bot.json` is world-readable. Apply the same `chmod 600` to `.env*` files.
+- Startup validation enforces that every enabled feature has its required env var set — the bot fails loudly with the exact var name when a secret is missing (see `validateResolvedSecrets` in `src/config.ts`).
+
+### 6.1 Env var handling
+
+- **Plugins must never read `process.env` directly.** Declare a `<field>_env` field in the plugin's `config.json` (or in the `plugins.json` override) and read `api.config.<field>` from init. The loader resolves the env var before the plugin sees its config. Plugins reading `process.env` can exfiltrate unrelated ambient secrets (AWS keys, cloud provider creds) that don't belong to the bot.
+- Never log resolved secret values, even at debug level. Log the env var name instead if a breadcrumb is useful ("NICKSERV_PASSWORD missing" — not the value).
+- Never reference env vars that don't belong to HexBot just because they're in the ambient environment. Every `_env` field should be documented in `config/bot.env.example`.
+- Rotate secrets after migrating from inline JSON to `_env` (the old values were in a plaintext file on disk).
 
 ---
 

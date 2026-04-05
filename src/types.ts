@@ -452,6 +452,67 @@ export interface BotConfig {
 }
 
 // ---------------------------------------------------------------------------
+// On-disk config shapes (pre-resolution)
+//
+// These describe the JSON schema stored in config/bot.json. Secrets are
+// referenced via `<field>_env` keys naming an environment variable. The
+// config loader calls resolveSecrets() to transform these into the runtime
+// BotConfig (above), which the rest of the bot reads. See src/config.ts
+// and docs/plans/config-secrets-env.md.
+// ---------------------------------------------------------------------------
+
+/**
+ * On-disk channel entry. Channel `+k` keys are treated as low-sensitivity
+ * operational tokens (shared with every channel member) and may live inline
+ * via `key`. Operators who prefer to keep them out of the config may use
+ * `key_env` to reference an env var instead. See docs/SECURITY.md §6.
+ */
+export interface ChannelEntryOnDisk {
+  name: string;
+  /** Inline channel key. Fine for most use cases. */
+  key?: string;
+  /** Alternative: env var name holding the channel key. Resolved at startup. */
+  key_env?: string;
+}
+
+/** On-disk IRC config — channels may reference keys via `key_env`. */
+export interface IrcConfigOnDisk extends Omit<IrcConfig, 'channels'> {
+  channels: (string | ChannelEntryOnDisk)[];
+}
+
+/** On-disk services config — NickServ password is sourced from env. */
+export interface ServicesConfigOnDisk extends Omit<ServicesConfig, 'password'> {
+  password_env?: string;
+}
+
+/** On-disk botlink config — shared secret is sourced from env. */
+export interface BotlinkConfigOnDisk extends Omit<BotlinkConfig, 'password'> {
+  password_env?: string;
+}
+
+/** On-disk proxy config — SOCKS5 password is sourced from env. */
+export interface ProxyConfigOnDisk extends Omit<ProxyConfig, 'password'> {
+  password_env?: string;
+}
+
+/** On-disk chanmod bot credentials — nick recovery password is sourced from env. */
+export interface ChanmodBotConfigOnDisk {
+  nick_recovery_password_env?: string;
+}
+
+/** On-disk bot config — the raw JSON schema before secret resolution. */
+export interface BotConfigOnDisk extends Omit<
+  BotConfig,
+  'irc' | 'services' | 'proxy' | 'botlink' | 'chanmod'
+> {
+  irc: IrcConfigOnDisk;
+  services: ServicesConfigOnDisk;
+  proxy?: ProxyConfigOnDisk;
+  botlink?: BotlinkConfigOnDisk;
+  chanmod?: ChanmodBotConfigOnDisk;
+}
+
+// ---------------------------------------------------------------------------
 // Channel settings
 // ---------------------------------------------------------------------------
 

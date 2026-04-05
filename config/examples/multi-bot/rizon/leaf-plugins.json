@@ -1,0 +1,21 @@
+{
+  "chanmod": {
+    "config": {
+      "auto_op": true,
+      "bitch": false,
+      "enforce_modes": false
+    }
+  },
+  "greeter": {
+    "config": {
+      "message": "Welcome to {channel}, {nick}! Type !help for commands.",
+      "delivery": "say",
+      "min_flag": "-"
+    }
+  },
+  "help": {
+    "config": {
+      "reply_type": "notice"
+    }
+  }
+}

@@ -11,6 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `d` (deop) permission flag — suppresses auto-op/halfop on join; auto-voice still works with explicit `+v`
 - Per-plugin channel scoping via `channels` array in `plugins.json` — restricts a plugin to specific channels
 - Greeter help now documents `{nick}` and `{channel}` substitution variables and sub-command help for `!greet set` and `!greet del`
+- Secrets live in `.env`, referenced from `bot.json` via `<field>_env` suffix keys. Startup validates every required secret for enabled features and fails loudly with the exact env var name when one is missing. Plugin configs support the same `_env` pattern — the loader resolves values before plugin `init()` runs, so plugins never touch `process.env`. See [docs/MIGRATION-env-secrets.md](docs/MIGRATION-env-secrets.md) for the one-time migration steps.
+
+### Changed
+
+- **Breaking:** `config/bot.json` no longer accepts inline secrets. `services.password`, `botlink.password`, `chanmod.nick_recovery_password`, `proxy.password`, and per-channel `+k` keys must now be referenced via `<field>_env` fields. See the migration guide.
 
 ### Fixed
 
@@ -206,7 +211,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - **Punish deop** (`punish_deop`) — kicks or kickbans whoever deops a flagged user without authority; rate-limited to 2 per setter per 30 seconds
   - **Enforcebans** (`enforcebans`) — kicks in-channel users whose hostmask matches a newly-set ban mask
 - ACC/STATUS fallback for NickServ verification (supports Atheme and Anope)
-- Deployment plan (`docs/plans/deployment.md`) — Docker + docker-compose, GitHub Actions CI/CD, systemd unit guide
+- Deployment tooling — Docker + docker-compose, GitHub Actions CI/CD, systemd unit guide
 - REPL mirrors incoming private messages and notices (e.g. from ChanServ/NickServ) to the console using IRC-conventional `<nick>` / `-nick-` formatting
 - **DCC CHAT + Botnet** (`src/core/dcc.ts`) — Passive DCC CHAT for remote administration:
   - Passive DCC only (bot opens port, user connects) — no NAT issues for VPS deployments

@@ -12,9 +12,15 @@ data/
 *.db-wal
 *.db-shm
 
-# Bot config (keep examples, ignore live configs)
-config/bot.json
-config/plugins.json
+# Bot config — ignore live configs and env files at every depth,
+# keep templates + the multi-bot reference.
+config/*.json
+config/**/*.json
+config/**/*.env
+!config/*.example.json
+!config/*.example
+!config/**/*.example
+!config/examples/**
 
 # Test / coverage
 coverage/

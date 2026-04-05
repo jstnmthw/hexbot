@@ -73,6 +73,26 @@ The merged config for this plugin. Values come from the plugin's own `config.jso
 const greeting = (api.config.greeting as string) ?? 'Hi';
 ```
 
+**Secrets via `_env` fields.** Any config field named `<name>_env: "VAR_NAME"` is resolved from `process.env` before the plugin sees its config. The resolved value appears at `<name>`, and the `_env` key is removed. This works in both the plugin's own `config.json` and in `plugins.json` overrides.
+
+```json
+// plugins/my-plugin/config.json
+{
+  "api_key_env": "MY_PLUGIN_API_KEY",
+  "endpoint": "https://api.example.com"
+}
+```
+
+```typescript
+// In init():
+const apiKey = api.config.api_key as string | undefined;
+if (!apiKey) {
+  throw new Error('MY_PLUGIN_API_KEY env var is required');
+}
+```
+
+Plugins must never read `process.env` directly — declare a `_env` field so the secret flows through the normal config path. See `docs/SECURITY.md`.
+
 #### `botConfig: PluginBotConfig`
 
 Read-only, deep-frozen view of `config/bot.json`. The NickServ password is omitted from `services`. Contains: `irc` (host, port, tls, nick, username, realname, channels), `owner` (handle, hostmask), `identity` (method, require_acc_for), `services` (type, nickserv, sasl), and `logging` (level, mod_actions). The `chanmod` key is present only for the chanmod plugin.

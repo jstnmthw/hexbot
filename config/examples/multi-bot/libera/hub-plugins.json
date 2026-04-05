@@ -1,0 +1,21 @@
+{
+  "chanmod": {
+    "config": {
+      "auto_op": true,
+      "bitch": true,
+      "enforce_modes": true,
+      "enforce_channel_modes": "+nt",
+      "revenge_on_kick": true,
+      "nick_recovery": true,
+      "nick_recovery_ghost": true
+    }
+  },
+  "greeter": {
+    "enabled": false
+  },
+  "help": {
+    "config": {
+      "reply_type": "notice"
+    }
+  }
+}

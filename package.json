@@ -5,8 +5,8 @@
   "description": "Modular IRC bot written in TypeScript",
   "main": "src/index.ts",
   "scripts": {
-    "start": "tsx src/index.ts",
-    "dev": "tsx src/index.ts --repl",
+    "start": "tsx --env-file-if-exists=config/bot.env src/index.ts",
+    "dev": "tsx --env-file-if-exists=config/bot.env src/index.ts --repl",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",

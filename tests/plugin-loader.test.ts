@@ -714,6 +714,48 @@ describe('PluginLoader', () => {
 
       db.close();
     });
+
+    it('should resolve _env fields in plugin config from process.env', async () => {
+      const envVarBackup = process.env.TEST_PLUGIN_SECRET_X;
+      process.env.TEST_PLUGIN_SECRET_X = 'resolved-value';
+
+      try {
+        writePluginConfig(tempDir, 'env-plugin', {
+          endpoint: 'https://api.example.com',
+          api_key_env: 'TEST_PLUGIN_SECRET_X',
+        });
+        const pluginPath = writePlugin(
+          tempDir,
+          'env-plugin',
+          `
+          export const name = 'env-plugin';
+          export const version = '1.0.0';
+          export const description = '';
+          export function init(api) {
+            api.db.set('api_key', String(api.config.api_key ?? ''));
+            api.db.set('api_key_env', String(api.config.api_key_env ?? ''));
+            api.db.set('endpoint', String(api.config.endpoint ?? ''));
+          }
+        `,
+        );
+
+        const db = new BotDatabase(':memory:');
+        db.open();
+        const { loader } = createLoader(tempDir, db);
+        const result = await loader.load(pluginPath);
+        expect(result.status).toBe('ok');
+
+        // _env field was resolved and the raw _env key dropped
+        expect(db.get('env-plugin', 'api_key')).toBe('resolved-value');
+        expect(db.get('env-plugin', 'api_key_env')).toBe('');
+        expect(db.get('env-plugin', 'endpoint')).toBe('https://api.example.com');
+
+        db.close();
+      } finally {
+        if (envVarBackup === undefined) delete process.env.TEST_PLUGIN_SECRET_X;
+        else process.env.TEST_PLUGIN_SECRET_X = envVarBackup;
+      }
+    });
   });
 
   describe('list', () => {

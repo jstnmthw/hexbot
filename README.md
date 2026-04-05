@@ -2,7 +2,7 @@
 
 ![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/jstnmthw/50c25c1f05168b07d48f34f8c8351ca5/raw/hexbot-coverage.json)
 
-A modern, modular IRC bot for Node.js, written in TypeScript. Inspired by [Eggdrop](https://www.eggheads.org/)'s 30-year-old bind system — same proven design patterns, none of the Tcl.
+HexBot is a modular Internet Relay Chat bot for Node.js, written in TypeScript. Designed for reliability and extensibility, HexBot runs on any IRC network and can be deployed in seconds using Docker.
 
 ## Highlights
 
@@ -23,13 +23,48 @@ git clone https://github.com/jstnmthw/hexbot.git && cd hexbot
 pnpm install
 cp config/bot.example.json config/bot.json
 cp config/plugins.example.json config/plugins.json
-# Edit both files for your server, nick, owner hostmask, and plugins
+cp config/bot.env.example config/bot.env && chmod 600 config/bot.env
+# Edit config/bot.json for your server, nick, owner hostmask, and plugins.
+# Put secrets (NickServ password, etc.) in config/bot.env.
 pnpm dev          # start with interactive REPL
 ```
 
 `pnpm start` runs without the REPL. Use `--config <path>` to specify an alternate config file.
 
 For a more detailed walkthrough, see the **[Getting Started guide](docs/GETTING_STARTED.md)**.
+
+### Secrets in `config/bot.env`
+
+Secret values never live in `bot.json`. Each secret field is named via a `_env` suffix — the loader reads the named environment variable at startup and fails loudly if a required secret is missing. `pnpm start` / `pnpm dev` auto-load `config/bot.env`. Default env vars (defined in `config/bot.env.example`): `NICKSERV_PASSWORD`, `BOTLINK_PASSWORD`, `CHANMOD_RECOVERY_PASSWORD`, `PROXY_PASSWORD`, `GEMINI_API_KEY`. Plugin configs may declare their own `<field>_env` fields; the loader resolves them before the plugin sees its config.
+
+### Running multiple bots
+
+Each bot instance has its own config, plugin overrides, env file, and database. The recommended layout groups configs by network:
+
+```
+config/
+├── libera/
+│   ├── chanbot.json           # bot config
+│   ├── chanbot-plugins.json   # plugin overrides for this bot
+│   ├── chanbot.env            # per-bot secrets (gitignored)
+│   └── rpgbot.json
+└── rizon/
+    ├── enforcer.json
+    └── enforcer.env
+
+data/libera-chanbot.db          # per-bot database
+data/libera-rpgbot.db
+data/rizon-enforcer.db
+```
+
+Launch each instance with its own env file and config:
+
+```bash
+tsx --env-file=config/libera/chanbot.env src/index.ts --config=config/libera/chanbot.json
+tsx --env-file=config/rizon/enforcer.env src/index.ts --config=config/rizon/enforcer.json
+```
+
+The `config/<network>/<bot-name>.json` layout is a convention — `--config=` accepts any path. Link bots together via the `botlink` block in each bot's config. See [docs/BOTLINK.md](docs/BOTLINK.md). A full worked example lives under [config/examples/multi-bot/](config/examples/multi-bot/README.md), and a docker-compose snippet for running multiple bots is in [docs/multi-instance/docker-compose.yml](docs/multi-instance/docker-compose.yml).
 
 ## Plugins
 

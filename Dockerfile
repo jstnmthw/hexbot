@@ -21,5 +21,6 @@ RUN pnpm exec tsc --noEmit
 # Config examples for first-run reference
 COPY config/bot.example.json ./config/bot.example.json
 COPY config/plugins.example.json ./config/plugins.example.json
+COPY config/bot.env.example ./config/bot.env.example
 
 CMD ["pnpm", "start"]
