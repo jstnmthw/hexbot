@@ -57,8 +57,18 @@ function stopHeartbeat(): void {
 
 const args = process.argv.slice(2);
 const useRepl = args.includes('--repl');
-const configIdx = args.indexOf('--config');
-const configPath = configIdx !== -1 ? args[configIdx + 1] : undefined;
+
+// Accept both `--config PATH` and `--config=PATH` forms — docker-compose arrays
+// commonly use the equals form, while shell invocations prefer the space form.
+function parseConfigArg(argv: string[]): string | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--config') return argv[i + 1];
+    if (arg.startsWith('--config=')) return arg.slice('--config='.length);
+  }
+  return undefined;
+}
+const configPath = parseConfigArg(args);
 
 // ---------------------------------------------------------------------------
 // Boot
