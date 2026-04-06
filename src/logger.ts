@@ -1,6 +1,7 @@
 // HexBot — Logger service
 // Structured console logging with level filtering, colored output, and child loggers.
 import chalk from 'chalk';
+import { format } from 'node:util';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,6 +41,14 @@ const LEVEL_COLORS: Record<LogLevel, (s: string) => string> = {
 export class Logger {
   private prefix: string | null;
   private levelRef: { value: LogLevel };
+
+  /** Output hook — when set, all log output routes through this function instead of console. */
+  private static outputHook: ((line: string) => void) | null = null;
+
+  /** Install a hook that receives every formatted log line (used by the REPL to clear the prompt). */
+  static setOutputHook(hook: ((line: string) => void) | null): void {
+    Logger.outputHook = hook;
+  }
 
   /**
    * @param prefix  - Prefix shown in brackets, e.g. 'bot' → [bot]. Null for root.
@@ -99,7 +108,9 @@ export class Logger {
     const parts = [timestamp, label];
     if (prefixStr) parts.push(prefixStr);
 
-    if (level === 'error') {
+    if (Logger.outputHook) {
+      Logger.outputHook(format(...parts, ...args));
+    } else if (level === 'error') {
       console.error(...parts, ...args);
     } else {
       console.log(...parts, ...args);

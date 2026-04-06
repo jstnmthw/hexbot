@@ -307,7 +307,7 @@ export class BotLinkLeaf {
         this.lastMessageAt = Date.now();
 
         // Switch to steady state
-        this.protocol!.onFrame = (f) => this.onSteadyState(f);
+        if (this.protocol) this.protocol.onFrame = (f) => this.onSteadyState(f);
         this.startHeartbeat();
 
         this.logger?.info(`Connected to hub "${this.hubBotname}"`);
@@ -363,7 +363,11 @@ export class BotLinkLeaf {
       const pending = this.pendingCmds.get(ref);
       if (pending) {
         this.pendingCmds.delete(ref);
-        pending.resolve(Array.isArray(frame.output) ? (frame.output as string[]) : []);
+        pending.resolve(
+          Array.isArray(frame.output)
+            ? frame.output.filter((s): s is string => typeof s === 'string')
+            : [],
+        );
         return;
       }
     }
@@ -374,7 +378,17 @@ export class BotLinkLeaf {
       const pending = this.pendingWhom.get(ref);
       if (pending) {
         this.pendingWhom.delete(ref);
-        pending.resolve(Array.isArray(frame.users) ? (frame.users as PartyLineUser[]) : []);
+        pending.resolve(
+          Array.isArray(frame.users)
+            ? frame.users.filter(
+                (u): u is PartyLineUser =>
+                  typeof u === 'object' &&
+                  u !== null &&
+                  typeof (u as PartyLineUser).handle === 'string' &&
+                  typeof (u as PartyLineUser).botname === 'string',
+              )
+            : [],
+        );
         return;
       }
     }

@@ -4,7 +4,7 @@
 import { type Interface as ReadlineInterface, createInterface } from 'node:readline';
 
 import type { Bot } from './bot';
-import type { Logger } from './logger';
+import { Logger } from './logger';
 import { toEventObject } from './utils/irc-event';
 import { sanitize } from './utils/sanitize';
 
@@ -23,13 +23,16 @@ export class BotREPL {
     this.logger = logger?.child('repl') ?? null;
   }
 
+  /** True while handleLine is executing — suppresses prompt redisplay in print(). */
+  private busy = false;
+
   /** Print a line above the prompt without disrupting the input line. */
   private print(line: string): void {
     if (this.rl) {
       // Clear the current prompt line, print the message, then redisplay the prompt
       process.stdout.write('\r\x1b[K');
       console.log(line);
-      this.rl.prompt(true);
+      if (!this.busy) this.rl.prompt(true);
     } else {
       console.log(line);
     }
@@ -71,6 +74,9 @@ export class BotREPL {
       { event: 'privmsg', fn: onPrivmsg },
     ];
 
+    // Route all logger output through print() so log lines don't collide with the prompt
+    Logger.setOutputHook((line: string) => this.print(line));
+
     this.logger?.info('Interactive mode. Type .help for commands, .quit to exit.');
 
     this.rl.on('line', (line: string) => {
@@ -89,6 +95,7 @@ export class BotREPL {
 
   /** Stop the REPL. */
   stop(): void {
+    Logger.setOutputHook(null);
     for (const { event, fn } of this.ircListeners) {
       this.bot.client.removeListener(event, fn);
     }
@@ -119,19 +126,24 @@ export class BotREPL {
       return;
     }
 
-    console.log(`[repl] Command: ${trimmed}`);
+    this.busy = true;
+    try {
+      this.logger?.info(`Command: ${trimmed}`);
 
-    // Announce REPL activity to botnet so DCC-connected users see local admin work
-    this.bot.dccManager?.announce(`*** REPL: ${trimmed}`);
+      // Announce REPL activity to botnet so DCC-connected users see local admin work
+      this.bot.dccManager?.announce(`*** REPL: ${trimmed}`);
 
-    // Route through the command handler (REPL has implicit owner privileges)
-    await this.bot.commandHandler.execute(trimmed, {
-      source: 'repl',
-      nick: 'REPL',
-      channel: null,
-      reply: (msg: string) => {
-        console.log(msg);
-      },
-    });
+      // Route through the command handler (REPL has implicit owner privileges)
+      await this.bot.commandHandler.execute(trimmed, {
+        source: 'repl',
+        nick: 'REPL',
+        channel: null,
+        reply: (msg: string) => {
+          this.print(msg);
+        },
+      });
+    } finally {
+      this.busy = false;
+    }
   }
 }

@@ -143,7 +143,10 @@ export class BotLinkHub {
   }
 
   /** Start listening for leaf connections. Uses config values when port/host not specified. */
-  listen(port = this.config.listen!.port, host = this.config.listen!.host): Promise<void> {
+  listen(
+    port = this.config.listen?.port ?? 0,
+    host = this.config.listen?.host ?? '0.0.0.0',
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
       this.server = createServer((socket) => this.handleConnection(socket));
       this.server.on('error', reject);
@@ -207,9 +210,10 @@ export class BotLinkHub {
     const broadcastUserSync = (handle: string) => {
       const user = permissions.getUser(handle);
       if (user) {
-        this.broadcast(
-          PermissionSyncer.buildSyncFrames(permissions).find((f) => f.handle === handle)!,
+        const frame = PermissionSyncer.buildSyncFrames(permissions).find(
+          (f) => f.handle === handle,
         );
+        if (frame) this.broadcast(frame);
       }
     };
 
@@ -430,7 +434,7 @@ export class BotLinkHub {
     const conn = this.leaves.get(botname);
     if (!conn) return false;
 
-    clearInterval(conn.pingTimer!);
+    if (conn.pingTimer) clearInterval(conn.pingTimer);
     conn.pingTimer = null;
     conn.protocol.onClose = null; // Prevent double-handling via onLeafClose
     conn.protocol.send({ type: 'ERROR', code: 'CLOSING', message: reason });
@@ -448,7 +452,7 @@ export class BotLinkHub {
   /** Shut down the hub: close all leaf connections and the server. */
   close(): void {
     for (const leaf of this.leaves.values()) {
-      clearInterval(leaf.pingTimer!); // clearInterval(null) is a no-op
+      if (leaf.pingTimer) clearInterval(leaf.pingTimer);
       leaf.protocol.onClose = null; // Prevent double-handling during shutdown
       leaf.protocol.send({ type: 'ERROR', code: 'CLOSING', message: 'Hub shutting down' });
       leaf.protocol.close(); // close() is idempotent
@@ -693,7 +697,8 @@ export class BotLinkHub {
   // -----------------------------------------------------------------------
 
   private onSteadyState(botname: string, frame: LinkFrame): void {
-    const conn = this.leaves.get(botname)!;
+    const conn = this.leaves.get(botname);
+    if (!conn) return;
 
     conn.lastMessageAt = Date.now();
 
@@ -735,7 +740,11 @@ export class BotLinkHub {
         const pending = this.pendingCmds.get(ref);
         if (pending) {
           this.pendingCmds.delete(ref);
-          pending.resolve(Array.isArray(frame.output) ? (frame.output as string[]) : []);
+          pending.resolve(
+            Array.isArray(frame.output)
+              ? frame.output.filter((s): s is string => typeof s === 'string')
+              : [],
+          );
           return;
         }
         const origin = this.cmdRoutes.get(ref);

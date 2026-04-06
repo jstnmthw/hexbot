@@ -1,6 +1,7 @@
 // HexBot — Bot Link State Synchronization
 // Converts ChannelState and Permissions into link frames for sync,
 // and applies incoming sync frames to local state.
+import { isObjectArray } from '../utils/irc-event';
 import type { LinkFrame } from './botlink-protocol';
 import type { ChannelState } from './channel-state';
 import type { Permissions } from './permissions';
@@ -51,13 +52,13 @@ export class ChannelStateSyncer {
       modes: String(frame.modes ?? ''),
       key: frame.key !== undefined ? String(frame.key) : undefined,
       limit: typeof frame.limit === 'number' ? frame.limit : undefined,
-      users: Array.isArray(frame.users)
-        ? (frame.users as Array<Record<string, unknown>>).map((u) => ({
+      users: isObjectArray(frame.users)
+        ? frame.users.map((u) => ({
             nick: String(u.nick ?? ''),
             ident: String(u.ident ?? ''),
             hostname: String(u.hostname ?? ''),
             modes: Array.isArray(u.modes)
-              ? (u.modes as string[]).filter((m) => typeof m === 'string' && /^[a-zA-Z]$/.test(m))
+              ? u.modes.filter((m): m is string => typeof m === 'string' && /^[a-zA-Z]$/.test(m))
               : [],
           }))
         : [],

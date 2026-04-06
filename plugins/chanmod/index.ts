@@ -159,6 +159,12 @@ export function init(api: PluginAPI): void {
       description: 'Enable threat scoring and automatic escalation for channel takeover attempts',
     },
     {
+      key: 'protect_topic',
+      type: 'flag',
+      default: false,
+      description: 'Restore the pre-attack topic after takeover recovery',
+    },
+    {
       key: 'invite',
       type: 'flag',
       default: config.invite,

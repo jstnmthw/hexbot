@@ -59,7 +59,8 @@ export function setupJoinRecovery(opts: JoinRecoveryOptions): () => void {
   // --- Handle join errors ---
 
   api.bind('join_error', '-', '*', (ctx: HandlerContext) => {
-    const channel = ctx.channel!;
+    if (!ctx.channel) return;
+    const channel = ctx.channel;
     const error = ctx.command;
     const chanKey = api.ircLower(channel);
 
@@ -106,7 +107,8 @@ export function setupJoinRecovery(opts: JoinRecoveryOptions): () => void {
 
   api.bind('join', '-', '*', (ctx: HandlerContext) => {
     if (!isBotNick(api, ctx.nick)) return;
-    const chanKey = api.ircLower(ctx.channel!);
+    if (!ctx.channel) return;
+    const chanKey = api.ircLower(ctx.channel);
     if (recoveryState.has(chanKey)) {
       recoveryState.delete(chanKey);
       api.debug(`Join recovery backoff reset for ${ctx.channel}`);

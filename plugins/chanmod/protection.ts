@@ -208,8 +208,13 @@ export function setupProtection(
           api.log(`Revenge: kicked ${kickerNick} from ${channel} for kicking bot`);
         } else {
           // revenge_action is 'kickban' — last remaining option after 'deop' and 'kick'
-          const hostmask = api.getUserHostmask(channel, kickerNick)!;
-          const mask = buildBanMask(hostmask, 1)!;
+          const hostmask = api.getUserHostmask(channel, kickerNick);
+          const mask = hostmask ? buildBanMask(hostmask, 1) : null;
+          /* v8 ignore next 4 -- defensive: getUserHostmask returns empty only if the kicker already left the channel between kick and revenge */
+          if (!mask) {
+            api.warn(`Revenge: could not build ban mask for ${kickerNick} in ${channel}`);
+            return;
+          }
           api.ban(channel, mask);
           storeBan(api, channel, mask, getBotNick(api), config.default_ban_duration);
           api.kick(channel, kickerNick, config.revenge_kick_reason);

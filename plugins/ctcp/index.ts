@@ -17,7 +17,7 @@ export function init(api: PluginAPI): void {
       name?: string;
       version?: string;
     };
-    versionString = `${pkg.name!} v${pkg.version!}`;
+    versionString = `${pkg.name ?? 'HexBot'} v${pkg.version ?? '0.0.0'}`;
   } catch {
     versionString = 'HexBot';
   }

@@ -620,7 +620,8 @@ export function setupModeEnforce(
 ): () => void {
   api.bind('mode', '-', '*', (ctx: HandlerContext) => {
     const { nick: setter, command: modeStr, args: target } = ctx;
-    const channel = ctx.channel!;
+    if (!ctx.channel) return;
+    const channel = ctx.channel;
 
     // Read per-channel settings (fall back to config default via channelSettings)
     const channelModes = api.channelSettings.getString(channel, 'channel_modes');
