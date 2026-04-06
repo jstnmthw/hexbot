@@ -143,7 +143,7 @@ export function setupProtection(
 
     // Schedule rejoin
     state.scheduleCycle(rejoinDelay, () => {
-      api.join(channel);
+      api.join(channel, api.getChannelKey(channel));
       api.log(`Rejoining ${channel} after being kicked`);
 
       // Schedule a backup retry in case the first rejoin fails (still banned).
@@ -157,7 +157,7 @@ export function setupProtection(
               chain!.requestUnban(channel);
             }
             state.scheduleCycle(SERVICES_PROCESSING_MS, () => {
-              api.join(channel);
+              api.join(channel, api.getChannelKey(channel));
             });
           }
         });

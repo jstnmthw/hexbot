@@ -401,6 +401,11 @@ export class EventDispatcher {
         if (mask === '*') return true;
         return wildcardMatch(mask, `${ctx.nick}!${ctx.ident}@${ctx.hostname}`, true, cm);
 
+      case 'join_error':
+        // Mask matches against the error reason (e.g. 'banned_from_channel'), '*' for all
+        if (mask === '*') return true;
+        return wildcardMatch(mask, ctx.command, true, cm);
+
       case 'time':
         // Timer binds are handled by setInterval, not by dispatch
         return false;

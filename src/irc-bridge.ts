@@ -92,6 +92,11 @@ export class IRCBridge {
     this.listenIrc('quit', this.onQuit.bind(this));
     this.listenIrc('invite', this.onInvite.bind(this));
 
+    // Join-error numerics (471/473/474/475) via irc-framework's 'irc error' event
+    this.listenIrc('irc error', this.onIrcError.bind(this));
+    // 477 (need to register nick) is unknown to irc-framework — catch via raw numeric
+    this.listenIrc('unknown command', this.onUnknownCommand.bind(this));
+
     // Suppress topic events during the initial channel join burst
     this.topicStartupGrace = true;
     setTimeout(() => {
@@ -446,6 +451,62 @@ export class IRCBridge {
     });
 
     this.dispatcher.dispatch('invite', ctx).catch(this.dispatchError('invite'));
+  }
+
+  // -------------------------------------------------------------------------
+  // Join-error dispatching (471/473/474/475/477)
+  // -------------------------------------------------------------------------
+
+  /** Known irc-framework error names that map to join failures. */
+  private static readonly JOIN_ERROR_NAMES = new Set([
+    'channel_is_full',
+    'invite_only_channel',
+    'banned_from_channel',
+    'bad_channel_key',
+  ]);
+
+  private onIrcError(event: Record<string, unknown>): void {
+    const error = String(event.error ?? '');
+    if (!IRCBridge.JOIN_ERROR_NAMES.has(error)) return;
+
+    const channel = sanitize(String(event.channel ?? ''));
+    if (!isValidChannel(channel)) return;
+
+    const reason = sanitize(String(event.reason ?? ''));
+
+    const ctx = this.buildContext({
+      nick: this.botNick,
+      ident: '',
+      hostname: '',
+      channel,
+      text: reason,
+      command: error,
+      args: '',
+    });
+
+    this.dispatcher.dispatch('join_error', ctx).catch(this.dispatchError('join_error'));
+  }
+
+  private onUnknownCommand(event: Record<string, unknown>): void {
+    if (String(event.command ?? '') !== '477') return;
+
+    const params = Array.isArray(event.params) ? (event.params as unknown[]) : [];
+    const channel = sanitize(String(params[1] ?? ''));
+    if (!isValidChannel(channel)) return;
+
+    const reason = sanitize(String(params.slice(2).join(' ') || ''));
+
+    const ctx = this.buildContext({
+      nick: this.botNick,
+      ident: '',
+      hostname: '',
+      channel,
+      text: reason,
+      command: 'need_registered_nick',
+      args: '',
+    });
+
+    this.dispatcher.dispatch('join_error', ctx).catch(this.dispatchError('join_error'));
   }
 
   // -------------------------------------------------------------------------

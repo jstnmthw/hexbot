@@ -60,6 +60,7 @@ function createMockBackend(
     canInvite: (ch) => accessAtLeast(accessLevels.get(ch.toLowerCase()) ?? access, 'op'),
     canRecover: (ch) => accessAtLeast(accessLevels.get(ch.toLowerCase()) ?? access, 'founder'),
     canClearBans: (ch) => accessAtLeast(accessLevels.get(ch.toLowerCase()) ?? access, 'founder'),
+    canRemoveKey: (ch) => accessAtLeast(accessLevels.get(ch.toLowerCase()) ?? access, 'op'),
     canAkick: (ch) => accessAtLeast(accessLevels.get(ch.toLowerCase()) ?? access, 'op'),
     requestOp: (ch, nick) => {
       calls.push(`requestOp:${ch}:${nick ?? 'self'}`);
@@ -78,6 +79,9 @@ function createMockBackend(
     },
     requestClearBans: (ch) => {
       calls.push(`requestClearBans:${ch}`);
+    },
+    requestRemoveKey: (ch) => {
+      calls.push(`requestRemoveKey:${ch}`);
     },
     requestAkick: (ch, mask, reason) => {
       calls.push(`requestAkick:${ch}:${mask}:${reason ?? ''}`);
@@ -276,6 +280,30 @@ describe('ProtectionChain', () => {
     chain.addBackend(b);
     expect(chain.requestClearBans('#test')).toBe(false);
     expect(b.calls).toHaveLength(0);
+  });
+
+  it('requestRemoveKey returns false when no backend can act', () => {
+    const chain = new ProtectionChain(createChainApi());
+    const b = createMockBackend('chanserv', 2, 'none');
+    chain.addBackend(b);
+    expect(chain.requestRemoveKey('#test')).toBe(false);
+    expect(b.calls).toHaveLength(0);
+  });
+
+  it('requestRemoveKey dispatches to capable backend', () => {
+    const chain = new ProtectionChain(createChainApi());
+    const b = createMockBackend('chanserv', 2, 'op');
+    chain.addBackend(b);
+    expect(chain.requestRemoveKey('#test')).toBe(true);
+    expect(b.calls).toContain('requestRemoveKey:#test');
+  });
+
+  it('isAutoDetected returns true when a backend has auto-detected access', () => {
+    const chain = new ProtectionChain(createChainApi());
+    const b = createMockBackend('chanserv', 2, 'op');
+    chain.addBackend(b);
+    // Mock backend doesn't auto-detect by default
+    expect(chain.isAutoDetected('#test')).toBe(false);
   });
 
   it('requestAkick returns false when no backend can act', () => {

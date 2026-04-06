@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Greeter help now documents `{nick}` and `{channel}` substitution variables and sub-command help for `!greet set` and `!greet del`
 - Secrets live in `.env`, referenced from `bot.json` via `<field>_env` suffix keys. Startup validates every required secret for enabled features and fails loudly with the exact env var name when one is missing. Plugin configs support the same `_env` pattern — the loader resolves values before plugin `init()` runs, so plugins never touch `process.env`.
 - Per-IP auth brute-force protection on BotLink hub: failure tracking with escalating bans (5min → 24h cap), CIDR whitelist, per-IP pending handshake limit, configurable handshake timeout (10s default), `auth:ban`/`auth:unban` EventBus events, source IP in all auth log lines
+- ChanServ-assisted join error recovery: when the bot can't join a channel (banned, invite-only, bad key), chanmod asks ChanServ for help and retries with exponential backoff (30s → 5min cap). New `join_error` dispatcher event type for 471/473/474/475/477 numerics.
+- `getChannelKey()` added to PluginAPI — plugins can look up configured channel keys for keyed (+k) channels
 
 ### Changed
 

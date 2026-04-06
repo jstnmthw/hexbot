@@ -539,3 +539,75 @@ describe('ChanServ notice handler — probe timeout', () => {
     expect(logs.filter((l) => l.includes('timed out'))).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Anope GETKEY response parsing
+// ---------------------------------------------------------------------------
+
+describe('ChanServ notice handler — Anope GETKEY', () => {
+  it('parses "Key for channel #chan is thekey." and fires callback', () => {
+    const { api, notice } = createMockApi();
+    const { backend } = createMockAnopeBackend();
+    const probeState = createProbeState();
+    const config = createMockConfig('anope');
+
+    setupChanServNotice({ api, config, backend, probeState });
+
+    let receivedKey: string | null | undefined;
+    probeState.pendingGetKey.set('#test', (key) => {
+      receivedKey = key;
+    });
+
+    notice('ChanServ', 'Key for channel \x02#test\x02 is \x02secretkey\x02.');
+    expect(receivedKey).toBe('secretkey');
+    expect(probeState.pendingGetKey.size).toBe(0);
+  });
+
+  it('parses "Key for channel #chan is thekey." without bold markers', () => {
+    const { api, notice } = createMockApi();
+    const { backend } = createMockAnopeBackend();
+    const probeState = createProbeState();
+    const config = createMockConfig('anope');
+
+    setupChanServNotice({ api, config, backend, probeState });
+
+    let receivedKey: string | null | undefined;
+    probeState.pendingGetKey.set('#test', (key) => {
+      receivedKey = key;
+    });
+
+    notice('ChanServ', 'Key for channel #test is mykey.');
+    expect(receivedKey).toBe('mykey');
+  });
+
+  it('parses "Channel #chan has no key." and fires callback with null', () => {
+    const { api, notice } = createMockApi();
+    const { backend } = createMockAnopeBackend();
+    const probeState = createProbeState();
+    const config = createMockConfig('anope');
+
+    setupChanServNotice({ api, config, backend, probeState });
+
+    let receivedKey: string | null | undefined;
+    probeState.pendingGetKey.set('#test', (key) => {
+      receivedKey = key;
+    });
+
+    notice('ChanServ', 'Channel \x02#test\x02 has no key.');
+    expect(receivedKey).toBeNull();
+    expect(probeState.pendingGetKey.size).toBe(0);
+  });
+
+  it('ignores GETKEY response when no pending callback', () => {
+    const { api, notice } = createMockApi();
+    const { backend } = createMockAnopeBackend();
+    const probeState = createProbeState();
+    const config = createMockConfig('anope');
+
+    setupChanServNotice({ api, config, backend, probeState });
+
+    // No pending GETKEY — should not throw or log errors
+    notice('ChanServ', 'Key for channel \x02#other\x02 is \x02somekey\x02.');
+    expect(probeState.pendingGetKey.size).toBe(0);
+  });
+});

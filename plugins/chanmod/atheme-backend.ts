@@ -81,6 +81,10 @@ export class AthemeBackend implements ProtectionBackend {
     return accessAtLeast(this.getAccess(channel), 'founder');
   }
 
+  canRemoveKey(channel: string): boolean {
+    return accessAtLeast(this.getAccess(channel), 'op');
+  }
+
   canAkick(channel: string): boolean {
     return accessAtLeast(this.getAccess(channel), 'op');
   }
@@ -117,6 +121,11 @@ export class AthemeBackend implements ProtectionBackend {
 
   requestClearBans(channel: string): void {
     this.sendChanServ(`CLEAR ${channel} BANS`);
+  }
+
+  requestRemoveKey(channel: string): void {
+    // Atheme: SET #channel KEYDEL removes the key. MODE -k also works at op+.
+    this.sendChanServ(`MODE ${channel} -k`);
   }
 
   requestAkick(channel: string, mask: string, reason?: string): void {

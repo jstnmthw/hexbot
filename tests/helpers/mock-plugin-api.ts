@@ -80,6 +80,7 @@ export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginA
     registerHelp: noop,
     getHelpEntries: vi.fn().mockReturnValue([]),
     stripFormatting: (s: string) => s,
+    getChannelKey: vi.fn().mockReturnValue(undefined),
     log: noop,
     error: noop,
     warn: noop,

@@ -7,6 +7,7 @@ import { setupBans } from './bans';
 import { createProbeState, setupChanServNotice } from './chanserv-notice';
 import { setupCommands } from './commands';
 import { setupInvite } from './invite';
+import { setupJoinRecovery } from './join-recovery';
 import type { ThreatCallback } from './mode-enforce';
 import { setupModeEnforce } from './mode-enforce';
 import { setupProtection } from './protection';
@@ -40,7 +41,12 @@ export function init(api: PluginAPI): void {
   let concreteBackend: AthemeBackend | AnopeBackend;
   const servicesType = config.chanserv_services_type;
   if (servicesType === 'anope') {
-    const backend = new AnopeBackend(api, config.chanserv_nick, config.anope_recover_step_delay_ms);
+    const backend = new AnopeBackend(
+      api,
+      config.chanserv_nick,
+      config.anope_recover_step_delay_ms,
+      probeState,
+    );
     chain.addBackend(backend);
     concreteBackend = backend;
     // Teardown: clear Anope recover timers
@@ -174,6 +180,23 @@ export function init(api: PluginAPI): void {
     }
   });
 
+  // Seed backend access levels from persisted chanserv_access settings for all
+  // configured channels. Without this, join-error recovery can't ask ChanServ
+  // for help on channels the bot hasn't joined yet (the join handler in auto-op
+  // normally syncs this, but the bot can't join if it's banned/+i/+k).
+  for (const ch of api.botConfig.irc.channels) {
+    const access = api.channelSettings.getString(ch, 'chanserv_access') as
+      | 'none'
+      | 'op'
+      | 'superop'
+      | 'founder';
+    if (access !== 'none') {
+      for (const b of chain.getBackends()) {
+        b.setAccess(ch, access);
+      }
+    }
+  }
+
   // --- Threat detection callback ---
   // When takeover_detection is enabled for a channel, route threat events through
   // assessThreat() which scores them and triggers ProtectionChain escalation.
@@ -188,6 +211,7 @@ export function init(api: PluginAPI): void {
     setupAutoOp(api, config, state, chain, probeState),
     setupModeEnforce(api, config, state, chain, onThreat),
     setupProtection(api, config, state, chain, onThreat),
+    setupJoinRecovery({ api, chain, state, config, probeState }),
     setupCommands(api, config, state),
     setupInvite(api, config, state),
     setupTopicRecovery(api, config, state),

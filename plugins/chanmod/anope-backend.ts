@@ -1,5 +1,6 @@
 // chanmod — Anope ChanServ ProtectionBackend implementation
 import type { PluginAPI } from '../../src/types';
+import type { ProbeState } from './chanserv-notice';
 import { getBotNick } from './helpers';
 import { type BackendAccess, type ProtectionBackend, accessAtLeast } from './protection-backend';
 
@@ -27,13 +28,20 @@ export class AnopeBackend implements ProtectionBackend {
   private api: PluginAPI;
   private chanservNick: string;
   private recoverStepDelayMs: number;
+  private probeState: ProbeState | null;
   /** Track active recover timers for cleanup. */
   private recoverTimers: ReturnType<typeof setTimeout>[] = [];
 
-  constructor(api: PluginAPI, chanservNick: string, recoverStepDelayMs?: number) {
+  constructor(
+    api: PluginAPI,
+    chanservNick: string,
+    recoverStepDelayMs?: number,
+    probeState?: ProbeState,
+  ) {
     this.api = api;
     this.chanservNick = chanservNick;
     this.recoverStepDelayMs = recoverStepDelayMs ?? RECOVER_STEP_DELAY_MS;
+    this.probeState = probeState ?? null;
   }
 
   // ---------------------------------------------------------------------------
@@ -85,6 +93,11 @@ export class AnopeBackend implements ProtectionBackend {
 
   canClearBans(channel: string): boolean {
     return accessAtLeast(this.getAccess(channel), 'founder');
+  }
+
+  canRemoveKey(channel: string): boolean {
+    // Anope: GETKEY requires AOP (level 5) — retrieves the key so the bot can join
+    return accessAtLeast(this.getAccess(channel), 'op');
   }
 
   canAkick(channel: string): boolean {
@@ -146,6 +159,24 @@ export class AnopeBackend implements ProtectionBackend {
 
   requestClearBans(channel: string): void {
     this.sendChanServ(`MODE ${channel} CLEAR bans`);
+  }
+
+  requestRemoveKey(channel: string): void {
+    // Anope GETKEY retrieves the current channel key (available at AOP/level 5+).
+    // On receiving the key, the callback joins with it. This avoids the nuclear
+    // MODE CLEAR (founder-only) or the destructive SET MLOCK -k (replaces MLOCK).
+    this.sendChanServ(`GETKEY ${channel}`);
+    if (this.probeState) {
+      const chanKey = this.api.ircLower(channel);
+      this.probeState.pendingGetKey.set(chanKey, (key) => {
+        if (key) {
+          this.api.log(`Anope: GETKEY returned key for ${channel} — joining`);
+          this.api.join(channel, key);
+        } else {
+          this.api.debug(`Anope: GETKEY for ${channel} returned no key`);
+        }
+      });
+    }
   }
 
   requestAkick(channel: string, mask: string, reason?: string): void {

@@ -125,6 +125,22 @@ The ban mask is tested against `nick!ident@hostname` using IRC-aware wildcard ma
 
 With `rejoin_on_kick: true` (default), the bot rejoins any channel it is kicked from after `rejoin_delay_ms`. To prevent a kick loop, rejoins are rate-limited: if the bot is kicked more than `max_rejoin_attempts` times within `rejoin_attempt_window_ms`, it stops trying.
 
+## Join error recovery
+
+When the bot can't join a channel (on startup or after a kick), chanmod asks ChanServ for help based on the error:
+
+| Error             | Numeric | Action                                                                           |
+| ----------------- | ------- | -------------------------------------------------------------------------------- |
+| Banned (+b)       | 474     | UNBAN + MODE -k + INVITE, then rejoin (handles full attacker stack +b+k+i+l)     |
+| Invite only (+i)  | 473     | INVITE, then rejoin (bypasses +i and +l)                                         |
+| Bad channel key   | 475     | MODE -k + INVITE if backend access; else retry with configured key from bot.json |
+| Channel full (+l) | 471     | INVITE if backend access (bypasses +l); else wait for periodic retry             |
+| Need registered   | 477     | No remedy — NickServ identification is separate                                  |
+
+All recovery goes through the ProtectionBackend chain. On ChanServ networks, the backend sends `MODE -k` to strip attacker-set keys and `INVITE` to bypass `+i`/`+l`. On EFnet-style networks (no ChanServ), the botnet backend will handle recovery through peer coordination.
+
+Recovery attempts use exponential backoff (30s → 60s → 120s → 5min cap) to avoid spamming ChanServ. The backoff resets when the bot successfully joins the channel.
+
 ## Revenge
 
 With `revenge_on_kick: true`, after rejoining the bot takes action against the user who kicked it. The action is taken `revenge_delay_ms` after the rejoin, giving time for ChanServ to restore ops first. Revenge is skipped if the kicker has left the channel, the bot has no ops, or the kicker has a flag in `revenge_exempt_flags` (default: `"nm"` — owners and masters).

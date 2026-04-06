@@ -173,6 +173,7 @@ function createMockBackend(
     canInvite: (ch) => accessAtLeast(accessLevels.get(ch.toLowerCase()) ?? access, 'op'),
     canRecover: (ch) => accessAtLeast(accessLevels.get(ch.toLowerCase()) ?? access, 'founder'),
     canClearBans: (ch) => accessAtLeast(accessLevels.get(ch.toLowerCase()) ?? access, 'founder'),
+    canRemoveKey: (ch) => accessAtLeast(accessLevels.get(ch.toLowerCase()) ?? access, 'op'),
     canAkick: (ch) => accessAtLeast(accessLevels.get(ch.toLowerCase()) ?? access, 'op'),
     requestOp: (ch, nick) => {
       calls.push(`requestOp:${ch}:${nick ?? 'self'}`);
@@ -191,6 +192,9 @@ function createMockBackend(
     },
     requestClearBans: (ch) => {
       calls.push(`requestClearBans:${ch}`);
+    },
+    requestRemoveKey: (ch) => {
+      calls.push(`requestRemoveKey:${ch}`);
     },
     requestAkick: (ch, mask, reason) => {
       calls.push(`requestAkick:${ch}:${mask}:${reason ?? ''}`);

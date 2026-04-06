@@ -496,6 +496,14 @@ export class PluginLoader {
       ircLower(text: string): string {
         return ircLower(text, getCasemapping());
       },
+      getChannelKey: (channel: string): string | undefined => {
+        const lower = ircLower(channel, getCasemapping());
+        for (const entry of this.botConfig.irc.channels) {
+          if (typeof entry === 'string') continue;
+          if (ircLower(entry.name, getCasemapping()) === lower) return entry.key;
+        }
+        return undefined;
+      },
       channelSettings: createPluginChannelSettingsApi(this.channelSettings, pluginId),
       ...createPluginHelpApi(this.helpRegistry, pluginId),
       stripFormatting(text: string): string {

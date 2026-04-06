@@ -23,16 +23,16 @@ When the bot can't join a channel (banned, invite-only, bad key), it currently l
 
 **In scope:**
 
-- `banned_from_channel` (474) -> ChanServ UNBAN + rejoin
+- `banned_from_channel` (474) -> ChanServ UNBAN + INVITE + rejoin
 - `invite_only_channel` (473) -> ChanServ INVITE + rejoin
-- `bad_channel_key` (475) -> retry with configured key (no ChanServ needed)
+- `bad_channel_key` (475) -> ChanServ INVITE (preferred) or retry with configured key (fallback)
+- `channel_is_full` (471) -> ChanServ INVITE (when access available)
 - Expose channel keys to plugins (read-only)
 - Exponential backoff cooldown on recovery attempts
 - Works with both Atheme and Anope backends
 
 **Out of scope:**
 
-- `channel_is_full` (471) — no ChanServ remedy, periodic rejoin handles it
 - `need_registered_nick` (477) — NickServ identification is a separate concern
 - Custom keys set at runtime (only configured keys from `bot.json`)
 
@@ -84,11 +84,11 @@ Add a case in `matchesMask()` for `join_error`. Mask matches against `command` (
 
 **Checklist:**
 
-- [ ] Add `'join_error'` to `BindType` union in `src/types.ts`
-- [ ] Add `irc error` listener in `src/irc-bridge.ts` that dispatches `join_error` for 471/473/474/475
-- [ ] Add `unknown command` handler for 477 -> `join_error` with `command='need_registered_nick'`
-- [ ] Add `join_error` case in `matchesMask()` in `src/dispatcher.ts`
-- [ ] Add tests: dispatch, mask matching, wildcard
+- [x] Add `'join_error'` to `BindType` union in `src/types.ts`
+- [x] Add `irc error` listener in `src/irc-bridge.ts` that dispatches `join_error` for 471/473/474/475
+- [x] Add `unknown command` handler for 477 -> `join_error` with `command='need_registered_nick'`
+- [x] Add `join_error` case in `matchesMask()` in `src/dispatcher.ts`
+- [x] Add tests: dispatch, mask matching, wildcard
 
 ---
 
@@ -129,10 +129,10 @@ api.join(channel, api.getChannelKey(channel));
 
 **Checklist:**
 
-- [ ] Add `getChannelKey(channel: string): string | undefined` to `PluginAPI` in `src/types.ts`
-- [ ] Implement in `src/plugin-loader.ts` using `bot.configuredChannels`
-- [ ] Fix `api.join(channel)` -> `api.join(channel, api.getChannelKey(channel))` in kick-rejoin (2 call sites)
-- [ ] Add tests: keyed channel, keyless channel, case-insensitive lookup
+- [x] Add `getChannelKey(channel: string): string | undefined` to `PluginAPI` in `src/types.ts`
+- [x] Implement in `src/plugin-loader.ts` using `bot.configuredChannels`
+- [x] Fix `api.join(channel)` -> `api.join(channel, api.getChannelKey(channel))` in kick-rejoin (2 call sites)
+- [x] Add tests: keyed channel, keyless channel, case-insensitive lookup
 
 ---
 
@@ -146,13 +146,16 @@ api.join(channel, api.getChannelKey(channel));
 
 Bind to `join_error` with mask `*` and dispatch based on `ctx.command`:
 
-| Error                  | Guard                               | Action                         | Retry                                          |
-| ---------------------- | ----------------------------------- | ------------------------------ | ---------------------------------------------- |
-| `banned_from_channel`  | `chain.canUnban(channel)`           | `chain.requestUnban(channel)`  | Join after 3s delay                            |
-| `invite_only_channel`  | `chain.canInvite(channel)`          | `chain.requestInvite(channel)` | Join after 3s delay                            |
-| `bad_channel_key`      | `api.getChannelKey(channel)` exists | — (no ChanServ needed)         | `api.join(channel, key)` after 1s delay        |
-| `channel_is_full`      | —                                   | Log only                       | No retry (periodic rejoin handles it)          |
-| `need_registered_nick` | —                                   | Log only                       | No retry (NickServ identification is separate) |
+| Error                  | Guard                      | Action                                      | Retry                                          |
+| ---------------------- | -------------------------- | ------------------------------------------- | ---------------------------------------------- |
+| `banned_from_channel`  | `chain.canUnban(channel)`  | UNBAN + INVITE (bypasses +k/+i/+l stacking) | Join after 3s delay                            |
+| `invite_only_channel`  | `chain.canInvite(channel)` | INVITE (also bypasses +k and +l)            | Join after 3s delay                            |
+| `bad_channel_key`      | `chain.canInvite(channel)` | INVITE (bypasses +k without needing key)    | Join after 3s delay                            |
+| `bad_channel_key`      | configured key exists      | — (fallback when no ChanServ)               | `api.join(channel, key)` after 1s delay        |
+| `channel_is_full`      | `chain.canInvite(channel)` | INVITE (bypasses +l)                        | Join after 3s delay                            |
+| `need_registered_nick` | —                          | Log only                                    | No retry (NickServ identification is separate) |
+
+**Key insight:** ChanServ INVITE bypasses +i, +k, AND +l simultaneously. An attacker who sets `+k +i +l +b` and kicks the bot can be defeated with UNBAN + INVITE — the bot never needs to know the attacker's key. The configured key from `bot.json` is only used as a fallback when there is no ChanServ access.
 
 The 3-second delay after ChanServ requests gives services time to process the UNBAN/INVITE before the bot retries the join.
 
@@ -203,16 +206,16 @@ The kick handler in `protection.ts` already does UNBAN + rejoin. The new join-er
 
 **Checklist:**
 
-- [ ] Create `plugins/chanmod/join-recovery.ts` with `setupJoinRecovery()` function
-- [ ] Bind to `join_error` with mask `*`
-- [ ] Handle `banned_from_channel`: guard on `canUnban`, request UNBAN, delayed rejoin with key
-- [ ] Handle `invite_only_channel`: guard on `canInvite`, request INVITE, delayed rejoin with key
-- [ ] Handle `bad_channel_key`: guard on `getChannelKey`, retry with key
-- [ ] Log-only for `channel_is_full` and `need_registered_nick`
-- [ ] Implement exponential backoff state in `SharedState` (30s -> 60s -> 120s -> 300s cap)
-- [ ] Reset backoff on successful join (bind `join` for bot's own nick)
-- [ ] Wire into chanmod `init()` — pass ProtectionChain and SharedState
-- [ ] Add tests: all 5 error types, backoff progression, backoff reset, access guards
+- [x] Create `plugins/chanmod/join-recovery.ts` with `setupJoinRecovery()` function
+- [x] Bind to `join_error` with mask `*`
+- [x] Handle `banned_from_channel`: guard on `canUnban`, request UNBAN, delayed rejoin with key
+- [x] Handle `invite_only_channel`: guard on `canInvite`, request INVITE, delayed rejoin with key
+- [x] Handle `bad_channel_key`: guard on `getChannelKey`, retry with key
+- [x] Log-only for `channel_is_full` and `need_registered_nick`
+- [x] Implement exponential backoff state in `SharedState` (30s -> 60s -> 120s -> 300s cap)
+- [x] Reset backoff on successful join (bind `join` for bot's own nick)
+- [x] Wire into chanmod `init()` — pass ProtectionChain and SharedState
+- [x] Add tests: all 5 error types, backoff progression, backoff reset, access guards
 
 ---
 
@@ -230,16 +233,16 @@ The `configuredChannels` array carries keys. Verify this works and add a test if
 
 **Checklist:**
 
-- [ ] Verify `startChannelPresenceCheck` passes `ch.key` (already does — line 303)
-- [ ] Add test if not already covered
+- [x] Verify `startChannelPresenceCheck` passes `ch.key` (already does — line 303)
+- [x] Add test if not already covered (tests/core/channel-presence.test.ts:147-152)
 
 ---
 
 ## Phase 5: Documentation
 
-- [ ] Update `docs/BOTLINK.md` or chanmod README with join-error recovery behavior
-- [ ] Update `docs/SECURITY.md` if relevant (ChanServ recovery as defense-in-depth)
-- [ ] Add CHANGELOG entry under `[Unreleased] > Added`
+- [x] Update `docs/BOTLINK.md` or chanmod README with join-error recovery behavior
+- [x] Update `docs/SECURITY.md` if relevant (ChanServ recovery as defense-in-depth) — not security-relevant, skipped
+- [x] Add CHANGELOG entry under `[Unreleased] > Added`
 
 ---
 

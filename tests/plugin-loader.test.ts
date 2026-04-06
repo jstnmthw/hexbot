@@ -2022,4 +2022,123 @@ describe('PluginLoader', () => {
       expect(ctxMsg2.reply).toHaveBeenCalledWith('fired-!one');
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // getChannelKey()
+  // ---------------------------------------------------------------------------
+
+  describe('getChannelKey', () => {
+    function createKeyedLoader(dir: string) {
+      const configWithKeys: BotConfig = {
+        ...MINIMAL_BOT_CONFIG,
+        irc: {
+          ...MINIMAL_BOT_CONFIG.irc,
+          channels: [{ name: '#secret', key: 'sesame' }, '#public'],
+        },
+      };
+
+      const database = new BotDatabase(':memory:');
+      database.open();
+      const dispatcher = new EventDispatcher();
+      const eventBus = new BotEventBus();
+      const permissions = new Permissions(database);
+
+      const loader = new PluginLoader({
+        pluginDir: dir,
+        dispatcher,
+        eventBus,
+        db: database,
+        permissions,
+        botConfig: configWithKeys,
+        ircClient: null,
+      });
+
+      return { loader, database };
+    }
+
+    it('returns the key for a keyed channel', async () => {
+      const dir = makeTempDir();
+      const pluginPath = writePlugin(
+        dir,
+        'keytest',
+        `export const name='keytest'; export const version='1.0.0'; export const description='d';
+         export function init(api) { globalThis.__testPluginApi = api; }`,
+      );
+
+      const { loader, database } = createKeyedLoader(dir);
+      await loader.load(pluginPath);
+      const api = getTestPluginApi();
+
+      expect(api.getChannelKey('#secret')).toBe('sesame');
+
+      await loader.unload(api.pluginId);
+      database.close();
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('returns undefined for a keyless channel', async () => {
+      const dir = makeTempDir();
+      const pluginPath = writePlugin(
+        dir,
+        'keytest2',
+        `export const name='keytest2'; export const version='1.0.0'; export const description='d';
+         export function init(api) { globalThis.__testPluginApi = api; }`,
+      );
+
+      const { loader, database } = createKeyedLoader(dir);
+      await loader.load(pluginPath);
+      const api = getTestPluginApi();
+
+      expect(api.getChannelKey('#public')).toBeUndefined();
+      expect(api.getChannelKey('#nonexistent')).toBeUndefined();
+
+      await loader.unload(api.pluginId);
+      database.close();
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('performs case-insensitive channel lookup', async () => {
+      const dir = makeTempDir();
+      const pluginPath = writePlugin(
+        dir,
+        'keytest3',
+        `export const name='keytest3'; export const version='1.0.0'; export const description='d';
+         export function init(api) { globalThis.__testPluginApi = api; }`,
+      );
+
+      const configWithKeys: BotConfig = {
+        ...MINIMAL_BOT_CONFIG,
+        irc: {
+          ...MINIMAL_BOT_CONFIG.irc,
+          channels: [{ name: '#Secret', key: 'sesame' }],
+        },
+      };
+
+      const database = new BotDatabase(':memory:');
+      database.open();
+      const dispatcher = new EventDispatcher();
+      const eventBus = new BotEventBus();
+      const permissions = new Permissions(database);
+
+      const loader = new PluginLoader({
+        pluginDir: dir,
+        dispatcher,
+        eventBus,
+        db: database,
+        permissions,
+        botConfig: configWithKeys,
+        ircClient: null,
+      });
+
+      await loader.load(pluginPath);
+      const api = getTestPluginApi();
+
+      expect(api.getChannelKey('#SECRET')).toBe('sesame');
+      expect(api.getChannelKey('#secret')).toBe('sesame');
+
+      await loader.unload(api.pluginId);
+      database.close();
+      rmSync(dir, { recursive: true, force: true });
+    });
+  });
 });

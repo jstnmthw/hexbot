@@ -50,6 +50,8 @@ export interface ProtectionBackend {
   canInvite(channel: string): boolean;
   canRecover(channel: string): boolean;
   canClearBans(channel: string): boolean;
+  /** Remove channel key (+k). Used for join recovery. */
+  canRemoveKey(channel: string): boolean;
   /** Persistent ban enforcement (ChanServ AKICK). Botnet returns false. */
   canAkick(channel: string): boolean;
 
@@ -64,6 +66,8 @@ export interface ProtectionBackend {
   /** Full channel recovery. Atheme: RECOVER. Anope: synthetic multi-step. */
   requestRecover(channel: string): void;
   requestClearBans(channel: string): void;
+  /** Remove the channel key (+k). Used for join recovery when an attacker sets +k. */
+  requestRemoveKey(channel: string): void;
   requestAkick(channel: string, mask: string, reason?: string): void;
 
   /** Verify actual access level (called on bot join). */
@@ -128,6 +132,10 @@ export class ProtectionChain {
 
   canClearBans(channel: string): boolean {
     return this.backends.some((b) => b.canClearBans(channel));
+  }
+
+  canRemoveKey(channel: string): boolean {
+    return this.backends.some((b) => b.canRemoveKey(channel));
   }
 
   canAkick(channel: string): boolean {
@@ -209,6 +217,18 @@ export class ProtectionChain {
       }
     }
     this.api.warn(`ProtectionChain: no backend can requestClearBans for ${channel}`);
+    return false;
+  }
+
+  requestRemoveKey(channel: string): boolean {
+    for (const b of this.backends) {
+      if (b.canRemoveKey(channel)) {
+        b.requestRemoveKey(channel);
+        this.api.log(`ProtectionChain: ${b.name} handling requestRemoveKey for ${channel}`);
+        return true;
+      }
+    }
+    this.api.warn(`ProtectionChain: no backend can requestRemoveKey for ${channel}`);
     return false;
   }
 

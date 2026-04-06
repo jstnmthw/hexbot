@@ -79,6 +79,8 @@ export interface ProbeState {
   activeInfoChannel: string | null;
   /** Timeout timers for probe responses. */
   probeTimers: ReturnType<typeof setTimeout>[];
+  /** Channels with pending GETKEY probes. Value = channel name. Callback fires with the key. */
+  pendingGetKey: Map<string, (key: string | null) => void>;
 }
 
 export function createProbeState(): ProbeState {
@@ -88,6 +90,7 @@ export function createProbeState(): ProbeState {
     pendingInfoProbes: new Map(),
     activeInfoChannel: null,
     probeTimers: [],
+    pendingGetKey: new Map(),
   };
 }
 
@@ -130,6 +133,7 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
     probeState.pendingAthemeProbes.clear();
     probeState.pendingAnopeProbes.clear();
     probeState.pendingInfoProbes.clear();
+    probeState.pendingGetKey.clear();
     probeState.activeInfoChannel = null;
     for (const t of probeState.probeTimers) clearTimeout(t);
     probeState.probeTimers.length = 0;
@@ -350,6 +354,39 @@ function handleAnopeNotice(
     if (channel) {
       api.debug(`ChanServ ACCESS response for ${channel}: denied (${text.trim()})`);
       backend.handleAccessResponse(channel, 0);
+    }
+    return;
+  }
+
+  // --- GETKEY response parsing ---
+
+  // Anope GETKEY success: "Key for channel \x02#chan\x02 is \x02thekey\x02."
+  // eslint-disable-next-line no-control-regex
+  const getkeyMatch = /^Key for channel \x02?(#[^\s\x02]+)\x02? is \x02?(.+?)\x02?\.?$/i.exec(text);
+  if (getkeyMatch) {
+    const channel = getkeyMatch[1];
+    const retrievedKey = getkeyMatch[2];
+    const chanKey = api.ircLower(channel);
+    const callback = probeState.pendingGetKey.get(chanKey);
+    if (callback) {
+      probeState.pendingGetKey.delete(chanKey);
+      api.debug(`ChanServ GETKEY response for ${channel}: got key`);
+      callback(retrievedKey);
+    }
+    return;
+  }
+
+  // Anope GETKEY no-key: "Channel \x02#chan\x02 has no key."
+  // eslint-disable-next-line no-control-regex
+  const noKeyMatch = /^Channel \x02?(#[^\s\x02]+)\x02? has no key/i.exec(text);
+  if (noKeyMatch) {
+    const channel = noKeyMatch[1];
+    const chanKey = api.ircLower(channel);
+    const callback = probeState.pendingGetKey.get(chanKey);
+    if (callback) {
+      probeState.pendingGetKey.delete(chanKey);
+      api.debug(`ChanServ GETKEY response for ${channel}: no key set`);
+      callback(null);
     }
     return;
   }

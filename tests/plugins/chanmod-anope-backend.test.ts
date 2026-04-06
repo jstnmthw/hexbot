@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AnopeBackend } from '../../plugins/chanmod/anope-backend';
+import { createProbeState } from '../../plugins/chanmod/chanserv-notice';
 import type { MockBot } from '../helpers/mock-bot';
 import { createMockBot } from '../helpers/mock-bot';
 
@@ -472,6 +473,87 @@ describe('AnopeBackend — handleAccessResponse', () => {
     const b = new AnopeBackend(shim as never, 'ChanServ');
     b.handleAccessResponse('#test', 0);
     expect(b.getAccess('#test')).toBe('none');
+    expect(b.isAutoDetected('#test')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// requestRemoveKey — GETKEY
+// ---------------------------------------------------------------------------
+
+describe('Anope backend — requestRemoveKey (GETKEY)', () => {
+  it('sends GETKEY and registers a pending callback', () => {
+    const messages: string[] = [];
+    const shim = {
+      say: (_t: string, m: string) => messages.push(m),
+      log: () => {},
+      debug: () => {},
+      warn: () => {},
+      join: vi.fn(),
+      ircLower: (s: string) => s.toLowerCase(),
+      botConfig: { irc: { nick: 'hexbot' } },
+    };
+    const probeState = createProbeState();
+    const b = new AnopeBackend(shim as never, 'ChanServ', undefined, probeState);
+    b.setAccess('#test', 'op');
+
+    expect(b.canRemoveKey('#test')).toBe(true);
+    b.requestRemoveKey('#test');
+
+    expect(messages).toContain('GETKEY #test');
+    expect(probeState.pendingGetKey.has('#test')).toBe(true);
+
+    // Simulate GETKEY response — callback fires join
+    const callback = probeState.pendingGetKey.get('#test')!;
+    callback('secretkey');
+    expect(shim.join).toHaveBeenCalledWith('#test', 'secretkey');
+  });
+
+  it('callback with null key does not join', () => {
+    const shim = {
+      say: () => {},
+      log: () => {},
+      debug: () => {},
+      warn: () => {},
+      join: vi.fn(),
+      ircLower: (s: string) => s.toLowerCase(),
+      botConfig: { irc: { nick: 'hexbot' } },
+    };
+    const probeState = createProbeState();
+    const b = new AnopeBackend(shim as never, 'ChanServ', undefined, probeState);
+    b.setAccess('#test', 'op');
+    b.requestRemoveKey('#test');
+
+    const callback = probeState.pendingGetKey.get('#test')!;
+    callback(null);
+    expect(shim.join).not.toHaveBeenCalled();
+  });
+
+  it('canRemoveKey returns false when access is none', () => {
+    const shim = {
+      say: () => {},
+      ircLower: (s: string) => s.toLowerCase(),
+      botConfig: { irc: { nick: 'hexbot' } },
+    };
+    const b = new AnopeBackend(shim as never, 'ChanServ');
+    expect(b.canRemoveKey('#test')).toBe(false);
+  });
+
+  it('setAccess clears auto-detected flag when value changes', () => {
+    const shim = {
+      say: () => {},
+      log: () => {},
+      debug: () => {},
+      warn: () => {},
+      ircLower: (s: string) => s.toLowerCase(),
+      botConfig: { irc: { nick: 'hexbot' } },
+    };
+    const b = new AnopeBackend(shim as never, 'ChanServ');
+    // Simulate auto-detection
+    b.handleAccessResponse('#test', 10);
+    expect(b.isAutoDetected('#test')).toBe(true);
+    // Change access — should clear auto-detected flag
+    b.setAccess('#test', 'founder');
     expect(b.isAutoDetected('#test')).toBe(false);
   });
 });

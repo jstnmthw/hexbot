@@ -29,7 +29,8 @@ export type BindType =
   | 'notice' // Notice message, stackable
   | 'topic' // Topic change, stackable
   | 'quit' // User quit (not channel-scoped), stackable
-  | 'invite'; // Bot invited to a channel, stackable
+  | 'invite' // Bot invited to a channel, stackable
+  | 'join_error'; // Bot failed to join a channel (banned, invite-only, bad key, etc.), stackable
 
 /** Permission flags: n=owner, m=master, o=op, v=voice, d=deop (suppress auto-op/halfop), -=anyone. */
 export type Flag = 'n' | 'm' | 'o' | 'v' | 'd' | '-';
@@ -212,6 +213,9 @@ export interface PluginAPI {
    * See docs/SECURITY.md section 5.2.
    */
   stripFormatting(text: string): string;
+
+  /** Get the configured channel key (from bot.json), or undefined if none. */
+  getChannelKey(channel: string): string | undefined;
 
   // Logging (prefixed with [plugin:<name>])
   log(...args: unknown[]): void;

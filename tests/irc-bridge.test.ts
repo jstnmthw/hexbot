@@ -1879,4 +1879,179 @@ describe('IRCBridge', () => {
       dispatcher.unbindAll('test');
     });
   });
+
+  // -------------------------------------------------------------------------
+  // join_error dispatching (471/473/474/475/477)
+  // -------------------------------------------------------------------------
+
+  describe('join_error dispatch', () => {
+    it('dispatches join_error for banned_from_channel (474)', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('join_error', '-', 'banned_from_channel', handler, 'test');
+
+      client.simulateEvent('irc error', {
+        error: 'banned_from_channel',
+        channel: '#test',
+        reason: 'Cannot join channel (+b)',
+      });
+      await Promise.resolve();
+
+      expect(handler).toHaveBeenCalledOnce();
+      const ctx: HandlerContext = handler.mock.calls[0][0];
+      expect(ctx.channel).toBe('#test');
+      expect(ctx.command).toBe('banned_from_channel');
+      expect(ctx.text).toBe('Cannot join channel (+b)');
+      expect(ctx.nick).toBe('testbot');
+
+      dispatcher.unbindAll('test');
+    });
+
+    it('dispatches join_error for invite_only_channel (473)', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('join_error', '-', '*', handler, 'test');
+
+      client.simulateEvent('irc error', {
+        error: 'invite_only_channel',
+        channel: '#secret',
+        reason: 'Cannot join channel (+i)',
+      });
+      await Promise.resolve();
+
+      expect(handler).toHaveBeenCalledOnce();
+      const ctx: HandlerContext = handler.mock.calls[0][0];
+      expect(ctx.channel).toBe('#secret');
+      expect(ctx.command).toBe('invite_only_channel');
+
+      dispatcher.unbindAll('test');
+    });
+
+    it('dispatches join_error for bad_channel_key (475)', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('join_error', '-', 'bad_channel_key', handler, 'test');
+
+      client.simulateEvent('irc error', {
+        error: 'bad_channel_key',
+        channel: '#keyed',
+        reason: 'Cannot join channel (+k)',
+      });
+      await Promise.resolve();
+
+      expect(handler).toHaveBeenCalledOnce();
+      expect(handler.mock.calls[0][0].command).toBe('bad_channel_key');
+
+      dispatcher.unbindAll('test');
+    });
+
+    it('dispatches join_error for channel_is_full (471)', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('join_error', '-', 'channel_is_full', handler, 'test');
+
+      client.simulateEvent('irc error', {
+        error: 'channel_is_full',
+        channel: '#full',
+        reason: 'Cannot join channel (+l)',
+      });
+      await Promise.resolve();
+
+      expect(handler).toHaveBeenCalledOnce();
+      expect(handler.mock.calls[0][0].command).toBe('channel_is_full');
+
+      dispatcher.unbindAll('test');
+    });
+
+    it('dispatches join_error for need_registered_nick (477) via unknown command', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('join_error', '-', 'need_registered_nick', handler, 'test');
+
+      client.simulateEvent('unknown command', {
+        command: '477',
+        params: ['testbot', '#registered', 'You need to identify to a registered nick'],
+      });
+      await Promise.resolve();
+
+      expect(handler).toHaveBeenCalledOnce();
+      const ctx: HandlerContext = handler.mock.calls[0][0];
+      expect(ctx.channel).toBe('#registered');
+      expect(ctx.command).toBe('need_registered_nick');
+      expect(ctx.text).toBe('You need to identify to a registered nick');
+
+      dispatcher.unbindAll('test');
+    });
+
+    it('mask matching: specific mask only fires for that error type', async () => {
+      const banHandler = vi.fn();
+      const inviteHandler = vi.fn();
+      dispatcher.bind('join_error', '-', 'banned_from_channel', banHandler, 'test');
+      dispatcher.bind('join_error', '-', 'invite_only_channel', inviteHandler, 'test');
+
+      client.simulateEvent('irc error', {
+        error: 'banned_from_channel',
+        channel: '#test',
+        reason: 'banned',
+      });
+      await Promise.resolve();
+
+      expect(banHandler).toHaveBeenCalledOnce();
+      expect(inviteHandler).not.toHaveBeenCalled();
+
+      dispatcher.unbindAll('test');
+    });
+
+    it('wildcard mask fires for all error types', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('join_error', '-', '*', handler, 'test');
+
+      client.simulateEvent('irc error', {
+        error: 'banned_from_channel',
+        channel: '#a',
+        reason: '',
+      });
+      client.simulateEvent('irc error', {
+        error: 'invite_only_channel',
+        channel: '#b',
+        reason: '',
+      });
+      client.simulateEvent('irc error', {
+        error: 'bad_channel_key',
+        channel: '#c',
+        reason: '',
+      });
+      await Promise.resolve();
+
+      expect(handler).toHaveBeenCalledTimes(3);
+
+      dispatcher.unbindAll('test');
+    });
+
+    it('ignores non-join irc errors', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('join_error', '-', '*', handler, 'test');
+
+      client.simulateEvent('irc error', {
+        error: 'no_such_nick',
+        channel: '#test',
+        reason: '',
+      });
+      await Promise.resolve();
+
+      expect(handler).not.toHaveBeenCalled();
+
+      dispatcher.unbindAll('test');
+    });
+
+    it('ignores unknown command that is not 477', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('join_error', '-', '*', handler, 'test');
+
+      client.simulateEvent('unknown command', {
+        command: '999',
+        params: ['testbot', '#test', 'some message'],
+      });
+      await Promise.resolve();
+
+      expect(handler).not.toHaveBeenCalled();
+
+      dispatcher.unbindAll('test');
+    });
+  });
 });
