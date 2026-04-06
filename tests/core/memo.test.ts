@@ -11,7 +11,6 @@ import { type MockBot, createMockBot } from '../helpers/mock-bot';
 
 function setupMemo(bot: MockBot, config?: Record<string, unknown>): MemoManager {
   const memo = new MemoManager({
-    db: bot.db,
     config: config as never,
     dispatcher: bot.dispatcher,
     commandHandler: bot.commandHandler,
@@ -40,8 +39,7 @@ function joinChannel(
   bot.client.simulateEvent('join', { nick, ident, hostname, channel, account: undefined });
 }
 
-/** Create a command context for DCC/REPL testing (uses REPL source to skip flag checks — DCC
- *  sessions are already authenticated, and in tests we just want to exercise the handler logic). */
+/** Create a command context for DCC/REPL testing. */
 function dccCtx(nick: string, replies: string[]): CommandContext {
   return {
     source: 'repl',
@@ -84,6 +82,7 @@ describe('MemoManager', () => {
   let memo: MemoManager;
 
   beforeEach(() => {
+    vi.useFakeTimers();
     bot = createMockBot();
     addAdmin(bot, 'admin', 'n', 'admin!user@host');
     addAdmin(bot, 'master', 'm', 'master!user@host');
@@ -92,155 +91,7 @@ describe('MemoManager', () => {
   afterEach(() => {
     memo?.detach();
     bot.cleanup();
-  });
-
-  // -------------------------------------------------------------------------
-  // Note CRUD
-  // -------------------------------------------------------------------------
-
-  describe('Note CRUD', () => {
-    beforeEach(() => {
-      memo = setupMemo(bot);
-    });
-
-    it('stores and retrieves a note', () => {
-      const result = memo.storeNote('admin', 'master', 'Hello world');
-      expect(result).toHaveProperty('id');
-      const id = (result as { id: number }).id;
-
-      const note = memo.getNote(id);
-      expect(note).not.toBeNull();
-      expect(note!.from).toBe('admin');
-      expect(note!.to).toBe('master');
-      expect(note!.message).toBe('Hello world');
-      expect(note!.read).toBe(false);
-    });
-
-    it('auto-increments IDs', () => {
-      const r1 = memo.storeNote('admin', 'master', 'First');
-      const r2 = memo.storeNote('admin', 'master', 'Second');
-      expect((r1 as { id: number }).id).toBeLessThan((r2 as { id: number }).id);
-    });
-
-    it('marks a note as read', () => {
-      const result = memo.storeNote('admin', 'master', 'Test');
-      const id = (result as { id: number }).id;
-
-      expect(memo.markRead(id)).toBe(true);
-      expect(memo.getNote(id)!.read).toBe(true);
-    });
-
-    it('deletes a note', () => {
-      const result = memo.storeNote('admin', 'master', 'Test');
-      const id = (result as { id: number }).id;
-
-      expect(memo.deleteNote(id)).toBe(true);
-      expect(memo.getNote(id)).toBeNull();
-    });
-
-    it('lists notes for a handle', () => {
-      memo.storeNote('admin', 'master', 'First');
-      memo.storeNote('admin', 'master', 'Second');
-      memo.storeNote('master', 'admin', 'To admin');
-
-      const masterNotes = memo.listNotesForHandle('master');
-      expect(masterNotes).toHaveLength(2);
-      expect(masterNotes[0].message).toBe('First');
-      expect(masterNotes[1].message).toBe('Second');
-
-      const adminNotes = memo.listNotesForHandle('admin');
-      expect(adminNotes).toHaveLength(1);
-    });
-
-    it('counts unread notes', () => {
-      const r1 = memo.storeNote('admin', 'master', 'First');
-      memo.storeNote('admin', 'master', 'Second');
-      memo.markRead((r1 as { id: number }).id);
-
-      expect(memo.countUnread('master')).toBe(1);
-    });
-
-    it('deletes all notes for a handle', () => {
-      memo.storeNote('admin', 'master', 'First');
-      memo.storeNote('admin', 'master', 'Second');
-      memo.storeNote('master', 'admin', 'To admin');
-
-      expect(memo.deleteAllForHandle('master')).toBe(2);
-      expect(memo.listNotesForHandle('master')).toHaveLength(0);
-      expect(memo.listNotesForHandle('admin')).toHaveLength(1);
-    });
-
-    it('markRead returns false for non-existent note', () => {
-      expect(memo.markRead(9999)).toBe(false);
-    });
-
-    it('deleteNote returns false for non-existent note', () => {
-      expect(memo.deleteNote(9999)).toBe(false);
-    });
-
-    it('setCasemapping updates internal casemapping', () => {
-      memo.setCasemapping('ascii');
-      // No assertion needed — just coverage. The casemapping affects ircLower calls.
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // Limits
-  // -------------------------------------------------------------------------
-
-  describe('limits', () => {
-    it('rejects notes exceeding max_note_length', () => {
-      memo = setupMemo(bot, { max_note_length: 10 });
-      const result = memo.storeNote('admin', 'master', 'a'.repeat(11));
-      expect(result).toHaveProperty('error');
-      expect((result as { error: string }).error).toContain('too long');
-    });
-
-    it('rejects notes when mailbox is full', () => {
-      memo = setupMemo(bot, { max_notes_per_user: 2 });
-      memo.storeNote('admin', 'master', 'First');
-      memo.storeNote('admin', 'master', 'Second');
-      const result = memo.storeNote('admin', 'master', 'Third');
-      expect(result).toHaveProperty('error');
-      expect((result as { error: string }).error).toContain('full');
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // Expiry
-  // -------------------------------------------------------------------------
-
-  describe('expiry', () => {
-    it('sweeps notes older than max_age_days', () => {
-      memo = setupMemo(bot, { max_age_days: 1 });
-      // Store a note, then manually backdate its timestamp
-      const result = memo.storeNote('admin', 'master', 'Old note');
-      const id = (result as { id: number }).id;
-      const note = memo.getNote(id)!;
-      note.timestamp = Date.now() - 2 * 86_400_000; // 2 days ago
-      bot.db.set('_memo', `note:${id}`, note);
-
-      const swept = memo.sweepExpired();
-      expect(swept).toBe(1);
-      expect(memo.getNote(id)).toBeNull();
-    });
-
-    it('does not sweep recent notes', () => {
-      memo = setupMemo(bot, { max_age_days: 90 });
-      memo.storeNote('admin', 'master', 'Recent');
-      expect(memo.sweepExpired()).toBe(0);
-    });
-
-    it('does nothing when max_age_days is 0', () => {
-      memo = setupMemo(bot, { max_age_days: 0 });
-      const result = memo.storeNote('admin', 'master', 'Immortal');
-      const id = (result as { id: number }).id;
-      const note = memo.getNote(id)!;
-      note.timestamp = Date.now() - 365 * 86_400_000;
-      bot.db.set('_memo', `note:${id}`, note);
-
-      expect(memo.sweepExpired()).toBe(0);
-    });
+    vi.useRealTimers();
   });
 
   // -------------------------------------------------------------------------
@@ -248,480 +99,387 @@ describe('MemoManager', () => {
   // -------------------------------------------------------------------------
 
   describe('MemoServ relay', () => {
-    it('relays MemoServ notices to online admins and stores as notes', () => {
-      memo = setupMemo(bot, { memoserv_relay: true, memoserv_nick: 'MemoServ' });
-
-      // Put admin in a channel so relay can find them
+    it('relays unsolicited notices to online admins via NOTICE', () => {
+      memo = setupMemo(bot);
       joinChannel(bot, 'admin', '#test');
+      bot.client.messages.length = 0;
 
-      sendNotice(bot, 'MemoServ', 'You have a new memo from NetworkOps.');
+      sendNotice(bot, 'MemoServ', 'You have 1 new memo.');
 
-      // Check that a NOTICE was sent to the admin
-      const notices = bot.client.messages.filter(
-        (m) => m.type === 'notice' && m.target === 'admin',
-      );
-      expect(notices.length).toBeGreaterThanOrEqual(1);
-      expect(notices[0].message).toContain('[MemoServ]');
+      const notices = bot.client.messages.filter((m) => m.type === 'notice');
+      expect(notices).toHaveLength(1);
+      expect(notices[0].target).toBe('admin');
+      expect(notices[0].message).toContain('[MemoServ] You have 1 new memo.');
+    });
 
-      // Check note was stored
-      const adminNotes = memo.listNotesForHandle('admin');
-      expect(adminNotes.length).toBeGreaterThanOrEqual(1);
-      expect(adminNotes[0].from).toBe('MemoServ');
+    it('relays unsolicited notices to DCC console', () => {
+      memo = setupMemo(bot);
+      const announced: string[] = [];
+      memo.setDCCManager({
+        announce: (msg) => announced.push(msg),
+        getSessionList: () => [],
+        getSession: () => undefined,
+      });
+
+      sendNotice(bot, 'MemoServ', 'You have 2 new memos.');
+
+      expect(announced).toHaveLength(1);
+      expect(announced[0]).toContain('[MemoServ] You have 2 new memos.');
     });
 
     it('ignores notices from non-MemoServ nicks', () => {
-      memo = setupMemo(bot, { memoserv_relay: true, memoserv_nick: 'MemoServ' });
+      memo = setupMemo(bot);
       joinChannel(bot, 'admin', '#test');
+      bot.client.messages.length = 0;
 
-      sendNotice(bot, 'RandomUser', 'This is not a memo.');
+      sendNotice(bot, 'NickServ', 'Some message');
 
-      const adminNotes = memo.listNotesForHandle('admin');
-      expect(adminNotes).toHaveLength(0);
+      const notices = bot.client.messages.filter((m) => m.type === 'notice');
+      expect(notices).toHaveLength(0);
+    });
+
+    it('parses "You have N new memo(s)" to update pendingMemoCount', () => {
+      memo = setupMemo(bot);
+
+      sendNotice(bot, 'MemoServ', 'You have 3 new memos.');
+      expect(memo.pendingMemoCount).toBe(3);
+
+      sendNotice(bot, 'MemoServ', 'You have 1 new memo.');
+      expect(memo.pendingMemoCount).toBe(1);
+    });
+
+    it('does not update pendingMemoCount for non-count messages', () => {
+      memo = setupMemo(bot);
+
+      sendNotice(bot, 'MemoServ', 'Type /msg MemoServ READ LAST to read it.');
+      expect(memo.pendingMemoCount).toBe(0);
     });
 
     it('ignores channel notices', () => {
-      memo = setupMemo(bot, { memoserv_relay: true, memoserv_nick: 'MemoServ' });
+      memo = setupMemo(bot);
       joinChannel(bot, 'admin', '#test');
+      bot.client.messages.length = 0;
 
-      // Channel notice — target is the channel, not the bot
       bot.client.simulateEvent('notice', {
         nick: 'MemoServ',
         ident: 'services',
         hostname: 'services.host',
         target: '#test',
-        message: 'Channel notice',
+        message: 'You have 1 new memo.',
       });
 
-      const adminNotes = memo.listNotesForHandle('admin');
-      expect(adminNotes).toHaveLength(0);
+      const notices = bot.client.messages.filter((m) => m.type === 'notice');
+      expect(notices).toHaveLength(0);
     });
 
-    it('does not relay when memoserv_relay is false', () => {
+    it('can be disabled via config', () => {
       memo = setupMemo(bot, { memoserv_relay: false });
       joinChannel(bot, 'admin', '#test');
+      bot.client.messages.length = 0;
 
-      sendNotice(bot, 'MemoServ', 'Test memo');
+      sendNotice(bot, 'MemoServ', 'You have 1 new memo.');
 
-      const adminNotes = memo.listNotesForHandle('admin');
-      expect(adminNotes).toHaveLength(0);
-    });
-
-    it('stores MemoServ messages for offline admins', () => {
-      memo = setupMemo(bot, { memoserv_relay: true, memoserv_nick: 'MemoServ' });
-      // No one in any channel — admins are "offline"
-
-      sendNotice(bot, 'MemoServ', 'Offline memo');
-
-      // Notes stored for both admin and master
-      expect(memo.listNotesForHandle('admin')).toHaveLength(1);
-      expect(memo.listNotesForHandle('master')).toHaveLength(1);
+      const notices = bot.client.messages.filter((m) => m.type === 'notice');
+      expect(notices).toHaveLength(0);
     });
   });
 
   // -------------------------------------------------------------------------
-  // DCC/REPL dot-commands
+  // .memo command
   // -------------------------------------------------------------------------
 
-  describe('dot-commands', () => {
-    beforeEach(() => {
+  describe('.memo command', () => {
+    it('no args with pending memos → shows count', async () => {
       memo = setupMemo(bot);
-    });
+      memo.pendingMemoCount = 5;
 
-    it('.note sends a note to a valid admin handle', async () => {
       const replies: string[] = [];
-      await bot.commandHandler.execute('.note master Hello from admin', dccCtx('admin', replies));
+      await bot.commandHandler.execute('.memo', dccCtx('admin', replies));
+
       expect(replies).toHaveLength(1);
-      expect(replies[0]).toContain('Note #');
-      expect(replies[0]).toContain('sent to master');
-
-      const notes = memo.listNotesForHandle('master');
-      expect(notes).toHaveLength(1);
-      expect(notes[0].message).toBe('Hello from admin');
+      expect(replies[0]).toContain('5 unread memo(s)');
     });
 
-    it('.note rejects non-admin target', async () => {
-      bot.permissions.addUser('regular', 'reg!user@host', 'o');
+    it('no args with zero pending → shows no memos', async () => {
+      memo = setupMemo(bot);
+      memo.pendingMemoCount = 0;
+
       const replies: string[] = [];
-      await bot.commandHandler.execute('.note regular Hello', dccCtx('admin', replies));
-      expect(replies[0]).toContain('No admin handle');
+      await bot.commandHandler.execute('.memo', dccCtx('admin', replies));
+
+      expect(replies).toHaveLength(1);
+      expect(replies[0]).toContain('No pending memos');
     });
 
-    it('.note rejects unknown target', async () => {
+    it('help → shows subcommand list', async () => {
+      memo = setupMemo(bot);
+
       const replies: string[] = [];
-      await bot.commandHandler.execute('.note nobody Hello', dccCtx('admin', replies));
-      expect(replies[0]).toContain('No admin handle');
+      await bot.commandHandler.execute('.memo help', dccCtx('admin', replies));
+
+      expect(replies.length).toBeGreaterThan(1);
+      expect(replies[0]).toContain('MemoServ proxy commands');
+      expect(replies.some((r) => r.includes('.memo read'))).toBe(true);
+      expect(replies.some((r) => r.includes('.memo send'))).toBe(true);
+      expect(replies.some((r) => r.includes('.memo list'))).toBe(true);
+      expect(replies.some((r) => r.includes('.memo del'))).toBe(true);
     });
 
-    it('.note shows usage with no args', async () => {
+    it('read (no arg) → sends /msg MemoServ READ LAST', async () => {
+      memo = setupMemo(bot);
+      bot.client.messages.length = 0;
+
       const replies: string[] = [];
-      await bot.commandHandler.execute('.note', dccCtx('admin', replies));
+      await bot.commandHandler.execute('.memo read', dccCtx('admin', replies));
+
+      const says = bot.client.messages.filter((m) => m.type === 'say');
+      expect(says).toHaveLength(1);
+      expect(says[0].target).toBe('MemoServ');
+      expect(says[0].message).toBe('READ LAST');
+    });
+
+    it('read new → sends /msg MemoServ READ NEW', async () => {
+      memo = setupMemo(bot);
+      bot.client.messages.length = 0;
+
+      const replies: string[] = [];
+      await bot.commandHandler.execute('.memo read new', dccCtx('admin', replies));
+
+      const says = bot.client.messages.filter((m) => m.type === 'say');
+      expect(says).toHaveLength(1);
+      expect(says[0].message).toBe('READ NEW');
+    });
+
+    it('read <id> → sends /msg MemoServ READ <ID>', async () => {
+      memo = setupMemo(bot);
+      bot.client.messages.length = 0;
+
+      const replies: string[] = [];
+      await bot.commandHandler.execute('.memo read 3', dccCtx('admin', replies));
+
+      const says = bot.client.messages.filter((m) => m.type === 'say');
+      expect(says).toHaveLength(1);
+      expect(says[0].message).toBe('READ 3');
+    });
+
+    it('read resets pendingMemoCount', async () => {
+      memo = setupMemo(bot);
+      memo.pendingMemoCount = 5;
+
+      const replies: string[] = [];
+      await bot.commandHandler.execute('.memo read', dccCtx('admin', replies));
+
+      expect(memo.pendingMemoCount).toBe(0);
+    });
+
+    it('list → sends /msg MemoServ LIST', async () => {
+      memo = setupMemo(bot);
+      bot.client.messages.length = 0;
+
+      const replies: string[] = [];
+      await bot.commandHandler.execute('.memo list', dccCtx('admin', replies));
+
+      const says = bot.client.messages.filter((m) => m.type === 'say');
+      expect(says).toHaveLength(1);
+      expect(says[0].target).toBe('MemoServ');
+      expect(says[0].message).toBe('LIST');
+    });
+
+    it('list resets pendingMemoCount', async () => {
+      memo = setupMemo(bot);
+      memo.pendingMemoCount = 3;
+
+      const replies: string[] = [];
+      await bot.commandHandler.execute('.memo list', dccCtx('admin', replies));
+
+      expect(memo.pendingMemoCount).toBe(0);
+    });
+
+    it('del <id> → sends /msg MemoServ DEL <ID>', async () => {
+      memo = setupMemo(bot);
+      bot.client.messages.length = 0;
+
+      const replies: string[] = [];
+      await bot.commandHandler.execute('.memo del 2', dccCtx('admin', replies));
+
+      const says = bot.client.messages.filter((m) => m.type === 'say');
+      expect(says).toHaveLength(1);
+      expect(says[0].message).toBe('DEL 2');
+    });
+
+    it('del all → sends /msg MemoServ DEL ALL', async () => {
+      memo = setupMemo(bot);
+      bot.client.messages.length = 0;
+
+      const replies: string[] = [];
+      await bot.commandHandler.execute('.memo del all', dccCtx('admin', replies));
+
+      const says = bot.client.messages.filter((m) => m.type === 'say');
+      expect(says).toHaveLength(1);
+      expect(says[0].message).toBe('DEL ALL');
+    });
+
+    it('del with no arg → shows usage', async () => {
+      memo = setupMemo(bot);
+
+      const replies: string[] = [];
+      await bot.commandHandler.execute('.memo del', dccCtx('admin', replies));
+
+      expect(replies).toHaveLength(1);
       expect(replies[0]).toContain('Usage');
     });
 
-    it('.notes lists unread notes', async () => {
-      memo.storeNote('master', 'admin', 'First note');
-      memo.storeNote('master', 'admin', 'Second note');
+    it('send <nick> <message> → sends /msg MemoServ SEND', async () => {
+      memo = setupMemo(bot);
+      bot.client.messages.length = 0;
 
       const replies: string[] = [];
-      await bot.commandHandler.execute('.notes', dccCtx('admin', replies));
-      expect(replies[0]).toContain('2 unread');
-      expect(replies[1]).toContain('#');
-      expect(replies[1]).toContain('master');
+      await bot.commandHandler.execute('.memo send d3m0n hello there', dccCtx('admin', replies));
+
+      const says = bot.client.messages.filter((m) => m.type === 'say');
+      expect(says).toHaveLength(1);
+      expect(says[0].target).toBe('MemoServ');
+      expect(says[0].message).toBe('SEND d3m0n hello there');
     });
 
-    it('.notes shows no unread when empty', async () => {
-      const replies: string[] = [];
-      await bot.commandHandler.execute('.notes', dccCtx('admin', replies));
-      expect(replies[0]).toContain('No unread');
-    });
-
-    it('.readnote shows full note and marks read', async () => {
-      const result = memo.storeNote('master', 'admin', 'Full note content');
-      const id = (result as { id: number }).id;
+    it('send with missing args → shows usage', async () => {
+      memo = setupMemo(bot);
 
       const replies: string[] = [];
-      await bot.commandHandler.execute(`.readnote ${id}`, dccCtx('admin', replies));
-      expect(replies.length).toBe(2);
-      expect(replies[0]).toContain(`Note #${id}`);
-      expect(replies[1]).toBe('Full note content');
-      expect(memo.getNote(id)!.read).toBe(true);
-    });
+      await bot.commandHandler.execute('.memo send d3m0n', dccCtx('admin', replies));
 
-    it('.readnote rejects wrong recipient', async () => {
-      const result = memo.storeNote('admin', 'master', 'Secret');
-      const id = (result as { id: number }).id;
-
-      const replies: string[] = [];
-      await bot.commandHandler.execute(`.readnote ${id}`, dccCtx('admin', replies));
-      expect(replies[0]).toContain('not found');
-    });
-
-    it('.delnote deletes a specific note', async () => {
-      const result = memo.storeNote('master', 'admin', 'Delete me');
-      const id = (result as { id: number }).id;
-
-      const replies: string[] = [];
-      await bot.commandHandler.execute(`.delnote ${id}`, dccCtx('admin', replies));
-      expect(replies[0]).toContain('deleted');
-      expect(memo.getNote(id)).toBeNull();
-    });
-
-    it('.delnote all deletes all notes for the user', async () => {
-      memo.storeNote('master', 'admin', 'One');
-      memo.storeNote('master', 'admin', 'Two');
-
-      const replies: string[] = [];
-      await bot.commandHandler.execute('.delnote all', dccCtx('admin', replies));
-      expect(replies[0]).toContain('Deleted 2');
-      expect(memo.listNotesForHandle('admin')).toHaveLength(0);
-    });
-
-    it('.notes-purge purges notes for a handle (owner only)', async () => {
-      memo.storeNote('admin', 'master', 'One');
-      memo.storeNote('admin', 'master', 'Two');
-
-      const replies: string[] = [];
-      await bot.commandHandler.execute('.notes-purge master', dccCtx('admin', replies));
-      expect(replies[0]).toContain('Purged 2');
-      expect(memo.listNotesForHandle('master')).toHaveLength(0);
-    });
-
-    it('.notes-purge rejects unknown handle', async () => {
-      const replies: string[] = [];
-      await bot.commandHandler.execute('.notes-purge nobody', dccCtx('admin', replies));
-      expect(replies[0]).toContain('Unknown handle');
-    });
-
-    it('.notes-purge shows usage with no args', async () => {
-      const replies: string[] = [];
-      await bot.commandHandler.execute('.notes-purge', dccCtx('admin', replies));
+      expect(replies).toHaveLength(1);
       expect(replies[0]).toContain('Usage');
     });
 
-    it('.readnote shows usage with no args', async () => {
+    it('info → sends /msg MemoServ INFO', async () => {
+      memo = setupMemo(bot);
+      bot.client.messages.length = 0;
+
       const replies: string[] = [];
-      await bot.commandHandler.execute('.readnote', dccCtx('admin', replies));
-      expect(replies[0]).toContain('Usage');
+      await bot.commandHandler.execute('.memo info', dccCtx('admin', replies));
+
+      const says = bot.client.messages.filter((m) => m.type === 'say');
+      expect(says).toHaveLength(1);
+      expect(says[0].message).toBe('INFO');
     });
 
-    it('.delnote shows usage with invalid arg', async () => {
-      const replies: string[] = [];
-      await bot.commandHandler.execute('.delnote xyz', dccCtx('admin', replies));
-      expect(replies[0]).toContain('Usage');
-    });
-
-    it('.delnote rejects note belonging to another user', async () => {
-      const result = memo.storeNote('admin', 'master', 'Not yours');
-      const id = (result as { id: number }).id;
+    it('unknown subcommand → shows error', async () => {
+      memo = setupMemo(bot);
 
       const replies: string[] = [];
-      await bot.commandHandler.execute(`.delnote ${id}`, dccCtx('admin', replies));
-      expect(replies[0]).toContain('not found');
-    });
+      await bot.commandHandler.execute('.memo bogus', dccCtx('admin', replies));
 
-    it('.note rejects when message exceeds max_note_length', async () => {
-      memo.detach();
-      memo = setupMemo(bot, { max_note_length: 5 });
-      const replies: string[] = [];
-      await bot.commandHandler.execute('.note master This is too long', dccCtx('admin', replies));
-      expect(replies[0]).toContain('too long');
-    });
-
-    it('.note works from IRC source with hostmask resolution', async () => {
-      const replies: string[] = [];
-      const ircCtx: CommandContext = {
-        source: 'irc',
-        nick: 'admin',
-        ident: 'user',
-        hostname: 'host',
-        channel: '#test',
-        reply(msg: string) {
-          replies.push(msg);
-        },
-      };
-      // Need to bypass permission check — use execute directly
-      // The IRC source path in resolveCallerHandle uses findByHostmask
-      await bot.commandHandler.execute('.note master Hello from IRC', ircCtx);
-      // Will get "Permission denied" because IRC source checks flags,
-      // but this exercises the IRC path in resolveCallerHandle
+      expect(replies).toHaveLength(1);
+      expect(replies[0]).toContain('Unknown memo subcommand');
     });
   });
 
   // -------------------------------------------------------------------------
-  // Public IRC commands
+  // Response capture
   // -------------------------------------------------------------------------
 
-  describe('IRC commands', () => {
-    beforeEach(() => {
+  describe('Response capture', () => {
+    it('captures MemoServ response and delivers to requesting session', async () => {
+      memo = setupMemo(bot);
+
+      const replies: string[] = [];
+      await bot.commandHandler.execute('.memo list', dccCtx('admin', replies));
+
+      // Simulate MemoServ response
+      sendNotice(bot, 'MemoServ', 'Memos for HEX:');
+      sendNotice(bot, 'MemoServ', '  1  d3m0n`  Apr 06 2026 [unread]');
+      sendNotice(bot, 'MemoServ', 'End of memo list.');
+
+      // Advance past the response timeout
+      vi.advanceTimersByTime(3000);
+
+      expect(replies).toHaveLength(3);
+      expect(replies[0]).toContain('[MemoServ] Memos for HEX:');
+      expect(replies[1]).toContain('d3m0n`');
+      expect(replies[2]).toContain('End of memo list.');
+    });
+
+    it('buffers multi-line responses', async () => {
+      memo = setupMemo(bot);
+
+      const replies: string[] = [];
+      await bot.commandHandler.execute('.memo read', dccCtx('admin', replies));
+
+      sendNotice(bot, 'MemoServ', 'Memo 1 from d3m0n` (Apr 06 2026).');
+      sendNotice(bot, 'MemoServ', 'Hello world!');
+
+      vi.advanceTimersByTime(3000);
+
+      expect(replies).toHaveLength(2);
+      expect(replies[0]).toContain('Memo 1');
+      expect(replies[1]).toContain('Hello world!');
+    });
+
+    it('delivers "No response" on timeout with empty buffer', async () => {
+      memo = setupMemo(bot);
+
+      const replies: string[] = [];
+      await bot.commandHandler.execute('.memo info', dccCtx('admin', replies));
+
+      // No MemoServ response arrives
+      vi.advanceTimersByTime(3000);
+
+      expect(replies).toHaveLength(1);
+      expect(replies[0]).toContain('No response from MemoServ');
+    });
+
+    it('rejects concurrent requests', async () => {
+      memo = setupMemo(bot);
+
+      const replies1: string[] = [];
+      await bot.commandHandler.execute('.memo list', dccCtx('admin', replies1));
+
+      const replies2: string[] = [];
+      await bot.commandHandler.execute('.memo read', dccCtx('master', replies2));
+
+      expect(replies2).toHaveLength(1);
+      expect(replies2[0]).toContain('MemoServ request in progress');
+
+      // Clean up the first request
+      vi.advanceTimersByTime(3000);
+    });
+
+    it('does not relay captured responses to other admins', async () => {
       memo = setupMemo(bot);
       joinChannel(bot, 'admin', '#test');
       joinChannel(bot, 'master', '#test');
-    });
+      bot.client.messages.length = 0;
 
-    it('!memo stores a note by handle', () => {
-      bot.client.clearMessages();
-      bot.client.simulateEvent('privmsg', {
-        nick: 'admin',
-        ident: 'user',
-        hostname: 'host',
-        target: '#test',
-        message: '!memo master Check the logs',
-      });
+      const replies: string[] = [];
+      await bot.commandHandler.execute('.memo list', dccCtx('admin', replies));
 
-      const notes = memo.listNotesForHandle('master');
-      expect(notes).toHaveLength(1);
-      expect(notes[0].message).toBe('Check the logs');
-      expect(notes[0].from).toBe('admin');
+      sendNotice(bot, 'MemoServ', 'Memos for HEX:');
+      vi.advanceTimersByTime(3000);
 
-      // Reply was via NOTICE
+      // The response should go to the requesting session, NOT broadcast as notices
       const notices = bot.client.messages.filter((m) => m.type === 'notice');
-      expect(notices.length).toBeGreaterThanOrEqual(1);
-      expect(notices.some((n) => n.message!.includes('sent to master'))).toBe(true);
+      expect(notices).toHaveLength(0);
+      expect(replies).toHaveLength(1);
     });
 
-    it('!memo resolves nick to handle', () => {
-      bot.client.simulateEvent('privmsg', {
-        nick: 'admin',
-        ident: 'user',
-        hostname: 'host',
-        target: '#test',
-        message: '!memo master Via nick resolution',
-      });
+    it('resets timeout on each new line from MemoServ', async () => {
+      memo = setupMemo(bot);
 
-      const notes = memo.listNotesForHandle('master');
-      expect(notes).toHaveLength(1);
-    });
+      const replies: string[] = [];
+      await bot.commandHandler.execute('.memo list', dccCtx('admin', replies));
 
-    it('!memo rejects non-admin target', () => {
-      bot.permissions.addUser('regular', 'reg!user@host', 'o');
-      joinChannel(bot, 'reg', '#test', 'user', 'host');
-      bot.client.clearMessages();
+      sendNotice(bot, 'MemoServ', 'Line 1');
+      vi.advanceTimersByTime(2000); // Less than timeout
+      sendNotice(bot, 'MemoServ', 'Line 2');
+      vi.advanceTimersByTime(2000); // Less than timeout
+      sendNotice(bot, 'MemoServ', 'Line 3');
 
-      bot.client.simulateEvent('privmsg', {
-        nick: 'admin',
-        ident: 'user',
-        hostname: 'host',
-        target: '#test',
-        message: '!memo regular Hello',
-      });
+      // Not delivered yet — timer was reset
+      expect(replies).toHaveLength(0);
 
-      const notices = bot.client.messages.filter((m) => m.type === 'notice');
-      expect(notices.some((n) => n.message!.includes('No admin handle'))).toBe(true);
-    });
-
-    it('!memos lists unread notes via NOTICE', () => {
-      memo.storeNote('master', 'admin', 'Test note');
-      bot.client.clearMessages();
-
-      bot.client.simulateEvent('privmsg', {
-        nick: 'admin',
-        ident: 'user',
-        hostname: 'host',
-        target: '#test',
-        message: '!memos',
-      });
-
-      const notices = bot.client.messages.filter((m) => m.type === 'notice');
-      expect(notices.some((n) => n.message!.includes('1 unread'))).toBe(true);
-    });
-
-    it('!read reads a note and marks it read', () => {
-      const result = memo.storeNote('master', 'admin', 'Full content');
-      const id = (result as { id: number }).id;
-      bot.client.clearMessages();
-
-      bot.client.simulateEvent('privmsg', {
-        nick: 'admin',
-        ident: 'user',
-        hostname: 'host',
-        target: '#test',
-        message: `!read ${id}`,
-      });
-
-      const notices = bot.client.messages.filter((m) => m.type === 'notice');
-      expect(notices.some((n) => n.message!.includes('Full content'))).toBe(true);
-      expect(memo.getNote(id)!.read).toBe(true);
-    });
-
-    it('!delmemo deletes a note', () => {
-      const result = memo.storeNote('master', 'admin', 'Delete me');
-      const id = (result as { id: number }).id;
-      bot.client.clearMessages();
-
-      bot.client.simulateEvent('privmsg', {
-        nick: 'admin',
-        ident: 'user',
-        hostname: 'host',
-        target: '#test',
-        message: `!delmemo ${id}`,
-      });
-
-      expect(memo.getNote(id)).toBeNull();
-    });
-
-    it('!delmemo all deletes all notes', () => {
-      memo.storeNote('master', 'admin', 'One');
-      memo.storeNote('master', 'admin', 'Two');
-      bot.client.clearMessages();
-
-      bot.client.simulateEvent('privmsg', {
-        nick: 'admin',
-        ident: 'user',
-        hostname: 'host',
-        target: '#test',
-        message: '!delmemo all',
-      });
-
-      expect(memo.listNotesForHandle('admin')).toHaveLength(0);
-    });
-
-    it('!memo shows usage with no args', () => {
-      bot.client.clearMessages();
-      bot.client.simulateEvent('privmsg', {
-        nick: 'admin',
-        ident: 'user',
-        hostname: 'host',
-        target: '#test',
-        message: '!memo',
-      });
-
-      const notices = bot.client.messages.filter((m) => m.type === 'notice');
-      expect(notices.some((n) => n.message!.includes('Usage'))).toBe(true);
-    });
-
-    it('!memo resolves nick to handle via channel state', () => {
-      // Use a nick that doesn't match a handle name — force nick resolution path
-      bot.permissions.addUser('op-user', 'TheOp!op@secure.host', 'n');
-      joinChannel(bot, 'TheOp', '#test', 'op', 'secure.host');
-      bot.client.clearMessages();
-
-      bot.client.simulateEvent('privmsg', {
-        nick: 'admin',
-        ident: 'user',
-        hostname: 'host',
-        target: '#test',
-        message: '!memo TheOp Check this out',
-      });
-
-      const notes = memo.listNotesForHandle('op-user');
-      expect(notes).toHaveLength(1);
-      expect(notes[0].message).toBe('Check this out');
-    });
-
-    it('!memos shows no unread when empty', () => {
-      bot.client.clearMessages();
-      bot.client.simulateEvent('privmsg', {
-        nick: 'admin',
-        ident: 'user',
-        hostname: 'host',
-        target: '#test',
-        message: '!memos',
-      });
-
-      const notices = bot.client.messages.filter((m) => m.type === 'notice');
-      expect(notices.some((n) => n.message!.includes('No unread'))).toBe(true);
-    });
-
-    it('!read shows usage with no args', () => {
-      bot.client.clearMessages();
-      bot.client.simulateEvent('privmsg', {
-        nick: 'admin',
-        ident: 'user',
-        hostname: 'host',
-        target: '#test',
-        message: '!read',
-      });
-
-      const notices = bot.client.messages.filter((m) => m.type === 'notice');
-      expect(notices.some((n) => n.message!.includes('Usage'))).toBe(true);
-    });
-
-    it('!read rejects note belonging to another user', () => {
-      const result = memo.storeNote('admin', 'master', 'Not yours');
-      const id = (result as { id: number }).id;
-      bot.client.clearMessages();
-
-      bot.client.simulateEvent('privmsg', {
-        nick: 'admin',
-        ident: 'user',
-        hostname: 'host',
-        target: '#test',
-        message: `!read ${id}`,
-      });
-
-      const notices = bot.client.messages.filter((m) => m.type === 'notice');
-      expect(notices.some((n) => n.message!.includes('not found'))).toBe(true);
-    });
-
-    it('!delmemo shows usage with invalid arg', () => {
-      bot.client.clearMessages();
-      bot.client.simulateEvent('privmsg', {
-        nick: 'admin',
-        ident: 'user',
-        hostname: 'host',
-        target: '#test',
-        message: '!delmemo xyz',
-      });
-
-      const notices = bot.client.messages.filter((m) => m.type === 'notice');
-      expect(notices.some((n) => n.message!.includes('Usage'))).toBe(true);
-    });
-
-    it('!delmemo rejects note belonging to another user', () => {
-      const result = memo.storeNote('admin', 'master', 'Not yours');
-      const id = (result as { id: number }).id;
-      bot.client.clearMessages();
-
-      bot.client.simulateEvent('privmsg', {
-        nick: 'admin',
-        ident: 'user',
-        hostname: 'host',
-        target: '#test',
-        message: `!delmemo ${id}`,
-      });
-
-      const notices = bot.client.messages.filter((m) => m.type === 'notice');
-      expect(notices.some((n) => n.message!.includes('not found'))).toBe(true);
+      vi.advanceTimersByTime(3000); // Now timeout fires
+      expect(replies).toHaveLength(3);
     });
   });
 
@@ -729,64 +487,71 @@ describe('MemoManager', () => {
   // Join delivery
   // -------------------------------------------------------------------------
 
-  describe('join delivery', () => {
-    it('notifies admin with unread notes on join', () => {
-      memo = setupMemo(bot, { delivery_cooldown_seconds: 0 });
-      memo.storeNote('master', 'admin', 'You have mail');
-      bot.client.clearMessages();
+  describe('Join delivery', () => {
+    it('notifies admin with pending memos on join', () => {
+      memo = setupMemo(bot);
+      joinChannel(bot, 'admin', '#test'); // seed channel state
+      memo.pendingMemoCount = 2;
+      bot.client.messages.length = 0;
 
-      triggerJoin(bot, 'admin', '#test');
+      triggerJoin(bot, 'admin', '#other');
 
-      const notices = bot.client.messages.filter(
-        (m) => m.type === 'notice' && m.target === 'admin',
-      );
-      expect(notices.length).toBeGreaterThanOrEqual(1);
-      expect(notices.some((n) => n.message!.includes('unread note'))).toBe(true);
+      const notices = bot.client.messages.filter((m) => m.type === 'notice');
+      expect(notices).toHaveLength(1);
+      expect(notices[0].target).toBe('admin');
+      expect(notices[0].message).toContain('2 unread memo(s)');
+    });
+
+    it('does not notify when pendingMemoCount is 0', () => {
+      memo = setupMemo(bot);
+      joinChannel(bot, 'admin', '#test');
+      memo.pendingMemoCount = 0;
+      bot.client.messages.length = 0;
+
+      triggerJoin(bot, 'admin', '#other');
+
+      const notices = bot.client.messages.filter((m) => m.type === 'notice');
+      expect(notices).toHaveLength(0);
     });
 
     it('does not notify non-admin users', () => {
-      memo = setupMemo(bot, { delivery_cooldown_seconds: 0 });
-      bot.permissions.addUser('regular', 'reg!user@host', 'o');
-      memo.storeNote('admin', 'regular', 'Should not deliver');
-      bot.client.clearMessages();
+      memo = setupMemo(bot);
+      memo.pendingMemoCount = 5;
+      bot.permissions.addUser('regular', 'regular!user@host', 'o');
+      joinChannel(bot, 'regular', '#test');
+      bot.client.messages.length = 0;
 
-      triggerJoin(bot, 'reg', '#test', 'user', 'host');
+      triggerJoin(bot, 'regular', '#other');
 
-      const notices = bot.client.messages.filter((m) => m.type === 'notice' && m.target === 'reg');
+      const notices = bot.client.messages.filter((m) => m.type === 'notice');
       expect(notices).toHaveLength(0);
     });
 
-    it('does not notify when no unread notes', () => {
-      memo = setupMemo(bot, { delivery_cooldown_seconds: 0 });
-      bot.client.clearMessages();
-
-      triggerJoin(bot, 'admin', '#test');
-
-      const notices = bot.client.messages.filter(
-        (m) => m.type === 'notice' && m.target === 'admin',
-      );
-      expect(notices).toHaveLength(0);
-    });
-
-    it('respects delivery cooldown', () => {
+    it('respects cooldown between join notifications', () => {
       memo = setupMemo(bot, { delivery_cooldown_seconds: 60 });
-      memo.storeNote('master', 'admin', 'Note');
-      bot.client.clearMessages();
+      joinChannel(bot, 'admin', '#test');
+      memo.pendingMemoCount = 2;
+      bot.client.messages.length = 0;
 
-      // First join — should notify
-      triggerJoin(bot, 'admin', '#test');
-      const firstNotices = bot.client.messages.filter(
-        (m) => m.type === 'notice' && m.target === 'admin',
-      );
-      expect(firstNotices.length).toBeGreaterThanOrEqual(1);
+      triggerJoin(bot, 'admin', '#chan1');
 
-      // Second join within cooldown — should not notify
-      bot.client.clearMessages();
-      triggerJoin(bot, 'admin', '#other');
-      const secondNotices = bot.client.messages.filter(
-        (m) => m.type === 'notice' && m.target === 'admin',
-      );
-      expect(secondNotices).toHaveLength(0);
+      const first = bot.client.messages.filter((m) => m.type === 'notice');
+      expect(first).toHaveLength(1);
+      bot.client.messages.length = 0;
+
+      // Within cooldown
+      vi.advanceTimersByTime(10_000);
+      triggerJoin(bot, 'admin', '#chan2');
+
+      const second = bot.client.messages.filter((m) => m.type === 'notice');
+      expect(second).toHaveLength(0);
+
+      // After cooldown
+      vi.advanceTimersByTime(60_000);
+      triggerJoin(bot, 'admin', '#chan3');
+
+      const third = bot.client.messages.filter((m) => m.type === 'notice');
+      expect(third).toHaveLength(1);
     });
   });
 
@@ -795,59 +560,62 @@ describe('MemoManager', () => {
   // -------------------------------------------------------------------------
 
   describe('DCC connect notification', () => {
-    it('shows unread count on DCC connect', () => {
+    it('shows pending count on connect', () => {
       memo = setupMemo(bot);
-      memo.storeNote('master', 'admin', 'Test note');
+      memo.pendingMemoCount = 3;
 
       const lines: string[] = [];
-      const mockDcc: MemoDCCManager = {
-        announce: vi.fn(),
-        getSessionList: () => [{ handle: 'admin', nick: 'admin', connectedAt: Date.now() }],
-        getSession: () => ({ writeLine: (line: string) => lines.push(line) }),
+      const dcc: MemoDCCManager = {
+        announce: () => {},
+        getSessionList: () => [],
+        getSession: (nick) =>
+          nick === 'admin' ? { writeLine: (l: string) => lines.push(l) } : undefined,
       };
-      memo.setDCCManager(mockDcc);
+      memo.setDCCManager(dcc);
 
       memo.notifyOnDCCConnect('admin', 'admin');
+
       expect(lines).toHaveLength(1);
-      expect(lines[0]).toContain('1 unread note');
+      expect(lines[0]).toContain('3 unread memo(s)');
+      expect(lines[0]).toContain('.memo');
     });
 
-    it('does not notify when no unread notes', () => {
+    it('no message if pendingMemoCount is 0', () => {
       memo = setupMemo(bot);
+      memo.pendingMemoCount = 0;
+
       const lines: string[] = [];
-      const mockDcc: MemoDCCManager = {
-        announce: vi.fn(),
+      const dcc: MemoDCCManager = {
+        announce: () => {},
         getSessionList: () => [],
-        getSession: () => ({ writeLine: (line: string) => lines.push(line) }),
+        getSession: () => ({ writeLine: (l: string) => lines.push(l) }),
       };
-      memo.setDCCManager(mockDcc);
+      memo.setDCCManager(dcc);
 
       memo.notifyOnDCCConnect('admin', 'admin');
+
       expect(lines).toHaveLength(0);
     });
   });
 
   // -------------------------------------------------------------------------
-  // DCC console relay from MemoServ
+  // MemoServ DCC relay
   // -------------------------------------------------------------------------
 
   describe('MemoServ DCC relay', () => {
-    it('forwards MemoServ notices to DCC console', () => {
-      const announcements: string[] = [];
-      const mockDcc: MemoDCCManager = {
-        announce: (msg: string) => announcements.push(msg),
+    it('announces MemoServ notices to DCC sessions', () => {
+      memo = setupMemo(bot);
+      const announced: string[] = [];
+      memo.setDCCManager({
+        announce: (msg) => announced.push(msg),
         getSessionList: () => [],
         getSession: () => undefined,
-      };
+      });
 
-      memo = setupMemo(bot, { memoserv_relay: true, memoserv_nick: 'MemoServ' });
-      memo.setDCCManager(mockDcc);
+      sendNotice(bot, 'MemoServ', 'You have 1 new memo.');
 
-      sendNotice(bot, 'MemoServ', 'Your vhost has been approved.');
-
-      expect(announcements).toHaveLength(1);
-      expect(announcements[0]).toContain('[MemoServ]');
-      expect(announcements[0]).toContain('vhost');
+      expect(announced).toHaveLength(1);
+      expect(announced[0]).toContain('[MemoServ]');
     });
   });
 });

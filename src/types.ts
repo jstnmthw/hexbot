@@ -445,20 +445,16 @@ export interface ChanmodBotConfig {
   nick_recovery_password?: string;
 }
 
-/** Memo / notes system configuration. */
+/** Memo / MemoServ proxy configuration. */
 export interface MemoConfig {
   /** Enable MemoServ notice relay to online owners/masters. Default: true. */
   memoserv_relay?: boolean;
   /** Nick of the MemoServ service bot. Default: "MemoServ". */
   memoserv_nick?: string;
-  /** Maximum stored notes per recipient handle. Default: 50. */
-  max_notes_per_user?: number;
-  /** Maximum note body length in characters. Default: 400. */
-  max_note_length?: number;
-  /** Auto-expire notes older than this many days. 0 = never. Default: 90. */
-  max_age_days?: number;
   /** Cooldown in seconds between join-delivery notifications per user. Default: 60. */
   delivery_cooldown_seconds?: number;
+  /** How long (ms) to wait for MemoServ response after sending a command. Default: 3000. */
+  response_timeout_ms?: number;
 }
 
 /** Shape for config/bot.json. */

@@ -86,10 +86,8 @@
   "memo": {
     "memoserv_relay": true,
     "memoserv_nick": "MemoServ",
-    "max_notes_per_user": 50,
-    "max_note_length": 400,
-    "max_age_days": 90,
-    "delivery_cooldown_seconds": 60
+    "delivery_cooldown_seconds": 60,
+    "response_timeout_ms": 3000
   },
   "quit_message": "HexBot",
   "channel_rejoin_interval_ms": 30000

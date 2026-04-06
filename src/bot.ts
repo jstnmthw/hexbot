@@ -143,7 +143,6 @@ export class Bot {
     this.helpRegistry = new HelpRegistry();
     this.channelSettings = new ChannelSettings(this.db, this.logger.child('channel-settings'));
     this.memo = new MemoManager({
-      db: this.db,
       config: this.config.memo,
       dispatcher: this.dispatcher,
       commandHandler: this.commandHandler,
