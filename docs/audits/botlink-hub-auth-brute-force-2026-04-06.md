@@ -71,6 +71,20 @@ auth_window_ms?: number;         // default 60_000
 auth_ban_duration_ms?: number;   // default 300_000
 ```
 
+**Decisions:** Exact IP tracking (no prefix grouping). Ban duration doubles on each re-ban, capped at 24h to prevent integer overflow — tracker entry never resets, so a persistent scanner stays at the 24h ceiling indefinitely. Whitelisted CIDRs bypass the tracker entirely.
+
+**Recommended phased solution:**
+
+- [ ] Add `AuthTracker` interface and `authTracker: Map<string, AuthTracker>` to `BotLinkHub`
+- [ ] Read `socket.remoteAddress` in `handleConnection()`; skip tracker for IPs matching `auth_ip_whitelist` CIDRs
+- [ ] If IP is currently banned (`bannedUntil > Date.now()`), immediately destroy socket — no handshake, no scrypt
+- [ ] On auth failure in `handleHello()`, increment per-IP failure counter; ban after `max_auth_failures` within `auth_window_ms`
+- [ ] Escalating ban duration: double on each re-ban, cap at 24h, no reset (5m → 10m → 20m → … → 24h ceiling)
+- [ ] Add config knobs to `BotlinkConfig`: `max_auth_failures`, `auth_window_ms`, `auth_ban_duration_ms`, `auth_ip_whitelist`
+- [ ] Emit `auth:ban` and `auth:unban` events on the EventBus (IP, failure count, ban duration)
+- [ ] Periodic stale-entry sweep (prune expired non-escalated entries on each new connection)
+- [ ] Add tests: failure counting, ban enforcement, ban expiry, escalation doubling, whitelist bypass, EventBus emission, config overrides
+
 ---
 
 ### [WARNING] Auth failure logs omit source IP
@@ -103,6 +117,13 @@ Also log on successful auth:
 this.logger?.info(`Leaf "${botname}" connected from ${ip}`);
 ```
 
+**Recommended phased solution:**
+
+- [ ] Add `get remoteAddress()` getter to `BotLinkProtocol` exposing `this.socket.remoteAddress`
+- [ ] Include source IP in auth failure log: `Auth failed for "${botname}" from ${ip}`
+- [ ] Include source IP in auth success log: `Leaf "${botname}" connected from ${ip}`
+- [ ] Add tests verifying IP presence in log output
+
 ---
 
 ### [WARNING] Handshake timeout still costs resources during flood
@@ -119,6 +140,15 @@ The brute-force protection from the CRITICAL finding would partially mitigate th
 - The per-IP ban from the critical fix is the primary mitigation
 - Optionally add a `max_pending_handshakes` limit (default: 20) — reject new connections beyond this until pending ones time out or complete
 - Consider reducing `HANDSHAKE_TIMEOUT_MS` from 30s to 10s for the auth phase specifically (legitimate leaves should HELLO within milliseconds)
+
+**Decisions:** Per-IP pending handshake cap (not global). Handshake timeout configurable via config.
+
+**Recommended phased solution:**
+
+- [ ] (Covered by CRITICAL fix) Banned IPs dropped before handshake setup
+- [ ] Add per-IP `max_pending_handshakes` counter (default: 3) to `BotLinkHub`; reject new connections from the same IP when limit reached
+- [ ] Make handshake timeout configurable via `handshake_timeout_ms` in `BotlinkConfig`; reduce default to 10s
+- [ ] Add tests: per-IP pending handshake limit enforcement, timeout behavior, config override
 
 ---
 
@@ -138,6 +168,11 @@ private handleConnection(socket: Socket): void {
   // ... existing logic
 }
 ```
+
+**Recommended phased solution:**
+
+- [ ] Add `debug`-level log on connection accept: `New connection from ${ip}`
+- [ ] Add `debug`-level log on handshake timeout: `Handshake timeout for ${ip}`
 
 ## Passed checks
 

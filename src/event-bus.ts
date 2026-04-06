@@ -29,6 +29,8 @@ export interface BotEvents {
   'botlink:connected': [botname: string];
   'botlink:disconnected': [botname: string, reason: string];
   'botlink:syncComplete': [botname: string];
+  'auth:ban': [ip: string, failures: number, banDurationMs: number];
+  'auth:unban': [ip: string];
 }
 
 // ---------------------------------------------------------------------------

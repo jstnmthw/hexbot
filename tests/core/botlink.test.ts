@@ -292,6 +292,21 @@ describe('BotLinkProtocol', () => {
     expect(protocol.isClosed).toBe(true);
   });
 
+  it('exposes remoteAddress from the underlying socket', () => {
+    const { socket } = createMockSocket();
+    (socket as unknown as Record<string, unknown>).remoteAddress = '10.0.0.5';
+    const protocol = new BotLinkProtocol(socket, null);
+
+    expect(protocol.remoteAddress).toBe('10.0.0.5');
+  });
+
+  it('returns undefined remoteAddress when socket has none', () => {
+    const { socket } = createMockSocket();
+    const protocol = new BotLinkProtocol(socket, null);
+
+    expect(protocol.remoteAddress).toBeUndefined();
+  });
+
   // onError is a trivial passthrough — not tested directly because
   // Duplex streams throw on emit('error') in unit test contexts.
 });

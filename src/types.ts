@@ -421,6 +421,18 @@ export interface BotlinkConfig {
   sync_bans?: boolean;
   ping_interval_ms: number;
   link_timeout_ms: number;
+  /** Max auth failures per IP before temporary ban. Default: 5. */
+  max_auth_failures?: number;
+  /** Sliding window for counting auth failures (ms). Default: 60 000. */
+  auth_window_ms?: number;
+  /** Base ban duration after exceeding max_auth_failures (ms). Doubles on each re-ban, capped at 24h. Default: 300 000. */
+  auth_ban_duration_ms?: number;
+  /** CIDR strings whose IPs bypass auth rate limiting entirely. Default: []. */
+  auth_ip_whitelist?: string[];
+  /** Handshake timeout (ms). Default: 10 000 (reduced from former 30s). */
+  handshake_timeout_ms?: number;
+  /** Max concurrent unauthenticated connections per IP. Default: 3. */
+  max_pending_handshakes?: number;
 }
 
 /** Plugin-specific credentials stored in bot.json (not plugins.json) per SECURITY.md §6. */

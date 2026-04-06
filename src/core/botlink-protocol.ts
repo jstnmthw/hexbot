@@ -216,6 +216,10 @@ export class BotLinkProtocol {
   get isClosed(): boolean {
     return this.closed;
   }
+
+  get remoteAddress(): string | undefined {
+    return this.socket.remoteAddress;
+  }
 }
 
 // ---------------------------------------------------------------------------

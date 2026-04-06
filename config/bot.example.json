@@ -72,7 +72,13 @@
     "sync_channel_state": true,
     "sync_bans": true,
     "ping_interval_ms": 30000,
-    "link_timeout_ms": 90000
+    "link_timeout_ms": 90000,
+    "max_auth_failures": 5,
+    "auth_window_ms": 60000,
+    "auth_ban_duration_ms": 300000,
+    "auth_ip_whitelist": [],
+    "handshake_timeout_ms": 10000,
+    "max_pending_handshakes": 3
   },
   "chanmod": {
     "nick_recovery_password_env": "HEX_CHANMOD_RECOVERY_PASSWORD"

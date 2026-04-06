@@ -134,6 +134,12 @@ const BotlinkConfigOnDiskSchema = z.strictObject({
   sync_bans: z.boolean().optional(),
   ping_interval_ms: z.number(),
   link_timeout_ms: z.number(),
+  max_auth_failures: z.number().optional(),
+  auth_window_ms: z.number().optional(),
+  auth_ban_duration_ms: z.number().optional(),
+  auth_ip_whitelist: z.array(z.string()).optional(),
+  handshake_timeout_ms: z.number().optional(),
+  max_pending_handshakes: z.number().optional(),
 });
 
 const ChanmodBotConfigOnDiskSchema = z.strictObject({

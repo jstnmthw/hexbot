@@ -10,7 +10,6 @@ import type { BotlinkConfig } from '../types';
 import {
   BotLinkProtocol,
   type CommandRelay,
-  HANDSHAKE_TIMEOUT_MS,
   HUB_ONLY_FRAMES,
   type LinkFrame,
   type LinkPermissions,
@@ -38,6 +37,57 @@ interface LeafConnection {
   pingSeq: number;
 }
 
+interface AuthTracker {
+  failures: number;
+  firstFailure: number;
+  bannedUntil: number;
+  /** Number of times this IP has been banned — drives escalation doubling. */
+  banCount: number;
+}
+
+// ---------------------------------------------------------------------------
+// CIDR whitelist helper
+// ---------------------------------------------------------------------------
+
+/** Parse an IPv4 address into a 32-bit number. Returns NaN for invalid input. */
+function ipv4ToNum(ip: string): number {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return NaN;
+  let num = 0;
+  for (const p of parts) {
+    const octet = Number(p);
+    if (octet < 0 || octet > 255 || !Number.isInteger(octet)) return NaN;
+    num = (num << 8) | octet;
+  }
+  return num >>> 0; // unsigned
+}
+
+/** Normalize IPv6-mapped IPv4 (::ffff:10.0.0.1 → 10.0.0.1). Returns the input unchanged for pure IPv6/IPv4. */
+function normalizeIP(ip: string): string {
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+  return mapped ? mapped[1] : ip;
+}
+
+/** Check whether an IP matches any CIDR in the whitelist. IPv4 only (IPv6 CIDRs are ignored). */
+export function isWhitelisted(ip: string, cidrs: string[]): boolean {
+  const normalizedIP = normalizeIP(ip);
+  const ipNum = ipv4ToNum(normalizedIP);
+  if (Number.isNaN(ipNum)) return false; // non-IPv4 — not whitelisted
+
+  for (const cidr of cidrs) {
+    const slash = cidr.indexOf('/');
+    if (slash === -1) continue;
+    const baseIP = cidr.slice(0, slash);
+    const prefix = Number(cidr.slice(slash + 1));
+    if (prefix < 0 || prefix > 32 || !Number.isInteger(prefix)) continue;
+    const baseNum = ipv4ToNum(baseIP);
+    if (Number.isNaN(baseNum)) continue;
+    const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
+    if ((ipNum & mask) === (baseNum & mask)) return true;
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // BotLinkHub
 // ---------------------------------------------------------------------------
@@ -59,9 +109,12 @@ export class BotLinkHub {
   private config: BotlinkConfig;
   private version: string;
   private logger: Logger | null;
+  private eventBus: BotEventBus | null;
   private expectedHash: string;
   private pingIntervalMs: number;
   private linkTimeoutMs: number;
+  private authTracker: Map<string, AuthTracker> = new Map();
+  private pendingHandshakes: Map<string, number> = new Map();
 
   /** Fired when a leaf completes handshake. */
   onLeafConnected: ((botname: string) => void) | null = null;
@@ -74,10 +127,16 @@ export class BotLinkHub {
   /** Called when a BSAY frame targets this hub — the bot should send the IRC message. */
   onBsay: ((target: string, message: string) => void) | null = null;
 
-  constructor(config: BotlinkConfig, version: string, logger?: Logger | null) {
+  constructor(
+    config: BotlinkConfig,
+    version: string,
+    logger?: Logger | null,
+    eventBus?: BotEventBus | null,
+  ) {
     this.config = config;
     this.version = version;
     this.logger = logger?.child('botlink:hub') ?? null;
+    this.eventBus = eventBus ?? null;
     this.expectedHash = hashPassword(config.password);
     this.pingIntervalMs = config.ping_interval_ms;
     this.linkTimeoutMs = config.link_timeout_ms;
@@ -407,18 +466,60 @@ export class BotLinkHub {
   // -----------------------------------------------------------------------
 
   private handleConnection(socket: Socket): void {
+    const ip = socket.remoteAddress ?? 'unknown';
+    this.logger?.debug(`New connection from ${ip}`);
+
+    // Sweep stale auth tracker entries on each new connection
+    this.sweepStaleTrackers();
+
+    const whitelist = this.config.auth_ip_whitelist ?? [];
+    const whitelisted = ip !== 'unknown' && isWhitelisted(ip, whitelist);
+
+    // Ban check — immediately reject banned IPs before any protocol setup
+    // (no readline, no scrypt, no timer allocation)
+    if (!whitelisted && ip !== 'unknown') {
+      const tracker = this.authTracker.get(ip);
+      if (tracker && tracker.bannedUntil > Date.now()) {
+        this.logger?.debug(`Rejected banned IP ${ip}`);
+        socket.destroy();
+        return;
+      }
+    }
+
+    // Per-IP pending handshake limit — also checked before protocol setup
+    if (!whitelisted && ip !== 'unknown') {
+      const maxPending = this.config.max_pending_handshakes ?? 3;
+      const pending = this.pendingHandshakes.get(ip) ?? 0;
+      if (pending >= maxPending) {
+        this.logger?.debug(`Pending handshake limit reached for ${ip}`);
+        socket.destroy();
+        return;
+      }
+      this.pendingHandshakes.set(ip, pending + 1);
+    }
+
+    // Past the early-reject gates — create the protocol wrapper (readline, frame parsing)
     const protocol = new BotLinkProtocol(socket, this.logger);
     let authenticated = false;
 
-    // Handshake timeout
+    const decrementPending = (): void => {
+      if (whitelisted || ip === 'unknown') return;
+      const cur = this.pendingHandshakes.get(ip) ?? 0;
+      if (cur <= 1) this.pendingHandshakes.delete(ip);
+      else this.pendingHandshakes.set(ip, cur - 1);
+    };
+
+    // Handshake timeout — configurable, default 10s (was 30s)
+    const timeoutMs = this.config.handshake_timeout_ms ?? 10_000;
     const timer = setTimeout(() => {
       /* v8 ignore next -- timer fires after fast handshake completes in tests; guards real-network timeouts */
       if (!authenticated) {
-        this.logger?.warn('Handshake timeout');
+        this.logger?.warn(`Handshake timeout from ${ip}`);
         protocol.send({ type: 'ERROR', code: 'TIMEOUT', message: 'Handshake timeout' });
         protocol.close();
+        decrementPending();
       }
-    }, HANDSHAKE_TIMEOUT_MS);
+    }, timeoutMs);
 
     protocol.onFrame = (frame) => {
       /* v8 ignore next -- after HELLO is processed, onFrame is immediately replaced; second frame can't reach here */
@@ -428,27 +529,42 @@ export class BotLinkHub {
         protocol.send({ type: 'ERROR', code: 'PROTOCOL', message: 'Expected HELLO' });
         protocol.close();
         clearTimeout(timer);
+        decrementPending();
         return;
       }
 
       clearTimeout(timer);
       authenticated = true;
-      this.handleHello(protocol, frame);
+      decrementPending();
+      this.handleHello(protocol, frame, ip, whitelisted);
     };
 
-    protocol.onClose = () => clearTimeout(timer);
+    protocol.onClose = () => {
+      clearTimeout(timer);
+      if (!authenticated) decrementPending();
+    };
     protocol.onError = () => {};
   }
 
-  private handleHello(protocol: BotLinkProtocol, frame: LinkFrame): void {
+  private handleHello(
+    protocol: BotLinkProtocol,
+    frame: LinkFrame,
+    ip: string,
+    whitelisted: boolean,
+  ): void {
     const botname = String(frame.botname ?? '');
     const password = String(frame.password ?? '');
 
     // Auth check — password field is NEVER logged
     if (password !== this.expectedHash) {
-      this.logger?.warn(`Auth failed for "${botname}"`);
+      this.logger?.warn(`Auth failed for "${botname}" from ${ip}`);
       protocol.send({ type: 'ERROR', code: 'AUTH_FAILED', message: 'Bad password' });
       protocol.close();
+
+      // Track auth failure for rate limiting (whitelisted IPs are exempt)
+      if (!whitelisted && ip !== 'unknown') {
+        this.recordAuthFailure(ip);
+      }
       return;
     }
 
@@ -473,6 +589,14 @@ export class BotLinkHub {
       protocol.send({ type: 'ERROR', code: 'FULL', message: 'Hub at max capacity' });
       protocol.close();
       return;
+    }
+
+    // Successful auth — clear failure count but preserve banCount for escalation
+    if (!whitelisted && ip !== 'unknown') {
+      const tracker = this.authTracker.get(ip);
+      if (tracker) {
+        tracker.failures = 0;
+      }
     }
 
     // Accept the leaf
@@ -509,8 +633,59 @@ export class BotLinkHub {
     // Start heartbeat
     this.startHeartbeat(conn);
 
-    this.logger?.info(`Leaf "${botname}" connected`);
+    this.logger?.info(`Leaf "${botname}" connected from ${ip}`);
     this.onLeafConnected?.(botname);
+  }
+
+  // -----------------------------------------------------------------------
+  // Auth failure tracking
+  // -----------------------------------------------------------------------
+
+  private recordAuthFailure(ip: string): void {
+    const maxFailures = this.config.max_auth_failures ?? 5;
+    const windowMs = this.config.auth_window_ms ?? 60_000;
+    const baseBanMs = this.config.auth_ban_duration_ms ?? 300_000;
+    const MAX_BAN_MS = 86_400_000; // 24h cap to prevent overflow
+
+    const now = Date.now();
+    let tracker = this.authTracker.get(ip);
+
+    if (!tracker) {
+      tracker = { failures: 0, firstFailure: now, bannedUntil: 0, banCount: 0 };
+      this.authTracker.set(ip, tracker);
+    }
+
+    // Reset failure window if expired (but never reset banCount)
+    if (now - tracker.firstFailure > windowMs) {
+      tracker.failures = 0;
+      tracker.firstFailure = now;
+    }
+
+    tracker.failures++;
+
+    if (tracker.failures >= maxFailures) {
+      const banDuration = Math.min(baseBanMs * 2 ** tracker.banCount, MAX_BAN_MS);
+      tracker.bannedUntil = now + banDuration;
+      tracker.banCount++;
+      tracker.failures = 0;
+      this.logger?.warn(`IP ${ip} banned for ${banDuration}ms after ${maxFailures} auth failures`);
+      this.eventBus?.emit('auth:ban', ip, maxFailures, banDuration);
+    }
+  }
+
+  /** Prune expired auth tracker entries that have never been escalated and have no recent failures. */
+  private sweepStaleTrackers(): void {
+    const now = Date.now();
+    const windowMs = this.config.auth_window_ms ?? 60_000;
+    for (const [ip, tracker] of this.authTracker) {
+      if (
+        tracker.bannedUntil < now &&
+        tracker.banCount === 0 &&
+        now - tracker.firstFailure > windowMs
+      ) {
+        this.authTracker.delete(ip);
+      }
+    }
   }
 
   // -----------------------------------------------------------------------

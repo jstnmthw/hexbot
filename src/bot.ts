@@ -283,7 +283,7 @@ export class Bot {
 
       const version = this.readPackageVersion();
       if (this.config.botlink.role === 'hub') {
-        this._botLinkHub = new BotLinkHub(this.config.botlink, version, this.logger);
+        this._botLinkHub = new BotLinkHub(this.config.botlink, version, this.logger, this.eventBus);
         this._botLinkHub.setCommandRelay(this.commandHandler, this.permissions, this.eventBus);
         this._botLinkHub.onSyncRequest = (_botname, send) => {
           for (const f of ChannelStateSyncer.buildSyncFrames(this.channelState)) send(f);
