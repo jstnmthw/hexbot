@@ -53,6 +53,27 @@ When the score crosses a threshold and the threat level increases:
 
 Escalation only fires on level transitions (crossing upward). If the score is already at level 2 and another event keeps it at level 2, no new escalation occurs.
 
+### Escalation flow
+
+```mermaid
+flowchart TD
+    E[Hostile event detected] --> S[Add points to threat score]
+    S --> W{Window expired?}
+    W -- Yes --> R[Reset score to 0]
+    R --> S
+    W -- No --> L{Score crosses threshold?}
+    L -- No --> DONE[Wait for next event]
+    L -- "≥ 3 → Alert" --> OP[Request OP from ChanServ]
+    L -- "≥ 6 → Active" --> OP
+    OP --> UB{Level ≥ Active?}
+    UB -- Yes --> UNBAN[Request UNBAN]
+    UB -- No --> DONE
+    UNBAN --> CR{Level ≥ Critical?}
+    CR -- Yes --> REC[Request RECOVER]
+    CR -- No --> DONE
+    REC --> DONE
+```
+
 ## Recovery features
 
 When the bot regains ops during an elevated threat level (Alert or higher), it performs recovery actions. These are triggered by the bot receiving +o while the threat score is still elevated.
@@ -105,6 +126,50 @@ When the bot cannot join a channel (on startup, reconnect, or after being kicked
 When the bot fails to join a channel and has no known ChanServ access (no `chanserv_access` has been set, manually or via auto-detection), it sends a proactive access probe before giving up. If ChanServ responds with access information, the bot stores the detected tier and retries the recovery with backend assistance.
 
 This means a freshly configured bot that has never joined a channel can still recover from join errors, as long as the bot's nick has ChanServ access to that channel.
+
+### Recovery decision flow
+
+```mermaid
+flowchart TD
+    JE[Join error received] --> TYPE{Error type?}
+    TYPE -- "banned (474)" --> BAN{canUnban?}
+    TYPE -- "invite only (473)" --> INV{canInvite?}
+    TYPE -- "bad key (475)" --> KEY{canRemoveKey?}
+    TYPE -- "full (471)" --> FULL{canInvite?}
+    TYPE -- "need reg (477)" --> LOG[Log only]
+
+    BAN -- Yes --> UNBAN[UNBAN + INVITE + remove key]
+    BAN -- No --> PROBE{Access never set?}
+
+    INV -- Yes --> INVITE[INVITE]
+    INV -- No --> PROBE
+
+    KEY -- Yes --> RMKEY["Remove key + INVITE<br/>(Atheme: MODE -k / Anope: GETKEY)"]
+    KEY -- No --> CFGKEY{Configured key?}
+    CFGKEY -- Yes --> USEKEY[Join with configured key]
+    CFGKEY -- No --> PROBE
+
+    FULL -- Yes --> FULLINV[INVITE]
+    FULL -- No --> WAIT[Wait for periodic rejoin]
+
+    PROBE -- Yes --> SEND[Send ChanServ probe]
+    PROBE -- No --> GIVEUP[No remedy]
+    SEND --> PWAIT["Wait 11s for probe response"]
+    PWAIT --> DETECTED{Access detected?}
+    DETECTED -- Yes --> JE
+    DETECTED -- No --> GIVEUP
+
+    UNBAN --> DELAY[Wait 3s]
+    INVITE --> DELAY
+    RMKEY --> DELAY
+    FULLINV --> DELAY
+    USEKEY --> DELAY1[Wait 1s]
+    DELAY --> REJOIN[Rejoin channel]
+    DELAY1 --> REJOIN
+    REJOIN --> OK{Joined?}
+    OK -- Yes --> RESET[Reset backoff]
+    OK -- No --> BACKOFF[Double backoff<br/>30s → 60s → ... → 300s cap]
+```
 
 ### Exponential backoff
 
@@ -192,6 +257,29 @@ An attacker with ops kicks and bans the bot.
 4. After a short services processing delay, the bot rejoins and requests ChanServ OP.
 5. If `revenge` is enabled, the bot deops/kicks/kickbans the attacker after rejoining.
 
+**Sequence:**
+
+```mermaid
+sequenceDiagram
+    participant A as Attacker
+    participant C as #channel
+    participant B as HexBot
+    participant CS as ChanServ
+
+    A->>C: KICK HexBot
+    Note over B: bot_kicked +4 pts → Alert
+    B->>CS: UNBAN #channel
+    B->>CS: INVITE #channel
+    CS->>C: MODE -b *!*@hexbot.net
+    CS->>B: INVITE #channel
+    Note over B: Wait 3s (services delay)
+    B->>C: JOIN #channel
+    B->>CS: OP #channel HexBot
+    CS->>C: MODE +o HexBot
+    Note over B: revenge enabled?
+    B->>C: KICK Attacker :Don't kick me.
+```
+
 **Settings needed:**
 
 ```
@@ -230,6 +318,33 @@ An attacker deops multiple flagged users and the bot, attempting to seize the ch
 3. At Active, the bot also requests UNBAN (preemptive, in case a ban follows).
 4. If the attack continues and score reaches 10+, threat level hits Critical (3). The bot requests RECOVER.
 5. On regaining ops: mass re-op restores all flagged users, hostile response punishes attackers, topic is restored if vandalized.
+
+**Sequence:**
+
+```mermaid
+sequenceDiagram
+    participant A as Attacker
+    participant C as #channel
+    participant B as HexBot
+    participant CS as ChanServ
+
+    A->>C: MODE -o HexBot
+    Note over B: bot_deopped +3 → Alert (3)
+    B->>CS: OP #channel HexBot
+    A->>C: MODE -o User1
+    Note over B: friendly_deopped +2 → (5)
+    A->>C: MODE -o User2
+    Note over B: friendly_deopped +2 → Active (7)
+    B->>CS: UNBAN #channel
+    A->>C: MODE +b *!*@hexbot.net
+    Note over B: bot_banned +5 → Critical (12)
+    B->>CS: RECOVER #channel
+    CS->>C: MODE -o Attacker, +o HexBot, +im
+    Note over B: Bot opped at elevated threat
+    B->>C: MODE -im (post-RECOVER cleanup)
+    B->>C: MODE +o User1 +o User2 (mass re-op)
+    B->>C: KICKBAN Attacker (hostile response)
+```
 
 **Settings needed:**
 

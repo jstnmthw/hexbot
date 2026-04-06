@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createLogger } from '../src/logger';
+import { Logger, createLogger } from '../src/logger';
 
 describe('Logger', () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
@@ -12,6 +12,7 @@ describe('Logger', () => {
   });
 
   afterEach(() => {
+    Logger.setOutputHook(null);
     logSpy.mockRestore();
     errorSpy.mockRestore();
   });
@@ -248,6 +249,81 @@ describe('Logger', () => {
       // Should contain the extra args after the formatted parts
       expect(callArgs).toContain(obj);
       expect(callArgs).toContain(42);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Output hook
+  // -------------------------------------------------------------------------
+
+  describe('output hook', () => {
+    it('should route all output through the hook when set', () => {
+      const hook = vi.fn();
+      Logger.setOutputHook(hook);
+      const logger = createLogger('debug');
+
+      logger.info('hello');
+
+      expect(hook).toHaveBeenCalledTimes(1);
+      expect(hook.mock.calls[0][0]).toContain('INF');
+      expect(hook.mock.calls[0][0]).toContain('hello');
+      // console.log/error should NOT be called
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    it('should route error-level output through the hook too', () => {
+      const hook = vi.fn();
+      Logger.setOutputHook(hook);
+      const logger = createLogger('debug');
+
+      logger.error('boom');
+
+      expect(hook).toHaveBeenCalledTimes(1);
+      expect(hook.mock.calls[0][0]).toContain('ERR');
+      expect(hook.mock.calls[0][0]).toContain('boom');
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    it('should resume normal console output when hook is cleared', () => {
+      const hook = vi.fn();
+      Logger.setOutputHook(hook);
+      const logger = createLogger('info');
+
+      logger.info('hooked');
+      expect(hook).toHaveBeenCalledTimes(1);
+      expect(logSpy).not.toHaveBeenCalled();
+
+      Logger.setOutputHook(null);
+      logger.info('unhooked');
+      expect(hook).toHaveBeenCalledTimes(1); // no additional calls
+      expect(logSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should still respect level filtering with the hook', () => {
+      const hook = vi.fn();
+      Logger.setOutputHook(hook);
+      const logger = createLogger('warn');
+
+      logger.debug('hidden');
+      logger.info('hidden');
+      logger.warn('visible');
+
+      expect(hook).toHaveBeenCalledTimes(1);
+      expect(hook.mock.calls[0][0]).toContain('WRN');
+    });
+
+    it('should include the child prefix in hooked output', () => {
+      const hook = vi.fn();
+      Logger.setOutputHook(hook);
+      const logger = createLogger('info');
+      const child = logger.child('irc');
+
+      child.info('test');
+
+      expect(hook).toHaveBeenCalledTimes(1);
+      expect(hook.mock.calls[0][0]).toContain('[irc]');
+      expect(hook.mock.calls[0][0]).toContain('test');
     });
   });
 });

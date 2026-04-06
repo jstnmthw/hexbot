@@ -16,11 +16,13 @@ export class BotREPL {
   private bot: Bot;
   private rl: ReadlineInterface | null = null;
   private logger: Logger | null;
+  private ircLogger: Logger | null;
   private ircListeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
 
   constructor(bot: Bot, logger?: Logger | null) {
     this.bot = bot;
     this.logger = logger?.child('repl') ?? null;
+    this.ircLogger = logger?.child('irc') ?? null;
   }
 
   /** True while handleLine is executing — suppresses prompt redisplay in print(). */
@@ -46,8 +48,8 @@ export class BotREPL {
       prompt: 'hexbot> ',
     });
 
-    // Mirror incoming private messages and notices to the console so the
-    // operator can see responses from services (e.g. ChanServ, NickServ).
+    // Mirror incoming private messages and notices to the console via the
+    // logger so they get uniform timestamps/levels and respect level filtering.
     const onNotice = (event: unknown) => {
       const e = toEventObject(event);
       const nick = String(e.nick ?? '');
@@ -55,7 +57,7 @@ export class BotREPL {
       const message = String(e.message ?? '');
       // Only print notices sent directly to the bot (not channel notices)
       if (target && /^[#&]/.test(target)) return;
-      this.print(`-${sanitize(nick)}- ${sanitize(message)}`);
+      this.ircLogger?.debug(`-${sanitize(nick)}- ${sanitize(message)}`);
     };
     const onPrivmsg = (event: unknown) => {
       const e = toEventObject(event);
@@ -64,7 +66,7 @@ export class BotREPL {
       const message = String(e.message ?? '');
       // Only print private messages (not channel messages)
       if (target && /^[#&]/.test(target)) return;
-      this.print(`<${sanitize(nick)}> ${sanitize(message)}`);
+      this.ircLogger?.debug(`<${sanitize(nick)}> ${sanitize(message)}`);
     };
 
     this.bot.client.on('notice', onNotice);

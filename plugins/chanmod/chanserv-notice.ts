@@ -120,7 +120,6 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
     if (api.ircLower(ctx.nick) !== api.ircLower(csNick)) return;
 
     const text = ctx.text;
-    api.debug(`ChanServ notice: ${text}`);
 
     if (isAtheme) {
       handleAthemeNotice(api, backend as AthemeBackend, probeState, text);
