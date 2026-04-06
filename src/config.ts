@@ -146,6 +146,15 @@ const ChanmodBotConfigOnDiskSchema = z.strictObject({
   nick_recovery_password_env: z.string().optional(),
 });
 
+const MemoConfigSchema = z.strictObject({
+  memoserv_relay: z.boolean().optional(),
+  memoserv_nick: z.string().optional(),
+  max_notes_per_user: z.number().int().positive().optional(),
+  max_note_length: z.number().int().positive().optional(),
+  max_age_days: z.number().int().min(0).optional(),
+  delivery_cooldown_seconds: z.number().int().min(0).optional(),
+});
+
 export const BotConfigOnDiskSchema = z.strictObject({
   irc: IrcConfigOnDiskSchema,
   owner: OwnerConfigSchema,
@@ -163,6 +172,7 @@ export const BotConfigOnDiskSchema = z.strictObject({
   quit_message: z.string().optional(),
   channel_rejoin_interval_ms: z.number().optional(),
   chanmod: ChanmodBotConfigOnDiskSchema.optional(),
+  memo: MemoConfigSchema.optional(),
 });
 
 // Compile-time guard: if BotConfigOnDisk (types.ts) drifts from the schema

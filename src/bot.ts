@@ -36,6 +36,7 @@ import {
 import { DCCManager } from './core/dcc';
 import { HelpRegistry } from './core/help-registry';
 import { IRCCommands } from './core/irc-commands';
+import { MemoManager } from './core/memo';
 import { MessageQueue } from './core/message-queue';
 import { Permissions } from './core/permissions';
 import { Services } from './core/services';
@@ -73,6 +74,7 @@ export class Bot {
   readonly messageQueue: MessageQueue;
   readonly services: Services;
   readonly helpRegistry: HelpRegistry;
+  readonly memo: MemoManager;
 
   private bridge: IRCBridge | null = null;
   private _dccManager: DCCManager | null = null;
@@ -140,6 +142,16 @@ export class Bot {
     });
     this.helpRegistry = new HelpRegistry();
     this.channelSettings = new ChannelSettings(this.db, this.logger.child('channel-settings'));
+    this.memo = new MemoManager({
+      db: this.db,
+      config: this.config.memo,
+      dispatcher: this.dispatcher,
+      commandHandler: this.commandHandler,
+      permissions: this.permissions,
+      channelState: this.channelState,
+      client: this.client,
+      logger: this.logger,
+    });
 
     // Wire verification provider: gates privileged dispatch on NickServ identity.
     // Uses the live account map from account-notify/extended-join (fast path),
@@ -264,6 +276,12 @@ export class Bot {
       this.botLogger.info('DCC CHAT enabled');
     }
 
+    // 6b. Attach memo system (after DCC so it can deliver to console)
+    if (this._dccManager) {
+      this.memo.setDCCManager(this._dccManager);
+    }
+    this.memo.attach();
+
     // 7. Start bot link (if configured)
     if (this.config.botlink?.enabled) {
       // Register the 'shared' per-channel setting for ban sync
@@ -349,6 +367,15 @@ export class Bot {
       (target, message) => this.client.say(target, message),
     );
 
+    // 7b. Wire memo DCC-connect notification (after botlink may have set onPartyJoin)
+    if (this._dccManager) {
+      const prevOnPartyJoin = this._dccManager.onPartyJoin;
+      this._dccManager.onPartyJoin = (handle, nick) => {
+        prevOnPartyJoin?.(handle, nick);
+        this.memo.notifyOnDCCConnect(handle, nick);
+      };
+    }
+
     // 8. Load plugins (sets up binds before connection so all handlers are
     //    ready when the server starts sending JOIN/MODE/etc responses)
     await this.pluginLoader.loadAll(
@@ -387,6 +414,7 @@ export class Bot {
       this._dccManager = null;
     }
 
+    this.memo.detach();
     this.services.detach();
     this.channelState.detach();
 
@@ -430,6 +458,7 @@ export class Bot {
             this.dispatcher.setCasemapping(cm);
             this.services.setCasemapping(cm);
             if (this._dccManager) this._dccManager.setCasemapping(cm);
+            this.memo.setCasemapping(cm);
           },
           messageQueue: this.messageQueue,
           dispatcher: this.dispatcher,
