@@ -46,7 +46,7 @@ hexbot> .flags yourhandle
 
 ## Setup
 
-### 1. Find your public IP
+### 1. Find your bot's public IP
 
 The bot's `ip` field must be the address your server is reachable on from the internet:
 
@@ -64,14 +64,14 @@ Open the port range you configure in `bot.json` so incoming connections can reac
 
 ```bash
 # ufw (Ubuntu/Debian)
-sudo ufw allow 50000:50010/tcp
+sudo ufw allow 49152:49171/tcp
 
 # firewalld (RHEL/Fedora)
-sudo firewall-cmd --permanent --add-port=50000-50010/tcp
+sudo firewall-cmd --permanent --add-port=49152-49171/tcp
 sudo firewall-cmd --reload
 
 # raw iptables
-sudo iptables -A INPUT -p tcp --dport 50000:50010 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 49152:49171 -j ACCEPT
 ```
 
 ### 3. Configure `config/bot.json`
@@ -80,7 +80,7 @@ sudo iptables -A INPUT -p tcp --dport 50000:50010 -j ACCEPT
 "dcc": {
   "enabled": true,
   "ip": "203.0.113.42",
-  "port_range": [50000, 50010],
+  "port_range": [49152, 49171],
   "require_flags": "m",
   "max_sessions": 5,
   "idle_timeout_ms": 300000,
@@ -229,7 +229,7 @@ The bot opens a TCP port and waits 30 seconds for your client to connect. If you
 
 1. Confirm the bot's `ip` is the correct **public** IP (not a private/internal address).
 2. Confirm the firewall allows inbound TCP on the configured port range.
-3. Test reachability: `nc -zv <bot-ip> 50000` from your machine. If it times out, it's a firewall/routing issue, not a bot issue.
+3. Test reachability: `nc -zv <bot-ip> 49152` from your machine. If it times out, it's a firewall/routing issue, not a bot issue.
 4. Check if the bot is behind a NAT (e.g., cloud VM with a private IP that maps to a public IP) — in that case, the `ip` field must be the **external** public IP, not the private one shown by `ip addr`.
 
 ### Client connects but immediately disconnects
