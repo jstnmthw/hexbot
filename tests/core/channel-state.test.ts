@@ -1477,6 +1477,97 @@ describe('ChannelState', () => {
   });
 
   // -------------------------------------------------------------------------
+  // IRCv3 away-notify (§A.2)
+  // -------------------------------------------------------------------------
+
+  describe('away-notify tracking', () => {
+    beforeEach(() => {
+      client.simulateEvent('join', {
+        nick: 'Bob',
+        ident: 'bob',
+        hostname: 'host',
+        channel: '#chan1',
+      });
+      client.simulateEvent('join', {
+        nick: 'Bob',
+        ident: 'bob',
+        hostname: 'host',
+        channel: '#chan2',
+      });
+    });
+
+    it('marks the user as away across every channel they share with the bot', () => {
+      client.simulateEvent('away', { nick: 'Bob', message: 'lunch' });
+      expect(state.getUser('#chan1', 'Bob')?.away).toBe(true);
+      expect(state.getUser('#chan1', 'Bob')?.awayMessage).toBe('lunch');
+      expect(state.getUser('#chan2', 'Bob')?.away).toBe(true);
+    });
+
+    it('clears the away flag on the `back` event (RPL_UNAWAY / empty AWAY)', () => {
+      client.simulateEvent('away', { nick: 'Bob', message: 'brb' });
+      client.simulateEvent('back', { nick: 'Bob', message: '' });
+      expect(state.getUser('#chan1', 'Bob')?.away).toBe(false);
+      expect(state.getUser('#chan1', 'Bob')?.awayMessage).toBeUndefined();
+    });
+
+    it('emits channel:awayChanged for every affected channel', () => {
+      const events: Array<[string, string, boolean]> = [];
+      eventBus.on('channel:awayChanged', (ch, nick, away) => {
+        events.push([ch, nick, away]);
+      });
+      client.simulateEvent('away', { nick: 'Bob', message: 'bbl' });
+      expect(events).toEqual([
+        ['#chan1', 'Bob', true],
+        ['#chan2', 'Bob', true],
+      ]);
+    });
+
+    it('ignores away events for users we do not track', () => {
+      const events: Array<[string, string, boolean]> = [];
+      eventBus.on('channel:awayChanged', (ch, nick, away) => {
+        events.push([ch, nick, away]);
+      });
+      client.simulateEvent('away', { nick: 'Eve', message: 'lurking' });
+      expect(events).toEqual([]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Account-tag pushed from irc-bridge (§A.2)
+  // -------------------------------------------------------------------------
+
+  describe('setAccountForNick', () => {
+    it('stores the account in networkAccounts and on per-channel UserInfo', () => {
+      client.simulateEvent('join', {
+        nick: 'Carol',
+        ident: 'c',
+        hostname: 'host',
+        channel: '#test',
+      });
+      state.setAccountForNick('Carol', 'CarolAcct');
+      expect(state.getAccountForNick('Carol')).toBe('CarolAcct');
+      expect(state.getUser('#test', 'Carol')?.accountName).toBe('CarolAcct');
+    });
+
+    it('updates the account when a later tag contradicts the earlier value', () => {
+      client.simulateEvent('join', {
+        nick: 'Carol',
+        ident: 'c',
+        hostname: 'host',
+        channel: '#test',
+      });
+      state.setAccountForNick('Carol', 'OldAcct');
+      state.setAccountForNick('Carol', 'NewAcct');
+      expect(state.getAccountForNick('Carol')).toBe('NewAcct');
+    });
+
+    it('stores null when a tag explicitly says the user is unidentified', () => {
+      state.setAccountForNick('Dave', null);
+      expect(state.getAccountForNick('Dave')).toBeNull();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // `+l` NaN guard (§3)
   // -------------------------------------------------------------------------
 

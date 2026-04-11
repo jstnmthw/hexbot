@@ -82,6 +82,17 @@ export interface BaseHandlerContext {
   /** Hostname of the user who triggered this event. */
   hostname: string;
   /**
+   * Services account name for the triggering user, when IRCv3 `account-tag`
+   * was present on the inbound message.
+   * - `string`    — authoritative: server confirmed this account sent the message
+   * - `null`      — authoritative: server confirmed the sender is not identified
+   * - `undefined` — tag not available (no account-tag cap, non-PRIVMSG event,
+   *                 or server didn't include the tag on this message)
+   * Plugin authors should treat a defined value as safer than a WHOIS / ACC
+   * round-trip and an undefined value as "unknown, fall back to other signals".
+   */
+  account?: string | null;
+  /**
    * Raw message text (for `pub`/`msg`/`pubm`/`msgm`: includes IRC formatting codes).
    * For non-message events, a synthetic string — see table above.
    */
@@ -432,12 +443,20 @@ export interface ChannelUser {
   /** Unix timestamp (ms) of when the user joined. */
   joinedAt: number;
   /**
-   * Services account name from IRCv3 `account-notify` / `extended-join`.
+   * Services account name from IRCv3 `account-notify` / `extended-join` /
+   * `account-tag`.
    * - `string`    — nick is identified as this account
    * - `null`      — nick is known NOT to be identified
-   * - `undefined` — no account-notify/extended-join data available for this user
+   * - `undefined` — no account data available for this user
    */
   accountName?: string | null;
+  /**
+   * Away state from IRCv3 `away-notify`.
+   * - `true`      — user has set an AWAY message
+   * - `false`     — user is explicitly back
+   * - `undefined` — no away-notify data received yet for this user
+   */
+  away?: boolean;
 }
 
 /** State for a single channel (plugin-facing view). */

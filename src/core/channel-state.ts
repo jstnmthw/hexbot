@@ -26,6 +26,15 @@ export interface UserInfo {
   joinedAt: Date;
   /** Services account name. null = known not identified. undefined = unknown (no account-notify/extended-join data). */
   accountName?: string | null;
+  /**
+   * Away state from IRCv3 `away-notify`.
+   * - `true`      — user has set an AWAY message
+   * - `false`     — user is explicitly back (RPL_UNAWAY / zero-length AWAY)
+   * - `undefined` — no away-notify data received yet
+   */
+  away?: boolean;
+  /** Last-known away reason, if the network advertised one. */
+  awayMessage?: string;
 }
 
 export interface ChannelInfo {
@@ -85,6 +94,11 @@ export class ChannelState {
     this.listen('account', this.onAccount.bind(this));
     // IRCv3: chghost (fires when a user's ident/hostname changes — requires enable_chghost: true)
     this.listen('user updated', this.onUserUpdated.bind(this));
+    // IRCv3: away-notify. irc-framework splits AWAY into 'away' (user set a
+    // message) and 'back' (user cleared it). We track both so plugins can
+    // ask "is this user away?" without a WHOIS round-trip.
+    this.listen('away', (event) => this.onAway(event, true));
+    this.listen('back', (event) => this.onAway(event, false));
     this.logger?.info('Attached to IRC client');
   }
 
@@ -167,6 +181,26 @@ export class ChannelState {
     const lower = ircLower(nick, this.casemapping);
     if (!this.networkAccounts.has(lower)) return undefined;
     return this.networkAccounts.get(lower);
+  }
+
+  /**
+   * Update the network-wide account map from a source outside the event
+   * stream — currently only `irc-bridge` when consuming the IRCv3
+   * `account-tag` on an incoming PRIVMSG. Centralising this here keeps the
+   * dispatcher's verification fast-path uniform regardless of which cap
+   * delivered the account data.
+   */
+  setAccountForNick(nick: string, account: string | null): void {
+    const lower = ircLower(nick, this.casemapping);
+    const previous = this.networkAccounts.get(lower);
+    if (previous === account) return;
+    this.networkAccounts.set(lower, account);
+    // Mirror the change onto any per-channel UserInfo records so plugin code
+    // reading `user.accountName` sees the same value as the dispatcher.
+    for (const ch of this.channels.values()) {
+      const user = ch.users.get(lower);
+      if (user) user.accountName = account;
+    }
   }
 
   getUserModes(channel: string, nick: string): string[] {
@@ -459,6 +493,33 @@ export class ChannelState {
       this.logger?.debug(`account-notify: ${nick} identified as ${accountName}`);
     } else {
       this.logger?.debug(`account-notify: ${nick} deidentified`);
+    }
+  }
+
+  /**
+   * IRCv3 away-notify. `isAway` is true on `AWAY :reason`, false on `AWAY`
+   * (no reason) / RPL_UNAWAY. Applies to every channel the user is in —
+   * away state is a network-wide property so we fan out to all channels
+   * that know about the nick, matching what account-notify does.
+   */
+  private onAway(event: Record<string, unknown>, isAway: boolean): void {
+    const nick = String(event.nick ?? '');
+    if (!nick) return;
+    const message = typeof event.message === 'string' ? event.message : '';
+    const lower = ircLower(nick, this.casemapping);
+
+    let touched = false;
+    for (const ch of this.channels.values()) {
+      const user = ch.users.get(lower);
+      if (!user) continue;
+      user.away = isAway;
+      user.awayMessage = isAway ? message : undefined;
+      touched = true;
+      this.eventBus.emit('channel:awayChanged', ch.name, nick, isAway);
+    }
+
+    if (touched) {
+      this.logger?.debug(`away-notify: ${nick} is ${isAway ? 'away' : 'back'}`);
     }
   }
 

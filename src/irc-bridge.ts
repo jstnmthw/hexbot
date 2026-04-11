@@ -27,6 +27,8 @@ export interface IRCClient {
 
 interface ChannelStateProvider {
   getUserHostmask(channel: string, nick: string): string | undefined;
+  /** Optional: push an account mapping discovered via IRCv3 `account-tag`. */
+  setAccountForNick?(nick: string, account: string | null): void;
 }
 
 interface IRCBridgeOptions {
@@ -44,6 +46,57 @@ interface IRCBridgeOptions {
 
 /** Duration after attach() during which topic events are suppressed (server join burst). */
 const STARTUP_GRACE_MS = 5000;
+
+// IRCv3 caps that irc-framework requests on our behalf but we deliberately
+// do NOT consume here:
+//
+// - `server-time`: surfaced as `event.time` on every message. Hexbot uses
+//   wall-clock time for ban expiry and mod-log timestamps; replaying a
+//   bouncer's `chathistory` window would mistime these, but we don't
+//   consume chathistory either, so there's nothing to mis-time. Plugins
+//   that care (relay bridges, log stores) can read `event.time` off the
+//   raw irc-framework event directly until we ship a consumer.
+// - `batch`: surfaced as `event.batch`. Relevant for netsplit QUIT
+//   bundles and chathistory replay. Hexbot treats every event as
+//   independent, which produces extra noise during a netsplit but is
+//   correct behaviourally. Revisit if we add a relay/log plugin that
+//   needs batch boundaries.
+// - `echo-message`: irc-framework gates this behind `enable_echomessage`.
+//   Leaving it off means our own PRIVMSGs don't come back — plugins
+//   wanting reply confirmation must track sends client-side.
+//
+// See docs/audits/irc-logic-2026-04-11.md §A.2 for the full capability
+// survey that motivated this set of tradeoffs.
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Pull the IRCv3 `account-tag` off an irc-framework event object, if the
+ * server attached one. Returns:
+ *   - `undefined` — tag not present (cap not negotiated, or server didn't send it)
+ *   - `null`      — tag present but the sender is not identified
+ *   - `string`    — the authoritative services account name
+ *
+ * irc-framework exposes `account` at the top level of the emitted event
+ * (see `messaging.js` handler) and mirrors the raw IRCv3 tag map on
+ * `event.tags`. We check the top-level field first and fall back to the
+ * tag map for robustness against future event-shape changes.
+ */
+function extractAccountTag(event: Record<string, unknown>): string | null | undefined {
+  const direct = event.account;
+  if (direct === '*' || direct === null) return null;
+  if (typeof direct === 'string' && direct.length > 0) return direct;
+
+  const tags = event.tags;
+  if (tags && typeof tags === 'object') {
+    const tagAccount = (tags as Record<string, unknown>).account;
+    if (tagAccount === '*' || tagAccount === null) return null;
+    if (typeof tagAccount === 'string' && tagAccount.length > 0) return tagAccount;
+  }
+  return undefined;
+}
 
 // ---------------------------------------------------------------------------
 // IRCBridge
@@ -152,6 +205,17 @@ export class IRCBridge {
     const isChannel = this.isValidChannel(target);
     const channel = isChannel ? target : null;
 
+    // IRCv3 account-tag: irc-framework surfaces the raw `account=<name>` tag
+    // value as `event.account` on every PRIVMSG from a user whose network
+    // supports the cap. A missing/undefined value means the tag wasn't
+    // present on this message — NOT that the user is unidentified.
+    const account = extractAccountTag(event);
+    if (account !== undefined && nick && this.channelState?.setAccountForNick) {
+      // Feed the dispatcher's verification fast-path so `n`/`m`-flagged
+      // commands stop needing a round-trip NickServ ACC query on every hit.
+      this.channelState.setAccountForNick(nick, account);
+    }
+
     // Parse command and args from the message text
     const stripped = stripFormatting(message);
     const spaceIdx = stripped.indexOf(' ');
@@ -169,6 +233,7 @@ export class IRCBridge {
       command,
       args,
     });
+    if (account !== undefined) ctx.account = account;
 
     // Build flood key: prefer full hostmask for accuracy, fall back to nick
     const floodKey = ident && hostname ? `${nick}!${ident}@${hostname}` : nick;
@@ -350,6 +415,15 @@ export class IRCBridge {
     const isChannel = this.isValidChannel(target);
     const channel = isChannel ? target : null;
 
+    // RFC 2812 §3.3.2: "automatic replies MUST NEVER be sent in response to
+    // a NOTICE message." Hexbot parses commands only in onPrivmsg — this
+    // path never dispatches to pub/msg binds, only to notice/rawlog binds.
+    // Keep it that way when refactoring.
+    const account = extractAccountTag(event);
+    if (account !== undefined && nick && this.channelState?.setAccountForNick) {
+      this.channelState.setAccountForNick(nick, account);
+    }
+
     const ctx = this.buildContext({
       nick,
       ident,
@@ -359,6 +433,7 @@ export class IRCBridge {
       command: 'NOTICE',
       args: message,
     });
+    if (account !== undefined) ctx.account = account;
 
     this.dispatcher.dispatch('notice', ctx).catch(this.dispatchError('notice'));
   }

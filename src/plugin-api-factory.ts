@@ -445,6 +445,7 @@ function createPluginChannelStateApi(
           modes: u.modes.join(''),
           joinedAt: u.joinedAt.getTime(),
           accountName: u.accountName,
+          away: u.away,
         });
       }
       return {
@@ -467,6 +468,7 @@ function createPluginChannelStateApi(
         modes: u.modes.join(''),
         joinedAt: u.joinedAt.getTime(),
         accountName: u.accountName,
+        away: u.away,
       }));
     },
     getUserHostmask(channel: string, nick: string): string | undefined {

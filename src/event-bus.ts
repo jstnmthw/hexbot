@@ -26,6 +26,7 @@ export interface BotEvents {
   'channel:userLeft': [channel: string, nick: string];
   'channel:modeChanged': [channel: string, nick: string, mode: string];
   'channel:modesReady': [channel: string];
+  'channel:awayChanged': [channel: string, nick: string, away: boolean];
   'botlink:connected': [botname: string];
   'botlink:disconnected': [botname: string, reason: string];
   'botlink:syncComplete': [botname: string];

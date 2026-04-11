@@ -2056,6 +2056,119 @@ describe('IRCBridge', () => {
   });
 
   // -------------------------------------------------------------------------
+  // IRCv3 account-tag consumption (§A.2)
+  // -------------------------------------------------------------------------
+
+  describe('account-tag on PRIVMSG', () => {
+    it('stashes the account on ctx when irc-framework surfaces event.account', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('pub', '-', '!ping', handler, 'test');
+
+      client.simulateEvent('privmsg', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        target: '#test',
+        message: '!ping',
+        account: 'AliceAcct',
+      });
+
+      await Promise.resolve();
+      const ctx: HandlerContext = handler.mock.calls[0][0];
+      expect(ctx.account).toBe('AliceAcct');
+      dispatcher.unbindAll('test');
+    });
+
+    it('falls through to event.tags.account when the top-level field is absent', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('pub', '-', '!ping', handler, 'test');
+
+      client.simulateEvent('privmsg', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        target: '#test',
+        message: '!ping',
+        tags: { account: 'AliceAcct' },
+      });
+
+      await Promise.resolve();
+      const ctx: HandlerContext = handler.mock.calls[0][0];
+      expect(ctx.account).toBe('AliceAcct');
+      dispatcher.unbindAll('test');
+    });
+
+    it('treats `account: "*"` as an authoritative unidentified signal (null)', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('pub', '-', '!ping', handler, 'test');
+
+      client.simulateEvent('privmsg', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        target: '#test',
+        message: '!ping',
+        account: '*',
+      });
+
+      await Promise.resolve();
+      const ctx: HandlerContext = handler.mock.calls[0][0];
+      expect(ctx.account).toBeNull();
+      dispatcher.unbindAll('test');
+    });
+
+    it('leaves ctx.account undefined when the cap is not active', async () => {
+      const handler = vi.fn();
+      dispatcher.bind('pub', '-', '!ping', handler, 'test');
+
+      client.simulateEvent('privmsg', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        target: '#test',
+        message: '!ping',
+      });
+
+      await Promise.resolve();
+      const ctx: HandlerContext = handler.mock.calls[0][0];
+      expect(ctx.account).toBeUndefined();
+      dispatcher.unbindAll('test');
+    });
+
+    it('feeds channel-state.setAccountForNick when a tag is present', async () => {
+      // Build a bridge with a real ChannelState so the dispatcher fast-path
+      // picks up the tag without waiting for account-notify/extended-join.
+      const state = new ChannelState(client, new BotEventBus());
+      state.attach();
+      bridge.detach();
+      bridge = new IRCBridge({
+        client,
+        dispatcher,
+        botNick: 'testbot',
+        channelState: state,
+      });
+      bridge.attach();
+
+      const handler = vi.fn();
+      dispatcher.bind('pub', '-', '!ping', handler, 'test');
+
+      client.simulateEvent('privmsg', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        target: '#test',
+        message: '!ping',
+        account: 'AliceAcct',
+      });
+
+      await Promise.resolve();
+      expect(state.getAccountForNick('Alice')).toBe('AliceAcct');
+      state.detach();
+      dispatcher.unbindAll('test');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // ISUPPORT CHANTYPES — §4 network-agnostic channel validation
   // -------------------------------------------------------------------------
 
