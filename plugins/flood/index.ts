@@ -68,18 +68,10 @@ function isFloodTriggered(
   return tracker.check(key, windowMs, threshold);
 }
 
-function getBotNick(): string {
-  return api.botConfig.irc.nick;
-}
-
-function isBotNick(nick: string): boolean {
-  return api.ircLower(nick) === api.ircLower(getBotNick());
-}
-
 function botHasOps(channel: string): boolean {
   const ch = api.getChannel(channel);
   if (!ch) return false;
-  const botNick = api.ircLower(getBotNick());
+  const botNick = api.ircLower(api.botConfig.irc.nick);
   const botUser = ch.users.get(botNick);
   return botUser?.modes.includes('o') ?? false;
 }
@@ -200,7 +192,7 @@ async function applyAction(
 
 async function handleMsgFlood(ctx: ChannelHandlerContext): Promise<void> {
   const { channel } = ctx;
-  if (isBotNick(ctx.nick)) return;
+  if (api.isBotNick(ctx.nick)) return;
   if (isPrivileged(ctx.nick, channel, cfg.ignoreOps)) return;
   const key = `${api.ircLower(ctx.nick)}@${api.ircLower(channel)}`;
   if (!isFloodTriggered(msgTracker, key, cfg.msgWindowMs, cfg.msgThreshold)) return;
@@ -216,8 +208,8 @@ async function handleMsgFlood(ctx: ChannelHandlerContext): Promise<void> {
 
 function handleJoinFlood(ctx: JoinContext): void {
   const { channel } = ctx;
-  if (isBotNick(ctx.nick)) return;
-  const hostmask = `${ctx.nick}!${ctx.ident}@${ctx.hostname}`;
+  if (api.isBotNick(ctx.nick)) return;
+  const hostmask = api.buildHostmask(ctx);
   const key = `join:${api.ircLower(hostmask)}`;
   if (!isFloodTriggered(joinTracker, key, cfg.joinWindowMs, cfg.joinThreshold)) return;
   if (isPrivileged(ctx.nick, channel, cfg.ignoreOps)) return;
@@ -234,7 +226,7 @@ function handleJoinFlood(ctx: JoinContext): void {
 function handleNickFlood(ctx: NickContext): void {
   const { ident, hostname } = ctx;
   if (!ident && !hostname) return; // Incomplete hostmask data — skip
-  const hostmask = `${ctx.nick}!${ident}@${hostname}`;
+  const hostmask = api.buildHostmask(ctx);
   const key = `nick:${api.ircLower(hostmask)}`;
   if (!isFloodTriggered(nickTracker, key, cfg.nickWindowMs, cfg.nickThreshold)) return;
   // Use the new nick (ctx.args) for channel lookup and punishment — the old nick is gone

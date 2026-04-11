@@ -1,15 +1,68 @@
 // chanmod — IRC commands: !op !deop !halfop !dehalfop !voice !devoice !kick !ban !unban !kickban !bans
-import type { PluginAPI } from '../../src/types';
+import type { ChannelHandlerContext, PluginAPI } from '../../src/types';
 import {
   botCanHalfop,
   botHasOps,
   buildBanMask,
   formatExpiry,
-  isBotNick,
   isValidNick,
   markIntentional,
 } from './helpers';
 import type { ChanmodConfig, SharedState } from './state';
+
+// ---------------------------------------------------------------------------
+// Mode command factory — !op / !deop / !voice / !devoice / !halfop / !dehalfop
+// ---------------------------------------------------------------------------
+
+interface ModeCommandOptions {
+  /** Log verb, e.g. "opped", "devoiced". */
+  verb: string;
+  /** Returns true if the bot has the capability needed to apply this mode. */
+  canApply: (api: PluginAPI, channel: string) => boolean;
+  /** Reply sent when `canApply` returns false. */
+  capabilityError: string;
+  /** Apply the mode to `target` in `channel`. */
+  execute: (api: PluginAPI, channel: string, target: string) => void;
+  /**
+   * Reply sent when the user targets the bot itself with a mode-removal command
+   * (e.g. !deop hexbot). Setting this enables the bot-self guard.
+   */
+  selfRejectReply?: string;
+  /** Mark the change as intentional so mode-enforce skips revenge/cycle. */
+  markIntent?: boolean;
+}
+
+/**
+ * Build a handler for a mode command that targets a nick.
+ * Each handler follows the same 8-step shape; the options pick which steps run.
+ */
+function createModeCommandHandler(
+  api: PluginAPI,
+  state: SharedState,
+  opts: ModeCommandOptions,
+): (ctx: ChannelHandlerContext) => void {
+  return (ctx: ChannelHandlerContext): void => {
+    const { channel } = ctx;
+    if (!opts.canApply(api, channel)) {
+      ctx.reply(opts.capabilityError);
+      return;
+    }
+    const target = ctx.args.trim() || ctx.nick;
+    if (!isValidNick(target)) {
+      ctx.reply('Invalid nick.');
+      return;
+    }
+    if (opts.selfRejectReply && api.isBotNick(target)) {
+      ctx.reply(opts.selfRejectReply);
+      return;
+    }
+    if (opts.markIntent) {
+      markIntentional(state, api, channel, target);
+    }
+    opts.execute(api, channel, target);
+    api.log(`${ctx.nick} ${opts.verb} ${target} in ${channel}`);
+  };
+}
 
 export function setupCommands(
   api: PluginAPI,
@@ -100,106 +153,85 @@ export function setupCommands(
   // !op / !deop / !voice / !devoice / !halfop / !dehalfop
   // ---------------------------------------------------------------------------
 
-  api.bind('pub', '+o', '!op', (ctx) => {
-    const { channel } = ctx;
-    if (!botHasOps(api, channel)) {
-      ctx.reply('I am not opped in this channel.');
-      return;
-    }
-    const target = ctx.args.trim() || ctx.nick;
-    if (!isValidNick(target)) {
-      ctx.reply('Invalid nick.');
-      return;
-    }
-    api.op(channel, target);
-    api.log(`${ctx.nick} opped ${target} in ${channel}`);
-  });
+  const OPS_REQUIRED_ERROR = 'I am not opped in this channel.';
+  const HALFOP_REQUIRED_ERROR = 'I do not have +h or +o in this channel.';
 
-  api.bind('pub', '+o', '!deop', (ctx) => {
-    const { channel } = ctx;
-    if (!botHasOps(api, channel)) {
-      ctx.reply('I am not opped in this channel.');
-      return;
-    }
-    const target = ctx.args.trim() || ctx.nick;
-    if (!isValidNick(target)) {
-      ctx.reply('Invalid nick.');
-      return;
-    }
-    if (isBotNick(api, target)) {
-      ctx.reply('I cannot deop myself.');
-      return;
-    }
-    markIntentional(state, api, channel, target);
-    api.deop(channel, target);
-    api.log(`${ctx.nick} deopped ${target} in ${channel}`);
-  });
+  api.bind(
+    'pub',
+    '+o',
+    '!op',
+    createModeCommandHandler(api, state, {
+      verb: 'opped',
+      canApply: botHasOps,
+      capabilityError: OPS_REQUIRED_ERROR,
+      execute: (a, c, t) => a.op(c, t),
+    }),
+  );
 
-  api.bind('pub', '+o', '!voice', (ctx) => {
-    const { channel } = ctx;
-    if (!botHasOps(api, channel)) {
-      ctx.reply('I am not opped in this channel.');
-      return;
-    }
-    const target = ctx.args.trim() || ctx.nick;
-    if (!isValidNick(target)) {
-      ctx.reply('Invalid nick.');
-      return;
-    }
-    api.voice(channel, target);
-    api.log(`${ctx.nick} voiced ${target} in ${channel}`);
-  });
+  api.bind(
+    'pub',
+    '+o',
+    '!deop',
+    createModeCommandHandler(api, state, {
+      verb: 'deopped',
+      canApply: botHasOps,
+      capabilityError: OPS_REQUIRED_ERROR,
+      execute: (a, c, t) => a.deop(c, t),
+      selfRejectReply: 'I cannot deop myself.',
+      markIntent: true,
+    }),
+  );
 
-  api.bind('pub', '+o', '!devoice', (ctx) => {
-    const { channel } = ctx;
-    if (!botHasOps(api, channel)) {
-      ctx.reply('I am not opped in this channel.');
-      return;
-    }
-    const target = ctx.args.trim() || ctx.nick;
-    if (!isValidNick(target)) {
-      ctx.reply('Invalid nick.');
-      return;
-    }
-    markIntentional(state, api, channel, target);
-    api.devoice(channel, target);
-    api.log(`${ctx.nick} devoiced ${target} in ${channel}`);
-  });
+  api.bind(
+    'pub',
+    '+o',
+    '!voice',
+    createModeCommandHandler(api, state, {
+      verb: 'voiced',
+      canApply: botHasOps,
+      capabilityError: OPS_REQUIRED_ERROR,
+      execute: (a, c, t) => a.voice(c, t),
+    }),
+  );
 
-  api.bind('pub', '+o', '!halfop', (ctx) => {
-    const { channel } = ctx;
-    if (!botCanHalfop(api, channel)) {
-      ctx.reply('I do not have +h or +o in this channel.');
-      return;
-    }
-    const target = ctx.args.trim() || ctx.nick;
-    if (!isValidNick(target)) {
-      ctx.reply('Invalid nick.');
-      return;
-    }
-    api.halfop(channel, target);
-    api.log(`${ctx.nick} halfopped ${target} in ${channel}`);
-  });
+  api.bind(
+    'pub',
+    '+o',
+    '!devoice',
+    createModeCommandHandler(api, state, {
+      verb: 'devoiced',
+      canApply: botHasOps,
+      capabilityError: OPS_REQUIRED_ERROR,
+      execute: (a, c, t) => a.devoice(c, t),
+      markIntent: true,
+    }),
+  );
 
-  api.bind('pub', '+o', '!dehalfop', (ctx) => {
-    const { channel } = ctx;
-    if (!botCanHalfop(api, channel)) {
-      ctx.reply('I do not have +h or +o in this channel.');
-      return;
-    }
-    const target = ctx.args.trim() || ctx.nick;
-    if (!isValidNick(target)) {
-      ctx.reply('Invalid nick.');
-      return;
-    }
-    if (isBotNick(api, target)) {
-      ctx.reply('I cannot dehalfop myself.');
-      return;
-    }
-    markIntentional(state, api, channel, target);
-    api.dehalfop(channel, target);
-    api.log(`${ctx.nick} dehalfopped ${target} in ${channel}`);
-  });
+  api.bind(
+    'pub',
+    '+o',
+    '!halfop',
+    createModeCommandHandler(api, state, {
+      verb: 'halfopped',
+      canApply: botCanHalfop,
+      capabilityError: HALFOP_REQUIRED_ERROR,
+      execute: (a, c, t) => a.halfop(c, t),
+    }),
+  );
+
+  api.bind(
+    'pub',
+    '+o',
+    '!dehalfop',
+    createModeCommandHandler(api, state, {
+      verb: 'dehalfopped',
+      canApply: botCanHalfop,
+      capabilityError: HALFOP_REQUIRED_ERROR,
+      execute: (a, c, t) => a.dehalfop(c, t),
+      selfRejectReply: 'I cannot dehalfop myself.',
+      markIntent: true,
+    }),
+  );
 
   // ---------------------------------------------------------------------------
   // !kick
@@ -217,7 +249,7 @@ export function setupCommands(
       ctx.reply('Usage: !kick <nick> [reason]');
       return;
     }
-    if (isBotNick(api, target)) {
+    if (api.isBotNick(target)) {
       ctx.reply('I cannot kick myself.');
       return;
     }
@@ -260,7 +292,7 @@ export function setupCommands(
       ctx.reply('Invalid nick.');
       return;
     }
-    if (isBotNick(api, target)) {
+    if (api.isBotNick(target)) {
       ctx.reply('I cannot ban myself.');
       return;
     }
@@ -338,7 +370,7 @@ export function setupCommands(
       ctx.reply('Usage: !kickban <nick> [reason]');
       return;
     }
-    if (isBotNick(api, target)) {
+    if (api.isBotNick(target)) {
       ctx.reply('I cannot ban myself.');
       return;
     }

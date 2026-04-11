@@ -77,6 +77,9 @@ export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginA
     config: {},
     getServerSupports: vi.fn().mockReturnValue({}),
     ircLower: (s: string) => s.toLowerCase(),
+    buildHostmask: (source: { nick: string; ident: string; hostname: string }) =>
+      `${source.nick}!${source.ident}@${source.hostname}`,
+    isBotNick: (nick: string) => nick.toLowerCase() === 'hexbot',
     channelSettings: {
       register: noop,
       get: vi.fn().mockReturnValue(false),

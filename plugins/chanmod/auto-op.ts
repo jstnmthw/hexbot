@@ -2,7 +2,7 @@
 import type { PluginAPI } from '../../src/types';
 import type { ProbeState } from './chanserv-notice';
 import { markProbePending } from './chanserv-notice';
-import { botCanHalfop, botHasOps, hasAnyFlag, isBotNick } from './helpers';
+import { botCanHalfop, botHasOps, hasAnyFlag } from './helpers';
 import type { BackendAccess } from './protection-backend';
 import type { ProtectionChain } from './protection-backend';
 import type { ChanmodConfig, SharedState } from './state';
@@ -20,7 +20,7 @@ export function setupAutoOp(
     // Bot joined — request current channel modes from the server.
     // The MODE reply triggers channel:modesReady, which chains to syncChannelModes
     // (set up in setupModeEnforce). This guarantees channel state is populated before sync.
-    if (isBotNick(api, nick)) {
+    if (api.isBotNick(nick)) {
       api.requestChannelModes(channel);
 
       // Set and verify ChanServ access level for the protection chain
@@ -70,8 +70,7 @@ export function setupAutoOp(
     const autoOp = api.channelSettings.getFlag(channel, 'auto_op');
     if (!autoOp) return;
 
-    const { ident, hostname } = ctx;
-    const fullHostmask = `${nick}!${ident}@${hostname}`;
+    const fullHostmask = api.buildHostmask(ctx);
     const user = api.permissions.findByHostmask(fullHostmask);
     if (!user) return;
 

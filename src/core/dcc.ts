@@ -627,76 +627,89 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
   /**
    * Run all guard checks for an incoming DCC CHAT request.
-   * Returns the matching UserRecord if all checks pass, or null if rejected.
-   * **Side effect:** sends an IRC notice to `nick` on rejection — callers must
-   * treat a null return as "already handled", not a silent failure.
+   * Returns the matching UserRecord if every check passes, or null if rejected.
+   * **Side effect:** each individual guard sends its own IRC notice + log on
+   * failure — callers must treat a null return as "already handled", not a
+   * silent failure.
    */
   private async rejectIfInvalid(
     nick: string,
     ctx: HandlerContext,
     parsed: DccChatPayload,
   ): Promise<UserRecord | null> {
-    const { ident, hostname } = ctx;
+    if (!this.checkPassiveDcc(nick, parsed)) return null;
+    const user = this.lookupUserOrReject(nick, ctx.ident, ctx.hostname);
+    if (!user) return null;
+    if (!this.checkUserFlags(nick, ctx, user)) return null;
+    if (!this.checkSessionLimit(nick)) return null;
+    if (!this.checkNotAlreadyConnected(nick)) return null;
+    if (!(await this.checkNickServVerify(nick))) return null;
+    return user;
+  }
 
-    // 0. Passive DCC — HexBot only accepts passive (port=0) DCC
-    if (!isPassiveDcc(parsed.ip, parsed.port)) {
-      this.logger?.info(
-        `DCC CHAT rejected (active DCC) from ${nick}: ip=${parsed.ip} port=${parsed.port}`,
-      );
-      this.client.notice(
-        nick,
-        'HexBot only accepts passive DCC CHAT. Enable passive/reverse DCC in your client settings, then try /dcc chat hexbot again.',
-      );
-      return null;
-    }
+  /** Reject active-DCC requests (HexBot only accepts passive). */
+  private checkPassiveDcc(nick: string, parsed: DccChatPayload): boolean {
+    if (isPassiveDcc(parsed.ip, parsed.port)) return true;
+    this.logger?.info(
+      `DCC CHAT rejected (active DCC) from ${nick}: ip=${parsed.ip} port=${parsed.port}`,
+    );
+    this.client.notice(
+      nick,
+      'HexBot only accepts passive DCC CHAT. Enable passive/reverse DCC in your client settings, then try /dcc chat hexbot again.',
+    );
+    return false;
+  }
 
-    // 1. Hostmask lookup
+  /** Look up the user by full hostmask, or reject with a notice. */
+  private lookupUserOrReject(nick: string, ident: string, hostname: string): UserRecord | null {
     const fullHostmask = `${nick}!${ident}@${hostname}`;
     const user = this.permissions.findByHostmask(fullHostmask);
-    if (!user) {
-      this.logger?.info(`DCC CHAT rejected (no hostmask match) for ${fullHostmask}`);
-      this.client.notice(nick, 'DCC CHAT: your hostmask is not in the user database.');
-      return null;
-    }
+    if (user) return user;
+    this.logger?.info(`DCC CHAT rejected (no hostmask match) for ${fullHostmask}`);
+    this.client.notice(nick, 'DCC CHAT: your hostmask is not in the user database.');
+    return null;
+  }
 
-    // 2. Flag check — delegate to permissions so owner flag (n) implies all others
+  /** Verify user has the required DCC flags. Delegates to permissions so owner (n) implies all. */
+  private checkUserFlags(nick: string, ctx: HandlerContext, user: UserRecord): boolean {
     const requiredFlags = this.config.require_flags;
-    if (!this.permissions.checkFlags(requiredFlags, ctx)) {
-      this.logger?.info(
-        `DCC CHAT rejected (insufficient flags) for ${nick}: has="${user.global}" needs="${requiredFlags}"`,
-      );
-      this.client.notice(nick, `DCC CHAT: insufficient flags (requires +${requiredFlags}).`);
-      return null;
-    }
+    if (this.permissions.checkFlags(requiredFlags, ctx)) return true;
+    this.logger?.info(
+      `DCC CHAT rejected (insufficient flags) for ${nick}: has="${user.global}" needs="${requiredFlags}"`,
+    );
+    this.client.notice(nick, `DCC CHAT: insufficient flags (requires +${requiredFlags}).`);
+    return false;
+  }
 
-    // 3. Session limit
-    if (this.sessions.size >= this.config.max_sessions) {
-      this.client.notice(nick, `DCC CHAT: maximum sessions (${this.config.max_sessions}) reached.`);
-      return null;
-    }
+  /** Cap total concurrent sessions. */
+  private checkSessionLimit(nick: string): boolean {
+    if (this.sessions.size < this.config.max_sessions) return true;
+    this.client.notice(nick, `DCC CHAT: maximum sessions (${this.config.max_sessions}) reached.`);
+    return false;
+  }
 
-    // 4. Already connected or pending?
+  /** Reject if the user already has an active session or a pending connection. */
+  private checkNotAlreadyConnected(nick: string): boolean {
     if (this.sessions.has(ircLower(nick, this.casemapping))) {
       this.client.notice(nick, 'DCC CHAT: you already have an active session.');
-      return null;
+      return false;
     }
     for (const p of this.pending.values()) {
       if (ircLower(p.nick, this.casemapping) === ircLower(nick, this.casemapping)) {
         this.client.notice(nick, 'DCC CHAT: a connection is already pending.');
-        return null;
+        return false;
       }
     }
+    return true;
+  }
 
-    // 5. NickServ verify (optional) — must complete before port allocation
-    if (this.config.nickserv_verify) {
-      const result = await this.services.verifyUser(nick);
-      if (!result.verified) {
-        this.client.notice(nick, 'DCC CHAT: NickServ verification failed. Please identify first.');
-        return null;
-      }
-    }
-
-    return user;
+  /** Optionally await NickServ ACC verification before allocating a TCP port. */
+  private async checkNickServVerify(nick: string): Promise<boolean> {
+    if (!this.config.nickserv_verify) return true;
+    const result = await this.services.verifyUser(nick);
+    if (result.verified) return true;
+    this.client.notice(nick, 'DCC CHAT: NickServ verification failed. Please identify first.');
+    return false;
   }
 
   /**

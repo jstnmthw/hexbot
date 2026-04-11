@@ -1,4 +1,5 @@
-// chanmod — adversarial protection: rejoin on kick, revenge, nick recovery, stopnethack
+// chanmod — adversarial protection: rejoin on kick, revenge, nick recovery
+// Stopnethack lives in ./stopnethack.ts.
 import type { PluginAPI } from '../../src/types';
 import {
   botHasOps,
@@ -6,40 +7,16 @@ import {
   getBotNick,
   getUserFlags,
   hasAnyFlag,
-  isBotNick,
   markIntentional,
 } from './helpers';
 import type { ThreatCallback } from './mode-enforce';
 import type { ProtectionChain } from './protection-backend';
 import type { ChanmodConfig, SharedState } from './state';
+import { setupStopnethack } from './stopnethack';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Returns true if a quit message looks like a netsplit (e.g. "hub.net leaf.net"). */
-function isSplitQuit(text: string): boolean {
-  const parts = text.trim().split(/\s+/);
-  if (parts.length !== 2) return false;
-  const isDomain = (s: string): boolean => /^[a-zA-Z0-9]([a-zA-Z0-9.-]*)\.[a-zA-Z]{2,}$/.test(s);
-  return isDomain(parts[0]) && isDomain(parts[1]);
-}
-
-/** Snapshot ops in all configured channels into state.splitOpsSnapshot. */
-function snapshotOps(api: PluginAPI, state: SharedState): void {
-  state.splitOpsSnapshot.clear();
-  for (const channel of api.botConfig.irc.channels) {
-    const ch = api.getChannel(channel);
-    if (!ch) continue;
-    const ops = new Set<string>();
-    for (const [nick, user] of ch.users) {
-      if (user.modes.includes('o')) ops.add(nick); // nick key is already lowercased
-    }
-    if (ops.size > 0) {
-      state.splitOpsSnapshot.set(api.ircLower(channel), ops);
-    }
-  }
-}
 
 interface RejoinRecord {
   count: number;
@@ -70,7 +47,7 @@ export function setupProtection(
     const { nick: kicked, args, channel } = ctx;
 
     // Only act when the bot itself is kicked
-    if (!isBotNick(api, kicked)) return;
+    if (!api.isBotNick(kicked)) return;
 
     const kickerNick = parseKicker(args);
 
@@ -266,74 +243,8 @@ export function setupProtection(
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // Stopnethack — deop suspicious server-granted ops after netsplit rejoins
-  // ---------------------------------------------------------------------------
-
-  if (config.stopnethack_mode > 0) {
-    const SPLIT_WINDOW_MS = 5000;
-    const SPLIT_THRESHOLD = 3;
-
-    // Detect netsplit via burst of split-quit messages
-    api.bind('quit', '-', '*', (ctx) => {
-      if (!isSplitQuit(ctx.text)) return;
-
-      const now = Date.now();
-      if (now - state.splitQuitWindowStart > SPLIT_WINDOW_MS) {
-        state.splitQuitCount = 0;
-        state.splitQuitWindowStart = now;
-      }
-      state.splitQuitCount++;
-
-      if (state.splitQuitCount >= SPLIT_THRESHOLD && !state.splitActive) {
-        state.splitActive = true;
-        state.splitExpiry = now + config.split_timeout_ms;
-        api.log(
-          `Stopnethack: netsplit detected (${state.splitQuitCount} split-quits) — monitoring +o for ${config.split_timeout_ms / 1000}s`,
-        );
-        snapshotOps(api, state);
-      }
-    });
-
-    // Check suspicious +o grants during/after a split
-    api.bind('mode', '-', '*', (ctx) => {
-      const { channel } = ctx;
-      if (ctx.command !== '+o') return;
-
-      // Only act within the split window
-      if (!state.splitActive || Date.now() >= state.splitExpiry) {
-        if (state.splitActive && Date.now() >= state.splitExpiry) {
-          state.splitActive = false; // expire the window
-        }
-        return;
-      }
-
-      const target = ctx.args;
-      if (!target || isBotNick(api, target)) return;
-
-      let isLegitimate: boolean;
-      if (config.stopnethack_mode === 1) {
-        // isoptest: user must be in permissions db with an op-level flag
-        const flags = getUserFlags(api, channel, target);
-        isLegitimate = hasAnyFlag(flags, config.op_flags);
-      } else {
-        // stopnethack_mode === 2 (wasoptest) — only valid values are 1 and 2
-        // wasoptest: user must have had ops before the split
-        const snapshot = state.splitOpsSnapshot.get(api.ircLower(channel));
-        isLegitimate = snapshot?.has(api.ircLower(target)) ?? false;
-      }
-
-      if (!isLegitimate && botHasOps(api, channel)) {
-        api.log(
-          `Stopnethack: deoping ${target} in ${channel} (mode ${config.stopnethack_mode}, not legitimate)`,
-        );
-        markIntentional(state, api, channel, target);
-        state.scheduleEnforcement(config.enforce_delay_ms, () => {
-          api.deop(channel, target);
-        });
-      }
-    });
-  }
+  // Stopnethack (netsplit-aware op protection) lives in ./stopnethack.ts.
+  setupStopnethack(api, config, state);
 
   return () => {
     for (const timer of state.cycleTimers) clearTimeout(timer);

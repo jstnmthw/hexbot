@@ -1,65 +1,19 @@
-// chanmod — ChanServ notice handler
+// chanmod — ChanServ notice router + shared probe state
 //
-// Parses ChanServ NOTICE responses (FLAGS for Atheme, ACCESS LIST for Anope)
-// and routes them to the appropriate backend's handler method. This completes
-// the verifyAccess() round-trip: the backend sends a probe, ChanServ responds
-// via NOTICE, and this handler delivers the parsed result back to the backend.
+// Owns the probe-state registry (pending FLAGS/ACCESS/INFO/GETKEY probes),
+// binds a single 'notice' handler, and dispatches ChanServ responses to
+// either the Atheme or Anope parser in the sibling files.
+//
+// Backend-specific parsing lives in:
+//   - chanserv-notice-atheme.ts  (Atheme FLAGS responses)
+//   - chanserv-notice-anope.ts   (Anope ACCESS LIST, GETKEY, INFO responses)
 import type { PluginAPI } from '../../src/types';
 import type { AnopeBackend } from './anope-backend';
 import type { AthemeBackend } from './atheme-backend';
-import { getBotNick } from './helpers';
+import { handleAnopeNotice } from './chanserv-notice-anope';
+import { handleAthemeNotice } from './chanserv-notice-atheme';
 import type { BackendAccess } from './protection-backend';
 import type { ChanmodConfig } from './state';
-
-// ---------------------------------------------------------------------------
-// Atheme FLAGS response patterns
-// ---------------------------------------------------------------------------
-
-// Atheme responds to `FLAGS #channel nick` with:
-//   "2 nick +flags"           (entry number, nick, flag string)
-// or for no access:
-//   "nick was not found on the access list of #channel."
-//   "The channel \x02#channel\x02 is not registered."
-
-/** Match: "<num> <nick> <flags>" — e.g. "2 hexbot +AOehiortv" */
-const ATHEME_FLAGS_RE = /^(\d+)\s+(\S+)\s+(\+\S+)$/;
-/** Match: "Flags for <nick> in <channel> are <flags>." — alternate format */
-const ATHEME_FLAGS_ALT_RE = /^Flags for (\S+) in (\S+) are (\+\S+)/;
-/** Match no-access error: "<nick> was not found on the access list of <channel>." */
-const ATHEME_NOT_FOUND_RE = /^(\S+) was not found on the access list of (#\S+?)\.?$/;
-/** Match "The channel #xxx is not registered." — captures the channel name.
- *  \x02 is IRC bold (ChanServ often bolds channel names). */
-// eslint-disable-next-line no-control-regex
-const ATHEME_NOT_REGISTERED_RE = /channel\s+\x02?(#\S+?)\x02?\s+is\s+not\s+registered/i;
-
-// ---------------------------------------------------------------------------
-// Anope ACCESS LIST response patterns
-// ---------------------------------------------------------------------------
-
-// Anope responds to `ACCESS #channel LIST` with one or more lines:
-//   "  <num>  <nick/mask>  <level>  [last-seen]"
-// End of list:
-//   "End of access list."
-
-/** Match numeric format: "  <num>  <nick/mask>  <level>" — e.g. "  1  hexbot  5" */
-const ANOPE_ACCESS_RE = /^\s*\d+\s+(\S+)\s+(-?\d+)/;
-/** Match XOP format (Rizon/Anope with XOP levels): "  <num>  <XOP>  <nick>" — e.g. "  1  SOP  d3m0n" */
-const ANOPE_XOP_ACCESS_RE = /^\s*\d+\s+(QOP|SOP|AOP|HOP|VOP)\s+(\S+)/i;
-/** Map Anope XOP keyword → equivalent numeric level. */
-const XOP_TO_LEVEL: Record<string, number> = {
-  QOP: 10000,
-  SOP: 10,
-  AOP: 5,
-  HOP: 4,
-  VOP: 3,
-};
-/** Match "Channel #xxx isn't registered" / "is not registered" — captures the channel name.
- *  \x02 is IRC bold (ChanServ often bolds channel names). */
-// eslint-disable-next-line no-control-regex
-const ANOPE_NOT_REGISTERED_RE = /channel\s+\x02?(#\S+?)\x02?\s+(?:isn't|is not)\s+registered/i;
-/** Match generic "access denied" / "permission denied" / "not authorized" / "must be identified" responses. */
-const ANOPE_DENIED_RE =
-  /(?:access denied|permission denied|not authorized|must be identified|must have a registered)/i;
 
 /** Timeout for ChanServ probe responses (10 seconds). */
 const PROBE_TIMEOUT_MS = 10_000;
@@ -95,7 +49,7 @@ export function createProbeState(): ProbeState {
 }
 
 // ---------------------------------------------------------------------------
-// Setup
+// Setup — bind the notice handler and dispatch to the right parser
 // ---------------------------------------------------------------------------
 
 export interface ChanServNoticeOptions {
@@ -175,7 +129,7 @@ export function markProbePending(
 }
 
 // ---------------------------------------------------------------------------
-// Sync auto-detected access back to channelSettings
+// Shared helpers — used by both backend parsers
 // ---------------------------------------------------------------------------
 
 /**
@@ -183,7 +137,7 @@ export function markProbePending(
  * level, sync the detected tier to channelSettings so .chaninfo and other code
  * sees the correct value.
  */
-function syncAccessToSettings(
+export function syncAccessToSettings(
   api: PluginAPI,
   backend: AthemeBackend | AnopeBackend,
   channel: string,
@@ -200,246 +154,8 @@ function syncAccessToSettings(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Atheme notice parsing
-// ---------------------------------------------------------------------------
-
-function handleAthemeNotice(
-  api: PluginAPI,
-  backend: AthemeBackend,
-  probeState: ProbeState,
-  text: string,
-): void {
-  const botNick = getBotNick(api);
-
-  // Try "2 hexbot +flags" format
-  let m = ATHEME_FLAGS_RE.exec(text);
-  if (m) {
-    const nick = m[2];
-    const flags = m[3];
-    if (api.ircLower(nick) === api.ircLower(botNick)) {
-      const channel = consumeFirstPendingProbe(probeState.pendingAthemeProbes);
-      if (channel) {
-        api.debug(`ChanServ FLAGS response for ${channel}: ${nick} ${flags}`);
-        backend.handleFlagsResponse(channel, flags);
-        syncAccessToSettings(api, backend, channel);
-      }
-    }
-    return;
-  }
-
-  // Try "Flags for <nick> in <channel> are <flags>." format
-  m = ATHEME_FLAGS_ALT_RE.exec(text);
-  if (m) {
-    const nick = m[1];
-    const channel = m[2];
-    const flags = m[3];
-    if (api.ircLower(nick) === api.ircLower(botNick)) {
-      const key = api.ircLower(channel);
-      probeState.pendingAthemeProbes.delete(key);
-      api.debug(`ChanServ FLAGS response for ${channel}: ${nick} ${flags}`);
-      backend.handleFlagsResponse(channel, flags);
-      syncAccessToSettings(api, backend, channel);
-    }
-    return;
-  }
-
-  // Try no-access error: "<nick> was not found on the access list of <channel>."
-  m = ATHEME_NOT_FOUND_RE.exec(text);
-  if (m) {
-    const nick = m[1];
-    const channel = m[2];
-    if (api.ircLower(nick) === api.ircLower(botNick)) {
-      const key = api.ircLower(channel);
-      probeState.pendingAthemeProbes.delete(key);
-      api.debug(`ChanServ FLAGS response for ${channel}: not on access list`);
-      backend.handleFlagsResponse(channel, '(none)');
-    }
-    return;
-  }
-
-  // Unregistered-channel error: "The channel #xxx is not registered."
-  m = ATHEME_NOT_REGISTERED_RE.exec(text);
-  if (m) {
-    const channel = m[1];
-    const key = api.ircLower(channel);
-    if (probeState.pendingAthemeProbes.delete(key)) {
-      api.debug(`ChanServ FLAGS response for ${channel}: channel not registered`);
-      backend.handleFlagsResponse(channel, '(none)');
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Anope notice parsing
-// ---------------------------------------------------------------------------
-
-function handleAnopeNotice(
-  api: PluginAPI,
-  backend: AnopeBackend,
-  probeState: ProbeState,
-  text: string,
-): void {
-  const botNick = getBotNick(api);
-
-  // Try XOP format first (Rizon): "  <num>  <XOP-name>  <nick>"
-  let m = ANOPE_XOP_ACCESS_RE.exec(text);
-  if (m) {
-    const xop = m[1].toUpperCase();
-    const nick = m[2];
-    const level = XOP_TO_LEVEL[xop] ?? 0;
-    if (api.ircLower(nick) === api.ircLower(botNick)) {
-      const channel = consumeFirstPendingProbe(probeState.pendingAnopeProbes);
-      if (channel) {
-        api.debug(`ChanServ ACCESS response for ${channel}: ${nick} ${xop} (level=${level})`);
-        backend.handleAccessResponse(channel, level);
-        syncAccessToSettings(api, backend, channel);
-      }
-    }
-    return;
-  }
-
-  // Try numeric format: "  <num>  <nick/mask>  <level>"
-  m = ANOPE_ACCESS_RE.exec(text);
-  if (m) {
-    const nick = m[1];
-    const level = parseInt(m[2], 10);
-    if (api.ircLower(nick) === api.ircLower(botNick)) {
-      const channel = consumeFirstPendingProbe(probeState.pendingAnopeProbes);
-      if (channel) {
-        api.debug(`ChanServ ACCESS response for ${channel}: ${nick} level=${level}`);
-        backend.handleAccessResponse(channel, level);
-        syncAccessToSettings(api, backend, channel);
-      }
-    }
-    return;
-  }
-
-  // "End of access list." — if we still have a pending probe, the bot wasn't in the list
-  if (text.match(/end of .*access list/i)) {
-    const channel = consumeFirstPendingProbe(probeState.pendingAnopeProbes);
-    if (channel) {
-      api.debug(`ChanServ ACCESS response for ${channel}: not in access list`);
-      backend.handleAccessResponse(channel, 0);
-    }
-    return;
-  }
-
-  // "#channel access list is empty." — Rizon/Anope sends this when the list has no entries
-  if (text.match(/^#\S+\s+access list is empty/i)) {
-    const channel = consumeFirstPendingProbe(probeState.pendingAnopeProbes);
-    if (channel) {
-      api.debug(`ChanServ ACCESS response for ${channel}: access list empty`);
-      backend.handleAccessResponse(channel, 0);
-    }
-    return;
-  }
-
-  // "Channel #xxx isn't registered" — resolve the probe for that specific channel.
-  const notReg = ANOPE_NOT_REGISTERED_RE.exec(text);
-  if (notReg) {
-    const channel = notReg[1];
-    const key = api.ircLower(channel);
-    if (probeState.pendingAnopeProbes.delete(key)) {
-      api.debug(`ChanServ ACCESS response for ${channel}: channel not registered`);
-      backend.handleAccessResponse(channel, 0);
-    }
-    return;
-  }
-
-  // Generic denial — resolve the oldest pending probe as no-access.
-  if (ANOPE_DENIED_RE.test(text)) {
-    const channel = consumeFirstPendingProbe(probeState.pendingAnopeProbes);
-    if (channel) {
-      api.debug(`ChanServ ACCESS response for ${channel}: denied (${text.trim()})`);
-      backend.handleAccessResponse(channel, 0);
-    }
-    return;
-  }
-
-  // --- GETKEY response parsing ---
-
-  // Anope GETKEY success: "Key for channel \x02#chan\x02 is \x02thekey\x02."
-  // eslint-disable-next-line no-control-regex
-  const getkeyMatch = /^Key for channel \x02?(#[^\s\x02]+)\x02? is \x02?(.+?)\x02?\.?$/i.exec(text);
-  if (getkeyMatch) {
-    const channel = getkeyMatch[1];
-    const retrievedKey = getkeyMatch[2];
-    const chanKey = api.ircLower(channel);
-    const callback = probeState.pendingGetKey.get(chanKey);
-    if (callback) {
-      probeState.pendingGetKey.delete(chanKey);
-      api.debug(`ChanServ GETKEY response for ${channel}: got key`);
-      callback(retrievedKey);
-    }
-    return;
-  }
-
-  // Anope GETKEY no-key: "Channel \x02#chan\x02 has no key."
-  // eslint-disable-next-line no-control-regex
-  const noKeyMatch = /^Channel \x02?(#[^\s\x02]+)\x02? has no key/i.exec(text);
-  if (noKeyMatch) {
-    const channel = noKeyMatch[1];
-    const chanKey = api.ircLower(channel);
-    const callback = probeState.pendingGetKey.get(chanKey);
-    if (callback) {
-      probeState.pendingGetKey.delete(chanKey);
-      api.debug(`ChanServ GETKEY response for ${channel}: no key set`);
-      callback(null);
-    }
-    return;
-  }
-
-  // --- INFO response parsing (founder detection) ---
-
-  // "Information for channel #xxx:" — start of multi-line INFO response
-  // \x02 is IRC bold — Anope may wrap the channel name in bold markers.
-  // eslint-disable-next-line no-control-regex
-  const infoHeader = /^Information for channel \x02?(#[^\s:\x02]+)\x02?:?\s*$/i.exec(text);
-  if (infoHeader) {
-    const channel = infoHeader[1];
-    const key = api.ircLower(channel);
-    if (probeState.pendingInfoProbes.has(key)) {
-      probeState.activeInfoChannel = channel;
-    }
-    return;
-  }
-
-  // "Founder: <nick>" — if bot is the founder, resolve INFO probe as founder level
-  if (probeState.activeInfoChannel) {
-    const founderMatch = /^\s*Founder:\s*(\S+)/i.exec(text);
-    if (founderMatch) {
-      const founder = founderMatch[1];
-      const channel = probeState.activeInfoChannel;
-      const key = api.ircLower(channel);
-      if (api.ircLower(founder) === api.ircLower(botNick)) {
-        probeState.pendingInfoProbes.delete(key);
-        probeState.activeInfoChannel = null;
-        api.debug(`ChanServ INFO response for ${channel}: bot is founder`);
-        backend.handleAccessResponse(channel, 10000);
-        syncAccessToSettings(api, backend, channel);
-      }
-      return;
-    }
-
-    // "For more verbose information..." — end of INFO response, clean up
-    if (/^For more verbose information/i.test(text)) {
-      const channel = probeState.activeInfoChannel;
-      const key = api.ircLower(channel);
-      probeState.pendingInfoProbes.delete(key);
-      probeState.activeInfoChannel = null;
-      api.debug(`ChanServ INFO response for ${channel}: bot is not founder`);
-      return;
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 /** Consume and return the first (oldest) pending probe channel. */
-function consumeFirstPendingProbe(probes: Map<string, string>): string | undefined {
+export function consumeFirstPendingProbe(probes: Map<string, string>): string | undefined {
   const first = probes.entries().next();
   if (first.done) return undefined;
   probes.delete(first.value[0]);

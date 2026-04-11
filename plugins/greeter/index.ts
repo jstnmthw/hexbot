@@ -35,8 +35,6 @@ export function meetsMinFlag(record: UserRecord, minFlag: string, channel: strin
   return false;
 }
 
-let botNick = '';
-
 export function init(api: PluginAPI): void {
   api.registerHelp([
     {
@@ -69,7 +67,6 @@ export function init(api: PluginAPI): void {
   const minFlag = (api.config.min_flag as string) ?? 'v';
   const delivery = (api.config.delivery as string) ?? 'say';
   const joinNotice = (api.config.join_notice as string) ?? '';
-  botNick = api.botConfig.irc.nick;
 
   // Register per-channel greeting setting; default reflects the global config value
   api.channelSettings.register([
@@ -83,14 +80,14 @@ export function init(api: PluginAPI): void {
 
   // --- Join handler ---
   api.bind('join', '-', '*', (ctx) => {
-    if (api.ircLower(ctx.nick) === api.ircLower(botNick)) return;
+    if (api.isBotNick(ctx.nick)) return;
 
     const { channel } = ctx;
 
     // Precedence: user custom greet > channel greet_msg setting > global default
     let greeting = api.channelSettings.getString(channel, 'greet_msg');
 
-    const hostmask = `${ctx.nick}!${ctx.ident}@${ctx.hostname}`;
+    const hostmask = api.buildHostmask(ctx);
     const record = api.permissions.findByHostmask(hostmask);
     if (record) {
       const custom = api.db.get(`greet:${record.handle}`);
@@ -122,7 +119,7 @@ export function init(api: PluginAPI): void {
 
     // !greet (no args) — show current greet
     if (!sub) {
-      const record = api.permissions.findByHostmask(`${ctx.nick}!${ctx.ident}@${ctx.hostname}`);
+      const record = api.permissions.findByHostmask(api.buildHostmask(ctx));
       if (!record) {
         ctx.replyPrivate('No custom greet set.');
         return;
@@ -139,7 +136,7 @@ export function init(api: PluginAPI): void {
         ctx.replyPrivate('Usage: !greet set <message>');
         return;
       }
-      const hostmask = `${ctx.nick}!${ctx.ident}@${ctx.hostname}`;
+      const hostmask = api.buildHostmask(ctx);
       const record = api.permissions.findByHostmask(hostmask);
       if (!record) {
         ctx.replyPrivate('You must be a registered user to set a greet.');
@@ -157,7 +154,7 @@ export function init(api: PluginAPI): void {
 
     // !greet del
     if (sub === 'del') {
-      const hostmask = `${ctx.nick}!${ctx.ident}@${ctx.hostname}`;
+      const hostmask = api.buildHostmask(ctx);
       const record = api.permissions.findByHostmask(hostmask);
       if (!record) {
         ctx.replyPrivate('You must be a registered user to remove a greet.');

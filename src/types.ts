@@ -378,6 +378,12 @@ export interface PluginAPI {
   // IRC-aware case folding using the connected network's CASEMAPPING
   ircLower(text: string): string;
 
+  /** Returns `nick!ident@hostname` built from any object carrying those three fields. */
+  buildHostmask(source: { nick: string; ident: string; hostname: string }): string;
+
+  /** True if `nick` case-folds to the bot's own configured nick on this network. */
+  isBotNick(nick: string): boolean;
+
   // Per-channel settings
   channelSettings: PluginChannelSettings;
 

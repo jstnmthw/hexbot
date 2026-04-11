@@ -1,13 +1,207 @@
 // HexBot — Bot link admin commands
 // Registers .botlink, .bots, .bottree, .whom, .bot, .bsay, .bannounce with the command handler.
-import type { CommandHandler } from '../../command-handler';
+import type { CommandContext, CommandHandler } from '../../command-handler';
 import type { BotlinkConfig } from '../../types';
 import { formatDuration, parseDuration } from '../../utils/duration';
 import { sanitize } from '../../utils/sanitize';
 import { type BotLinkHub, isValidIP } from '../botlink-hub';
 import type { BotLinkLeaf } from '../botlink-leaf';
-import type { PartyLineUser } from '../botlink-protocol';
+import type { LinkFrame, PartyLineUser } from '../botlink-protocol';
 import type { BotlinkDCCView } from '../dcc';
+
+// ---------------------------------------------------------------------------
+// Helpers — guard and dispatch between hub/leaf
+// ---------------------------------------------------------------------------
+
+/**
+ * Type guard that replies and returns false if bot link is not enabled.
+ * Use at the top of every command handler so the rest of the body can assume
+ * `config` is present.
+ */
+function requireEnabled(
+  ctx: CommandContext,
+  config: BotlinkConfig | null,
+): config is BotlinkConfig {
+  if (!config?.enabled) {
+    ctx.reply('Bot link is not enabled.');
+    return false;
+  }
+  return true;
+}
+
+/** Reply + return null if not running as hub. */
+function requireHub(ctx: CommandContext, hub: BotLinkHub | null): BotLinkHub | null {
+  if (!hub) {
+    ctx.reply('Only available on hub bots.');
+    return null;
+  }
+  return hub;
+}
+
+/** Reply + return null if not running as leaf. */
+function requireLeaf(ctx: CommandContext, leaf: BotLinkLeaf | null): BotLinkLeaf | null {
+  if (!leaf) {
+    ctx.reply('Only available on leaf bots.');
+    return null;
+  }
+  return leaf;
+}
+
+type BotLink = { kind: 'hub'; hub: BotLinkHub } | { kind: 'leaf'; leaf: BotLinkLeaf };
+
+/**
+ * Return the active bot link (hub or leaf), or null after replying "Not connected".
+ * Call from commands that work on either role.
+ */
+function requireBotLink(
+  ctx: CommandContext,
+  hub: BotLinkHub | null,
+  leaf: BotLinkLeaf | null,
+): BotLink | null {
+  if (hub) return { kind: 'hub', hub };
+  if (leaf) return { kind: 'leaf', leaf };
+  ctx.reply('Not connected to any bot link.');
+  return null;
+}
+
+/** Send a frame through whichever side of the link is active. */
+function sendFrame(link: BotLink, frame: LinkFrame, targetBot?: string): void {
+  if (link.kind === 'hub' && targetBot) {
+    link.hub.send(targetBot, frame);
+  } else if (link.kind === 'hub') {
+    link.hub.broadcast(frame);
+  } else {
+    link.leaf.send(frame);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// .botlink sub-command handlers
+// ---------------------------------------------------------------------------
+
+function handleBotlinkStatus(
+  ctx: CommandContext,
+  config: BotlinkConfig,
+  hub: BotLinkHub | null,
+  leaf: BotLinkLeaf | null,
+): void {
+  if (hub) {
+    const leaves = hub.getLeaves();
+    ctx.reply(`Bot link: hub (botname: "${config.botname}")`);
+    if (leaves.length > 0) {
+      const leafInfo = leaves
+        .map((name) => {
+          const info = hub.getLeafInfo(name);
+          if (!info) return `  ${name} (disconnecting)`;
+          const ago = Math.floor((Date.now() - info.connectedAt) / 1000);
+          return `  ${name} (connected ${ago}s ago)`;
+        })
+        .join('\n');
+      ctx.reply(`Connected leaves (${leaves.length}):\n${leafInfo}`);
+    } else {
+      ctx.reply('No leaves connected.');
+    }
+  } else if (leaf) {
+    ctx.reply(`Bot link: leaf (botname: "${config.botname}")`);
+    if (leaf.isConnected) {
+      ctx.reply(`Connected to hub "${leaf.hubName}"`);
+    } else {
+      ctx.reply('Status: disconnected (reconnecting...)');
+    }
+  }
+}
+
+function handleBotlinkDisconnect(
+  ctx: CommandContext,
+  hub: BotLinkHub | null,
+  botname: string | undefined,
+): void {
+  const h = requireHub(ctx, hub);
+  if (!h) return;
+  if (!botname) {
+    ctx.reply('Usage: .botlink disconnect <botname>');
+    return;
+  }
+  if (!h.disconnectLeaf(botname)) {
+    ctx.reply(`Leaf "${botname}" not found.`);
+    return;
+  }
+  ctx.reply(`Disconnected "${botname}".`);
+}
+
+function handleBotlinkReconnect(ctx: CommandContext, leaf: BotLinkLeaf | null): void {
+  const l = requireLeaf(ctx, leaf);
+  if (!l) return;
+  l.reconnect();
+  ctx.reply('Reconnecting to hub...');
+}
+
+function handleBotlinkBans(ctx: CommandContext, hub: BotLinkHub | null): void {
+  const h = requireHub(ctx, hub);
+  if (!h) return;
+  const bans = h.getAuthBans();
+  if (bans.length === 0) {
+    ctx.reply('No active link bans.');
+    return;
+  }
+  const lines = [`Link bans (${bans.length}):`];
+  for (const ban of bans) {
+    const type = ban.manual ? 'manual' : 'auto';
+    const remaining =
+      ban.bannedUntil === 0
+        ? 'permanent'
+        : `expires in ${formatDuration(ban.bannedUntil - Date.now())}`;
+    const esc = ban.banCount > 0 ? ` (escalation: ${ban.banCount})` : '';
+    lines.push(`  ${ban.ip.padEnd(20)} ${type.padEnd(7)} ${remaining}${esc}`);
+  }
+  ctx.reply(lines.join('\n'));
+}
+
+function handleBotlinkBan(ctx: CommandContext, hub: BotLinkHub | null, rest: string[]): void {
+  const h = requireHub(ctx, hub);
+  if (!h) return;
+  const banIp = rest[0];
+  if (!banIp) {
+    ctx.reply('Usage: .botlink ban <ip|cidr> [duration] [reason...]');
+    return;
+  }
+  if (!isValidIP(banIp)) {
+    ctx.reply('Invalid IPv4 address or CIDR range.');
+    return;
+  }
+  let durationMs = 0; // default: permanent
+  let reasonParts = rest.slice(1);
+  if (reasonParts.length > 0) {
+    const parsed = parseDuration(reasonParts[0]);
+    if (parsed !== null) {
+      durationMs = parsed;
+      reasonParts = reasonParts.slice(1);
+    }
+  }
+  const reason = reasonParts.join(' ') || 'manual ban';
+  h.manualBan(banIp, durationMs, reason, ctx.nick);
+  const durStr = durationMs === 0 ? 'permanent' : formatDuration(durationMs);
+  ctx.reply(`Banned ${banIp} (${durStr}): ${reason}`);
+}
+
+function handleBotlinkUnban(
+  ctx: CommandContext,
+  hub: BotLinkHub | null,
+  unbanIp: string | undefined,
+): void {
+  const h = requireHub(ctx, hub);
+  if (!h) return;
+  if (!unbanIp) {
+    ctx.reply('Usage: .botlink unban <ip|cidr>');
+    return;
+  }
+  h.unban(unbanIp);
+  ctx.reply(`Unbanned ${unbanIp}.`);
+}
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
 
 /**
  * Register bot-link admin commands.
@@ -31,139 +225,22 @@ export function registerBotlinkCommands(
       category: 'botlink',
     },
     (args, ctx) => {
+      if (!requireEnabled(ctx, config)) return;
       const [sub, ...rest] = args.split(/\s+/);
 
-      if (!config?.enabled) {
-        ctx.reply('Bot link is not enabled.');
-        return;
-      }
-
       switch (sub || 'status') {
-        case 'status': {
-          if (hub) {
-            const leaves = hub.getLeaves();
-            ctx.reply(`Bot link: hub (botname: "${config.botname}")`);
-            if (leaves.length > 0) {
-              const leafInfo = leaves
-                .map((name) => {
-                  const info = hub.getLeafInfo(name);
-                  if (!info) return `  ${name} (disconnecting)`;
-                  const ago = Math.floor((Date.now() - info.connectedAt) / 1000);
-                  return `  ${name} (connected ${ago}s ago)`;
-                })
-                .join('\n');
-              ctx.reply(`Connected leaves (${leaves.length}):\n${leafInfo}`);
-            } else {
-              ctx.reply('No leaves connected.');
-            }
-          } else if (leaf) {
-            ctx.reply(`Bot link: leaf (botname: "${config.botname}")`);
-            if (leaf.isConnected) {
-              ctx.reply(`Connected to hub "${leaf.hubName}"`);
-            } else {
-              ctx.reply('Status: disconnected (reconnecting...)');
-            }
-          }
-          break;
-        }
-
-        case 'disconnect': {
-          if (!hub) {
-            ctx.reply('Only available on hub bots.');
-            return;
-          }
-          const botname = rest[0];
-          if (!botname) {
-            ctx.reply('Usage: .botlink disconnect <botname>');
-            return;
-          }
-          if (!hub.disconnectLeaf(botname)) {
-            ctx.reply(`Leaf "${botname}" not found.`);
-            return;
-          }
-          ctx.reply(`Disconnected "${botname}".`);
-          break;
-        }
-
-        case 'reconnect': {
-          if (!leaf) {
-            ctx.reply('Only available on leaf bots.');
-            return;
-          }
-          leaf.reconnect();
-          ctx.reply('Reconnecting to hub...');
-          break;
-        }
-
-        case 'bans': {
-          if (!hub) {
-            ctx.reply('Only available on hub bots.');
-            return;
-          }
-          const bans = hub.getAuthBans();
-          if (bans.length === 0) {
-            ctx.reply('No active link bans.');
-            return;
-          }
-          const lines = [`Link bans (${bans.length}):`];
-          for (const ban of bans) {
-            const type = ban.manual ? 'manual' : 'auto';
-            const remaining =
-              ban.bannedUntil === 0
-                ? 'permanent'
-                : `expires in ${formatDuration(ban.bannedUntil - Date.now())}`;
-            const esc = ban.banCount > 0 ? ` (escalation: ${ban.banCount})` : '';
-            lines.push(`  ${ban.ip.padEnd(20)} ${type.padEnd(7)} ${remaining}${esc}`);
-          }
-          ctx.reply(lines.join('\n'));
-          break;
-        }
-
-        case 'ban': {
-          if (!hub) {
-            ctx.reply('Only available on hub bots.');
-            return;
-          }
-          const banIp = rest[0];
-          if (!banIp) {
-            ctx.reply('Usage: .botlink ban <ip|cidr> [duration] [reason...]');
-            return;
-          }
-          if (!isValidIP(banIp)) {
-            ctx.reply('Invalid IPv4 address or CIDR range.');
-            return;
-          }
-          let durationMs = 0; // default: permanent
-          let reasonParts = rest.slice(1);
-          if (reasonParts.length > 0) {
-            const parsed = parseDuration(reasonParts[0]);
-            if (parsed !== null) {
-              durationMs = parsed;
-              reasonParts = reasonParts.slice(1);
-            }
-          }
-          const reason = reasonParts.join(' ') || 'manual ban';
-          hub.manualBan(banIp, durationMs, reason, ctx.nick);
-          const durStr = durationMs === 0 ? 'permanent' : formatDuration(durationMs);
-          ctx.reply(`Banned ${banIp} (${durStr}): ${reason}`);
-          break;
-        }
-
-        case 'unban': {
-          if (!hub) {
-            ctx.reply('Only available on hub bots.');
-            return;
-          }
-          const unbanIp = rest[0];
-          if (!unbanIp) {
-            ctx.reply('Usage: .botlink unban <ip|cidr>');
-            return;
-          }
-          hub.unban(unbanIp);
-          ctx.reply(`Unbanned ${unbanIp}.`);
-          break;
-        }
-
+        case 'status':
+          return handleBotlinkStatus(ctx, config, hub, leaf);
+        case 'disconnect':
+          return handleBotlinkDisconnect(ctx, hub, rest[0]);
+        case 'reconnect':
+          return handleBotlinkReconnect(ctx, leaf);
+        case 'bans':
+          return handleBotlinkBans(ctx, hub);
+        case 'ban':
+          return handleBotlinkBan(ctx, hub, rest);
+        case 'unban':
+          return handleBotlinkUnban(ctx, hub, rest[0]);
         default:
           ctx.reply('Usage: .botlink <status|disconnect|reconnect|bans|ban|unban>');
       }
@@ -179,10 +256,7 @@ export function registerBotlinkCommands(
       category: 'botlink',
     },
     (_args, ctx) => {
-      if (!config?.enabled) {
-        ctx.reply('Bot link is not enabled.');
-        return;
-      }
+      if (!requireEnabled(ctx, config)) return;
 
       if (hub) {
         const leaves = hub.getLeaves();
@@ -212,10 +286,7 @@ export function registerBotlinkCommands(
       category: 'botlink',
     },
     (_args, ctx) => {
-      if (!config?.enabled) {
-        ctx.reply('Bot link is not enabled.');
-        return;
-      }
+      if (!requireEnabled(ctx, config)) return;
 
       if (hub) {
         const leaves = hub.getLeaves();
@@ -244,10 +315,7 @@ export function registerBotlinkCommands(
       category: 'botlink',
     },
     (_args, ctx) => {
-      if (!config?.enabled) {
-        ctx.reply('Bot link is not enabled.');
-        return;
-      }
+      if (!requireEnabled(ctx, config)) return;
 
       const targetBot = _args.trim();
       if (!targetBot) {
@@ -276,47 +344,26 @@ export function registerBotlinkCommands(
         return;
       }
 
-      // Determine which link to send through
-      const link = hub ?? leaf;
-      if (!link) {
-        ctx.reply('Not connected to any bot link.');
+      const link = requireBotLink(ctx, hub, leaf);
+      if (!link) return;
+
+      // Hub route: verify the target leaf is actually connected before sending.
+      if (link.kind === 'hub' && !link.hub.getLeaves().includes(targetBot)) {
+        ctx.reply(`Bot "${targetBot}" is not connected.`);
         return;
       }
 
-      const sendFrame = (frame: import('../botlink-protocol').LinkFrame) => {
-        if (hub) hub.send(targetBot, frame);
-        else if (leaf) leaf.send(frame);
+      const requestFrame: LinkFrame = {
+        type: 'RELAY_REQUEST',
+        handle: session.handle,
+        fromBot: config.botname,
+        toBot: targetBot,
       };
-
-      // Send RELAY_REQUEST
-      const requestFrame = hub
-        ? {
-            type: 'RELAY_REQUEST',
-            handle: session.handle,
-            fromBot: config.botname,
-            toBot: targetBot,
-          }
-        : {
-            type: 'RELAY_REQUEST',
-            handle: session.handle,
-            fromBot: config.botname,
-            toBot: targetBot,
-          };
-
-      if (hub) {
-        // Hub can route directly
-        if (!hub.getLeaves().includes(targetBot)) {
-          ctx.reply(`Bot "${targetBot}" is not connected.`);
-          return;
-        }
-        hub.send(targetBot, requestFrame);
-      } else if (leaf) {
-        leaf.send(requestFrame);
-      }
+      sendFrame(link, requestFrame, targetBot);
 
       // Enter relay mode — input goes to the remote bot
       session.enterRelay(targetBot, (line: string) => {
-        sendFrame({ type: 'RELAY_INPUT', handle: session.handle, line });
+        sendFrame(link, { type: 'RELAY_INPUT', handle: session.handle, line }, targetBot);
       });
 
       ctx.reply(`*** Relaying to ${targetBot}. Type .relay end to return.`);
@@ -376,10 +423,7 @@ export function registerBotlinkCommands(
       category: 'botlink',
     },
     async (args, ctx) => {
-      if (!config?.enabled) {
-        ctx.reply('Bot link is not enabled.');
-        return;
-      }
+      if (!requireEnabled(ctx, config)) return;
 
       const parts = args.trim().split(/\s+/);
       const targetBot = parts[0];
@@ -399,29 +443,33 @@ export function registerBotlinkCommands(
         return;
       }
 
+      const link = requireBotLink(ctx, hub, leaf);
+      if (!link) return;
+
       const handle = ctx.nick;
       let output: string[];
 
-      if (hub) {
-        if (!hub.getLeaves().includes(targetBot)) {
+      if (link.kind === 'hub') {
+        if (!link.hub.getLeaves().includes(targetBot)) {
           ctx.reply(`Bot "${targetBot}" is not connected.`);
           return;
         }
-        output = await hub.sendCommandToBot(
+        output = await link.hub.sendCommandToBot(
           targetBot,
           cmdName,
           cmdArgs.join(' '),
           handle,
           ctx.channel,
         );
-      } else if (leaf?.isConnected) {
+      } else {
+        if (!link.leaf.isConnected) {
+          ctx.reply('Not connected to any bot link.');
+          return;
+        }
         const captured: string[] = [];
         const relayCtx = { ...ctx, reply: (msg: string) => captured.push(msg) };
-        await leaf.relayCommand(cmdName, cmdArgs.join(' '), handle, relayCtx, targetBot);
+        await link.leaf.relayCommand(cmdName, cmdArgs.join(' '), handle, relayCtx, targetBot);
         output = captured;
-      } else {
-        ctx.reply('Not connected to any bot link.');
-        return;
       }
 
       for (const line of output) ctx.reply(line);
@@ -437,10 +485,7 @@ export function registerBotlinkCommands(
       category: 'botlink',
     },
     (_args, ctx) => {
-      if (!config?.enabled) {
-        ctx.reply('Bot link is not enabled.');
-        return;
-      }
+      if (!requireEnabled(ctx, config)) return;
 
       const match = _args.trim().match(/^(\S+)\s+(\S+)\s+(.+)$/);
       if (!match) {
@@ -449,12 +494,12 @@ export function registerBotlinkCommands(
       }
       const [, botname, target, message] = match;
 
-      const sendLocal = () => {
+      const sendLocal = (): void => {
         if (ircSay) ircSay(sanitize(target), sanitize(message));
         else ctx.reply('IRC client not available on this bot.');
       };
 
-      const bsayFrame = { type: 'BSAY', target, message, toBot: botname };
+      const bsayFrame: LinkFrame = { type: 'BSAY', target, message, toBot: botname };
 
       if (botname === config.botname) {
         sendLocal();
@@ -474,17 +519,20 @@ export function registerBotlinkCommands(
       }
 
       // Specific remote bot
-      if (hub) {
-        if (!hub.getLeaves().includes(botname)) {
+      const link = requireBotLink(ctx, hub, leaf);
+      if (!link) return;
+      if (link.kind === 'hub') {
+        if (!link.hub.getLeaves().includes(botname)) {
           ctx.reply(`Bot "${botname}" is not connected.`);
           return;
         }
-        hub.send(botname, bsayFrame);
-      } else if (leaf?.isConnected) {
-        leaf.send(bsayFrame);
+        link.hub.send(botname, bsayFrame);
       } else {
-        ctx.reply('Not connected to any bot link.');
-        return;
+        if (!link.leaf.isConnected) {
+          ctx.reply('Not connected to any bot link.');
+          return;
+        }
+        link.leaf.send(bsayFrame);
       }
       ctx.reply(`Sent to ${target} via ${botname}.`);
     },
@@ -499,10 +547,7 @@ export function registerBotlinkCommands(
       category: 'botlink',
     },
     (_args, ctx) => {
-      if (!config?.enabled) {
-        ctx.reply('Bot link is not enabled.');
-        return;
-      }
+      if (!requireEnabled(ctx, config)) return;
 
       const message = _args.trim();
       if (!message) {
@@ -514,7 +559,11 @@ export function registerBotlinkCommands(
       dccManager?.announce?.(`*** ${message}`);
 
       // Send ANNOUNCE frame to all linked bots
-      const frame = { type: 'ANNOUNCE', message: `*** ${message}`, fromBot: config.botname };
+      const frame: LinkFrame = {
+        type: 'ANNOUNCE',
+        message: `*** ${message}`,
+        fromBot: config.botname,
+      };
       if (hub) {
         for (const leafName of hub.getLeaves()) hub.send(leafName, frame);
       } else if (leaf?.isConnected) {

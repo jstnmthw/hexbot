@@ -11,7 +11,6 @@
 import type { PluginAPI } from '../../src/types';
 import type { ProbeState } from './chanserv-notice';
 import { markProbePending } from './chanserv-notice';
-import { isBotNick } from './helpers';
 import type { ProtectionChain } from './protection-backend';
 import type { ChanmodConfig, SharedState } from './state';
 
@@ -116,7 +115,7 @@ export function setupJoinRecovery(opts: JoinRecoveryOptions): () => void {
   // cancelled and backoff continues escalating.
 
   api.bind('join', '-', '*', (ctx) => {
-    if (!isBotNick(api, ctx.nick)) return;
+    if (!api.isBotNick(ctx.nick)) return;
     const chanKey = api.ircLower(ctx.channel);
     probedChannels.delete(chanKey);
 

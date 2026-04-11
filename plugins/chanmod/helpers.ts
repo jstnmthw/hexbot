@@ -6,10 +6,6 @@ export function getBotNick(api: PluginAPI): string {
   return api.botConfig.irc.nick;
 }
 
-export function isBotNick(api: PluginAPI, nick: string): boolean {
-  return api.ircLower(nick) === api.ircLower(getBotNick(api));
-}
-
 export function botHasOps(api: PluginAPI, channel: string): boolean {
   const ch = api.getChannel(channel);
   if (!ch) return false;

@@ -1,6 +1,7 @@
 // HexBot — IRC admin commands
 // Registers .say, .join, .part, .invite, .status with the command handler.
 import type { CommandHandler } from '../../command-handler';
+import { isValidCommandTarget, parseTargetMessage } from '../../utils/parse-args';
 import { sanitize } from '../../utils/sanitize';
 
 /** Minimal IRC client interface for admin commands. */
@@ -38,21 +39,17 @@ export function registerIRCAdminCommands(
       category: 'irc',
     },
     (_args, ctx) => {
-      const spaceIdx = _args.indexOf(' ');
-      if (spaceIdx === -1 || !_args.trim()) {
+      const parsed = parseTargetMessage(_args);
+      if (!parsed) {
         ctx.reply('Usage: .say <target> <message>');
         return;
       }
-      const target = _args.substring(0, spaceIdx).trim();
-      const message = _args.substring(spaceIdx + 1).trim();
-      // Validate target looks like a channel or nick (no spaces, starts with # or alphanumeric)
-      if (!target || !/^[#&]?[^\s\r\n]+$/.test(target)) {
+      if (!isValidCommandTarget(parsed.target)) {
         ctx.reply('Invalid target.');
         return;
       }
-      const safe = sanitize(message);
-      client.say(target, safe);
-      ctx.reply(`Message sent to ${target}`);
+      client.say(parsed.target, sanitize(parsed.message));
+      ctx.reply(`Message sent to ${parsed.target}`);
     },
   );
 
@@ -105,20 +102,18 @@ export function registerIRCAdminCommands(
       category: 'irc',
     },
     (_args, ctx) => {
-      const spaceIdx = _args.indexOf(' ');
-      if (spaceIdx === -1 || !_args.trim()) {
+      const parsed = parseTargetMessage(_args);
+      if (!parsed) {
         ctx.reply('Usage: .msg <target> <message>');
         return;
       }
-      const rawTarget = _args.substring(0, spaceIdx);
-      const target = rawTarget.trim();
-      const message = _args.substring(spaceIdx + 1).trim();
-      if (!/^[^\s\r\n]+$/.test(rawTarget)) {
+      // .msg accepts any non-whitespace target (channel, nick, service).
+      if (!/^\S+$/.test(parsed.target)) {
         ctx.reply('Invalid target.');
         return;
       }
-      client.say(target, sanitize(message));
-      ctx.reply(`Message sent to ${target}`);
+      client.say(parsed.target, sanitize(parsed.message));
+      ctx.reply(`Message sent to ${parsed.target}`);
     },
   );
 

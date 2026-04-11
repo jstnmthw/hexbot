@@ -16,7 +16,7 @@ export function setupInvite(
 
     // Use the hostmask from the INVITE message directly — the IRC protocol
     // includes nick!ident@host so no channel state lookup is needed.
-    const fullHostmask = `${ctx.nick}!${ctx.ident}@${ctx.hostname}`;
+    const fullHostmask = api.buildHostmask(ctx);
     const user = api.permissions.findByHostmask(fullHostmask);
     if (!user) return;
 
