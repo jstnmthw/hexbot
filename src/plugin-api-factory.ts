@@ -346,28 +346,28 @@ function createPluginIrcActionsApi(
   | 'part'
   | 'changeNick'
 > {
-  function send(fn: () => void): void {
-    if (messageQueue) messageQueue.enqueue(fn);
+  function send(target: string, fn: () => void): void {
+    if (messageQueue) messageQueue.enqueue(target, fn);
     else fn();
   }
   return {
     say(target: string, message: string): void {
       const safe = sanitize(message);
-      send(() => ircClient?.say(target, safe));
+      send(target, () => ircClient?.say(target, safe));
     },
     action(target: string, message: string): void {
       const safe = sanitize(message);
-      send(() => ircClient?.action(target, safe));
+      send(target, () => ircClient?.action(target, safe));
     },
     notice(target: string, message: string): void {
       const safe = sanitize(message);
-      send(() => ircClient?.notice(target, safe));
+      send(target, () => ircClient?.notice(target, safe));
     },
     ctcpResponse(target: string, type: string, message: string): void {
       const safeTarget = sanitize(target),
         safeType = sanitize(type),
         safeMsg = sanitize(message);
-      send(() => ircClient?.ctcpResponse(safeTarget, safeType, safeMsg));
+      send(safeTarget, () => ircClient?.ctcpResponse(safeTarget, safeType, safeMsg));
     },
     op(channel: string, nick: string): void {
       ircCommands?.op(channel, nick);

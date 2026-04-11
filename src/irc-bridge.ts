@@ -612,9 +612,9 @@ export class IRCBridge {
   }): HandlerContext {
     const client = this.client;
     const queue = this.messageQueue;
-    const enqueue = (fn: () => void) => {
+    const enqueue = (target: string, fn: () => void) => {
       /* v8 ignore next -- queue.enqueue path: messageQueue is never set in tests (always null); tested via MessageQueue unit tests */
-      if (queue) queue.enqueue(fn);
+      if (queue) queue.enqueue(target, fn);
       else fn();
     };
     return {
@@ -623,13 +623,13 @@ export class IRCBridge {
         const target = fields.channel ?? fields.nick;
         const lines = splitMessage(sanitize(msg));
         for (const line of lines) {
-          enqueue(() => client.say(target, line));
+          enqueue(target, () => client.say(target, line));
         }
       },
       replyPrivate: (msg: string) => {
         const lines = splitMessage(sanitize(msg));
         for (const line of lines) {
-          enqueue(() => client.notice(fields.nick, line));
+          enqueue(fields.nick, () => client.notice(fields.nick, line));
         }
       },
     };

@@ -183,7 +183,7 @@ export class Bot {
     }
     this.dispatcher.setFloodNotice({
       sendNotice: (nick: string, msg: string) => {
-        this.messageQueue.enqueue(() => this.client.notice(nick, msg));
+        this.messageQueue.enqueue(nick, () => this.client.notice(nick, msg));
       },
     });
 
@@ -497,6 +497,11 @@ export class Bot {
             this.channelState.setCapabilities(caps);
             this.ircCommands.setCapabilities(caps);
             this.bridge?.setCapabilities(caps);
+            // Feed TARGMAX into the message queue. It's advisory (hexbot
+            // never sends multi-target PRIVMSG lines) but surfaced so
+            // plugins can inspect it via the queue for future multi-target
+            // logic — see docs/audits/irc-logic-2026-04-11.md §10.
+            this.messageQueue.setTargmax(caps.targmax);
           },
           onReconnecting: () => {
             // Drop cached services-account state so a user who took a
