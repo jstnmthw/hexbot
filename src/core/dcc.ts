@@ -439,7 +439,7 @@ export class DCCSession implements DCCSessionEntry {
     if (this.closed) return;
     this.closed = true;
 
-    clearTimeout(this.idleTimer!);
+    if (this.idleTimer !== null) clearTimeout(this.idleTimer);
     this.idleTimer = null;
 
     // Remove from manager and announce departure

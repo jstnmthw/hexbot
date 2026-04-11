@@ -459,8 +459,9 @@ export class PluginLoader {
       pluginId,
       bind(type: BindType, flags: string, mask: string, handler: BindHandler): void {
         if (scopeSet) {
+          const boundScope = scopeSet;
           const wrapped: BindHandler = (ctx: HandlerContext) => {
-            if (ctx.channel !== null && !scopeSet!.has(ircLower(ctx.channel, getCasemapping()))) {
+            if (ctx.channel !== null && !boundScope.has(ircLower(ctx.channel, getCasemapping()))) {
               return;
             }
             return handler(ctx);
@@ -976,27 +977,29 @@ function createPluginChannelSettingsApi(
   channelSettings: ChannelSettings | null | undefined,
   pluginId: string,
 ): PluginChannelSettings {
+  // When channelSettings is absent (e.g. minimal test harness), reads return
+  // the "nothing registered" default for that return type rather than throwing.
   return Object.freeze({
     register(defs: ChannelSettingDef[]): void {
       channelSettings?.register(pluginId, defs);
     },
     get(channel: string, key: string): ChannelSettingValue {
-      return channelSettings!.get(channel, key);
+      return channelSettings?.get(channel, key) ?? '';
     },
     getFlag(channel: string, key: string): boolean {
-      return channelSettings!.getFlag(channel, key);
+      return channelSettings?.getFlag(channel, key) ?? false;
     },
     getString(channel: string, key: string): string {
-      return channelSettings!.getString(channel, key);
+      return channelSettings?.getString(channel, key) ?? '';
     },
     getInt(channel: string, key: string): number {
-      return channelSettings!.getInt(channel, key);
+      return channelSettings?.getInt(channel, key) ?? 0;
     },
     set(channel: string, key: string, value: ChannelSettingValue): void {
       channelSettings?.set(channel, key, value);
     },
     isSet(channel: string, key: string): boolean {
-      return channelSettings!.isSet(channel, key);
+      return channelSettings?.isSet(channel, key) ?? false;
     },
     onChange(callback: (channel: string, key: string, value: ChannelSettingValue) => void): void {
       channelSettings?.onChange(pluginId, callback);
@@ -1013,7 +1016,7 @@ function createPluginHelpApi(
       helpRegistry?.register(pluginId, entries);
     },
     getHelpEntries(): HelpEntry[] {
-      return helpRegistry!.getAll();
+      return helpRegistry?.getAll() ?? [];
     },
   };
 }

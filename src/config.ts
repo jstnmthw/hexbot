@@ -249,8 +249,11 @@ const ENV_SUFFIX_RE = /^(.+)_env$/;
  * - `_env` value is non-string (array/object/number): leave as-is, warn.
  * - Both `field` and `field_env` present: `_env` wins, warn (config drift).
  */
-export function resolveSecrets<T>(obj: T): T {
-  return resolveValue(obj) as T;
+export function resolveSecrets(obj: BotConfigOnDisk): BotConfig;
+export function resolveSecrets(obj: Record<string, unknown>): Record<string, unknown>;
+export function resolveSecrets<T>(obj: T): T;
+export function resolveSecrets(obj: unknown): unknown {
+  return resolveValue(obj);
 }
 
 function resolveValue(value: unknown): unknown {

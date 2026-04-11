@@ -593,7 +593,7 @@ export class Bot {
       // Resolve `_env` suffix fields from process.env into their sibling
       // non-suffixed fields. After this, internal code reads the resolved
       // runtime BotConfig shape (services.password, botlink.password, etc.).
-      const resolved = resolveSecrets(onDisk) as unknown as BotConfig;
+      const resolved = resolveSecrets(onDisk);
       validateResolvedSecrets(resolved);
       // Channels keyed via key_env need their own post-resolution check —
       // the resolver drops unset env vars, so validateResolvedSecrets can't

@@ -1004,7 +1004,7 @@ export class BotLinkHub {
     const conn = this.leaves.get(botname);
     if (!conn) return;
 
-    clearInterval(conn.pingTimer!); // clearInterval(null) is a no-op
+    if (conn.pingTimer !== null) clearInterval(conn.pingTimer);
     conn.pingTimer = null;
     this.leaves.delete(botname);
 
@@ -1024,7 +1024,7 @@ export class BotLinkHub {
       // Check for link timeout
       if (Date.now() - conn.lastMessageAt > this.linkTimeoutMs) {
         this.logger?.warn(`Leaf "${conn.botname}" timed out`);
-        clearInterval(conn.pingTimer!);
+        if (conn.pingTimer !== null) clearInterval(conn.pingTimer);
         conn.pingTimer = null;
         this.leaves.delete(conn.botname);
         this.cleanupLeafState(conn.botname);

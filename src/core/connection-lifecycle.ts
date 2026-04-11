@@ -205,12 +205,24 @@ function applyCasemapping(deps: ConnectionLifecycleDeps): void {
 
 /** Log TLS cipher info from the underlying socket. */
 function logTlsCipher(client: LifecycleIRCClient, logger: Logger): void {
-  // Access the TLS socket through irc-framework's internal connection/transport chain.
-  // Using optional chaining throughout since this is private API.
-  type InternalClient = { connection?: { transport?: { socket?: unknown } } };
+  // irc-framework does not expose the underlying socket in its public types, so
+  // we walk the private connection/transport chain via `unknown`. Double-cast
+  // would be needed because `LifecycleIRCClient` and `InternalClient` are
+  // structurally unrelated; going through `unknown` keeps it honest.
+  interface TlsCipherSocket {
+    getCipher(): { name: string; version: string };
+  }
+  interface InternalClient {
+    connection?: { transport?: { socket?: unknown } };
+  }
   const tlsSocket = (client as unknown as InternalClient).connection?.transport?.socket;
-  if (tlsSocket && typeof (tlsSocket as Record<string, unknown>).getCipher === 'function') {
-    const cipher = (tlsSocket as { getCipher(): { name: string; version: string } }).getCipher();
+  if (
+    tlsSocket !== null &&
+    typeof tlsSocket === 'object' &&
+    'getCipher' in tlsSocket &&
+    typeof (tlsSocket as TlsCipherSocket).getCipher === 'function'
+  ) {
+    const cipher = (tlsSocket as TlsCipherSocket).getCipher();
     logger.info(`TLS connected — ${cipher.name} (${cipher.version})`);
   } else {
     logger.info('TLS connected');
