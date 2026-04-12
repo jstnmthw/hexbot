@@ -1,0 +1,7 @@
+{
+  "feeds": [],
+  "dedup_window_days": 30,
+  "max_title_length": 300,
+  "request_timeout_ms": 10000,
+  "max_per_poll": 5
+}

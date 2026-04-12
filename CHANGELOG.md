@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **RSS plugin** (`plugins/rss/`): polls RSS/Atom feeds and announces new items to configured channels. Single 60s `time` bind drives all feeds with per-feed interval tracking; SHA-1-based deduplication via the KV store survives restarts; first-run silent seeding prevents backlog floods. Admin commands `!rss list/add/remove/check` (flags `m`) reply via private notice while feed announcements go to channels. Runtime-added feeds persist in KV alongside config-file feeds. Daily cleanup of dedup entries past `dedup_window_days`. New `rss-parser` dependency.
 - `d` (deop) permission flag — elective flag that suppresses auto-op/halfop on join without revoking privileges; user can still `.op` themselves or be opped manually; mode enforcement and bitch mode respect `+d`; auto-voice still works with explicit `+v`
 - Per-plugin channel scoping via `channels` array in `plugins.json` — restricts a plugin to specific channels
 - Greeter help now documents `{nick}` and `{channel}` substitution variables and sub-command help for `!greet set` and `!greet del`

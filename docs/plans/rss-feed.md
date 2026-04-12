@@ -24,7 +24,7 @@ A plugin that polls RSS/Atom feeds and announces new items to configured IRC cha
 - [x] `src/database.ts` — KV store
 - [x] Dispatcher `time` bind type
 - [x] `api.say()` / message queue
-- [ ] `rss-parser` npm package (new dependency)
+- [x] `rss-parser` npm package (new dependency)
 
 ## Phases
 
@@ -32,11 +32,11 @@ A plugin that polls RSS/Atom feeds and announces new items to configured IRC cha
 
 **Goal:** Install `rss-parser`, scaffold the plugin structure, define config schema.
 
-- [ ] Run `pnpm add rss-parser` (ships its own TypeScript types, no `@types/` package needed)
-- [ ] Create `plugins/rss/index.ts` with `name`, `version`, `description`, `init`, `teardown` exports
-- [ ] Create `plugins/rss/config.json` with defaults (`dedup_window_days: 30`, `max_title_length: 300`, `request_timeout_ms: 10000`, `max_per_poll: 5`, `feeds: []`)
-- [ ] Create `plugins/rss/README.md` with config documentation
-- [ ] Verify plugin loads with `pnpm dev` and empty feeds list (should log startup and do nothing)
+- [x] Run `pnpm add rss-parser` (ships its own TypeScript types, no `@types/` package needed)
+- [x] Create `plugins/rss/index.ts` with `name`, `version`, `description`, `init`, `teardown` exports
+- [x] Create `plugins/rss/config.json` with defaults (`dedup_window_days: 30`, `max_title_length: 300`, `request_timeout_ms: 10000`, `max_per_poll: 5`, `feeds: []`)
+- [x] Create `plugins/rss/README.md` with config documentation
+- [x] Verify plugin loads with `pnpm dev` and empty feeds list (should log startup and do nothing)
 
 ### Phase 2: Feed polling and deduplication
 
@@ -53,13 +53,13 @@ Where `feed_id` is the feed's `id` field (user-defined slug), and `item_hash` is
 
 **Implementation:**
 
-- [ ] Write `hashItem(item: FeedItem): string` — `createHash('sha1')` on guid or title+link, return first 16 hex chars
-- [ ] Write `hasSeen(api, feedId, hash): boolean` — checks `api.db.get('rss:seen:<feedId>:<hash>')`
-- [ ] Write `markSeen(api, feedId, hash): void` — `api.db.set(...)` with current ISO timestamp
-- [ ] Write `getLastPoll(api, feedId): number` — parses KV timestamp, returns 0 if absent
-- [ ] Write `setLastPoll(api, feedId): void` — stores current ISO timestamp
-- [ ] Write `pollFeed(api, feed, config, announce): Promise<FeedItem[]>` — fetches URL with `rss-parser`, filters unseen items, marks them seen, caps at `max_per_poll`; when `announce = false`, marks all items seen and returns `[]`
-- [ ] In `init()`: call `pollFeed(..., false)` for each feed (silent first-run seeding), then register a single `time` bind at `'60'` seconds that polls feeds whose interval has elapsed
+- [x] Write `hashItem(item: FeedItem): string` — `createHash('sha1')` on guid or title+link, return first 16 hex chars
+- [x] Write `hasSeen(api, feedId, hash): boolean` — checks `api.db.get('rss:seen:<feedId>:<hash>')`
+- [x] Write `markSeen(api, feedId, hash): void` — `api.db.set(...)` with current ISO timestamp
+- [x] Write `getLastPoll(api, feedId): number` — parses KV timestamp, returns 0 if absent
+- [x] Write `setLastPoll(api, feedId): void` — stores current ISO timestamp
+- [x] Write `pollFeed(api, feed, config, announce): Promise<FeedItem[]>` — fetches URL with `rss-parser`, filters unseen items, marks them seen, caps at `max_per_poll`; when `announce = false`, marks all items seen and returns `[]`
+- [x] In `init()`: call `pollFeed(..., false)` for each feed (silent first-run seeding), then register a single `time` bind at `'60'` seconds that polls feeds whose interval has elapsed
 - [ ] Verification: Load plugin, observe KV populated with seen entries; reload plugin, confirm no items re-announced
 
 ### Phase 3: IRC announcement and formatting
@@ -70,25 +70,25 @@ Where `feed_id` is the feed's `id` field (user-defined slug), and `item_hash` is
 
 Where `\x02` is IRC bold. Title is truncated to `max_title_length` chars with `…` appended if cut.
 
-- [ ] Write `formatItem(feed, item, config): string` — strips HTML from title (`/<[^>]*>/g`), truncates, applies bold feed name prefix
-- [ ] Write `announceItems(api, feed, items): Promise<void>` — `api.say(channel, formatted)` for each item × each channel, with a 500ms delay between sends to avoid bursting
-- [ ] If `feeds[].channels` is empty, skip and log a warning; don't announce to channels the feed isn't configured for
+- [x] Write `formatItem(feed, item, config): string` — strips HTML from title (`/<[^>]*>/g`), truncates, applies bold feed name prefix
+- [x] Write `announceItems(api, feed, items): Promise<void>` — `api.say(channel, formatted)` for each item × each channel, with a 500ms delay between sends to avoid bursting
+- [x] If `feeds[].channels` is empty, skip and log a warning; don't announce to channels the feed isn't configured for
 - [ ] Verification: Configure a known feed, trigger a `!rss check` (Phase 5), observe formatted announcements in the test channel
 
 ### Phase 4: Cleanup and error handling
 
 **Goal:** Prevent stale KV entries from accumulating; handle network/parse failures gracefully.
 
-- [ ] Write `cleanupSeen(api, config): void` — `api.db.list('rss:seen:')` → delete entries older than `dedup_window_days` days
-- [ ] Register a `time` bind at `'86400'` (daily) that calls `cleanupSeen`
-- [ ] Wrap each `pollFeed` call in try/catch — on error, log `[plugin:rss] Error polling <url>: <msg>` and skip; do NOT update `last_poll` so it retries on the next tick
-- [ ] Handle `rss-parser` parse errors (malformed XML, non-RSS responses) the same way
-- [ ] Set fetch timeout via `rss-parser`'s `timeout` option (`request_timeout_ms` from config)
+- [x] Write `cleanupSeen(api, config): void` — `api.db.list('rss:seen:')` → delete entries older than `dedup_window_days` days
+- [x] Register a `time` bind at `'86400'` (daily) that calls `cleanupSeen`
+- [x] Wrap each `pollFeed` call in try/catch — on error, log `[plugin:rss] Error polling <url>: <msg>` and skip; do NOT update `last_poll` so it retries on the next tick
+- [x] Handle `rss-parser` parse errors (malformed XML, non-RSS responses) the same way
+- [x] Set fetch timeout via `rss-parser`'s `timeout` option (`request_timeout_ms` from config)
 - [ ] Verification: Point at a non-existent URL, confirm bot logs an error and doesn't crash or update `last_poll`
 
 ### Phase 5: Admin commands
 
-**Goal:** Let operators manage feeds at runtime via IRC and manually trigger polls.
+**Goal:** Let operators manage feeds at runtime via IRC and manually trigger polls. All command responses use `api.notice(ctx.nick, ...)` (private notice to the invoking user), not channel messages. Feed announcements from polling continue to use `api.say(channel, ...)` as public channel messages.
 
 **Commands** (all require `m` master flags, except `!rss check` which requires `o` op):
 
@@ -103,30 +103,30 @@ Where `\x02` is IRC bold. Title is truncated to `max_title_length` chars with `�
 
 **Implementation:**
 
-- [ ] Write `loadRuntimeFeeds(api): FeedConfig[]` — `api.db.list('rss:feed:')` → parse JSON values
-- [ ] Write `saveRuntimeFeed(api, feed): void` — `api.db.set('rss:feed:<id>', JSON.stringify(feed))`
-- [ ] Write `deleteRuntimeFeed(api, id): void` — `api.db.del('rss:feed:<id>')`
-- [ ] In `init()`, call `loadRuntimeFeeds` and merge with config feeds into a mutable `activeFeedsMap`
-- [ ] Register `pub` bind on `!rss` with `m` flags — dispatch to subcommand handlers based on `ctx.args`
-- [ ] Implement `!rss list` handler — formats and replies with feed table
-- [ ] Implement `!rss add` handler — validates args, creates `FeedConfig`, saves to KV, calls `pollFeed(..., false)` to seed without announcing, adds to `activeFeedsMap`
-- [ ] Implement `!rss remove` handler — checks feed is runtime-added (not from config), deletes from KV and `activeFeedsMap`
-- [ ] Implement `!rss check` handler (requires `o` flags) — calls `pollFeed(..., true)` for the specified feed(s), announces any new items
-- [ ] Register help entries for all `!rss` subcommands via `api.registerHelp()`
+- [x] Write `loadRuntimeFeeds(api): FeedConfig[]` — `api.db.list('rss:feed:')` → parse JSON values
+- [x] Write `saveRuntimeFeed(api, feed): void` — `api.db.set('rss:feed:<id>', JSON.stringify(feed))`
+- [x] Write `deleteRuntimeFeed(api, id): void` — `api.db.del('rss:feed:<id>')`
+- [x] In `init()`, call `loadRuntimeFeeds` and merge with config feeds into a mutable `activeFeedsMap`
+- [x] Register `pub` bind on `!rss` with `m` flags — dispatch to subcommand handlers based on `ctx.args`
+- [x] Implement `!rss list` handler — formats feed table and sends via `api.notice(ctx.nick, ...)` per line
+- [x] Implement `!rss add` handler — validates args, creates `FeedConfig`, saves to KV, calls `pollFeed(..., false)` to seed without announcing, adds to `activeFeedsMap`, confirms via `api.notice(ctx.nick, ...)`
+- [x] Implement `!rss remove` handler — checks feed is runtime-added (not from config), deletes from KV and `activeFeedsMap`, confirms via `api.notice(ctx.nick, ...)`
+- [x] Implement `!rss check` handler (requires `o` flags) — calls `pollFeed(..., true)` for the specified feed(s), announces new items to channels via `api.say()`, confirms check status via `api.notice(ctx.nick, ...)`
+- [x] Register help entries for all `!rss` subcommands via `api.registerHelp()`
 - [ ] Verification: Add a feed via `!rss add`, observe it in `!rss list`, trigger `!rss check`, remove with `!rss remove`
 
 ### Phase 6: Tests
 
 **Goal:** Unit-test the pure functions; integration-test polling logic with a mock feed.
 
-- [ ] Create `tests/plugins/rss.test.ts`
-- [ ] Test `hashItem()` — deterministic hash for same guid, fallback to title+link, 16-char hex output
-- [ ] Test `formatItem()` — HTML stripping, title truncation at `max_title_length`, bold feed name prefix
-- [ ] Test `hasSeen()` / `markSeen()` — KV round-trip with in-memory SQLite
-- [ ] Test `cleanupSeen()` — old entries deleted, recent entries kept
-- [ ] Integration test `pollFeed()` with mocked `rss-parser` — first poll (announce=false) marks all seen and returns `[]`; second poll returns `[]` (already seen); new item on third poll returns one item
-- [ ] Test `!rss add` / `!rss remove` / `!rss list` command handlers
-- [ ] Error handling: mocked `rss-parser` throws → no crash, no `last_poll` update
+- [x] Create `tests/plugins/rss.test.ts`
+- [x] Test `hashItem()` — deterministic hash for same guid, fallback to title+link, 16-char hex output
+- [x] Test `formatItem()` — HTML stripping, title truncation at `max_title_length`, bold feed name prefix
+- [x] Test `hasSeen()` / `markSeen()` — KV round-trip with in-memory SQLite
+- [x] Test `cleanupSeen()` — old entries deleted, recent entries kept
+- [x] Integration test `pollFeed()` with mocked `rss-parser` — first poll (announce=false) marks all seen and returns `[]`; second poll returns `[]` (already seen); new item on third poll returns one item
+- [x] Test `!rss add` / `!rss remove` / `!rss list` command handlers
+- [x] Error handling: mocked `rss-parser` throws → no crash, no `last_poll` update
 - [ ] Verification: `pnpm test` passes all new tests
 
 ## Config changes

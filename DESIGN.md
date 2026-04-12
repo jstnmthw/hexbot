@@ -107,6 +107,7 @@ hexbot/
 │   ├── flood/                # Flood detection, escalation, and channel lockdown
 │   ├── greeter/              # Configurable join greeting
 │   ├── help/                 # Help system (!help command)
+│   ├── rss/                  # RSS/Atom feed announcer
 │   ├── seen/                 # Last-seen tracking (!seen command)
 │   └── topic/                # Topic rotation and themed messages
 ├── types/                    # Exported TypeScript declarations
@@ -656,7 +657,7 @@ What differs between networks and how we handle it:
 
 All core infrastructure is implemented and production-ready. See [CHANGELOG.md](CHANGELOG.md) for a full implementation history.
 
-**Shipped plugins:** `8ball`, `chanmod`, `ctcp`, `flood`, `greeter`, `help`, `seen`, `topic`
+**Shipped plugins:** `8ball`, `chanmod`, `ctcp`, `flood`, `greeter`, `help`, `rss`, `seen`, `topic`
 
 **Shipped core features:** bot linking (hub/leaf), DCC CHAT console, channel takeover protection, persistent channel rejoin, IRCv3 STS enforcement, account-based identity matching
 
