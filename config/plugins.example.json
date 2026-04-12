@@ -55,12 +55,18 @@
       "msg_window_secs": 3,
       "join_threshold": 3,
       "join_window_secs": 60,
+      "part_threshold": 3,
+      "part_window_secs": 60,
       "nick_threshold": 3,
       "nick_window_secs": 60,
       "ban_duration_minutes": 10,
       "ignore_ops": true,
       "actions": ["warn", "kick", "tempban"],
-      "offence_window_ms": 300000
+      "offence_window_ms": 300000,
+      "flood_lock_count": 3,
+      "flood_lock_window": 60,
+      "flood_lock_duration": 60,
+      "flood_lock_mode": "R"
     }
   },
   "greeter": {

@@ -1,12 +1,21 @@
 // flood — Inbound flood protection plugin.
-// Detects message floods, join spam, and nick-change spam.
+// Detects message floods, join spam, part spam, and nick-change spam.
 // Escalating responses: warn → kick → tempban (configurable).
-import type { ChannelHandlerContext, JoinContext, NickContext, PluginAPI } from '../../src/types';
+// Channel lockdown: sets +R (or +i fallback) when multiple distinct users
+// trip the join/part flood detector within a window.
+import type {
+  ChannelHandlerContext,
+  JoinContext,
+  NickContext,
+  PartContext,
+  PluginAPI,
+} from '../../src/types';
 import { SlidingWindowCounter } from '../../src/utils/sliding-window';
 
 export const name = 'flood';
 export const version = '1.0.0';
-export const description = 'Inbound flood protection: message rate, join spam, nick-change spam';
+export const description =
+  'Inbound flood protection: message rate, join/part spam, nick-change spam, channel lockdown';
 
 let api: PluginAPI;
 
@@ -33,6 +42,9 @@ interface FloodConfig {
   joinThreshold: number;
   joinWindowSecs: number;
   joinWindowMs: number;
+  partThreshold: number;
+  partWindowSecs: number;
+  partWindowMs: number;
   nickThreshold: number;
   nickWindowSecs: number;
   nickWindowMs: number;
@@ -40,6 +52,10 @@ interface FloodConfig {
   ignoreOps: boolean;
   actions: string[];
   offenceWindowMs: number;
+  lockCount: number;
+  lockWindowMs: number;
+  lockDurationMs: number;
+  defaultLockMode: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -50,13 +66,42 @@ interface FloodConfig {
 
 let msgTracker: SlidingWindowCounter;
 let joinTracker: SlidingWindowCounter;
+let partTracker: SlidingWindowCounter;
 let nickTracker: SlidingWindowCounter;
 let offenceTracker: Map<string, OffenceEntry>; // `${nick}@${channel}` or `${hostmask}`
 let cfg: FloodConfig;
 
+// Channel lockdown state: tracks distinct flooders per channel and active locks.
+let lockFlooders: Map<string, Set<string>>; // channel → set of hostmasks that tripped join/part flood
+let lockFloderTimestamps: Map<string, number[]>; // channel → timestamps of flooder detections
+let activeLocks: Map<string, ReturnType<typeof setTimeout>>; // channel → unlock timer
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** Shared error handler for fire-and-forget flood actions. */
+function logFloodError(err: unknown): void {
+  api.error('Flood action error:', err);
+}
+
+/** Read a numeric config value with fallback. */
+function cfgNum(key: string, fallback: number): number {
+  const v = api.config[key];
+  return typeof v === 'number' ? v : fallback;
+}
+
+/** Read a boolean config value with fallback. */
+function cfgBool(key: string, fallback: boolean): boolean {
+  const v = api.config[key];
+  return typeof v === 'boolean' ? v : fallback;
+}
+
+/** Read a string config value with fallback. */
+function cfgStr(key: string, fallback: string): string {
+  const v = api.config[key];
+  return typeof v === 'string' ? v : fallback;
+}
 
 /** Returns true if the tracker has seen more than `threshold` events in `windowMs`. */
 function isFloodTriggered(
@@ -76,10 +121,18 @@ function botHasOps(channel: string): boolean {
   return botUser?.modes.includes('o') ?? false;
 }
 
-/** Return true if the nick has any privileged flag (n/m/o) in the channel. */
-function isPrivileged(nick: string, channel: string, ignoreOps: boolean): boolean {
+/** Return true if the nick has any privileged flag (n/m/o) in the channel.
+ *  When `knownHostmask` is provided (e.g. from ctx for part events where the
+ *  user has already left channel state), it skips the channel-state lookup.
+ */
+function isPrivileged(
+  nick: string,
+  channel: string,
+  ignoreOps: boolean,
+  knownHostmask?: string,
+): boolean {
   if (!ignoreOps) return false;
-  const hostmask = api.getUserHostmask(channel, nick);
+  const hostmask = knownHostmask ?? api.getUserHostmask(channel, nick);
   if (!hostmask) return false;
   const user = api.permissions.findByHostmask(hostmask);
   if (!user) return false;
@@ -97,6 +150,80 @@ function buildFloodBanMask(hostmask: string): string | null {
   const host = hostmask.substring(atIdx + 1);
   if (!host) return null;
   return `*!*@${host}`;
+}
+
+// ---------------------------------------------------------------------------
+// Channel lockdown helpers
+// ---------------------------------------------------------------------------
+
+/** Determine the lock mode for a channel (chanset with registered default handles fallback). */
+function getLockMode(channel: string): string {
+  return api.channelSettings.getString(channel, 'flood_lock_mode');
+}
+
+/**
+ * Record that a distinct flooder (by hostmask) tripped join/part flood in a channel.
+ * When enough distinct flooders accumulate within the window, trigger lockdown.
+ */
+function recordFloodForLockdown(channel: string, hostmask: string): void {
+  if (cfg.lockCount <= 0) return; // lockdown disabled
+
+  const lowerChannel = api.ircLower(channel);
+  const lowerMask = api.ircLower(hostmask);
+
+  // Get or create the set of distinct flooders for this channel
+  if (!lockFlooders.has(lowerChannel)) {
+    lockFlooders.set(lowerChannel, new Set());
+    lockFloderTimestamps.set(lowerChannel, []);
+  }
+  const flooders = lockFlooders.get(lowerChannel)!;
+  const timestamps = lockFloderTimestamps.get(lowerChannel)!;
+
+  // Only count each hostmask once
+  if (flooders.has(lowerMask)) return;
+
+  const now = Date.now();
+  flooders.add(lowerMask);
+  timestamps.push(now);
+
+  // Prune timestamps outside the window
+  const cutoff = now - cfg.lockWindowMs;
+  while (timestamps.length > 0 && timestamps[0] < cutoff) {
+    timestamps.shift();
+  }
+
+  // If enough distinct flooders in window, trigger lockdown
+  if (timestamps.length >= cfg.lockCount && !activeLocks.has(lowerChannel)) {
+    triggerLockdown(channel);
+  }
+}
+
+function triggerLockdown(channel: string): void {
+  if (!botHasOps(channel)) return;
+
+  const lowerChannel = api.ircLower(channel);
+  const mode = getLockMode(channel);
+
+  api.mode(channel, `+${mode}`);
+  api.log(`Channel lockdown: set +${mode} on ${channel} (flood detected)`);
+
+  // Schedule auto-unlock
+  const timer = setTimeout(() => {
+    liftLockdown(channel, mode);
+  }, cfg.lockDurationMs);
+  activeLocks.set(lowerChannel, timer);
+}
+
+function liftLockdown(channel: string, mode: string): void {
+  const lowerChannel = api.ircLower(channel);
+  activeLocks.delete(lowerChannel);
+  lockFlooders.delete(lowerChannel);
+  lockFloderTimestamps.delete(lowerChannel);
+
+  if (botHasOps(channel)) {
+    api.mode(channel, `-${mode}`);
+    api.log(`Channel lockdown lifted: -${mode} on ${channel}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -214,13 +341,33 @@ function handleJoinFlood(ctx: JoinContext): void {
   if (!isFloodTriggered(joinTracker, key, cfg.joinWindowMs, cfg.joinThreshold)) return;
   if (isPrivileged(ctx.nick, channel, cfg.ignoreOps)) return;
   const action = recordOffence(cfg.actions, cfg.offenceWindowMs, key);
+  recordFloodForLockdown(channel, hostmask);
   applyAction(
     cfg.banDurationMinutes,
     action,
     channel,
     ctx.nick,
     `join flood (${cfg.joinThreshold}+ joins/${cfg.joinWindowSecs}s)`,
-  ).catch((err) => api.error('Join flood action error:', err));
+  ).catch(logFloodError);
+}
+
+function handlePartFlood(ctx: PartContext): void {
+  const { channel } = ctx;
+  if (api.isBotNick(ctx.nick)) return;
+  const hostmask = api.buildHostmask(ctx);
+  const key = `part:${api.ircLower(hostmask)}`;
+  if (!isFloodTriggered(partTracker, key, cfg.partWindowMs, cfg.partThreshold)) return;
+  // Pass hostmask directly — user has already left channel state by the time the part bind fires
+  if (isPrivileged(ctx.nick, channel, cfg.ignoreOps, hostmask)) return;
+  const action = recordOffence(cfg.actions, cfg.offenceWindowMs, key);
+  recordFloodForLockdown(channel, hostmask);
+  applyAction(
+    cfg.banDurationMinutes,
+    action,
+    channel,
+    ctx.nick,
+    `part flood (${cfg.partThreshold}+ parts/${cfg.partWindowSecs}s)`,
+  ).catch(logFloodError);
 }
 
 function handleNickFlood(ctx: NickContext): void {
@@ -242,7 +389,7 @@ function handleNickFlood(ctx: NickContext): void {
       channel,
       newNick,
       `nick-change spam (${cfg.nickThreshold}+ changes/${cfg.nickWindowSecs}s)`,
-    ).catch((err) => api.error('Nick flood action error:', err));
+    ).catch(logFloodError);
     break;
   }
 }
@@ -257,30 +404,56 @@ export function init(pluginApi: PluginAPI): void {
   // Fresh state on each load/reload
   msgTracker = new SlidingWindowCounter();
   joinTracker = new SlidingWindowCounter();
+  partTracker = new SlidingWindowCounter();
   nickTracker = new SlidingWindowCounter();
   offenceTracker = new Map();
+  lockFlooders = new Map();
+  lockFloderTimestamps = new Map();
+  activeLocks = new Map();
 
-  const msgWindowSecs = (api.config.msg_window_secs as number | undefined) ?? 3;
-  const joinWindowSecs = (api.config.join_window_secs as number | undefined) ?? 60;
-  const nickWindowSecs = (api.config.nick_window_secs as number | undefined) ?? 60;
+  const msgWindowSecs = cfgNum('msg_window_secs', 3);
+  const joinWindowSecs = cfgNum('join_window_secs', 60);
+  const partWindowSecs = cfgNum('part_window_secs', 60);
+  const nickWindowSecs = cfgNum('nick_window_secs', 60);
+  const lockWindowSecs = cfgNum('flood_lock_window', 60);
+  const lockDurationSecs = cfgNum('flood_lock_duration', 60);
   cfg = {
-    msgThreshold: (api.config.msg_threshold as number | undefined) ?? 5,
+    msgThreshold: cfgNum('msg_threshold', 5),
     msgWindowSecs,
     msgWindowMs: msgWindowSecs * 1000,
-    joinThreshold: (api.config.join_threshold as number | undefined) ?? 3,
+    joinThreshold: cfgNum('join_threshold', 3),
     joinWindowSecs,
     joinWindowMs: joinWindowSecs * 1000,
-    nickThreshold: (api.config.nick_threshold as number | undefined) ?? 3,
+    partThreshold: cfgNum('part_threshold', 3),
+    partWindowSecs,
+    partWindowMs: partWindowSecs * 1000,
+    nickThreshold: cfgNum('nick_threshold', 3),
     nickWindowSecs,
     nickWindowMs: nickWindowSecs * 1000,
-    banDurationMinutes: (api.config.ban_duration_minutes as number | undefined) ?? 10,
-    ignoreOps: (api.config.ignore_ops as boolean | undefined) ?? true,
+    banDurationMinutes: cfgNum('ban_duration_minutes', 10),
+    ignoreOps: cfgBool('ignore_ops', true),
     actions: (api.config.actions as string[] | undefined) ?? ['warn', 'kick', 'tempban'],
-    offenceWindowMs: (api.config.offence_window_ms as number | undefined) ?? 300_000,
+    offenceWindowMs: cfgNum('offence_window_ms', 300_000),
+    lockCount: cfgNum('flood_lock_count', 3),
+    lockWindowMs: lockWindowSecs * 1000,
+    lockDurationMs: lockDurationSecs * 1000,
+    defaultLockMode: cfgStr('flood_lock_mode', 'R'),
   };
+
+  // Register per-channel lockdown settings
+  api.channelSettings.register([
+    {
+      key: 'flood_lock_mode',
+      type: 'string',
+      default: cfg.defaultLockMode,
+      description: 'Channel mode to set on flood lockdown (R = registered-only, i = invite-only)',
+      allowedValues: ['R', 'i'],
+    },
+  ]);
 
   api.bind('pubm', '-', '*', handleMsgFlood);
   api.bind('join', '-', '*', handleJoinFlood);
+  api.bind('part', '-', '*', handlePartFlood);
   api.bind('nick', '-', '*', handleNickFlood);
   api.bind('time', '-', '60', liftExpiredFloodBans);
 }
@@ -292,6 +465,11 @@ export function init(pluginApi: PluginAPI): void {
 export function teardown(): void {
   msgTracker.reset();
   joinTracker.reset();
+  partTracker.reset();
   nickTracker.reset();
   offenceTracker.clear();
+  lockFlooders.clear();
+  lockFloderTimestamps.clear();
+  for (const timer of activeLocks.values()) clearTimeout(timer);
+  activeLocks.clear();
 }

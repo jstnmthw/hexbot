@@ -874,6 +874,769 @@ describe('flood plugin — tempban fallback when buildFloodBanMask returns null'
 });
 
 // ---------------------------------------------------------------------------
+// Part flood tests
+// ---------------------------------------------------------------------------
+
+function simulatePart(
+  bot: MockBot,
+  nick: string,
+  ident: string,
+  hostname: string,
+  channel: string,
+  reason = '',
+): void {
+  bot.client.simulateEvent('part', { nick, ident, hostname, channel, message: reason });
+}
+
+describe('flood plugin — part flood', () => {
+  let bot: MockBot;
+
+  beforeAll(async () => {
+    bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
+      flood: {
+        enabled: true,
+        channels: ['#test'],
+        config: {
+          part_threshold: 2,
+          part_window_secs: 60,
+          actions: ['warn', 'kick'],
+          ignore_ops: false,
+          flood_lock_count: 0, // disable lockdown so we test part flood in isolation
+        },
+      },
+    });
+    expect(result.status).toBe('ok');
+  });
+
+  afterAll(() => {
+    bot.cleanup();
+  });
+
+  beforeEach(() => {
+    bot.client.clearMessages();
+  });
+
+  it('no action below threshold', async () => {
+    // 2 parts = at threshold, not exceeding
+    simulatePart(bot, 'PartUser', 'bad', 'bad.host', '#test');
+    simulatePart(bot, 'PartUser', 'bad', 'bad.host', '#test');
+    await flush();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'notice' || (m.type === 'raw' && m.message?.includes('KICK')),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('warns on part flood exceeding threshold', async () => {
+    // 3 parts from same hostmask — threshold is 2, 3rd triggers flood
+    for (let i = 0; i < 3; i++) {
+      simulatePart(bot, 'PartFlooder', 'bad', 'bad2.host', '#test', 'spam reason');
+    }
+    await flush();
+    expect(
+      bot.client.messages.find(
+        (m) =>
+          m.type === 'notice' && m.target === 'PartFlooder' && m.message?.includes('part flood'),
+      ),
+    ).toBeDefined();
+  });
+
+  it("ignores the bot's own part events", async () => {
+    for (let i = 0; i < 5; i++) {
+      simulatePart(bot, 'hexbot', 'bot', 'bot.host', '#test');
+    }
+    await flush();
+    expect(bot.client.messages.find((m) => m.type === 'notice')).toBeUndefined();
+  });
+
+  it('skips privileged users when ignore_ops is true', async () => {
+    const bot2 = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot2, '#test');
+    try {
+      await bot2.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            part_threshold: 2,
+            part_window_secs: 60,
+            actions: ['kick'],
+            ignore_ops: true,
+            flood_lock_count: 0,
+          },
+        },
+      });
+      bot2.permissions.addUser('opuser', '*!opuser@op.host', 'o', 'test');
+      bot2.client.clearMessages();
+
+      // Re-join before each part so the user stays in channel state for hostmask lookup
+      for (let i = 0; i < 5; i++) {
+        simulateJoin(bot2, 'OpUser', 'opuser', 'op.host', '#test');
+        simulatePart(bot2, 'OpUser', 'opuser', 'op.host', '#test');
+      }
+      await flush();
+
+      expect(
+        bot2.client.messages.find((m) => m.type === 'raw' && m.message?.includes('KICK')),
+      ).toBeUndefined();
+    } finally {
+      bot2.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Channel lockdown tests (join/part flood → +R/+i)
+// ---------------------------------------------------------------------------
+
+describe('flood plugin — channel lockdown', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('triggers +R lockdown when flood_lock_count distinct flooders detected', async () => {
+    vi.useFakeTimers();
+    const bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    try {
+      await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            join_threshold: 1,
+            join_window_secs: 60,
+            actions: ['warn'],
+            ignore_ops: false,
+            flood_lock_count: 3,
+            flood_lock_window: 60,
+            flood_lock_duration: 30,
+            flood_lock_mode: 'R',
+          },
+        },
+      });
+      bot.client.clearMessages();
+
+      // 3 distinct hostmasks each trip the join flood detector (threshold 1 → 2nd join triggers)
+      for (let i = 0; i < 3; i++) {
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+      }
+      await flush();
+
+      // Should have set +R
+      const modeMsg = bot.client.messages.find(
+        (m) => m.type === 'raw' && m.message?.includes('+R'),
+      );
+      expect(modeMsg).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+      bot.cleanup();
+    }
+  });
+
+  it('auto-lifts lockdown after configured duration', async () => {
+    vi.useFakeTimers();
+    const bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    try {
+      await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            join_threshold: 1,
+            join_window_secs: 60,
+            actions: ['warn'],
+            ignore_ops: false,
+            flood_lock_count: 2,
+            flood_lock_window: 60,
+            flood_lock_duration: 30,
+          },
+        },
+      });
+      bot.client.clearMessages();
+
+      // Trip 2 distinct flooders
+      for (let i = 0; i < 2; i++) {
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+      }
+      await flush();
+
+      // Verify lockdown triggered
+      expect(
+        bot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('+R')),
+      ).toBeDefined();
+
+      // Advance time past lock duration
+      bot.client.clearMessages();
+      vi.advanceTimersByTime(31_000);
+
+      // Should have lifted -R
+      const unlockMsg = bot.client.messages.find(
+        (m) => m.type === 'raw' && m.message?.includes('-R'),
+      );
+      expect(unlockMsg).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+      bot.cleanup();
+    }
+  });
+
+  it('uses +i when flood_lock_mode is set to i', async () => {
+    vi.useFakeTimers();
+    const bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    try {
+      await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            join_threshold: 1,
+            join_window_secs: 60,
+            actions: ['warn'],
+            ignore_ops: false,
+            flood_lock_count: 2,
+            flood_lock_window: 60,
+            flood_lock_duration: 30,
+            flood_lock_mode: 'i',
+          },
+        },
+      });
+      bot.client.clearMessages();
+
+      for (let i = 0; i < 2; i++) {
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+      }
+      await flush();
+
+      expect(
+        bot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('+i')),
+      ).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+      bot.cleanup();
+    }
+  });
+
+  it('part floods also contribute to lockdown', async () => {
+    vi.useFakeTimers();
+    const bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    try {
+      await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            join_threshold: 1,
+            join_window_secs: 60,
+            part_threshold: 1,
+            part_window_secs: 60,
+            actions: ['warn'],
+            ignore_ops: false,
+            flood_lock_count: 2,
+            flood_lock_window: 60,
+            flood_lock_duration: 30,
+          },
+        },
+      });
+      bot.client.clearMessages();
+
+      // First flooder trips via join flood
+      simulateJoin(bot, 'JoinFlood', 'jf', 'jf.host', '#test');
+      simulateJoin(bot, 'JoinFlood', 'jf', 'jf.host', '#test');
+      await flush();
+
+      // Second flooder trips via part flood
+      simulatePart(bot, 'PartFlood', 'pf', 'pf.host', '#test');
+      simulatePart(bot, 'PartFlood', 'pf', 'pf.host', '#test');
+      await flush();
+
+      // Both contribute to lockdown — should trigger +R
+      expect(
+        bot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('+R')),
+      ).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+      bot.cleanup();
+    }
+  });
+
+  it('does not lock when flood_lock_count is 0 (disabled)', async () => {
+    const bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    try {
+      await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            join_threshold: 1,
+            join_window_secs: 60,
+            actions: ['warn'],
+            ignore_ops: false,
+            flood_lock_count: 0, // disabled
+          },
+        },
+      });
+      bot.client.clearMessages();
+
+      for (let i = 0; i < 5; i++) {
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+      }
+      await flush();
+
+      expect(
+        bot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('+R')),
+      ).toBeUndefined();
+    } finally {
+      bot.cleanup();
+    }
+  });
+
+  it('does not lock when bot has no ops', async () => {
+    const bot = createMockBot({ botNick: 'hexbot' });
+    // Do NOT give bot ops
+    try {
+      await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            join_threshold: 1,
+            join_window_secs: 60,
+            actions: ['warn'],
+            ignore_ops: false,
+            flood_lock_count: 2,
+            flood_lock_window: 60,
+            flood_lock_duration: 30,
+          },
+        },
+      });
+      bot.client.clearMessages();
+
+      for (let i = 0; i < 3; i++) {
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+      }
+      await flush();
+
+      expect(
+        bot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('+R')),
+      ).toBeUndefined();
+    } finally {
+      bot.cleanup();
+    }
+  });
+
+  it('does not double-lock on continued flooding', async () => {
+    vi.useFakeTimers();
+    const bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    try {
+      await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            join_threshold: 1,
+            join_window_secs: 60,
+            actions: ['warn'],
+            ignore_ops: false,
+            flood_lock_count: 2,
+            flood_lock_window: 60,
+            flood_lock_duration: 60,
+          },
+        },
+      });
+      bot.client.clearMessages();
+
+      // Trip lockdown
+      for (let i = 0; i < 2; i++) {
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+      }
+      await flush();
+
+      const lockMsgs = bot.client.messages.filter(
+        (m) => m.type === 'raw' && m.message?.includes('+R'),
+      );
+      expect(lockMsgs.length).toBe(1);
+
+      // More flooders arrive while locked — should not set +R again
+      for (let i = 10; i < 13; i++) {
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+      }
+      await flush();
+
+      const lockMsgs2 = bot.client.messages.filter(
+        (m) => m.type === 'raw' && m.message?.includes('+R'),
+      );
+      expect(lockMsgs2.length).toBe(1); // still just 1
+    } finally {
+      vi.useRealTimers();
+      bot.cleanup();
+    }
+  });
+
+  it('does not double-count the same hostmask', async () => {
+    vi.useFakeTimers();
+    const bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    try {
+      await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            join_threshold: 1,
+            join_window_secs: 60,
+            actions: ['warn'],
+            ignore_ops: false,
+            flood_lock_count: 3,
+            flood_lock_window: 60,
+            flood_lock_duration: 30,
+          },
+        },
+      });
+      bot.client.clearMessages();
+
+      // One flooder triggers join flood multiple times (same hostmask)
+      // Each join after threshold calls recordFloodForLockdown again
+      for (let i = 0; i < 6; i++) {
+        simulateJoin(bot, 'Repeat', 'r', 'repeat.host', '#test');
+      }
+      // Second distinct flooder
+      simulateJoin(bot, 'Second', 's', 'second.host', '#test');
+      simulateJoin(bot, 'Second', 's', 'second.host', '#test');
+      await flush();
+
+      // Only 2 distinct hostmasks < 3 threshold — should NOT lock
+      expect(
+        bot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('+R')),
+      ).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      bot.cleanup();
+    }
+  });
+
+  it('does not count stale flooders outside the lock window', async () => {
+    vi.useFakeTimers();
+    const bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    try {
+      await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            join_threshold: 1,
+            join_window_secs: 60,
+            actions: ['warn'],
+            ignore_ops: false,
+            flood_lock_count: 3,
+            flood_lock_window: 10, // tight 10s window
+            flood_lock_duration: 30,
+          },
+        },
+      });
+      bot.client.clearMessages();
+
+      // First flooder at t=0
+      simulateJoin(bot, 'Early0', 'e0', 'early0.host', '#test');
+      simulateJoin(bot, 'Early0', 'e0', 'early0.host', '#test');
+      await flush();
+
+      // Advance past the 10s window so the first flooder's timestamp expires
+      vi.advanceTimersByTime(15_000);
+
+      // Two more flooders arrive — but the first is now stale, so only 2 active < 3 threshold
+      simulateJoin(bot, 'Late1', 'l1', 'late1.host', '#test');
+      simulateJoin(bot, 'Late1', 'l1', 'late1.host', '#test');
+      simulateJoin(bot, 'Late2', 'l2', 'late2.host', '#test');
+      simulateJoin(bot, 'Late2', 'l2', 'late2.host', '#test');
+      await flush();
+
+      // Should NOT lock — only 2 flooders in the 10s window
+      expect(
+        bot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('+R')),
+      ).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      bot.cleanup();
+    }
+  });
+
+  it('uses chanset override for flood_lock_mode', async () => {
+    vi.useFakeTimers();
+    const bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    try {
+      await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            join_threshold: 1,
+            join_window_secs: 60,
+            actions: ['warn'],
+            ignore_ops: false,
+            flood_lock_count: 2,
+            flood_lock_window: 60,
+            flood_lock_duration: 30,
+            flood_lock_mode: 'R', // global default
+          },
+        },
+      });
+
+      // Override per-channel to +i
+      bot.channelSettings.set('#test', 'flood_lock_mode', 'i');
+      bot.client.clearMessages();
+
+      for (let i = 0; i < 2; i++) {
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+      }
+      await flush();
+
+      // Should use +i from chanset, not +R from global config
+      expect(
+        bot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('+i')),
+      ).toBeDefined();
+      expect(
+        bot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('+R')),
+      ).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      bot.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Part flood — additional edge cases
+// ---------------------------------------------------------------------------
+
+describe('flood plugin — part flood edge cases', () => {
+  it('punishes non-privileged part-flooder even with ignore_ops true (no perms entry)', async () => {
+    const bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    try {
+      await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            part_threshold: 2,
+            part_window_secs: 60,
+            actions: ['warn'],
+            ignore_ops: true,
+            flood_lock_count: 0,
+          },
+        },
+      });
+      // Do NOT add user to permissions — isPrivileged should return false via knownHostmask path
+      bot.client.clearMessages();
+
+      for (let i = 0; i < 3; i++) {
+        simulatePart(bot, 'NoPerm', 'np', 'noperm.host', '#test');
+      }
+      await flush();
+
+      expect(
+        bot.client.messages.find(
+          (m) => m.type === 'notice' && m.target === 'NoPerm' && m.message?.includes('part flood'),
+        ),
+      ).toBeDefined();
+    } finally {
+      bot.cleanup();
+    }
+  });
+
+  it('punishes part-flooder when ignore_ops is false (skips privilege check)', async () => {
+    const bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    try {
+      await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            part_threshold: 2,
+            part_window_secs: 60,
+            actions: ['warn'],
+            ignore_ops: false,
+            flood_lock_count: 0,
+          },
+        },
+      });
+      // Even with op flag, should be punished because ignore_ops is false
+      bot.permissions.addUser('opuser', '*!opuser@op.host', 'o', 'test');
+      bot.client.clearMessages();
+
+      for (let i = 0; i < 3; i++) {
+        simulatePart(bot, 'OpUser', 'opuser', 'op.host', '#test');
+      }
+      await flush();
+
+      expect(
+        bot.client.messages.find(
+          (m) => m.type === 'notice' && m.target === 'OpUser' && m.message?.includes('part flood'),
+        ),
+      ).toBeDefined();
+    } finally {
+      bot.cleanup();
+    }
+  });
+
+  it('punishes part-flooder who has hostmask in perms but with non-privileged flag', async () => {
+    const bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    try {
+      await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            part_threshold: 2,
+            part_window_secs: 60,
+            actions: ['warn'],
+            ignore_ops: true,
+            flood_lock_count: 0,
+          },
+        },
+      });
+      // User exists in perms but only has 'v' flag (not n/m/o)
+      bot.permissions.addUser('voiceuser', '*!vu@voice.host', 'v', 'test');
+      bot.client.clearMessages();
+
+      for (let i = 0; i < 3; i++) {
+        simulatePart(bot, 'VoiceUser', 'vu', 'voice.host', '#test');
+      }
+      await flush();
+
+      expect(
+        bot.client.messages.find(
+          (m) =>
+            m.type === 'notice' && m.target === 'VoiceUser' && m.message?.includes('part flood'),
+        ),
+      ).toBeDefined();
+    } finally {
+      bot.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lockdown — bot loses ops before unlock timer fires
+// ---------------------------------------------------------------------------
+
+describe('flood plugin — lockdown lift without ops', () => {
+  it('does not send -R when bot lost ops before unlock timer fires', async () => {
+    vi.useFakeTimers();
+    const bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    try {
+      await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            join_threshold: 1,
+            join_window_secs: 60,
+            actions: ['warn'],
+            ignore_ops: false,
+            flood_lock_count: 2,
+            flood_lock_window: 60,
+            flood_lock_duration: 30,
+          },
+        },
+      });
+      bot.client.clearMessages();
+
+      // Trip lockdown
+      for (let i = 0; i < 2; i++) {
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+      }
+      await flush();
+      expect(
+        bot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('+R')),
+      ).toBeDefined();
+
+      // Bot loses ops
+      bot.client.simulateEvent('mode', {
+        nick: 'Attacker',
+        ident: 'a',
+        hostname: 'a.host',
+        target: '#test',
+        modes: [{ mode: '-o', param: 'hexbot' }],
+      });
+      bot.client.clearMessages();
+
+      // Advance past lock duration
+      vi.advanceTimersByTime(31_000);
+
+      // Should NOT send -R since bot has no ops
+      expect(
+        bot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('-R')),
+      ).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      bot.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Config defaults (covers ?? fallback branches when keys are omitted)
+// ---------------------------------------------------------------------------
+
+describe('flood plugin — config defaults', () => {
+  it('uses sensible defaults when no config is provided', async () => {
+    const bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    try {
+      // Load with empty config — all ?? defaults must fire
+      const result = await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: { enabled: true, channels: ['#test'], config: {} },
+      });
+      expect(result.status).toBe('ok');
+
+      // Verify default behavior: 6 messages in 3s window exceeds threshold of 5
+      bot.client.simulateEvent('join', {
+        nick: 'Tester',
+        ident: 't',
+        hostname: 't.host',
+        channel: '#test',
+      });
+      bot.client.clearMessages();
+      for (let i = 0; i < 6; i++) {
+        simulatePrivmsg(bot, 'Tester', 't', 't.host', '#test', `msg ${i}`);
+      }
+      await flush();
+
+      // Default action[0] is 'warn'
+      expect(
+        bot.client.messages.find((m) => m.type === 'notice' && m.target === 'Tester'),
+      ).toBeDefined();
+    } finally {
+      bot.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Teardown
 // ---------------------------------------------------------------------------
 
@@ -884,5 +1647,52 @@ describe('flood plugin — teardown', () => {
     await bot.pluginLoader.unload('flood');
     expect(bot.pluginLoader.isLoaded('flood')).toBe(false);
     bot.cleanup();
+  });
+
+  it('clears active lockdown timers on unload', async () => {
+    vi.useFakeTimers();
+    const bot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(bot, '#test');
+    try {
+      await bot.pluginLoader.load(PLUGIN_PATH, {
+        flood: {
+          enabled: true,
+          channels: ['#test'],
+          config: {
+            join_threshold: 1,
+            join_window_secs: 60,
+            actions: ['warn'],
+            ignore_ops: false,
+            flood_lock_count: 2,
+            flood_lock_window: 60,
+            flood_lock_duration: 300,
+          },
+        },
+      });
+      bot.client.clearMessages();
+
+      // Trip lockdown
+      for (let i = 0; i < 2; i++) {
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+        simulateJoin(bot, `Flood${i}`, `f${i}`, `flood${i}.host`, '#test');
+      }
+      await flush();
+      expect(
+        bot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('+R')),
+      ).toBeDefined();
+
+      // Unload while lockdown active — timers should be cleared
+      await bot.pluginLoader.unload('flood');
+      bot.client.clearMessages();
+
+      // Advance past the lock duration — should NOT send -R since plugin unloaded
+      vi.advanceTimersByTime(301_000);
+      expect(
+        bot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('-R')),
+      ).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      bot.cleanup();
+    }
   });
 });
