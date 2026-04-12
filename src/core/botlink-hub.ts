@@ -338,6 +338,11 @@ export class BotLinkHub {
     this.activeRelays.set(handle, { originBot: this.config.botname, targetBot });
   }
 
+  /** Remove a hub-originated relay (e.g. when the DCC user types .relay end). */
+  unregisterRelay(handle: string): void {
+    this.activeRelays.delete(handle);
+  }
+
   /** Route RELAY_* frames between origin and target bots. */
   private routeRelayFrame(fromBot: string, frame: LinkFrame): void {
     const handle = String(frame.handle ?? '');

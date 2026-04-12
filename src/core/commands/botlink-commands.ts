@@ -359,6 +359,13 @@ export function registerBotlinkCommands(
         fromBot: config.botname,
         toBot: targetBot,
       };
+
+      // When the hub itself originates a relay, register it in the routing
+      // table so RELAY_OUTPUT/END frames from the leaf are delivered locally.
+      if (link.kind === 'hub') {
+        link.hub.registerRelay(session.handle, targetBot);
+      }
+
       sendFrame(link, requestFrame, targetBot);
 
       // Enter relay mode — input goes to the remote bot

@@ -35,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Hub-originated `.relay` sessions received no output — the hub never registered itself in `activeRelays` and `routeRelayFrame` tried to `send()` return traffic to the hub's own botname (which isn't in the `leaves` map), silently dropping all `RELAY_OUTPUT`/`RELAY_ACCEPT`/`RELAY_END` frames
 - `+d` flag ignored by mode enforcement, bitch mode, mass reop, and stopnethack — a `+od` user was re-opped by enforcement after being deopped, allowed through bitch mode, re-opped during takeover recovery, and treated as legitimate during netsplit ops checks; all four paths now respect `+d`
 - Plugins listed in `plugins.json` without `"enabled": true` were incorrectly skipped; now only `"enabled": false` disables a plugin
 - **§A.3 P0**: `ChannelState.parseUserlistModes` dropped every user's prefix modes on NAMES because `irc-framework` ships `modes` as a `string[]`, not a string. Every plugin checking "is this user an op?" got a wrong answer for the pre-existing userlist until a subsequent MODE event landed.

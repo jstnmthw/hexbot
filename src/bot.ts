@@ -839,6 +839,10 @@ export class Bot {
     };
     this._dccManager.onRelayEnd = (handle, _targetBot) => {
       sendFrame({ type: 'RELAY_END', handle, reason: 'User ended relay' });
+      // Clean up the hub's relay routing table when the hub originated the relay.
+      if (link instanceof BotLinkHub) {
+        link.unregisterRelay(handle);
+      }
     };
   }
 
