@@ -72,6 +72,15 @@ export class RangePortAllocator implements PortAllocator {
   }
 }
 
+/** Live stats surfaced in the DCC session banner. */
+export interface BannerStats {
+  channels: string[];
+  pluginCount: number;
+  bindCount: number;
+  userCount: number;
+  uptime: number; // milliseconds
+}
+
 /** The subset of DCCManager that DCCSession depends on. */
 export interface DCCSessionManager {
   getSessionList(): Array<{ handle: string; nick: string; connectedAt: number }>;
@@ -80,6 +89,7 @@ export interface DCCSessionManager {
   removeSession(nick: string): void;
   notifyPartyPart(handle: string, nick: string): void;
   getBotName(): string;
+  getStats(): BannerStats | null;
   onRelayEnd?: ((handle: string, targetBot: string) => void) | null;
 }
 
@@ -122,6 +132,8 @@ export interface DCCManagerDeps {
   sessions?: Map<string, DCCSessionEntry>;
   /** Injectable port allocator. Default: RangePortAllocator from config.port_range. */
   portAllocator?: PortAllocator;
+  /** Optional live stats provider for the DCC session banner. */
+  getStats?: () => BannerStats;
 }
 
 interface PendingDCC {
@@ -199,20 +211,51 @@ export function isPassiveDcc(_ip: number, port: number): boolean {
 // DCCSession
 // ---------------------------------------------------------------------------
 
-// ASCII logo placeholder — replace BANNER_LOGO lines with your own art.
-// Each entry is one line of text sent to the user's DCC CHAT window.
-const BANNER_LOGO = [
-  '⠀⠀⠀⠀⣠⣤⣶⣶⣶⣤⣄⡀⠀⠀⠀',
-  '⠀⠀⣴⣾⣿⣿⣿⣿⣿⣧⡀⠈⠢⠀⠀',
-  '⠀⣼⣿⣿⣿⣿⣿⣿⣿⡿⠁⠀⠀⠀⠀      dBP dBP dBBBP`Bb  .BP    dBBBBb  dBBBBP dBBBBBBP',
-  '⢰⡿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀                    .BP.P        dBP  dBP.BP    ',
-  "⠘⣽⡿⠿⠿⣿⣿⣿⣿⣿⣦⣤⡀⠀⠀   dBBBBBP dBBP     dBK     dBBBK'  dBP.BP   dBP",
-  "⠀⣟⠀⠀⠀⣸⣿⡏⠀⠀⠀⢹⠗⠀⠀⠀  dBP dBP dBP      dB'dB   dB' db  dBP.BP   dBP",
-  "⠀⣿⣷⣶⣾⡿⠁⠙⣄⣀⣀⣠⡀⠀⠀ dBP dBP dBBBBP   dB' dBP dBBBBP' dBBBBP   dBP",
-  '⠀⠙⠙⢿⡿⣷⣶⣤⣿⣿⡿⠿⠃⠀⠀',
-  '⠀⠀⠀⠺⡏⡏⡏⡏⡏⠉⠁⠀⠀⠀⠀',
-  '⠀⠀⠀⠀⠀⠀⠁⠁⠀⠀⠀⠀⠀⠀⠀⠀',
-];
+// ---------------------------------------------------------------------------
+// IRC formatting helpers (mIRC color codes)
+// ---------------------------------------------------------------------------
+
+const B = '\x02'; // bold toggle
+const C = (n: number) => `\x03${String(n).padStart(2, '0')}`; // set color
+const RC = '\x03'; // reset color
+
+const green = (s: string) => `${C(3)}${s}${RC}`;
+const red = (s: string) => `${C(4)}${s}${RC}`;
+const grey = (s: string) => `${C(14)}${s}${RC}`;
+const lbl = (s: string) => `${C(10)}${B}${s}${B}${RC}`; // teal bold label
+
+// ---------------------------------------------------------------------------
+// Banner art — braille hex icon with colored "HEXBOT" text art
+// ---------------------------------------------------------------------------
+
+function bannerLogo(version: string): string[] {
+  return [
+    `⠀⠀⠀⠀⣠⣤⣶⣶⣶⣤⣄⡀⠀    `,
+    `⠀⠀⣴⣾⣿⣿⣿⣿⣿⣧⡀⠈⠢⠀⠀ `,
+    `⠀⣼⣿⣿⣿⣿⣿⣿⣿⡿⠁ ⠀⠀⠀  `,
+    `⢰⡿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀  `,
+    `⠘⣽⡿⠿⠿⣿⣿⣿⣿⣿⣦⣤⡀⠀⠀ `,
+    `⠀⣟⠀⠀⠀⣸⣿⡏⠀⠀⠀⢹⠗⠀⠀  `,
+    `⠀⣿⣷⣶⣾⡿⠁⠙⣄⣀⣀⣠⡀ ⠀   ${red('HexBot')} v${grey(version)}`,
+    `⠀⠙⠙⢿⡿⣷⣶⣤⣿⣿⡿⠿⠃⠀⠀   Hell is empty and all the bots are here.`,
+    `⠀⠀⠀⠺⡏⡏⡏⡏⡏⠉⠁⠀⠀⠀⠀⠀`,
+    `⠀⠀⠀⠀⠀⠀⠁⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀`,
+  ];
+}
+
+function formatUptime(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0) parts.push(`${minutes}m`);
+  parts.push(`${secs}s`);
+  return parts.join(' ');
+}
 
 export class DCCSession implements DCCSessionEntry {
   readonly handle: string;
@@ -260,43 +303,73 @@ export class DCCSession implements DCCSessionEntry {
     const rl = createReadline({ input: this.socket, crlfDelay: Infinity });
 
     // Banner
+    const rule = grey('─'.repeat(60));
     const now = new Date().toLocaleString();
-    const platform = `Node.js ${process.version} on ${process.platform}`;
     const others = this.manager
       .getSessionList()
       .filter((s) => s.handle !== this.handle)
       .map((s) => s.handle);
-    const onConsole =
+    const consoleLine =
       others.length > 0
-        ? `${others.length} other(s) here: ${others.join(', ')}`
+        ? `${B}${others.length}${B} other(s) here: ${others.join(', ')}`
         : 'you are the only one here';
 
-    for (const line of BANNER_LOGO) {
+    // Logo
+    for (const line of bannerLogo(version)) {
       this.writeLine(line);
     }
     this.writeLine('');
     this.writeLine(
-      `Hey ${this.handle}! My name is ${botNick} and I am running HexBot v${version},`,
+      `  ${green(`${B}◆${B}`)} ${green(`${B}HexBot${B}`)} ${grey(`v${version}`)}  ${grey('—')} ${B}${botNick}${B}`,
     );
-    this.writeLine(`on ${platform}.`);
+    this.writeLine(`  ${rule}`);
+
+    // Session info
     this.writeLine('');
-    this.writeLine(`Local time is now ${now}`);
+    this.writeLine(
+      `  ${lbl('Session')}    ${B}${this.handle}${B} (${this.nick}!${this.ident}@${this.hostname})`,
+    );
+    const flagDisplay = this.flags ? `+${this.flags}` : '+-';
+    const ownerTag = this.flags.includes('n') ? `  ${green('(owner)')}` : '';
+    this.writeLine(`  ${lbl('Flags')}      ${flagDisplay}${ownerTag}`);
+    this.writeLine(`  ${lbl('Time')}       ${now}`);
+
+    // Observability stats (when available)
+    const stats = this.manager.getStats();
+    if (stats) {
+      this.writeLine('');
+      const chanList =
+        stats.channels.length > 0
+          ? `${B}${stats.channels.length}${B} joined ${grey('│')} ${stats.channels.join(', ')}`
+          : grey('none');
+      this.writeLine(`  ${lbl('Channels')}   ${chanList}`);
+      this.writeLine(
+        `  ${lbl('Plugins')}    ${B}${stats.pluginCount}${B} loaded ${grey('│')} ${B}${stats.bindCount}${B} binds`,
+      );
+      this.writeLine(`  ${lbl('Users')}      ${B}${stats.userCount}${B} registered`);
+      this.writeLine(`  ${lbl('Uptime')}     ${formatUptime(stats.uptime)}`);
+    }
+
+    // Console presence
     this.writeLine('');
-    this.writeLine(`Logged in as: ${this.handle} (${this.nick}!${this.ident}@${this.hostname})`);
-    this.writeLine(`Your flags: +${this.flags || '-'}`);
+    this.writeLine(`  ${lbl('Console')}    ${consoleLine}`);
+
+    // Owner-only notice
     if (this.flags.includes('n')) {
       this.writeLine('');
-      this.writeLine('You are an owner of this bot. Only +n users can see this.');
+      this.writeLine(`  ${green(`${B}★${B}`)} You are an owner of this bot.`);
     }
+
+    // Quick-start commands
     this.writeLine('');
-    this.writeLine(`Console: ${onConsole}`);
+    this.writeLine(`  ${rule}`);
+    this.writeLine(`  ${B}.help${B}          All available commands`);
+    this.writeLine(`  ${B}.help${B} <cmd>    Detailed command help`);
+    this.writeLine(`  ${B}.console${B}       Who's on the console`);
+    this.writeLine(`  ${B}.quit${B}          Disconnect`);
+    this.writeLine(`  ${rule}`);
     this.writeLine('');
-    this.writeLine('Use .help for basic help.');
-    this.writeLine('Use .help <command> for help on a specific command.');
-    this.writeLine('Use .console to see who is currently on the console.');
-    this.writeLine('');
-    this.writeLine("Commands start with '.' (like '.quit' or '.help')");
-    this.writeLine('Everything else goes out to the console.');
+    this.writeLine(`  Commands start with ${B}.${B} ${grey('—')} everything else is party chat.`);
 
     this.resetIdle();
 
@@ -466,6 +539,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   private config: DccConfig;
   private version: string;
   private logger: Logger | null;
+  private getStatsFn: (() => BannerStats) | null;
 
   private readonly sessions: Map<string, DCCSessionEntry>;
   private readonly portAllocator: PortAllocator;
@@ -484,6 +558,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     this.version = deps.version;
     this.botNick = deps.botNick;
     this.logger = deps.logger?.child('dcc') ?? null;
+    this.getStatsFn = deps.getStats ?? null;
     this.sessions = deps.sessions ?? new Map();
     this.portAllocator = deps.portAllocator ?? new RangePortAllocator(deps.config.port_range);
   }
@@ -601,6 +676,11 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   /** Get the bot's name (for relay display). */
   getBotName(): string {
     return this.botNick;
+  }
+
+  /** Get live stats for the DCC session banner. */
+  getStats(): BannerStats | null {
+    return this.getStatsFn?.() ?? null;
   }
 
   /** Remove a session by IRC nick (called by DCCSession.onClose). */

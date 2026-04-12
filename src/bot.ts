@@ -287,6 +287,13 @@ export class Bot {
         version: this.readPackageVersion(),
         botNick: this.config.irc.nick,
         logger: this.logger,
+        getStats: () => ({
+          channels: this.channelState.getAllChannels().map((ch) => ch.name),
+          pluginCount: this.pluginLoader.list().length,
+          bindCount: this.dispatcher.listBinds().length,
+          userCount: this.permissions.listUsers().length,
+          uptime: Date.now() - this.startTime,
+        }),
       });
       this._dccManager.attach();
       this.botLogger.info('DCC CHAT enabled');

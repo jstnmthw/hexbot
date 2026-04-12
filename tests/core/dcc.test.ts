@@ -625,6 +625,13 @@ function makeMockManagerForSession(
     announce: vi.fn(),
     notifyPartyPart: vi.fn(),
     getBotName: vi.fn().mockReturnValue('hexbot'),
+    getStats: vi.fn().mockReturnValue({
+      channels: ['#test', '#dev'],
+      pluginCount: 3,
+      bindCount: 12,
+      userCount: 2,
+      uptime: 3600000,
+    }),
     onRelayEnd: null,
   };
 }
