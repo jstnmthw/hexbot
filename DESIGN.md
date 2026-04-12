@@ -44,36 +44,51 @@ hexbot/
 ├── src/
 │   ├── index.ts              # Entry point, process signals
 │   ├── bot.ts                # Thin orchestrator, wires modules together
+│   ├── config.ts             # Config loader: merges bot.json + bot.env, validates schema
 │   ├── irc-bridge.ts         # Translates irc-framework events to dispatcher events
 │   ├── dispatcher.ts         # Bind/unbind event system
 │   ├── plugin-loader.ts      # Discovers, loads, hot-reloads plugins
+│   ├── plugin-api-factory.ts # Builds scoped PluginAPI objects for each plugin
 │   ├── database.ts           # SQLite key-value store + mod_log, namespaced per plugin
 │   ├── repl.ts               # Attached REPL (--repl flag)
 │   ├── command-handler.ts    # Command router (used by REPL, IRC, DCC CHAT)
 │   ├── types.ts              # Shared interfaces (HandlerContext, PluginAPI, etc.)
 │   ├── event-bus.ts          # Typed EventEmitter for internal bot events
 │   ├── logger.ts             # Structured logging with levels and child loggers
+│   ├── types/
+│   │   └── irc-framework.d.ts # Type augmentations for irc-framework
 │   ├── utils/
 │   │   ├── wildcard.ts       # Wildcard pattern matching (shared by dispatcher + permissions)
-│   │   ├── sanitize.ts       # Strip \r\n for IRC injection prevention
+│   │   ├── sanitize.ts       # Strip \r\n\0 for IRC injection prevention
 │   │   ├── sliding-window.ts # Sliding-window rate counter (shared by flood limiter + DCC)
 │   │   ├── socks.ts          # SOCKS5 proxy tunnel for IRC connections
 │   │   ├── split-message.ts  # Word-boundary message splitting for IRC line limits
 │   │   ├── strip-formatting.ts  # Remove IRC control codes
 │   │   ├── table.ts          # Formatted text table output for admin commands
 │   │   ├── verify-flags.ts   # Flag requirement parsing and checking
-│   │   └── irc-event.ts      # Type guards for irc-framework event payloads
+│   │   ├── irc-event.ts      # Type guards for irc-framework event payloads
+│   │   ├── admin-list-store.ts # Generic ban/exempt list store with expiry
+│   │   ├── duration.ts       # Human-readable duration parsing and formatting
+│   │   └── parse-args.ts     # Argument splitting with quote handling
 │   └── core/                 # Core modules (always loaded)
 │       ├── permissions.ts    # Flag-based permissions: n/m/o/v flags, hostmask matching
 │       ├── services.ts       # NickServ/ChanServ integration, SASL
-│       ├── irc-commands.ts   # Helpers: join, part, kick, ban, mode
-│       ├── channel-state.ts  # Track users, modes, hostmasks per channel
+│       ├── irc-commands.ts   # Helpers: join, part, kick, ban, quiet, mode
+│       ├── channel-state.ts  # Track users, modes, hostmasks, accounts per channel
 │       ├── channel-settings.ts  # Per-channel typed setting registry (DB-backed)
-│       ├── botlink.ts        # Bot link protocol: hub/leaf, handshake, heartbeat
-│       ├── botlink-sync.ts   # State sync: permissions + channel state → link frames
-│       ├── botlink-sharing.ts # Ban/exempt list sharing across linked bots
-│       ├── botlink-protect.ts # Cross-bot channel protection requests
-│       ├── connection-lifecycle.ts # IRC connection/reconnection state machine
+│       ├── ban-store.ts      # Persistent ban/exempt list store for plugins
+│       ├── isupport.ts       # ISUPPORT (005) parser, ServerCapabilities struct
+│       ├── sts.ts            # IRCv3 Strict Transport Security enforcement
+│       ├── memo.ts           # Internal memo/note system between admins
+│       ├── botlink-protocol.ts  # Bot link wire format, frame types, scrypt auth
+│       ├── botlink-auth.ts      # Bot link authentication and IP banning
+│       ├── botlink-hub.ts       # Hub: accept leaves, fan out frames, rate limit
+│       ├── botlink-leaf.ts      # Leaf: connect to hub, reconnect, heartbeat
+│       ├── botlink-sync.ts      # State sync: permissions + channel state → link frames
+│       ├── botlink-sharing.ts   # Ban/exempt list sharing across linked bots
+│       ├── botlink-protect.ts   # Cross-bot channel protection requests
+│       ├── botlink-relay-handler.ts # Remote command execution via CMD frames
+│       ├── connection-lifecycle.ts  # IRC connection/reconnection state machine
 │       ├── dcc.ts            # DCC CHAT + console (shared admin sessions)
 │       ├── help-registry.ts  # Stores/retrieves command help entries
 │       ├── message-queue.ts  # Token-bucket flood protection for outgoing messages
@@ -83,12 +98,13 @@ hexbot/
 │           ├── irc-commands-admin.ts
 │           ├── plugin-commands.ts
 │           ├── channel-commands.ts   # .chanset, .chaninfo
+│           ├── ban-commands.ts       # .ban, .unban, .bans (global ban management)
 │           └── botlink-commands.ts   # .botlink, .bots, .bottree, .relay, .whom
 ├── plugins/                  # Optional plugins (user-installable)
 │   ├── 8ball/                # Magic 8-ball command
 │   ├── chanmod/              # Channel moderation: auto-op/voice, mode enforcement, bans
 │   ├── ctcp/                 # CTCP VERSION/PING/TIME responder
-│   ├── flood/                # Flood detection and auto-action escalation
+│   ├── flood/                # Flood detection, escalation, and channel lockdown
 │   ├── greeter/              # Configurable join greeting
 │   ├── help/                 # Help system (!help command)
 │   ├── seen/                 # Last-seen tracking (!seen command)
@@ -122,24 +138,25 @@ dispatcher.unbindAll(pluginId); // Remove all binds for a plugin (used on unload
 
 **Bind types:**
 
-| Type     | Trigger            | Mask matches against            | Stackable       |
-| -------- | ------------------ | ------------------------------- | --------------- |
-| `pub`    | Channel message    | Exact command (e.g. `!uno`)     | No (overwrites) |
-| `pubm`   | Channel message    | Wildcard on full text           | Yes             |
-| `msg`    | Private message    | Exact command                   | No              |
-| `msgm`   | Private message    | Wildcard on full text           | Yes             |
-| `join`   | User joins channel | `#channel nick!user@host`       | Yes             |
-| `part`   | User parts channel | `#channel nick!user@host`       | Yes             |
-| `kick`   | User kicked        | `#channel nick!user@host`       | Yes             |
-| `nick`   | Nick change        | Wildcard                        | Yes             |
-| `mode`   | Mode change        | `#channel +/-mode`              | Yes             |
-| `raw`    | Raw server line    | Command/numeric string          | Yes             |
-| `time`   | Timer (interval)   | Seconds as string (e.g. `"60"`) | Yes             |
-| `ctcp`   | CTCP request       | CTCP type (e.g. `VERSION`)      | Yes             |
-| `notice` | Notice message     | Wildcard on text                | Yes             |
-| `topic`  | Topic change       | Channel name wildcard           | Yes             |
-| `quit`   | User quit          | `nick!user@host`                | Yes             |
-| `invite` | Bot invited        | `#channel nick!user@host`       | Yes             |
+| Type         | Trigger            | Mask matches against            | Stackable       |
+| ------------ | ------------------ | ------------------------------- | --------------- |
+| `pub`        | Channel message    | Exact command (e.g. `!uno`)     | No (overwrites) |
+| `pubm`       | Channel message    | Wildcard on full text           | Yes             |
+| `msg`        | Private message    | Exact command                   | No              |
+| `msgm`       | Private message    | Wildcard on full text           | Yes             |
+| `join`       | User joins channel | `#channel nick!user@host`       | Yes             |
+| `part`       | User parts channel | `#channel nick!user@host`       | Yes             |
+| `kick`       | User kicked        | `#channel nick!user@host`       | Yes             |
+| `nick`       | Nick change        | Wildcard                        | Yes             |
+| `mode`       | Mode change        | `#channel +/-mode`              | Yes             |
+| `raw`        | Raw server line    | Command/numeric string          | Yes             |
+| `time`       | Timer (interval)   | Seconds as string (e.g. `"60"`) | Yes             |
+| `ctcp`       | CTCP request       | CTCP type (e.g. `VERSION`)      | Yes             |
+| `notice`     | Notice message     | Wildcard on text                | Yes             |
+| `topic`      | Topic change       | Channel name wildcard           | Yes             |
+| `quit`       | User quit          | `nick!user@host`                | Yes             |
+| `invite`     | Bot invited        | `#channel nick!user@host`       | Yes             |
+| `join_error` | Bot failed to join | Error name wildcard or `*`      | Yes             |
 
 **Non-stackable** types (pub, msg) overwrite previous binds on the same mask — only one handler per command. **Stackable** types allow multiple handlers on the same mask — all matching handlers fire.
 
@@ -168,6 +185,7 @@ interface HandlerContext {
   text: string;
   command: string;
   args: string;
+  account?: string | null; // IRCv3 account-tag (string = identified, null = not identified)
   reply(msg: string): void;
   replyPrivate(msg: string): void;
 }
@@ -252,9 +270,20 @@ export function init(api: PluginAPI): void {
   api.botConfig;
 
   // Channel settings (per-channel typed key/value store)
-  api.channelSettings.register(key, opts);
+  api.channelSettings.register(defs);   // array of ChannelSettingDef
   api.channelSettings.get(channel, key);
+  api.channelSettings.getFlag(channel, key);
+  api.channelSettings.getString(channel, key);
+  api.channelSettings.getInt(channel, key);
   api.channelSettings.set(channel, key, value);
+  api.channelSettings.isSet(channel, key);
+  api.channelSettings.onChange(callback);
+
+  // Ban store (per-plugin persistent ban list)
+  api.banStore.add(channel, mask, setBy, reason, expires?);
+  api.banStore.remove(channel, mask);
+  api.banStore.list(channel);
+  api.banStore.isActive(channel, mask);
 
   // Help registry
   api.registerHelp(entries);
@@ -262,6 +291,11 @@ export function init(api: PluginAPI): void {
 
   // Server capabilities (from ISUPPORT)
   api.getServerSupports();
+
+  // Identity helpers
+  api.buildHostmask(source);     // build nick!ident@host from ctx
+  api.isBotNick(nick);           // case-insensitive check against bot's nick
+  api.getChannelKey(channel);    // get configured key for a channel
 
   // Utilities
   api.ircLower(text);
@@ -331,9 +365,10 @@ interface UserRecord {
 
 - `*!*@hostname.com` — static host
 - `*!ident@*.isp.com` — dynamic host with known ident
+- `$a:accountname` — IRCv3 account name (strongest; requires `account-notify` / `extended-join` caps)
 - `nick!*@*` — nick-only (least secure, not recommended)
 
-**Optional NickServ ACC enhancement:** When enabled in config, the bot queries NickServ ACC before granting privileged operations (+o, +n flagged commands). Configurable per-network since not all networks have services.
+**Optional NickServ ACC enhancement:** When enabled in config, the bot queries NickServ ACC (Atheme) or STATUS (Anope) before granting privileged operations (+o, +n flagged commands). When the network supports IRCv3 `account-notify` and `extended-join`, the bot can skip the NickServ round-trip and use the live account map directly. Configurable per-network since not all networks have services.
 
 ### 2.7 Services integration (core module)
 
@@ -357,16 +392,19 @@ Config:
   "services": {
     "type": "atheme",
     "nickserv": "NickServ",
-    "password": "botpass",
+    "password_env": "HEX_NICKSERV_PASSWORD",
     "sasl": true,
+    "sasl_mechanism": "PLAIN",
     "verify_privileged": true
   }
 }
 ```
 
+Passwords are loaded from environment variables via `password_env` (never stored inline). SASL mechanisms: `"PLAIN"` (default) or `"EXTERNAL"` (TLS client certificate / CertFP). The bot refuses to start if SASL PLAIN is configured over a plaintext connection.
+
 ### 2.8 Channel state (core module)
 
-Tracks who is in each channel, their modes (@/+), hostmasks, and join times. Also tracks channel-level modes (mode string, key, and limit) via RPL_CHANNELMODEIS and MODE events. Updated via JOIN, PART, QUIT, KICK, NICK, MODE, WHO/NAMES, and `channel info` responses. Exposed to plugins via `api.getChannel()`, `api.getUsers()`, `api.requestChannelModes()`, and `api.onModesReady()`.
+Tracks who is in each channel, their modes (@/+), hostmasks, join times, services account names (via IRCv3 `extended-join` and `account-notify`), and away state (via `away-notify`). Also tracks channel-level modes (mode string, key, and limit) via RPL_CHANNELMODEIS and MODE events. Updated via JOIN, PART, QUIT, KICK, NICK, MODE, ACCOUNT, AWAY, WHO/NAMES, and `channel info` responses. Exposed to plugins via `api.getChannel()`, `api.getUsers()`, `api.requestChannelModes()`, and `api.onModesReady()`.
 
 ### 2.9 IRC commands (core module)
 
@@ -377,6 +415,7 @@ Convenience wrappers around raw IRC commands with flood protection and mode stac
 - `kick(channel, nick, reason?)`
 - `ban(channel, mask)`
 - `unban(channel, mask)`
+- `quiet(channel, mask)`
 - `mode(channel, modes, ...params)`
 - `op(channel, nick)` / `deop(channel, nick)`
 - `halfop(channel, nick)` / `dehalfop(channel, nick)`
@@ -427,7 +466,7 @@ Each plugin accesses its own namespace via `api.db`. Core modules use reserved n
   "services": {
     "type": "atheme",
     "nickserv": "NickServ",
-    "password": "botpass",
+    "password_env": "HEX_NICKSERV_PASSWORD",
     "sasl": true
   },
   "database": "./data/hexbot.db",
@@ -508,7 +547,7 @@ CREATE TABLE mod_log (
   action    TEXT NOT NULL,     -- 'op', 'deop', 'kick', 'ban', 'unban'
   channel   TEXT,
   target    TEXT,              -- nick or hostmask acted upon
-  by        TEXT,              -- who/what triggered it (plugin name or admin handle)
+  by_user   TEXT,              -- who/what triggered it (plugin name or admin handle)
   reason    TEXT
 );
 ```
@@ -570,7 +609,7 @@ One hub, N leaves. Star topology — leaves never talk directly to each other. T
 
 - JSON frames, one per line, delimited by `\r\n`.
 - 64KB max frame size. Frames exceeding this are protocol errors.
-- Handshake: leaf sends `HELLO` (botname + SHA-256 password hash), hub replies `WELCOME` or `ERROR`.
+- Handshake: leaf sends `HELLO` (botname + scrypt-hashed password), hub replies `WELCOME` or `ERROR`.
 - Heartbeat: hub pings leaves periodically. Missed pongs trigger timeout disconnect.
 - Rate limiting: CMD frames capped at 10/sec, PARTY_CHAT at 5/sec per leaf.
 
@@ -618,7 +657,7 @@ All core infrastructure is implemented and production-ready. See [CHANGELOG.md](
 
 **Shipped plugins:** `8ball`, `chanmod`, `ctcp`, `flood`, `greeter`, `help`, `seen`, `topic`
 
-**Shipped core features:** bot linking (hub/leaf), DCC CHAT console, channel takeover protection, persistent channel rejoin
+**Shipped core features:** bot linking (hub/leaf), DCC CHAT console, channel takeover protection, persistent channel rejoin, IRCv3 STS enforcement, account-based identity matching
 
 **Planned features** (design documents in `docs/plans/`):
 
@@ -685,13 +724,14 @@ Minimum viable plugin:
 
 ```typescript
 // plugins/my-plugin/index.ts
-import type { HandlerContext, PluginAPI } from '../../src/types.js';
+import type { PluginAPI } from '../../src/types';
 
 export const name = 'my-plugin';
 export const version = '1.0.0';
+export const description = 'A simple greeting plugin';
 
 export function init(api: PluginAPI): void {
-  api.bind('pub', '-', '!hello', async (ctx: HandlerContext) => {
+  api.bind('pub', '-', '!hello', (ctx) => {
     ctx.reply(`Hello, ${ctx.nick}!`);
   });
 }
