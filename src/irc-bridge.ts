@@ -475,6 +475,10 @@ export class IRCBridge {
     // bit — dropping it is what closes the loophole. Falls back to the
     // nick only if both ident and hostname are empty, which is rare and
     // typically indicates a server-generated pseudo-source.
+    this.logger?.info(
+      `CTCP ${type}${payload ? ' ' + payload : ''} from ${nick}!${ident}@${hostname}`,
+    );
+
     const rateLimitKey = ident && hostname ? `${ident}@${hostname}` : nick;
     if (!this.ctcpAllowed(rateLimitKey)) return;
     this.dispatcher.dispatch('ctcp', ctx).catch(this.dispatchError('ctcp'));
