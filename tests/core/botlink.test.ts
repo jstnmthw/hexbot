@@ -1183,6 +1183,34 @@ describe('BotLinkLeaf', () => {
       expect(disconnectReason).toBe('Connection lost');
     });
 
+    it('flushes pending whom and protect requests on disconnect', async () => {
+      vi.useFakeTimers();
+      try {
+        const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
+        const { socket, duplex } = createMockSocket();
+
+        leaf.connectWithSocket(socket);
+        pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(leaf.isConnected).toBe(true);
+
+        // Start pending whom + protect requests (they time out after 10s/5s normally)
+        const whomPromise = leaf.requestWhom();
+        const protectPromise = leaf.sendProtect('PROTECT_OP', '#test', 'alice');
+
+        // Disconnect immediately — should resolve both promises
+        leaf.disconnect();
+
+        const whomResult = await whomPromise;
+        const protectResult = await protectPromise;
+
+        expect(whomResult).toEqual([]);
+        expect(protectResult).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('does NOT fire onDisconnected on explicit disconnect', async () => {
       const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
       const { socket, duplex } = createMockSocket();

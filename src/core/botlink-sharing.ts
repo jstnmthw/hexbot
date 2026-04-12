@@ -43,7 +43,10 @@ class MaskList {
     const list = this.entries.get(lower);
     if (!list) return;
     const idx = list.findIndex((b) => b.mask === mask);
-    if (idx !== -1) list.splice(idx, 1);
+    if (idx !== -1) {
+      list.splice(idx, 1);
+      if (list.length === 0) this.entries.delete(lower);
+    }
   }
 
   sync(channel: string, entries: BanEntry[]): void {

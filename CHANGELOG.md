@@ -35,6 +35,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Memory leak audit** (full codebase, see `docs/audits/memleak-all-2026-04-12.md`):
+  - `SlidingWindowCounter` stale keys never evicted — added `sweep()` method; dispatcher and flood plugin invoke it periodically to prune hostmask keys whose timestamps have expired
+  - `MemoManager.detach()` did not unbind dispatcher binds or unregister the `.memo` command — each attach/detach cycle accumulated duplicate handlers
+  - Plugin loader did not clean up on partial `init()` failure — if `init()` threw, teardowns, help entries, channel settings, and event bus listeners from the failed load leaked; now the loader drains all partial state before re-throwing
+  - `ChannelState.channels` Map never pruned on self-PART/KICK — stale channel entries accumulated when the bot left channels; added `setBotNick()` and self-detection in PART/KICK handlers
+  - `ChannelState.networkAccounts` never pruned on PART — nicks that left all shared channels without QUITting persisted until reconnect; now evicted when the nick leaves all tracked channels
+  - BotLink hub `setCommandRelay()` registered 5 anonymous eventBus listeners with no removal path — stored refs and remove them in `close()`
+  - BotLink hub `close()` did not clear `remotePartyUsers`, `activeRelays`, `protectRequests`, `cmdRoutes`, or `pendingCmds` — pending promises now resolved with error before clearing
+  - BotLink hub `protectRequests`/`cmdRoutes` had no TTL — unanswered entries persisted forever; added timestamps and 30s sweep in the heartbeat tick
+  - BotLink leaf `pendingCmds`/`pendingWhom`/`pendingProtect` not flushed on disconnect — stale closures held for up to 10s; now resolved and cleared immediately on disconnect/reconnect
+  - BotLink relay virtual sessions had no orphan cleanup — sessions persisted if `RELAY_END` never arrived; now cleaned on `botlink:disconnected`
+  - Connection lifecycle startup retry `setTimeout` not stored — callback could fire after shutdown; timer ID now stored and cancellable via `cancelStartupRetry()`
+  - Connection lifecycle listeners registered as anonymous closures with no removal path — refactored to tracked named listeners with `removeListeners()` on the handle
+  - DCC `readline` interface not explicitly closed — stored as class member and closed in `close()`/`onClose()`
+  - DCC server error handler missing `clearTimeout` for pending offer timer — timer held closure references for 30s after error
+  - Flood plugin `offenceTracker` Map never pruned — expired entries now swept every 60s via the existing `time` bind
+  - Flood plugin `lockFlooders`/`lockFloderTimestamps` not cleaned for channels without active lockdowns — swept alongside offence tracker
+  - Chanmod `intentionalModeChanges`/`enforcementCooldown` Maps never pruned during runtime — added `pruneExpiredState()` called every 60s
+  - Chanmod `enforcementTimers`/`cycleTimers` arrays grew monotonically — changed to Sets with self-removing callbacks
+  - BotLink protocol `readline` interface not explicitly closed — stored and closed in `close()`
+  - BotLink `MaskList` never pruned empty channel keys — channel key now deleted when its entry list becomes empty
+  - BotLink auth tracker only swept stale entries on incoming connections — added periodic 5-minute sweep timer
 - Hub-originated `.relay` sessions received no output — the hub never registered itself in `activeRelays` and `routeRelayFrame` tried to `send()` return traffic to the hub's own botname (which isn't in the `leaves` map), silently dropping all `RELAY_OUTPUT`/`RELAY_ACCEPT`/`RELAY_END` frames
 - `+d` flag ignored by mode enforcement, bitch mode, mass reop, and stopnethack — a `+od` user was re-opped by enforcement after being deopped, allowed through bitch mode, re-opped during takeover recovery, and treated as legitimate during netsplit ops checks; all four paths now respect `+d`
 - Plugins listed in `plugins.json` without `"enabled": true` were incorrectly skipped; now only `"enabled": false` disables a plugin

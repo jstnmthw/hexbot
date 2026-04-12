@@ -59,6 +59,7 @@ export class ChannelState {
   private eventBus: BotEventBus;
   private logger: Logger | null;
   private listeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
+  private botNick = '';
   private casemapping: Casemapping = 'rfc1459';
   private capabilities: ServerCapabilities = defaultServerCapabilities();
 
@@ -66,6 +67,11 @@ export class ChannelState {
     this.client = client;
     this.eventBus = eventBus;
     this.logger = logger?.child('channel-state') ?? null;
+  }
+
+  /** Set the bot's own nick (used to detect self-PART/KICK for channel cleanup). */
+  setBotNick(nick: string): void {
+    this.botNick = nick;
   }
 
   setCasemapping(cm: Casemapping): void {
@@ -266,10 +272,34 @@ export class ChannelState {
   private onPart(event: Record<string, unknown>): void {
     const nick = String(event.nick ?? '');
     const channel = String(event.channel ?? '');
+    const lower = ircLower(channel, this.casemapping);
 
-    const ch = this.channels.get(ircLower(channel, this.casemapping));
+    const ch = this.channels.get(lower);
     if (ch) {
       ch.users.delete(ircLower(nick, this.casemapping));
+    }
+
+    // Bot left the channel — remove the entire channel entry
+    if (
+      this.botNick &&
+      ircLower(nick, this.casemapping) === ircLower(this.botNick, this.casemapping)
+    ) {
+      this.channels.delete(lower);
+    }
+
+    // If the user is no longer in any tracked channel, remove from network accounts
+    if (nick !== this.botNick) {
+      const nickLower = ircLower(nick, this.casemapping);
+      if (this.networkAccounts.has(nickLower)) {
+        let stillPresent = false;
+        for (const ch of this.channels.values()) {
+          if (ch.users.has(nickLower)) {
+            stillPresent = true;
+            break;
+          }
+        }
+        if (!stillPresent) this.networkAccounts.delete(nickLower);
+      }
     }
 
     this.eventBus.emit('channel:userLeft', channel, nick);
@@ -290,10 +320,19 @@ export class ChannelState {
   private onKick(event: Record<string, unknown>): void {
     const kicked = String(event.kicked ?? '');
     const channel = String(event.channel ?? '');
+    const lower = ircLower(channel, this.casemapping);
 
-    const ch = this.channels.get(ircLower(channel, this.casemapping));
+    const ch = this.channels.get(lower);
     if (ch) {
       ch.users.delete(ircLower(kicked, this.casemapping));
+    }
+
+    // Bot was kicked — remove the entire channel entry
+    if (
+      this.botNick &&
+      ircLower(kicked, this.casemapping) === ircLower(this.botNick, this.casemapping)
+    ) {
+      this.channels.delete(lower);
     }
 
     this.eventBus.emit('channel:userLeft', channel, kicked);

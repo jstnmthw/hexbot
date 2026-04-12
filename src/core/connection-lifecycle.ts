@@ -17,6 +17,7 @@ import { type STSDirective, parseSTSDirective } from './sts';
 /** Minimal IRC client interface needed for connection lifecycle. */
 export interface LifecycleIRCClient {
   on(event: string, listener: (...args: unknown[]) => void): void;
+  removeListener(event: string, listener: (...args: unknown[]) => void): void;
   join(channel: string, key?: string): void;
   /**
    * irc-framework's `network.supports()` returns a string for most tokens, a
@@ -90,6 +91,10 @@ export interface ConnectionLifecycleDeps {
 export interface ConnectionLifecycleHandle {
   /** Stop the periodic channel presence check timer. */
   stopPresenceCheck(): void;
+  /** Remove all IRC client listeners registered by connection lifecycle. */
+  removeListeners(): void;
+  /** Cancel any pending startup retry timer. */
+  cancelStartupRetry(): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,12 +132,20 @@ export function registerConnectionEvents(
   const maxRetryWait = 30_000;
   let startupAttempt = 0;
 
+  const listeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
+  let startupRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function listen(event: string, fn: (...args: unknown[]) => void): void {
+    client.on(event, fn);
+    listeners.push({ event, fn });
+  }
+
   // One-time listeners — registered before any connection events fire so they
   // are never stacked by reconnects.
-  registerJoinErrorListeners(client, logger);
+  registerJoinErrorListeners(client, logger, listeners);
   bindCoreInviteHandler(deps);
 
-  client.on('registered', () => {
+  const onRegistered = () => {
     registered = true;
     expectingReconnect = false;
     lastCloseReason = null;
@@ -156,21 +169,21 @@ export function registerConnectionEvents(
     presenceTimer = startChannelPresenceCheck(deps);
 
     resolve();
-  });
+  };
 
   // Capture the server's IRC ERROR message (e.g. "Closing Link: ... (Throttled)")
   // which fires just before the socket closes. irc-framework emits this as 'irc error'
   // with error === 'irc' and reason containing the server message.
-  client.on('irc error', (event: unknown) => {
+  const onIrcError = (event: unknown) => {
     const e = toEventObject(event);
     if (String(e.error ?? '') === 'irc') {
       const reason = String(e.reason ?? '');
       lastCloseReason = reason;
       logger.warn(`Server ERROR: ${reason}`);
     }
-  });
+  };
 
-  client.on('close', () => {
+  const onClose = () => {
     if (registered && !expectingReconnect) {
       // irc-framework exhausted all reconnect attempts — the bot is a zombie.
       // If the ERROR reason says we were K/G-lined, exit non-zero immediately
@@ -230,7 +243,7 @@ export function registerConnectionEvents(
             `...`,
         );
         lastCloseReason = null;
-        setTimeout(() => deps.reconnect!(), delay);
+        startupRetryTimer = setTimeout(() => deps.reconnect!(), delay);
       } else {
         reject(new Error(`Connection failed: ${reason}`));
       }
@@ -239,17 +252,17 @@ export function registerConnectionEvents(
     expectingReconnect = false;
     logger.info('Connection closed');
     deps.eventBus.emit('bot:disconnected', 'connection closed');
-  });
+  };
 
-  client.on('reconnecting', () => {
+  const onReconnecting = () => {
     expectingReconnect = true;
     lastCloseReason = null;
     deps.messageQueue.clear();
     deps.onReconnecting?.();
     logger.info('Reconnecting...');
-  });
+  };
 
-  client.on('socket error', (err: unknown) => {
+  const onSocketError = (err: unknown) => {
     const error = err instanceof Error ? err : new Error(String(err));
     lastCloseReason = error.message;
     logger.error('Socket error:', error.message);
@@ -257,13 +270,31 @@ export function registerConnectionEvents(
     if (!registered) {
       reject(error);
     }
-  });
+  };
+
+  listen('registered', onRegistered);
+  listen('irc error', onIrcError);
+  listen('close', onClose);
+  listen('reconnecting', onReconnecting);
+  listen('socket error', onSocketError);
 
   return {
     stopPresenceCheck() {
       if (presenceTimer !== null) {
         clearInterval(presenceTimer);
         presenceTimer = null;
+      }
+    },
+    removeListeners() {
+      for (const { event, fn } of listeners) {
+        client.removeListener(event, fn);
+      }
+      listeners.length = 0;
+    },
+    cancelStartupRetry() {
+      if (startupRetryTimer !== null) {
+        clearTimeout(startupRetryTimer);
+        startupRetryTimer = null;
       }
     },
   };
@@ -413,28 +444,37 @@ function logTlsCipher(client: LifecycleIRCClient, logger: Logger): void {
 }
 
 /** Register listeners for IRC join-error numerics (irc error + unknown command). */
-function registerJoinErrorListeners(client: LifecycleIRCClient, logger: Logger): void {
+function registerJoinErrorListeners(
+  client: LifecycleIRCClient,
+  logger: Logger,
+  listeners: Array<{ event: string; fn: (...args: unknown[]) => void }>,
+): void {
   const JOIN_ERROR_NAMES: Record<string, string> = {
     channel_is_full: 'channel is full (+l)',
     invite_only_channel: 'invite only (+i)',
     banned_from_channel: 'banned from channel (+b)',
     bad_channel_key: 'bad channel key (+k)',
   };
-  client.on('irc error', (event: unknown) => {
+  const onJoinIrcError = (event: unknown) => {
     const e = toEventObject(event);
     const reason = JOIN_ERROR_NAMES[String(e.error ?? '')];
     if (reason) {
       logger.warn(`Cannot join ${String(e.channel ?? '')}: ${reason}`);
     }
-  });
+  };
+  client.on('irc error', onJoinIrcError);
+  listeners.push({ event: 'irc error', fn: onJoinIrcError });
+
   // 477 (need to register nick) is unknown to irc-framework — catch it via raw numeric.
-  client.on('unknown command', (event: unknown) => {
+  const onUnknownCommand = (event: unknown) => {
     const e = toEventObject(event);
     if (String(e.command ?? '') === '477') {
       const params = Array.isArray(e.params) ? (e.params as unknown[]) : [];
       logger.warn(`Cannot join ${String(params[1] ?? '')}: need to register nick (+r)`);
     }
-  });
+  };
+  client.on('unknown command', onUnknownCommand);
+  listeners.push({ event: 'unknown command', fn: onUnknownCommand });
 }
 
 /**

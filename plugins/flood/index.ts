@@ -395,6 +395,33 @@ function handleNickFlood(ctx: NickContext): void {
 }
 
 // ---------------------------------------------------------------------------
+// Periodic state cleanup
+// ---------------------------------------------------------------------------
+
+/** Prune stale entries from rate-limit counters and offence tracker. */
+function sweepStaleState(): void {
+  const now = Date.now();
+  // Sweep SlidingWindowCounter stale keys
+  msgTracker.sweep(cfg.msgWindowMs);
+  joinTracker.sweep(cfg.joinWindowMs);
+  partTracker.sweep(cfg.partWindowMs);
+  nickTracker.sweep(cfg.nickWindowMs);
+  // Sweep expired offence entries
+  for (const [key, entry] of offenceTracker) {
+    if (now - entry.lastSeen > cfg.offenceWindowMs) {
+      offenceTracker.delete(key);
+    }
+  }
+  // Sweep lockFlooders/lockFloderTimestamps for channels without active locks
+  for (const [ch] of lockFlooders) {
+    if (!activeLocks.has(ch)) {
+      lockFlooders.delete(ch);
+      lockFloderTimestamps.delete(ch);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
 
@@ -455,7 +482,10 @@ export function init(pluginApi: PluginAPI): void {
   api.bind('join', '-', '*', handleJoinFlood);
   api.bind('part', '-', '*', handlePartFlood);
   api.bind('nick', '-', '*', handleNickFlood);
-  api.bind('time', '-', '60', liftExpiredFloodBans);
+  api.bind('time', '-', '60', () => {
+    liftExpiredFloodBans();
+    sweepStaleState();
+  });
 }
 
 // ---------------------------------------------------------------------------

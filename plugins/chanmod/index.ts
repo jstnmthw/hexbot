@@ -12,7 +12,7 @@ import type { ThreatCallback } from './mode-enforce';
 import { setupModeEnforce } from './mode-enforce';
 import { setupProtection } from './protection';
 import { ProtectionChain } from './protection-backend';
-import { createState, readConfig } from './state';
+import { createState, pruneExpiredState, readConfig } from './state';
 import { setupStickyBans } from './sticky';
 import { assessThreat } from './takeover-detect';
 import { setupTopicRecovery } from './topic-recovery';
@@ -229,6 +229,11 @@ export function init(api: PluginAPI): void {
 
   // Sticky ban enforcement doesn't return a teardown (binds are auto-cleaned)
   setupStickyBans(api);
+
+  // Periodic cleanup of expired intentionalModeChanges and enforcementCooldown entries
+  api.bind('time', '-', '60', () => {
+    pruneExpiredState(state);
+  });
 }
 
 export function teardown(): void {

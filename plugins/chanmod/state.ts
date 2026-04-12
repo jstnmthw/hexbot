@@ -23,9 +23,9 @@ export interface ThreatState {
 export interface SharedState {
   intentionalModeChanges: Map<string, number>;
   enforcementCooldown: Map<string, { count: number; expiresAt: number }>;
-  cycleTimers: ReturnType<typeof setTimeout>[];
+  cycleTimers: Set<ReturnType<typeof setTimeout>>;
   cycleScheduled: Set<string>;
-  enforcementTimers: ReturnType<typeof setTimeout>[];
+  enforcementTimers: Set<ReturnType<typeof setTimeout>>;
   startupTimer: ReturnType<typeof setTimeout> | null;
   // Stopnethack
   splitActive: boolean;
@@ -48,9 +48,9 @@ export interface SharedState {
   /** Channels already warned about takeover_detection w/o chanserv_access (dedupe per session). */
   takeoverWarnedChannels: Set<string>;
 
-  /** Schedule a callback on `enforcementTimers` — wraps setTimeout + push. */
+  /** Schedule a callback on `enforcementTimers` — wraps setTimeout + add, auto-removes on fire. */
   scheduleEnforcement(delayMs: number, fn: () => void): void;
-  /** Schedule a callback on `cycleTimers` — wraps setTimeout + push. */
+  /** Schedule a callback on `cycleTimers` — wraps setTimeout + add, auto-removes on fire. */
   scheduleCycle(delayMs: number, fn: () => void): void;
 }
 
@@ -62,9 +62,9 @@ export function createState(): SharedState {
   const state: SharedState = {
     intentionalModeChanges: new Map(),
     enforcementCooldown: new Map(),
-    cycleTimers: [],
+    cycleTimers: new Set(),
     cycleScheduled: new Set(),
-    enforcementTimers: [],
+    enforcementTimers: new Set(),
     startupTimer: null,
     splitActive: false,
     splitExpiry: 0,
@@ -78,15 +78,32 @@ export function createState(): SharedState {
     knownGoodTopics: new Map(),
     takeoverWarnedChannels: new Set(),
     scheduleEnforcement(delayMs: number, fn: () => void): void {
-      const timer = setTimeout(fn, delayMs);
-      state.enforcementTimers.push(timer);
+      const timer = setTimeout(() => {
+        state.enforcementTimers.delete(timer);
+        fn();
+      }, delayMs);
+      state.enforcementTimers.add(timer);
     },
     scheduleCycle(delayMs: number, fn: () => void): void {
-      const timer = setTimeout(fn, delayMs);
-      state.cycleTimers.push(timer);
+      const timer = setTimeout(() => {
+        state.cycleTimers.delete(timer);
+        fn();
+      }, delayMs);
+      state.cycleTimers.add(timer);
     },
   };
   return state;
+}
+
+/** Prune expired entries from intentionalModeChanges and enforcementCooldown. */
+export function pruneExpiredState(state: SharedState): void {
+  const now = Date.now();
+  for (const [key, expiresAt] of state.intentionalModeChanges) {
+    if (now >= expiresAt) state.intentionalModeChanges.delete(key);
+  }
+  for (const [key, entry] of state.enforcementCooldown) {
+    if (now >= entry.expiresAt) state.enforcementCooldown.delete(key);
+  }
 }
 
 // ---------------------------------------------------------------------------

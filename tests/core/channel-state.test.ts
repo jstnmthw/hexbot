@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ChannelState } from '../../src/core/channel-state';
 import { BotEventBus } from '../../src/event-bus';
@@ -1530,6 +1530,46 @@ describe('ChannelState', () => {
       client.simulateEvent('away', { nick: 'Eve', message: 'lurking' });
       expect(events).toEqual([]);
     });
+
+    it('ignores away events with an empty nick', () => {
+      const events: Array<[string, string, boolean]> = [];
+      eventBus.on('channel:awayChanged', (ch, nick, away) => {
+        events.push([ch, nick, away]);
+      });
+      client.simulateEvent('away', { nick: '', message: 'ghost' });
+      expect(events).toEqual([]);
+    });
+
+    it('defaults to empty string when message is not a string', () => {
+      client.simulateEvent('away', { nick: 'Bob', message: 123 });
+      // awayMessage should be empty string (non-string message defaults to '')
+      // but away flag should still be set
+      expect(state.getUser('#chan1', 'Bob')?.away).toBe(true);
+    });
+
+    it('logs away-notify through the logger when present', () => {
+      // Construct a ChannelState with a mock logger to cover the logger?.debug branch
+      const logClient = new MockClient();
+      const logBus = new BotEventBus();
+      const mockDebug = vi.fn();
+      const mockLogger = {
+        child: () => ({ info: vi.fn(), debug: mockDebug, warn: vi.fn(), error: vi.fn() }),
+      };
+      const logState = new ChannelState(logClient, logBus, mockLogger as never);
+      logState.attach();
+      try {
+        logClient.simulateEvent('join', {
+          nick: 'Zoe',
+          ident: 'z',
+          hostname: 'host',
+          channel: '#log',
+        });
+        logClient.simulateEvent('away', { nick: 'Zoe', message: 'brb' });
+        expect(mockDebug).toHaveBeenCalledWith(expect.stringContaining('away'));
+      } finally {
+        logState.detach();
+      }
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -1621,6 +1661,100 @@ describe('ChannelState', () => {
       const ch = state.getChannel('#test');
       // Old behaviour stored NaN; new behaviour clamps to 0.
       expect(ch?.limit ?? 0).toBe(0);
+    });
+  });
+
+  describe('self-PART/KICK channel cleanup', () => {
+    it('removes the channel entry when the bot PARTs', () => {
+      state.setBotNick('HexBot');
+
+      client.simulateEvent('join', {
+        nick: 'HexBot',
+        ident: 'bot',
+        hostname: 'bot.host',
+        channel: '#test',
+      });
+      expect(state.getChannel('#test')).toBeDefined();
+
+      client.simulateEvent('part', { nick: 'HexBot', channel: '#test' });
+      expect(state.getChannel('#test')).toBeUndefined();
+    });
+
+    it('removes the channel entry when the bot is KICKed', () => {
+      state.setBotNick('HexBot');
+
+      client.simulateEvent('join', {
+        nick: 'HexBot',
+        ident: 'bot',
+        hostname: 'bot.host',
+        channel: '#test',
+      });
+      expect(state.getChannel('#test')).toBeDefined();
+
+      client.simulateEvent('kick', { kicked: 'HexBot', nick: 'Oper', channel: '#test' });
+      expect(state.getChannel('#test')).toBeUndefined();
+    });
+
+    it('does not remove the channel when another user PARTs', () => {
+      state.setBotNick('HexBot');
+
+      client.simulateEvent('join', {
+        nick: 'HexBot',
+        ident: 'bot',
+        hostname: 'bot.host',
+        channel: '#test',
+      });
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'alice.host',
+        channel: '#test',
+      });
+
+      client.simulateEvent('part', { nick: 'Alice', channel: '#test' });
+      expect(state.getChannel('#test')).toBeDefined();
+    });
+  });
+
+  describe('networkAccounts cleanup on PART', () => {
+    it('evicts networkAccounts entry when user leaves all tracked channels', () => {
+      state.setBotNick('HexBot');
+
+      // User joins one channel with an account
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'alice.host',
+        channel: '#test',
+        account: 'Alice',
+      });
+      expect(state.getAccountForNick('Alice')).toBe('Alice');
+
+      // User parts — no longer in any channel
+      client.simulateEvent('part', { nick: 'Alice', channel: '#test' });
+      expect(state.getAccountForNick('Alice')).toBeUndefined();
+    });
+
+    it('keeps networkAccounts entry when user is still in another channel', () => {
+      state.setBotNick('HexBot');
+
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'alice.host',
+        channel: '#chan1',
+        account: 'Alice',
+      });
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'alice.host',
+        channel: '#chan2',
+      });
+
+      // Part from one channel — still in the other
+      client.simulateEvent('part', { nick: 'Alice', channel: '#chan1' });
+      expect(state.getAccountForNick('Alice')).toBe('Alice');
     });
   });
 });

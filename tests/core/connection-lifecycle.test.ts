@@ -195,6 +195,21 @@ describe('registerConnectionEvents', () => {
       expect(warnCalls.some((s) => String(s).includes('Unknown CASEMAPPING'))).toBe(true);
     });
 
+    it('falls back to rfc1459 without warning when CASEMAPPING is not a string', () => {
+      const { client, deps, applyCasemapping, logger } = makeContext();
+      client.network.supports.mockReturnValue(undefined);
+      registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      client.emit('registered');
+      expect(applyCasemapping).toHaveBeenCalledWith('rfc1459');
+      // No warning for undefined/non-string values — only warn on unrecognized strings
+      const warnCalls = (logger.warn as ReturnType<typeof vi.fn>).mock.calls.flat();
+      expect(warnCalls.some((s) => String(s).includes('Unknown CASEMAPPING'))).toBe(false);
+    });
+
     it('forwards a parsed STS directive to onSTSDirective when advertised (§5)', () => {
       const onSTSDirective = vi.fn();
       const { client, deps } = makeContext({ onSTSDirective });
@@ -501,6 +516,30 @@ describe('registerConnectionEvents', () => {
       }
     });
 
+    it('exits immediately on a K-lined close AFTER registration', () => {
+      // Post-registration ban: bot was K-lined while connected.
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+      try {
+        const { client, deps } = makeContext();
+        registerConnectionEvents(
+          deps,
+          () => {},
+          () => {},
+        );
+        // First, register successfully
+        client.emit('registered');
+        // Then receive a K-line error and close
+        client.emit('irc error', {
+          error: 'irc',
+          reason: 'Closing Link: 1.2.3.4 (K-Lined: spam)',
+        });
+        client.emit('close');
+        expect(exitSpy).toHaveBeenCalledWith(1);
+      } finally {
+        exitSpy.mockRestore();
+      }
+    });
+
     it('applies a longer backoff for a Throttled close reason (§9)', () => {
       vi.useFakeTimers();
       try {
@@ -767,6 +806,65 @@ describe('registerConnectionEvents', () => {
       handler({ nick: 'op', channel: null });
 
       expect(client.joins).toHaveLength(0);
+    });
+  });
+
+  describe('handle cleanup methods', () => {
+    it('removeListeners() removes all registered listeners from the client', () => {
+      const { client, deps } = makeContext();
+      const handle = registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+
+      // Before: listeners registered
+      expect(client.listenerCount('registered')).toBeGreaterThan(0);
+      expect(client.listenerCount('close')).toBeGreaterThan(0);
+
+      handle.removeListeners();
+
+      // After: all listeners from lifecycle removed
+      expect(client.listenerCount('registered')).toBe(0);
+      expect(client.listenerCount('close')).toBe(0);
+      expect(client.listenerCount('irc error')).toBe(0);
+      expect(client.listenerCount('reconnecting')).toBe(0);
+      expect(client.listenerCount('socket error')).toBe(0);
+      expect(client.listenerCount('unknown command')).toBe(0);
+    });
+
+    it('cancelStartupRetry() is a no-op when no retry is pending', () => {
+      const { deps } = makeContext();
+      const handle = registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      // No close event → no retry timer → cancelStartupRetry should be safe
+      handle.cancelStartupRetry();
+    });
+
+    it('cancelStartupRetry() prevents a pending retry from firing', () => {
+      vi.useFakeTimers();
+      try {
+        const reconnect = vi.fn();
+        const { client, deps } = makeContext({ reconnect });
+        const handle = registerConnectionEvents(
+          deps,
+          () => {},
+          () => {},
+        );
+
+        // Trigger a close before registration to schedule a retry
+        client.emit('close');
+
+        handle.cancelStartupRetry();
+        vi.advanceTimersByTime(120_000);
+
+        expect(reconnect).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

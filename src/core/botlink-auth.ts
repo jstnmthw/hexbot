@@ -128,6 +128,7 @@ export class BotLinkAuthManager {
   private readonly pendingHandshakes: Map<string, number> = new Map();
   private readonly manualCidrBans: Map<string, LinkBan> = new Map();
   private readonly linkBanStore: AdminListStore<LinkBan> | null;
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     config: BotlinkConfig,
@@ -146,6 +147,9 @@ export class BotLinkAuthManager {
         })
       : null;
     this.loadPersistedBans();
+
+    this.sweepTimer = setInterval(() => this.sweepStaleTrackers(), 300_000);
+    this.sweepTimer.unref(); // Don't keep the process alive
   }
 
   // -------------------------------------------------------------------------
@@ -262,6 +266,14 @@ export class BotLinkAuthManager {
     const tracker = this.authTracker.get(ip);
     if (tracker) {
       tracker.failures = 0;
+    }
+  }
+
+  /** Clean up the periodic sweep timer. Caller (BotLinkHub.close) should invoke this on shutdown. */
+  dispose(): void {
+    if (this.sweepTimer) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = null;
     }
   }
 

@@ -136,7 +136,7 @@ export function setupJoinRecovery(opts: JoinRecoveryOptions): () => void {
       api.debug(`Join recovery backoff reset for ${ctx.channel} (sustained presence)`);
     }, SUSTAINED_PRESENCE_MS);
     rs.resetTimer = timer;
-    state.cycleTimers.push(timer);
+    state.cycleTimers.add(timer);
   });
 
   return () => {

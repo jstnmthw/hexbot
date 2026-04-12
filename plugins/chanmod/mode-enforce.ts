@@ -234,8 +234,8 @@ export function setupModeEnforce(
   return () => {
     for (const timer of state.enforcementTimers) clearTimeout(timer);
     for (const timer of state.cycleTimers) clearTimeout(timer);
-    state.enforcementTimers.length = 0;
-    state.cycleTimers.length = 0;
+    state.enforcementTimers.clear();
+    state.cycleTimers.clear();
     state.cycleScheduled.clear();
     state.intentionalModeChanges.clear();
     state.enforcementCooldown.clear();

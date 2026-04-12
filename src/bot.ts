@@ -273,6 +273,7 @@ export class Bot {
     });
     this.bridge.attach();
     this.channelState.attach();
+    this.channelState.setBotNick(this.config.irc.nick);
     this.services.attach();
 
     // 6. Start DCC CHAT / botnet (if configured)
@@ -387,6 +388,15 @@ export class Bot {
         this.botLogger.info('Bot link leaf connecting to hub');
       }
     }
+    // Clean up orphaned relay virtual sessions when a linked bot disconnects
+    this.eventBus.on('botlink:disconnected', (botname: string) => {
+      for (const [handle, session] of this._relayVirtualSessions) {
+        if (session.fromBot === botname) {
+          this._relayVirtualSessions.delete(handle);
+        }
+      }
+    });
+
     registerBotlinkCommands(
       this.commandHandler,
       this._botLinkHub,

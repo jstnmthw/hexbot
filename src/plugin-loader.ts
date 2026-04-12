@@ -267,8 +267,27 @@ export class PluginLoader {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // Clean up any binds registered before the error
+      // Clean up partial init: drain any teardown the plugin registered
+      if (typeof mod.teardown === 'function') {
+        try {
+          (mod.teardown as () => void)();
+        } catch {
+          /* swallow teardown errors */
+        }
+      }
+      // Clean up binds registered during partial init
       this.dispatcher.unbindAll(pluginName);
+      // Remove help entries
+      this.helpRegistry?.unregister(pluginName);
+      // Remove channel setting defs and change listeners
+      this.channelSettings?.unregister(pluginName);
+      this.channelSettings?.offChange(pluginName);
+      // Remove modesReady listeners
+      const modesListeners = this.modesReadyListeners.get(pluginName);
+      if (modesListeners) {
+        for (const fn of modesListeners) this.eventBus.off('channel:modesReady', fn);
+        this.modesReadyListeners.delete(pluginName);
+      }
       return { name: pluginName, status: 'error', error: `Plugin init() threw: ${message}` };
     }
 

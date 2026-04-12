@@ -248,6 +248,6 @@ export function setupProtection(
 
   return () => {
     for (const timer of state.cycleTimers) clearTimeout(timer);
-    state.cycleTimers.length = 0;
+    state.cycleTimers.clear();
   };
 }

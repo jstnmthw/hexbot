@@ -54,12 +54,13 @@ export class BotLinkHub {
   private remotePartyUsers: Map<string, PartyLineUser> = new Map();
   /** Active relay sessions. Key: handle. Value: { originBot, targetBot }. */
   private activeRelays: Map<string, { originBot: string; targetBot: string }> = new Map();
-  /** Pending protect requests. Key: ref. Value: requesting botname. */
-  private protectRequests: Map<string, string> = new Map();
-  /** CMD routing table — tracks toBot-routed commands for CMD_RESULT forwarding. Key: ref. Value: originating leaf botname. */
-  private cmdRoutes: Map<string, string> = new Map();
+  /** Pending protect requests. Key: ref. Value: { botname, createdAt }. */
+  private protectRequests: Map<string, { botname: string; createdAt: number }> = new Map();
+  /** CMD routing table — tracks toBot-routed commands for CMD_RESULT forwarding. Key: ref. Value: { botname, createdAt }. */
+  private cmdRoutes: Map<string, { botname: string; createdAt: number }> = new Map();
   /** Pending commands sent by the hub itself (from .bot). Key: ref. */
   private pendingCmds: Map<string, { resolve: (output: string[]) => void }> = new Map();
+  private eventBusListeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
   private cmdRefCounter = 0;
   private config: BotlinkConfig;
   private version: string;
@@ -171,11 +172,15 @@ export class BotLinkHub {
       }
     };
 
-    eventBus.on('user:added', broadcastUserSync);
-    eventBus.on('user:removed', (handle) => {
+    const onRemoved = (handle: string) => {
       this.broadcast({ type: 'DELUSER', handle });
-    });
-    eventBus.on('user:flagsChanged', (handle, globalFlags, channelFlags) => {
+    };
+
+    const onFlagsChanged = (
+      handle: string,
+      globalFlags: string,
+      channelFlags: Record<string, string>,
+    ) => {
       const user = permissions.getUser(handle);
       if (user) {
         this.broadcast({
@@ -186,9 +191,21 @@ export class BotLinkHub {
           channelFlags: { ...channelFlags },
         });
       }
-    });
+    };
+
+    eventBus.on('user:added', broadcastUserSync);
+    eventBus.on('user:removed', onRemoved);
+    eventBus.on('user:flagsChanged', onFlagsChanged);
     eventBus.on('user:hostmaskAdded', broadcastUserSync);
     eventBus.on('user:hostmaskRemoved', broadcastUserSync);
+
+    this.eventBusListeners = [
+      { event: 'user:added', fn: broadcastUserSync as (...args: unknown[]) => void },
+      { event: 'user:removed', fn: onRemoved as (...args: unknown[]) => void },
+      { event: 'user:flagsChanged', fn: onFlagsChanged as (...args: unknown[]) => void },
+      { event: 'user:hostmaskAdded', fn: broadcastUserSync as (...args: unknown[]) => void },
+      { event: 'user:hostmaskRemoved', fn: broadcastUserSync as (...args: unknown[]) => void },
+    ];
   }
 
   /** Handle an incoming CMD frame from a leaf. */
@@ -207,7 +224,7 @@ export class BotLinkHub {
         });
         return;
       }
-      this.cmdRoutes.set(ref, fromBot);
+      this.cmdRoutes.set(ref, { botname: fromBot, createdAt: Date.now() });
       this.send(toBot, frame);
       return;
     }
@@ -395,16 +412,16 @@ export class BotLinkHub {
   /** Track a PROTECT_* request so the ACK can be routed back. */
   private handleProtectRequest(botname: string, frame: LinkFrame): void {
     if (frame.ref) {
-      this.protectRequests.set(String(frame.ref), botname);
+      this.protectRequests.set(String(frame.ref), { botname, createdAt: Date.now() });
     }
   }
 
   /** Route a PROTECT_ACK back to the requesting leaf. */
   private handleProtectAck(frame: LinkFrame): void {
     if (!frame.ref) return;
-    const requester = this.protectRequests.get(String(frame.ref));
-    if (requester) {
-      this.send(requester, frame);
+    const entry = this.protectRequests.get(String(frame.ref));
+    if (entry) {
+      this.send(entry.botname, frame);
       this.protectRequests.delete(String(frame.ref));
     }
   }
@@ -457,6 +474,25 @@ export class BotLinkHub {
       leaf.protocol.close(); // close() is idempotent
     }
     this.leaves.clear();
+
+    // Resolve pending commands with error before clearing
+    for (const pending of this.pendingCmds.values()) {
+      pending.resolve(['Hub shutting down.']);
+    }
+    this.pendingCmds.clear();
+    this.remotePartyUsers.clear();
+    this.activeRelays.clear();
+    this.protectRequests.clear();
+    this.cmdRoutes.clear();
+
+    // Remove eventBus listeners
+    if (this.eventBus) {
+      for (const { event, fn } of this.eventBusListeners) {
+        (this.eventBus.off as (event: string, fn: (...args: unknown[]) => void) => void)(event, fn);
+      }
+      this.eventBusListeners = [];
+    }
+
     if (this.server) {
       this.server.close();
       this.server = null;
@@ -673,7 +709,7 @@ export class BotLinkHub {
         const origin = this.cmdRoutes.get(ref);
         if (origin) {
           this.cmdRoutes.delete(ref);
-          this.send(origin, frame);
+          this.send(origin.botname, frame);
           return;
         }
         break;
@@ -733,12 +769,12 @@ export class BotLinkHub {
       }
     }
     // Clean up pending CMD routes from this leaf
-    for (const [ref, origin] of this.cmdRoutes) {
-      if (origin === botname) this.cmdRoutes.delete(ref);
+    for (const [ref, entry] of this.cmdRoutes) {
+      if (entry.botname === botname) this.cmdRoutes.delete(ref);
     }
     // Clean up pending protect requests from this leaf
-    for (const [ref, requester] of this.protectRequests) {
-      if (requester === botname) this.protectRequests.delete(ref);
+    for (const [ref, entry] of this.protectRequests) {
+      if (entry.botname === botname) this.protectRequests.delete(ref);
     }
   }
 
@@ -779,6 +815,19 @@ export class BotLinkHub {
 
       conn.pingSeq++;
       conn.protocol.send({ type: 'PING', seq: conn.pingSeq });
+      this.sweepStaleRoutes();
     }, this.pingIntervalMs);
+  }
+
+  /** Remove stale entries from protectRequests and cmdRoutes that have exceeded their TTL. */
+  private sweepStaleRoutes(): void {
+    const now = Date.now();
+    const TTL = 30_000; // 30 seconds
+    for (const [ref, entry] of this.protectRequests) {
+      if (now - entry.createdAt > TTL) this.protectRequests.delete(ref);
+    }
+    for (const [ref, entry] of this.cmdRoutes) {
+      if (now - entry.createdAt > TTL) this.cmdRoutes.delete(ref);
+    }
   }
 }

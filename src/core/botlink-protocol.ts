@@ -138,6 +138,7 @@ export class RateCounter {
 
 export class BotLinkProtocol {
   private socket: Socket;
+  private rl: import('readline').Interface | null = null;
   private logger: Logger | null;
   private closed = false;
 
@@ -152,7 +153,8 @@ export class BotLinkProtocol {
     this.socket = socket;
     this.logger = logger ?? null;
 
-    const rl = createReadline({ input: socket, crlfDelay: Infinity });
+    this.rl = createReadline({ input: socket, crlfDelay: Infinity });
+    const rl = this.rl;
 
     rl.on('line', (line: string) => {
       /* v8 ignore next -- race guard: socket may deliver buffered lines after close */
@@ -207,6 +209,7 @@ export class BotLinkProtocol {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.rl?.close();
     this.socket.destroy(); // destroy() is idempotent
   }
 

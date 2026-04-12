@@ -22,6 +22,8 @@ export function init(api: PluginAPI): void | Promise<void> {
 export function teardown(): void | Promise<void> {
   // Optional — clean up timers, connections, etc.
   // Binds are automatically removed by the loader.
+  // Also called if init() throws partway through, so partial
+  // state is safely drained before the error propagates.
 }
 ```
 

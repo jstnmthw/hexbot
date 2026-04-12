@@ -74,4 +74,52 @@ describe('SlidingWindowCounter', () => {
     const counter = new SlidingWindowCounter();
     expect(counter.check('key', 1000, 0)).toBe(true);
   });
+
+  describe('sweep()', () => {
+    it('removes keys whose timestamps have all expired', () => {
+      const counter = new SlidingWindowCounter();
+      counter.check('stale', 1000, 10);
+      counter.check('fresh', 1000, 10);
+
+      vi.advanceTimersByTime(1001);
+
+      // Add a fresh event for 'fresh' so it survives the sweep
+      counter.check('fresh', 1000, 10);
+
+      counter.sweep(1000);
+      expect(counter.size).toBe(1); // only 'fresh' remains
+    });
+
+    it('removes keys with empty timestamp arrays', () => {
+      const counter = new SlidingWindowCounter();
+      counter.check('a', 1000, 10);
+      counter.clear('a');
+      // clear() deletes the key, so nothing to sweep — but check sweep handles it
+      counter.check('b', 500, 10);
+      vi.advanceTimersByTime(501);
+      counter.sweep(500);
+      expect(counter.size).toBe(0);
+    });
+
+    it('preserves keys with active timestamps', () => {
+      const counter = new SlidingWindowCounter();
+      counter.check('a', 1000, 10);
+      counter.check('b', 1000, 10);
+      counter.sweep(1000);
+      expect(counter.size).toBe(2);
+    });
+  });
+
+  describe('size', () => {
+    it('reflects the number of tracked keys', () => {
+      const counter = new SlidingWindowCounter();
+      expect(counter.size).toBe(0);
+      counter.check('a', 1000, 10);
+      expect(counter.size).toBe(1);
+      counter.check('b', 1000, 10);
+      expect(counter.size).toBe(2);
+      counter.clear('a');
+      expect(counter.size).toBe(1);
+    });
+  });
 });

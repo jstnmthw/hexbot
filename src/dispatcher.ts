@@ -114,6 +114,7 @@ export class EventDispatcher {
   private msgFlood = new SlidingWindowCounter();
   /** Tracks which hostmask keys have already received the one-time flood warning this window. */
   private floodWarned = new Set<string>();
+  private lastFloodSweep = 0;
 
   constructor(permissions?: PermissionsProvider | null, logger?: Logger | null) {
     this.permissions = permissions ?? null;
@@ -160,6 +161,17 @@ export class EventDispatcher {
    *   when a `FloodNoticeProvider` is attached)
    */
   floodCheck(floodType: 'pub' | 'msg', key: string, ctx: HandlerContext): FloodCheckResult {
+    // Lazy sweep: prune stale keys from flood counters every 5 minutes
+    const now = Date.now();
+    if (now - this.lastFloodSweep > 300_000) {
+      this.lastFloodSweep = now;
+      if (this.floodConfig) {
+        this.pubFlood.sweep(this.floodConfig.pub.window * 1000);
+        this.msgFlood.sweep(this.floodConfig.msg.window * 1000);
+      }
+      this.floodWarned.clear();
+    }
+
     if (!this.floodConfig) return { blocked: false, firstBlock: false };
 
     // Owner bypass — n-flagged users are never flood-limited

@@ -320,9 +320,10 @@ Responsibilities:
 
 - Discover plugins in the plugin directory (each subdirectory with `index.ts`, or standalone `.ts` files)
 - Load: dynamic `import()` with cache-busting query string for ESM (imports compiled `.js` output)
-- Unload: call `teardown()`, then `dispatcher.unbindAll(pluginId)`
+- Unload: call `teardown()`, then `dispatcher.unbindAll(pluginId)`, unregister help, channel settings, event listeners
 - Reload: unload then load from disk
 - Provide scoped API to each plugin's `init()`
+- Partial init safety: if `init()` throws, the loader calls `teardown()` and performs the same cleanup as unload before re-throwing
 
 Hot-reload works because ESM's `import()` can be cache-busted with `?t=Date.now()`. The loader clears the old plugin's binds, calls teardown, then imports the fresh code and re-initializes.
 

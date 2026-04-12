@@ -268,6 +268,7 @@ export class DCCSession implements DCCSessionEntry {
   private manager: DCCSessionManager;
   private commandHandler: CommandExecutor;
   private idleTimeoutMs: number;
+  private rl: import('readline').Interface | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   private logger: Logger | null;
@@ -299,7 +300,8 @@ export class DCCSession implements DCCSessionEntry {
   /** Start the session: send banner, begin readline loop. */
   start(version: string, botNick: string): void {
     // Wrap socket in readline — DCC uses \r\n but readline handles both
-    const rl = createReadline({ input: this.socket, crlfDelay: Infinity });
+    this.rl = createReadline({ input: this.socket, crlfDelay: Infinity });
+    const rl = this.rl;
 
     // Banner
     const d = new Date();
@@ -488,6 +490,8 @@ export class DCCSession implements DCCSessionEntry {
       this.idleTimer = null;
     }
 
+    this.rl?.close();
+
     if (!this.socket.destroyed) {
       if (reason) this.socket.write(`*** ${reason}\r\n`);
       this.socket.destroy();
@@ -505,6 +509,7 @@ export class DCCSession implements DCCSessionEntry {
 
     if (this.idleTimer !== null) clearTimeout(this.idleTimer);
     this.idleTimer = null;
+    this.rl?.close();
 
     // Remove from manager and announce departure
     this.manager.removeSession(this.nick);
@@ -855,6 +860,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
     server.on('error', (err) => {
       this.logger?.error(`DCC server error on port ${port}:`, err);
+      clearTimeout(pending.timer);
       this.portAllocator.release(port);
       this.pending.delete(port);
     });

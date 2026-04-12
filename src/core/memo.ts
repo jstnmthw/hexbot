@@ -138,6 +138,8 @@ export class MemoManager {
 
   /** Clean up timers and state. */
   detach(): void {
+    this.dispatcher.unbindAll(OWNER_ID);
+    this.commandHandler.unregisterCommand('memo');
     if (this.pendingRequest) {
       clearTimeout(this.pendingRequest.timer);
       this.pendingRequest = null;

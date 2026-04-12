@@ -105,6 +105,11 @@ export class CommandHandler {
     this.commands.set(name.toLowerCase(), { name, options, handler });
   }
 
+  /** Remove a previously registered command. Returns true if it existed. */
+  unregisterCommand(name: string): boolean {
+    return this.commands.delete(name);
+  }
+
   /** Look up a single command by name. */
   getCommand(name: string): CommandEntry | undefined {
     return this.commands.get(name.toLowerCase());

@@ -26,4 +26,19 @@ export class SlidingWindowCounter {
   reset(): void {
     this.windows.clear();
   }
+
+  /** Remove keys whose timestamps have all expired outside `windowMs`. */
+  sweep(windowMs: number): void {
+    const now = Date.now();
+    for (const [key, timestamps] of this.windows) {
+      if (timestamps.length === 0 || timestamps.every((t) => now - t >= windowMs)) {
+        this.windows.delete(key);
+      }
+    }
+  }
+
+  /** Number of tracked keys (for observability). */
+  get size(): number {
+    return this.windows.size;
+  }
 }

@@ -245,6 +245,22 @@ export class BotLinkLeaf {
     });
   }
 
+  /** Resolve and clear all pending request maps. */
+  private flushPendingRequests(): void {
+    for (const pending of this.pendingCmds.values()) {
+      pending.resolve(['Disconnected from hub.']);
+    }
+    this.pendingCmds.clear();
+    for (const pending of this.pendingWhom.values()) {
+      pending.resolve([]);
+    }
+    this.pendingWhom.clear();
+    for (const pending of this.pendingProtect.values()) {
+      pending.resolve(false);
+    }
+    this.pendingProtect.clear();
+  }
+
   /** Disconnect from the hub and stop reconnecting. */
   disconnect(): void {
     this.disconnecting = true;
@@ -255,6 +271,7 @@ export class BotLinkLeaf {
     }
     this.stopHeartbeat();
     this.connected = false;
+    this.flushPendingRequests();
     if (this.protocol) {
       this.protocol.close();
       this.protocol = null;
@@ -267,6 +284,7 @@ export class BotLinkLeaf {
     this.connecting = false;
     this.stopHeartbeat();
     this.connected = false;
+    this.flushPendingRequests();
     if (this.protocol) {
       this.protocol.close();
       this.protocol = null;
@@ -326,6 +344,7 @@ export class BotLinkLeaf {
       const wasConnected = this.connected;
       this.connected = false;
       this.stopHeartbeat();
+      this.flushPendingRequests();
       this.protocol = null;
 
       if (wasConnected) {
