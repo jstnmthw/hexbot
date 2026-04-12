@@ -50,6 +50,11 @@ export function init(api: PluginAPI): void {
         .find((e) => e.command.replace(/^!/, '').toLowerCase() === normalized.toLowerCase());
 
       if (entry) {
+        // Filter by permission — don't reveal privileged commands to unprivileged users
+        if (entry.flags !== '-' && !api.permissions.checkFlags(entry.flags, ctx)) {
+          api.notice(ctx.nick, `No help for "${arg}" — try !help for a list`);
+          return;
+        }
         // Detail view — always private to nick
         api.notice(ctx.nick, `${boldTrigger(entry.usage)} — ${entry.description}`);
         api.notice(

@@ -321,6 +321,8 @@ describe('help plugin', () => {
   it('!help <command> returns detail for the command (always to nick)', async () => {
     await loadHelp();
     helpRegistry.register('chanmod', [OP_ENTRY]);
+    permissions.addUser('opuser', 'user1!user@host.com', 'o', 'test');
+    permissions.loadFromDb();
 
     const ctx = makeCtx({ args: 'op', text: '!help op', channel: '#test' });
     await dispatcher.dispatch('pub', ctx);
@@ -351,6 +353,8 @@ describe('help plugin', () => {
   it('!help !op (with leading !) also works', async () => {
     await loadHelp();
     helpRegistry.register('chanmod', [OP_ENTRY]);
+    permissions.addUser('opuser', 'user1!user@host.com', 'o', 'test');
+    permissions.loadFromDb();
 
     const ctx = makeCtx({ args: '!op', text: '!help !op' });
     await dispatcher.dispatch('pub', ctx);
@@ -363,6 +367,8 @@ describe('help plugin', () => {
     await loadHelp();
     const withDetail: HelpEntry = { ...OP_ENTRY, detail: ['Extra info here', 'More info'] };
     helpRegistry.register('chanmod', [withDetail]);
+    permissions.addUser('opuser', 'user1!user@host.com', 'o', 'test');
+    permissions.loadFromDb();
 
     const ctx = makeCtx({ args: 'op' });
     await dispatcher.dispatch('pub', ctx);
@@ -370,6 +376,17 @@ describe('help plugin', () => {
     const messages = mockNotice.mock.calls.map((c) => c[1]);
     expect(messages).toContain('Extra info here');
     expect(messages).toContain('More info');
+  });
+
+  it('!help <command> hides privileged commands from unprivileged users', async () => {
+    await loadHelp();
+    helpRegistry.register('chanmod', [OP_ENTRY]);
+
+    // user1 does NOT have 'o' flag — should get "No help" instead of details
+    const ctx = makeCtx({ args: 'op', text: '!help op' });
+    await dispatcher.dispatch('pub', ctx);
+
+    expect(mockNotice).toHaveBeenCalledWith('user1', 'No help for "op" — try !help for a list');
   });
 
   it('!help <unknowncmd> returns explicit not-found reply', async () => {

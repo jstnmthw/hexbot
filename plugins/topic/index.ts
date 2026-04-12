@@ -60,7 +60,7 @@ export function init(api: PluginAPI): void {
     },
     {
       command: '!topics',
-      flags: '-',
+      flags: 'o',
       usage: '!topics [preview [text]]',
       description: 'List available topic themes; preview renders all themes',
       category: 'topic',
@@ -156,9 +156,9 @@ export function init(api: PluginAPI): void {
     ctx.reply(`Topic set using theme "${themeName}".`);
   });
 
-  // !topics — list available themes (anyone can use)
+  // !topics — list available themes (requires +o, same as !topic)
   // !topics preview [text] — PM all themes rendered with sample text
-  api.bind('pub', '-', '!topics', (ctx) => {
+  api.bind('pub', '+o', '!topics', (ctx) => {
     const args = ctx.args.trim();
     const parts = args.split(/\s+/);
     const subcommand = parts[0]?.toLowerCase();
