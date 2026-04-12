@@ -235,7 +235,7 @@ function bannerLogo(version: string): string[] {
     `⢰⡿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀  `,
     `⠘⣽⡿⠿⠿⣿⣿⣿⣿⣿⣦⣤⡀⠀⠀ `,
     `⠀⣟⠀⠀⠀⣸⣿⡏⠀⠀⠀⢹⠗⠀⠀  `,
-    `⠀⣿⣷⣶⣾⡿⠁⠙⣄⣀⣀⣠⡀ ⠀   ${red('HexBot')} v${version}`,
+    `⠀⣿⣷⣶⣾⡿⠁⠙⣄⣀⣀⣠⡀ ⠀   ${B}${red(`HexBot`)} v${version}${B}`,
     `⠀⠙⠙⢿⡿⣷⣶⣤⣿⣿⡿⠿⠃⠀⠀   ${grey('Hell is empty and all the bots are here.')}`,
     `⠀⠀⠀⠺⡏⡏⡏⡏⡏⠉⠁⠀⠀⠀⠀⠀`,
     `⠀⠀⠀⠀⠀⠀⠁⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀`,
@@ -302,7 +302,10 @@ export class DCCSession implements DCCSessionEntry {
     const rl = createReadline({ input: this.socket, crlfDelay: Infinity });
 
     // Banner
-    const now = new Date().toLocaleString();
+    const d = new Date();
+    const time = d.toLocaleTimeString();
+    const tz = d.toLocaleTimeString('en-US', { timeZoneName: 'short' }).split(' ').pop();
+    const date = d.toLocaleDateString();
     const stats = this.manager.getStats();
     const others = this.manager
       .getSessionList()
@@ -321,7 +324,7 @@ export class DCCSession implements DCCSessionEntry {
     // Greeting
     this.writeLine('');
     this.writeLine(
-      `Hey ${B}${this.handle}${B}! My name is ${B}${botNick}${B} and the local time is ${now}.`,
+      `Hey ${B}${this.handle}${B}! My name is ${B}${botNick}${B} and the local time is ${time} (${tz}) on ${date}.`,
     );
 
     // Owner-only notice

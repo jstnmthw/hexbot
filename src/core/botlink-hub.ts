@@ -329,6 +329,15 @@ export class BotLinkHub {
   // Session relay routing (Phase 9)
   // -----------------------------------------------------------------------
 
+  /**
+   * Register a relay that the hub itself originated (e.g. from a DCC .relay
+   * command on this bot).  The hub's routeRelayFrame only sees frames that
+   * arrive from leaves, so hub-originated relays must be registered explicitly.
+   */
+  registerRelay(handle: string, targetBot: string): void {
+    this.activeRelays.set(handle, { originBot: this.config.botname, targetBot });
+  }
+
   /** Route RELAY_* frames between origin and target bots. */
   private routeRelayFrame(fromBot: string, frame: LinkFrame): void {
     const handle = String(frame.handle ?? '');
@@ -337,7 +346,7 @@ export class BotLinkHub {
       // Origin bot wants to relay to target bot
       const targetBot = String(frame.toBot ?? '');
       if (!this.leaves.has(targetBot)) {
-        this.send(fromBot, {
+        this.sendOrDeliver(fromBot, {
           type: 'RELAY_END',
           handle,
           reason: `Bot "${targetBot}" not connected`,
@@ -348,22 +357,34 @@ export class BotLinkHub {
       this.send(targetBot, frame);
     } else if (frame.type === 'RELAY_ACCEPT') {
       const relay = this.activeRelays.get(handle);
-      if (relay) this.send(relay.originBot, frame);
+      if (relay) this.sendOrDeliver(relay.originBot, frame);
     } else if (frame.type === 'RELAY_INPUT') {
       const relay = this.activeRelays.get(handle);
       if (relay) this.send(relay.targetBot, frame);
     } else if (frame.type === 'RELAY_OUTPUT') {
       const relay = this.activeRelays.get(handle);
-      if (relay) this.send(relay.originBot, frame);
+      if (relay) this.sendOrDeliver(relay.originBot, frame);
     } else if (frame.type === 'RELAY_END') {
       const relay = this.activeRelays.get(handle);
       if (relay) {
         // Forward to the other side
         const otherBot = fromBot === relay.originBot ? relay.targetBot : relay.originBot;
-        this.send(otherBot, frame);
+        this.sendOrDeliver(otherBot, frame);
         this.activeRelays.delete(handle);
       }
     }
+  }
+
+  /**
+   * Send a frame to a bot.  If the target is the hub itself, deliver the frame
+   * locally via onLeafFrame instead of trying to look it up in the leaves map.
+   */
+  private sendOrDeliver(botname: string, frame: LinkFrame): boolean {
+    if (botname === this.config.botname) {
+      this.onLeafFrame?.(botname, frame);
+      return true;
+    }
+    return this.send(botname, frame);
   }
 
   /** Track a PROTECT_* request so the ACK can be routed back. */
