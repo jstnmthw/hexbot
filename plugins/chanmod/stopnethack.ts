@@ -84,9 +84,9 @@ export function setupStopnethack(api: PluginAPI, config: ChanmodConfig, state: S
 
     let isLegitimate: boolean;
     if (config.stopnethack_mode === 1) {
-      // isoptest: user must be in permissions db with an op-level flag
+      // isoptest: user must be in permissions db with an op-level flag (and no +d)
       const flags = getUserFlags(api, channel, target);
-      isLegitimate = hasAnyFlag(flags, config.op_flags);
+      isLegitimate = hasAnyFlag(flags, config.op_flags) && !flags?.includes('d');
     } else {
       // stopnethack_mode === 2 (wasoptest) — only valid values are 1 and 2
       // wasoptest: user must have had ops before the split

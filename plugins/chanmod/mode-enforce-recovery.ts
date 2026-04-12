@@ -182,9 +182,13 @@ function performMassReop(api: PluginAPI, config: ChanmodConfig, channel: string)
     const hasHalfop = user.modes.includes('h');
     const hasVoice = user.modes.includes('v');
 
-    const shouldOp = hasAnyFlag(allFlags, config.op_flags);
+    const deop = allFlags.includes('d');
+    const shouldOp = !deop && hasAnyFlag(allFlags, config.op_flags);
     const shouldHalfop =
-      !shouldOp && config.halfop_flags.length > 0 && hasAnyFlag(allFlags, config.halfop_flags);
+      !shouldOp &&
+      !deop &&
+      config.halfop_flags.length > 0 &&
+      hasAnyFlag(allFlags, config.halfop_flags);
     const shouldVoice = !shouldOp && !shouldHalfop && hasAnyFlag(allFlags, config.voice_flags);
 
     // Re-op flagged users who lost ops

@@ -82,9 +82,9 @@ When the bot regains ops during an elevated threat level (Alert or higher), it p
 
 When `mass_reop_on_recovery` is enabled, the bot scans the channel and:
 
-- Re-ops all users with op flags who lost their ops
-- Re-halfops and re-voices users according to their flags
-- If `bitch` is also enabled, deops anyone who has ops but lacks the required flags
+- Re-ops all users with op flags who lost their ops (users with `+d` are skipped)
+- Re-halfops and re-voices users according to their flags (users with `+d` are skipped for halfop)
+- If `bitch` is also enabled, deops anyone who has ops but lacks the required flags (or has `+d`)
 
 This restores the channel to its pre-attack state in a single batch of mode changes.
 

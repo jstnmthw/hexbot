@@ -69,13 +69,19 @@ When a user joins a channel where the bot has ops (or halfop), chanmod checks th
 2. **Auto-halfop** -- user has a flag in `halfop_flags` (and no op flag); requires bot to have `+h` or `+o`; disabled by default (`halfop_flags: []`)
 3. **Auto-voice** -- user has a flag in `voice_flags` (and no op/halfop flag); requires bot to have `+o`
 
-The `d` (deop) flag suppresses auto-op and auto-halfop. A user with `+d` will not be opped or halfopped on join, regardless of other flags. Auto-voice still works if the user also has an explicit `+v` flag (`n` does not imply `v` when `d` is active). Example: an owner with `+ndv` gets voiced but not opped.
+The `d` (deop) flag suppresses auto-op and auto-halfop on join. A user with `+d` will not be opped or halfopped on join, regardless of other flags. This is an **elective** flag, not a punitive one — the user retains all their privileges and can still `.op` themselves or be opped manually when needed. It is designed for trusted ops who prefer to idle without `@` and only op up when moderation is required.
+
+Mode enforcement respects `+d`: if a `+d` user is deopped, the bot will **not** re-op them. Bitch mode also treats `+d` users as unauthorized for op/halfop grants.
+
+Auto-voice still works if the user also has an explicit `+v` flag (`n` does not imply `v` when `d` is active). Example: an owner with `+ndv` gets voiced but not opped.
+
+> **Eggdrop difference:** Eggdrop's `+d` is punitive — it actively deops users and prevents all opping. HexBot's `+d` only suppresses automatic modes; the user can still op themselves via commands.
 
 If the bot configuration includes `identity.require_acc_for` containing `+o`, `+h`, or `+v`, chanmod will verify the user with NickServ before applying the mode. If verification fails, the user is silently skipped (or notified if `notify_on_fail` is true).
 
 ## Mode enforcement
 
-With `enforce_modes: true`, the bot watches for `-o`, `-h`, and `-v` mode changes. If a flagged user is deopped, dehalfopped, or devoiced by someone else, the bot re-applies the mode after `enforce_delay_ms`. To prevent mode wars, enforcement is capped at 3 times per user per 10-second window before being suppressed with a warning.
+With `enforce_modes: true`, the bot watches for `-o`, `-h`, and `-v` mode changes. If a flagged user is deopped, dehalfopped, or devoiced by someone else, the bot re-applies the mode after `enforce_delay_ms`. Users with the `+d` flag are excluded from op/halfop re-enforcement — if a `+d` user is deopped, the bot leaves them deopped. To prevent mode wars, enforcement is capped at 3 times per user per 10-second window before being suppressed with a warning.
 
 Modes applied by `!deop`, `!dehalfop`, and `!devoice` are marked intentional and are never re-enforced.
 
@@ -105,7 +111,7 @@ Nicks in `nodesynch_nicks` (default: `["ChanServ"]`) are always exempt as setter
 
 ## Bitch mode
 
-With `bitch: true`, the bot strips `+o` and `+h` from anyone who receives them without the corresponding flag in `op_flags` or `halfop_flags`. This is a strict op-control mode: only users already in the permissions database may hold ops.
+With `bitch: true`, the bot strips `+o` and `+h` from anyone who receives them without the corresponding flag in `op_flags` or `halfop_flags`. Users with the `+d` flag are treated as unauthorized even if they have op flags — bitch mode will strip their ops. This is a strict op-control mode: only users already in the permissions database (without `+d`) may hold ops.
 
 Exemptions:
 

@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `d` (deop) permission flag — suppresses auto-op/halfop on join; auto-voice still works with explicit `+v`
+- `d` (deop) permission flag — elective flag that suppresses auto-op/halfop on join without revoking privileges; user can still `.op` themselves or be opped manually; mode enforcement and bitch mode respect `+d`; auto-voice still works with explicit `+v`
 - Per-plugin channel scoping via `channels` array in `plugins.json` — restricts a plugin to specific channels
 - Greeter help now documents `{nick}` and `{channel}` substitution variables and sub-command help for `!greet set` and `!greet del`
 - Secrets live in `.env`, referenced from `bot.json` via `<field>_env` suffix keys. Startup validates every required secret for enabled features and fails loudly with the exact env var name when one is missing. Plugin configs support the same `_env` pattern — the loader resolves values before plugin `init()` runs, so plugins never touch `process.env`.
@@ -35,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `+d` flag ignored by mode enforcement, bitch mode, mass reop, and stopnethack — a `+od` user was re-opped by enforcement after being deopped, allowed through bitch mode, re-opped during takeover recovery, and treated as legitimate during netsplit ops checks; all four paths now respect `+d`
 - Plugins listed in `plugins.json` without `"enabled": true` were incorrectly skipped; now only `"enabled": false` disables a plugin
 - **§A.3 P0**: `ChannelState.parseUserlistModes` dropped every user's prefix modes on NAMES because `irc-framework` ships `modes` as a `string[]`, not a string. Every plugin checking "is this user an op?" got a wrong answer for the pre-existing userlist until a subsequent MODE event landed.
 - **§1 P0**: `splitMessage` counted JavaScript UTF-16 code units instead of UTF-8 bytes and could slice mid-surrogate. Emoji / Japanese / Cyrillic messages silently truncated on the wire. Replaced with a byte-aware, code-point-iterating splitter; ellipsis truncation now trims the tail so `" ..."` never overflows the budget. New `reservedBytes` parameter covers CTCP `\x01…\x01` wrapper overhead.
