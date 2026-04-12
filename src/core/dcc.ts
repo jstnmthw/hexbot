@@ -217,12 +217,11 @@ export function isPassiveDcc(_ip: number, port: number): boolean {
 
 const B = '\x02'; // bold toggle
 const C = (n: number) => `\x03${String(n).padStart(2, '0')}`; // set color
-const RC = '\x03'; // reset color
+const RC = '\x0F'; // reset all — avoids bare \x03 eating a following digit as a color code
 
-const green = (s: string) => `${C(3)}${s}${RC}`;
 const red = (s: string) => `${C(4)}${s}${RC}`;
 const grey = (s: string) => `${C(14)}${s}${RC}`;
-const lbl = (s: string) => `${C(10)}${B}${s}${B}${RC}`; // teal bold label
+const lbl = (s: string, w = 10) => `${C(4)}${B}${s.padEnd(w)}${B}${RC}`; // teal bold, fixed-width
 
 // ---------------------------------------------------------------------------
 // Banner art — braille hex icon with colored "HEXBOT" text art
@@ -236,8 +235,8 @@ function bannerLogo(version: string): string[] {
     `⢰⡿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀  `,
     `⠘⣽⡿⠿⠿⣿⣿⣿⣿⣿⣦⣤⡀⠀⠀ `,
     `⠀⣟⠀⠀⠀⣸⣿⡏⠀⠀⠀⢹⠗⠀⠀  `,
-    `⠀⣿⣷⣶⣾⡿⠁⠙⣄⣀⣀⣠⡀ ⠀   ${red('HexBot')} v${grey(version)}`,
-    `⠀⠙⠙⢿⡿⣷⣶⣤⣿⣿⡿⠿⠃⠀⠀   Hell is empty and all the bots are here.`,
+    `⠀⣿⣷⣶⣾⡿⠁⠙⣄⣀⣀⣠⡀ ⠀   ${red('HexBot')} v${version}`,
+    `⠀⠙⠙⢿⡿⣷⣶⣤⣿⣿⡿⠿⠃⠀⠀   ${grey('Hell is empty and all the bots are here.')}`,
     `⠀⠀⠀⠺⡏⡏⡏⡏⡏⠉⠁⠀⠀⠀⠀⠀`,
     `⠀⠀⠀⠀⠀⠀⠁⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀`,
   ];
@@ -303,73 +302,62 @@ export class DCCSession implements DCCSessionEntry {
     const rl = createReadline({ input: this.socket, crlfDelay: Infinity });
 
     // Banner
-    const rule = grey('─'.repeat(60));
     const now = new Date().toLocaleString();
+    const stats = this.manager.getStats();
     const others = this.manager
       .getSessionList()
       .filter((s) => s.handle !== this.handle)
       .map((s) => s.handle);
     const consoleLine =
       others.length > 0
-        ? `${B}${others.length}${B} other(s) here: ${others.join(', ')}`
+        ? `${others.length} other(s) here: ${others.join(', ')}`
         : 'you are the only one here';
 
     // Logo
     for (const line of bannerLogo(version)) {
       this.writeLine(line);
     }
+
+    // Greeting
     this.writeLine('');
     this.writeLine(
-      `  ${green(`${B}◆${B}`)} ${green(`${B}HexBot${B}`)} ${grey(`v${version}`)}  ${grey('—')} ${B}${botNick}${B}`,
+      `Hey ${B}${this.handle}${B}! My name is ${B}${botNick}${B} and the local time is ${now}.`,
     );
-    this.writeLine(`  ${rule}`);
-
-    // Session info
-    this.writeLine('');
-    this.writeLine(
-      `  ${lbl('Session')}    ${B}${this.handle}${B} (${this.nick}!${this.ident}@${this.hostname})`,
-    );
-    const flagDisplay = this.flags ? `+${this.flags}` : '+-';
-    const ownerTag = this.flags.includes('n') ? `  ${green('(owner)')}` : '';
-    this.writeLine(`  ${lbl('Flags')}      ${flagDisplay}${ownerTag}`);
-    this.writeLine(`  ${lbl('Time')}       ${now}`);
-
-    // Observability stats (when available)
-    const stats = this.manager.getStats();
-    if (stats) {
-      this.writeLine('');
-      const chanList =
-        stats.channels.length > 0
-          ? `${B}${stats.channels.length}${B} joined ${grey('│')} ${stats.channels.join(', ')}`
-          : grey('none');
-      this.writeLine(`  ${lbl('Channels')}   ${chanList}`);
-      this.writeLine(
-        `  ${lbl('Plugins')}    ${B}${stats.pluginCount}${B} loaded ${grey('│')} ${B}${stats.bindCount}${B} binds`,
-      );
-      this.writeLine(`  ${lbl('Users')}      ${B}${stats.userCount}${B} registered`);
-      this.writeLine(`  ${lbl('Uptime')}     ${formatUptime(stats.uptime)}`);
-    }
-
-    // Console presence
-    this.writeLine('');
-    this.writeLine(`  ${lbl('Console')}    ${consoleLine}`);
 
     // Owner-only notice
     if (this.flags.includes('n')) {
       this.writeLine('');
-      this.writeLine(`  ${green(`${B}★${B}`)} You are an owner of this bot.`);
+      this.writeLine(`${red(`${B}★${B}`)} You are an owner of this bot.`);
     }
+
+    // Stats table
+    this.writeLine('');
+    const flagDisplay = this.flags ? `+${this.flags}` : '+-';
+    this.writeLine(
+      `  ${lbl('Session')}${B}${this.handle}${B} (${this.nick}!${this.ident}@${this.hostname})`,
+    );
+    this.writeLine(`  ${lbl('Flags')}${flagDisplay}`);
+    if (stats) {
+      const chanList = stats.channels.length > 0 ? stats.channels.join(', ') : grey('none');
+      this.writeLine(
+        `  ${lbl('Channels')}${B}${stats.channels.length}${B} joined ${grey('│')} ${chanList}`,
+      );
+      this.writeLine(
+        `  ${lbl('Plugins')}${B}${stats.pluginCount}${B} loaded ${grey('│')} ${B}${stats.bindCount}${B} binds`,
+      );
+      this.writeLine(`  ${lbl('Users')}${B}${stats.userCount}${B} registered`);
+      this.writeLine(`  ${lbl('Uptime')}${formatUptime(stats.uptime)}`);
+    }
+    this.writeLine(`  ${lbl('Console')}${consoleLine}`);
 
     // Quick-start commands
     this.writeLine('');
-    this.writeLine(`  ${rule}`);
-    this.writeLine(`  ${B}.help${B}          All available commands`);
-    this.writeLine(`  ${B}.help${B} <cmd>    Detailed command help`);
-    this.writeLine(`  ${B}.console${B}       Who's on the console`);
-    this.writeLine(`  ${B}.quit${B}          Disconnect`);
-    this.writeLine(`  ${rule}`);
+    this.writeLine(`Use ${B}.help${B} for basic help.`);
+    this.writeLine(`Use ${B}.help${B} <command> for help on a specific command.`);
+    this.writeLine(`Use ${B}.console${B} to see who is on the console.`);
     this.writeLine('');
-    this.writeLine(`  Commands start with ${B}.${B} ${grey('—')} everything else is party chat.`);
+    this.writeLine(`Commands start with '.' — everything else is console chat.`);
+    this.writeLine('');
 
     this.resetIdle();
 

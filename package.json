@@ -16,6 +16,7 @@
     "check": "tsc --noEmit && eslint . && vitest run",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "preview:banner": "tsx scripts/preview-banner.ts",
     "prepare": "husky"
   },
   "lint-staged": {
