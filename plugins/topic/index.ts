@@ -45,6 +45,13 @@ export function init(api: PluginAPI): void {
       category: 'topic',
     },
     {
+      command: '!topic preview',
+      flags: 'o',
+      usage: '!topic preview <theme> <text>',
+      description: 'Preview a themed topic in channel without setting it',
+      category: 'topic',
+    },
+    {
       command: '!topic lock',
       flags: 'o',
       usage: '!topic lock',
@@ -74,7 +81,8 @@ export function init(api: PluginAPI): void {
   api.bind('pub', '+o', '!topic', (ctx) => {
     const args = ctx.args.trim();
     if (!args) {
-      ctx.reply(
+      api.notice(
+        ctx.nick,
         'Usage: !topic <theme> <text> | !topic lock | !topic unlock | !topic preview <theme> <text>',
       );
       return;
@@ -87,17 +95,18 @@ export function init(api: PluginAPI): void {
     if (firstArg === 'lock') {
       const live = api.getChannel(ctx.channel)?.topic ?? '';
       if (!live) {
-        ctx.reply('Cannot lock: no topic is currently set.');
+        api.notice(ctx.nick, 'Cannot lock: no topic is currently set.');
         return;
       }
       if (live.length > 390) {
-        ctx.reply(
+        api.notice(
+          ctx.nick,
           `Warning: topic is ${live.length} chars (typical limit is ~390). It may be truncated by the server.`,
         );
       }
       api.channelSettings.set(ctx.channel, 'topic_text', live);
       api.channelSettings.set(ctx.channel, 'protect_topic', true);
-      ctx.reply('Topic locked.');
+      api.notice(ctx.nick, 'Topic locked.');
       return;
     }
 
@@ -105,14 +114,14 @@ export function init(api: PluginAPI): void {
     if (firstArg === 'unlock') {
       api.channelSettings.set(ctx.channel, 'protect_topic', false);
       api.channelSettings.set(ctx.channel, 'topic_text', '');
-      ctx.reply('Topic protection disabled.');
+      api.notice(ctx.nick, 'Topic protection disabled.');
       return;
     }
 
     // Handle preview subcommand
     if (firstArg === 'preview') {
       if (parts.length < 3) {
-        ctx.reply('Usage: !topic preview <theme> <text>');
+        api.notice(ctx.nick, 'Usage: !topic preview <theme> <text>');
         return;
       }
       const themeName = parts[1].toLowerCase();
@@ -120,26 +129,26 @@ export function init(api: PluginAPI): void {
 
       const template = themes[themeName];
       if (!template) {
-        ctx.reply(`Unknown theme "${parts[1]}". Use !topics to see available themes.`);
+        api.notice(ctx.nick, `Unknown theme "${parts[1]}". Use !topics to see available themes.`);
         return;
       }
 
       const formatted = template.replace('$text', () => text);
-      api.say(ctx.channel, formatted);
+      api.notice(ctx.nick, formatted);
       return;
     }
 
     // Normal topic set: !topic <theme> <text>
     const themeName = firstArg;
     if (parts.length < 2) {
-      ctx.reply('Usage: !topic <theme> <text>');
+      api.notice(ctx.nick, 'Usage: !topic <theme> <text>');
       return;
     }
     const text = parts.slice(1).join(' ');
 
     const template = themes[themeName];
     if (!template) {
-      ctx.reply(`Unknown theme "${parts[0]}". Use !topics to see available themes.`);
+      api.notice(ctx.nick, `Unknown theme "${parts[0]}". Use !topics to see available themes.`);
       return;
     }
 
@@ -147,13 +156,14 @@ export function init(api: PluginAPI): void {
 
     // Warn if the formatted topic is very long (typical IRC limit ~390 chars)
     if (formatted.length > 390) {
-      ctx.reply(
+      api.notice(
+        ctx.nick,
         `Warning: topic is ${formatted.length} chars (typical limit is ~390). It may be truncated by the server.`,
       );
     }
 
     api.topic(ctx.channel, formatted);
-    ctx.reply(`Topic set using theme "${themeName}".`);
+    api.notice(ctx.nick, `Topic set using theme "${themeName}".`);
   });
 
   // !topics — list available themes (requires +o, same as !topic)
@@ -168,24 +178,24 @@ export function init(api: PluginAPI): void {
       const cooldownExpires = previewCooldown.get(cooldownKey) ?? 0;
       if (Date.now() < cooldownExpires) {
         const secsLeft = Math.ceil((cooldownExpires - Date.now()) / 1000);
-        api.notice(ctx.channel, `Preview cooldown active — try again in ${secsLeft}s.`);
+        api.notice(ctx.nick, `Preview cooldown active — try again in ${secsLeft}s.`);
         return;
       }
       previewCooldown.set(cooldownKey, Date.now() + PREVIEW_COOLDOWN_MS);
 
       const sampleText = parts.length > 1 ? parts.slice(1).join(' ') : 'Sample Topic Text';
-      const nick = ctx.nick;
-      api.say(nick, `Theme previews using: "${sampleText}"`);
+      api.notice(ctx.nick, `Theme previews using: "${sampleText}"`);
       for (const themeName of themeNames) {
         const formatted = themes[themeName].replace('$text', sampleText);
-        api.say(nick, `${themeName}: ${formatted}`);
+        api.notice(ctx.nick, `${themeName}: ${formatted}`);
       }
-      api.say(nick, `${themeNames.length} themes total. Use !topic <theme> <text> to set.`);
+      api.notice(ctx.nick, `${themeNames.length} themes total. Use !topic <theme> <text> to set.`);
       return;
     }
 
-    ctx.reply(
-      `Available themes: ${themeNames.join(', ')} — Use "!topics preview [text]" to preview all via PM.`,
+    api.notice(
+      ctx.nick,
+      `Available themes: ${themeNames.join(', ')} — Use "!topics preview [text]" to preview all.`,
     );
   });
 

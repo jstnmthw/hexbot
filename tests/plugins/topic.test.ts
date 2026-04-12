@@ -49,7 +49,9 @@ describe('topic plugin', () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!topic');
     await tick();
 
-    const reply = bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Usage'));
+    const reply = bot.client.messages.find(
+      (m) => m.type === 'notice' && m.message?.includes('Usage'),
+    );
     expect(reply).toBeDefined();
   });
 
@@ -58,7 +60,7 @@ describe('topic plugin', () => {
     await tick();
 
     const reply = bot.client.messages.find(
-      (m) => m.type === 'say' && m.message?.includes('Unknown theme'),
+      (m) => m.type === 'notice' && m.message?.includes('Unknown theme'),
     );
     expect(reply).toBeDefined();
   });
@@ -81,7 +83,7 @@ describe('topic plugin', () => {
     expect(topicMsg).toBeDefined();
 
     const reply = bot.client.messages.find(
-      (m) => m.type === 'say' && m.message?.includes('Topic set'),
+      (m) => m.type === 'notice' && m.message?.includes('Topic set'),
     );
     expect(reply).toBeDefined();
   });
@@ -98,11 +100,11 @@ describe('topic plugin', () => {
     );
     await tick();
 
-    // The preview should output formatted text via say, not set topic
-    const sayMsg = bot.client.messages.find(
-      (m) => m.type === 'say' && m.target === '#test' && m.message?.includes('Preview text'),
+    // The preview should output formatted text via notice to nick, not set topic
+    const noticeMsg = bot.client.messages.find(
+      (m) => m.type === 'notice' && m.target === 'Admin' && m.message?.includes('Preview text'),
     );
-    expect(sayMsg).toBeDefined();
+    expect(noticeMsg).toBeDefined();
 
     // Should NOT set the actual topic
     const topicMsg = bot.client.messages.find(
@@ -116,7 +118,7 @@ describe('topic plugin', () => {
     await tick();
 
     const reply = bot.client.messages.find(
-      (m) => m.type === 'say' && m.message?.includes('Unknown theme'),
+      (m) => m.type === 'notice' && m.message?.includes('Unknown theme'),
     );
     expect(reply).toBeDefined();
   });
@@ -125,7 +127,9 @@ describe('topic plugin', () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!topic preview');
     await tick();
 
-    const reply = bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Usage'));
+    const reply = bot.client.messages.find(
+      (m) => m.type === 'notice' && m.message?.includes('Usage'),
+    );
     expect(reply).toBeDefined();
   });
 
@@ -134,7 +138,7 @@ describe('topic plugin', () => {
     await tick();
 
     const reply = bot.client.messages.find(
-      (m) => m.type === 'say' && m.message?.includes('Available themes'),
+      (m) => m.type === 'notice' && m.message?.includes('Available themes'),
     );
     expect(reply).toBeDefined();
     // Should include at least one known theme name
@@ -148,7 +152,7 @@ describe('topic plugin', () => {
 
     // Should send previews mentioning the default sample text
     const reply = bot.client.messages.find(
-      (m) => m.type === 'say' && m.message?.includes('Sample Topic Text'),
+      (m) => m.type === 'notice' && m.message?.includes('Sample Topic Text'),
     );
     expect(reply).toBeDefined();
   });
@@ -164,7 +168,7 @@ describe('topic plugin', () => {
     await tick();
 
     const cooldownReply = bot.client.messages.find(
-      (m) => m.type === 'notice' && m.target === '#test' && m.message?.includes('cooldown'),
+      (m) => m.type === 'notice' && m.target === 'Admin' && m.message?.includes('cooldown'),
     );
     expect(cooldownReply).toBeDefined();
     expect(cooldownReply!.message).toMatch(/Preview cooldown active/);
@@ -175,7 +179,9 @@ describe('topic plugin', () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', `!topic ${themeName}`);
     await tick();
 
-    const reply = bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Usage'));
+    const reply = bot.client.messages.find(
+      (m) => m.type === 'notice' && m.message?.includes('Usage'),
+    );
     expect(reply).toBeDefined();
   });
 
@@ -199,7 +205,7 @@ describe('topic plugin', () => {
     await tick();
 
     const warning = bot.client.messages.find(
-      (m) => m.type === 'say' && m.message?.includes('Warning'),
+      (m) => m.type === 'notice' && m.message?.includes('Warning'),
     );
     expect(warning).toBeDefined();
     expect(warning!.message).toContain('chars');
@@ -230,7 +236,7 @@ describe('topic plugin', () => {
       expect(bot.channelSettings.get('#test', 'topic_text')).toBe('Welcome to #test!');
 
       const reply = bot.client.messages.find(
-        (m) => m.type === 'say' && m.message?.includes('locked'),
+        (m) => m.type === 'notice' && m.message?.includes('locked'),
       );
       expect(reply).toBeDefined();
     });
@@ -242,7 +248,7 @@ describe('topic plugin', () => {
 
       expect(bot.channelSettings.get('#test', 'protect_topic')).toBe(false);
       const reply = bot.client.messages.find(
-        (m) => m.type === 'say' && m.message?.includes('Cannot lock'),
+        (m) => m.type === 'notice' && m.message?.includes('Cannot lock'),
       );
       expect(reply).toBeDefined();
     });
@@ -256,7 +262,7 @@ describe('topic plugin', () => {
       expect(bot.channelSettings.get('#test', 'protect_topic')).toBe(true);
       expect(bot.channelSettings.get('#test', 'topic_text')).toBe(longTopic);
       const warning = bot.client.messages.find(
-        (m) => m.type === 'say' && m.message?.includes('Warning'),
+        (m) => m.type === 'notice' && m.message?.includes('Warning'),
       );
       expect(warning).toBeDefined();
     });
@@ -273,7 +279,7 @@ describe('topic plugin', () => {
       expect(bot.channelSettings.get('#test', 'protect_topic')).toBe(false);
       expect(bot.channelSettings.get('#test', 'topic_text')).toBe('');
       const reply = bot.client.messages.find(
-        (m) => m.type === 'say' && m.message?.includes('disabled'),
+        (m) => m.type === 'notice' && m.message?.includes('disabled'),
       );
       expect(reply).toBeDefined();
     });
