@@ -5,18 +5,27 @@ that replaces the default message when they join.
 
 ## Usage
 
-Automatic — fires on every JOIN event.
+Automatic — fires on every JOIN event (the bot's own joins are ignored).
+
+Greeting precedence (highest to lowest):
+
+1. User's custom greet (set via `!greet set`)
+2. Per-channel `greet_msg` setting (set via `.chanset`)
+3. Global default `message` from plugin config
 
 Optional user commands:
 
-| Command                | Flags       | Description                    |
-| ---------------------- | ----------- | ------------------------------ |
-| `!greet`               | anyone      | Show your current custom greet |
-| `!greet set <message>` | `min_flag`+ | Set your custom greet          |
-| `!greet del`           | `min_flag`+ | Remove your custom greet       |
+| Command                | Flags | Description                                    |
+| ---------------------- | ----- | ---------------------------------------------- |
+| `!greet`               | `-`   | View, set, or delete your custom join greeting |
+| `!greet set <message>` | `-`   | Set your custom greet                          |
+| `!greet del`           | `-`   | Remove your custom greet                       |
+
+> `!greet set` and `!greet del` check the `min_flag` permission internally — any user can run the base `!greet` command, but setting or deleting requires the configured flag level.
 
 Custom greet messages support the same `{channel}` and `{nick}` template substitutions
-as the default message.
+as the default message. Custom greetings are silently truncated to 200 characters, and
+`\r` and `\n` characters are stripped from both custom greetings and private join notices.
 
 ## Config
 

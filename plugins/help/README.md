@@ -40,12 +40,20 @@ detail view is shown; otherwise it is tried as a category name.
 -Bot- Requires: o
 ```
 
+### Example output (`!help 8ball`)
+
+```
+-Bot- !8ball <question> — Ask the magic 8-ball a question
+-Bot- No flags required
+```
+
 ### Permission filtering
 
 The list view only shows commands the requesting user can actually run:
 
 - Commands with `flags: '-'` are always shown (open to everyone).
 - Commands with `flags: 'o'`, `'m'`, etc. are shown only if the user holds those flags.
+- Users with the `n` (owner) flag see all commands — owner implies every other flag.
 - The detail view (`!help <command>`) always shows the entry regardless of flags — including
   the required flags — so users can look up what permissions a command needs.
 
@@ -103,7 +111,7 @@ Plugins register their commands with `api.registerHelp(entries)` in `init()`:
 api.registerHelp([
   {
     command: '!mycommand',
-    flags: '-', // '-' = anyone, 'o' = op+, 'm' = master+, etc.
+    flags: '-', // '-' = anyone, 'o' = needs o flag, 'm' = needs m flag
     usage: '!mycommand <arg>',
     description: 'One-line description shown in the list view',
     detail: [
@@ -111,6 +119,29 @@ api.registerHelp([
       'Additional usage notes here',
     ],
     category: 'fun', // groups commands in the list view
+  },
+]);
+```
+
+Flag strings are literal character checks, not privilege levels. The supported formats:
+
+| Format   | Meaning                                   | Example         |
+| -------- | ----------------------------------------- | --------------- |
+| `'-'`    | No flags required — anyone can run it     | `flags: '-'`    |
+| `'o'`    | User must have the `o` flag               | `flags: 'o'`    |
+| `'om'`   | User must have **both** `o` and `m` flags | `flags: 'om'`   |
+| `'o\|m'` | User must have **either** `o` or `m`      | `flags: 'o\|m'` |
+
+Example using OR syntax:
+
+```typescript
+api.registerHelp([
+  {
+    command: '!moderate',
+    flags: 'o|m', // op OR master may run this
+    usage: '!moderate <action>',
+    description: 'Perform a moderation action',
+    category: 'moderation',
   },
 ]);
 ```

@@ -88,6 +88,7 @@ The arguments are:
 | `pub`  | `!command` in a channel | Exact command (e.g. `!hello`)                |
 | `pubm` | Any channel text        | Wildcard on full message (e.g. `*http*`)     |
 | `msg`  | Private message command | Exact command                                |
+| `msgm` | Any private message     | Wildcard on full text (e.g. `*help*`)        |
 | `join` | User joins a channel    | `#channel nick!user@host` or `*` for all     |
 | `time` | Run on an interval      | Seconds as a string (e.g. `"300"` for 5 min) |
 
@@ -189,7 +190,7 @@ api.notice('#lobby', 'Notice to channel'); // NOTICE
 api.action('#lobby', 'waves'); // /me waves
 ```
 
-All outgoing messages go through a shared rate-limiting queue (default 1 msg/sec, burst 5). This prevents IRC flood disconnects, but it also means commands that send many lines will delay responses to other users. Keep this in mind when designing commands:
+All outgoing messages go through a shared rate-limiting queue (default 2 msg/sec, burst 4). This prevents IRC flood disconnects, but it also means commands that send many lines will delay responses to other users. Keep this in mind when designing commands:
 
 - **Commands that send more than ~3 lines** must implement a per-caller cooldown to prevent users from stacking the queue by repeating the command.
 - **Give immediate channel feedback** before a long PM dump, so the caller knows the bot is working:
@@ -321,4 +322,4 @@ Before shipping a plugin:
 
 ## Full API reference
 
-See [docs/PLUGIN_API.md](../docs/PLUGIN_API.md) for the complete PluginAPI surface including channel state, permissions, services, and all 13 bind types.
+See [docs/PLUGIN_API.md](../docs/PLUGIN_API.md) for the complete PluginAPI surface including channel state, permissions, services, and all 17 bind types.

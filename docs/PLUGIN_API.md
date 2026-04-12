@@ -95,7 +95,7 @@ Plugins must never read `process.env` directly — declare a `_env` field so the
 
 #### `botConfig: PluginBotConfig`
 
-Read-only, deep-frozen view of `config/bot.json`. The NickServ password is omitted from `services`. Contains: `irc` (host, port, tls, nick, username, realname, channels), `owner` (handle, hostmask), `identity` (method, require_acc_for), `services` (type, nickserv, sasl), and `logging` (level, mod_actions). The `chanmod` key is present only for the chanmod plugin.
+Read-only, deep-frozen view of `config/bot.json`. Contains: `irc` (host, port, tls, tls_verify, tls_cert, tls_key, nick, username, realname, channels), `owner` (handle, hostmask), `identity` (method, require_acc_for), `services` (type, nickserv, sasl), and `logging` (level, mod_actions). The NickServ password is omitted from `services`. The `channels` array contains only channel name strings (keys are never exposed). The `database` and `pluginDir` filesystem paths are omitted. The `chanmod` key is present only for the chanmod plugin.
 
 #### `permissions: PluginPermissions`
 
@@ -117,12 +117,12 @@ Namespaced database access. All keys are scoped to this plugin automatically.
 
 Register an event handler.
 
-| Parameter | Type                                             | Description                                                                      |
-| --------- | ------------------------------------------------ | -------------------------------------------------------------------------------- |
-| `type`    | `BindType`                                       | Event type (see table below)                                                     |
-| `flags`   | `string`                                         | Required user flags. `'-'` = anyone. `'+o'` = ops. `'+n\|+m'` = owner OR master. |
-| `mask`    | `string`                                         | Pattern to match against. Meaning depends on the bind type.                      |
-| `handler` | `(ctx: HandlerContext) => void \| Promise<void>` | The callback.                                                                    |
+| Parameter | Type                                             | Description                                                                   |
+| --------- | ------------------------------------------------ | ----------------------------------------------------------------------------- |
+| `type`    | `BindType`                                       | Event type (see table below)                                                  |
+| `flags`   | `string`                                         | Required user flags. `'-'` = anyone. `'o'` = ops. `'n\|m'` = owner OR master. |
+| `mask`    | `string`                                         | Pattern to match against. Meaning depends on the bind type.                   |
+| `handler` | `(ctx: HandlerContext) => void \| Promise<void>` | The callback.                                                                 |
 
 Binds are automatically tagged with the plugin ID. On unload, all binds are removed.
 
@@ -140,24 +140,25 @@ Remove a specific handler. Rarely needed since unload cleans up automatically.
 
 ### Bind types
 
-| Type     | Trigger          | Mask matches against             | Stackable |
-| -------- | ---------------- | -------------------------------- | --------- |
-| `pub`    | Channel message  | Exact command (case-insensitive) | No        |
-| `pubm`   | Channel message  | Wildcard on full text            | Yes       |
-| `msg`    | Private message  | Exact command (case-insensitive) | No        |
-| `msgm`   | Private message  | Wildcard on full text            | Yes       |
-| `join`   | User joins       | `#channel nick!user@host` or `*` | Yes       |
-| `part`   | User parts       | `#channel nick!user@host` or `*` | Yes       |
-| `kick`   | User kicked      | `#channel nick!user@host` or `*` | Yes       |
-| `nick`   | Nick change      | Wildcard on old nick             | Yes       |
-| `mode`   | Mode change      | `#channel +/-mode` or `*`        | Yes       |
-| `raw`    | Raw server line  | Command/numeric (wildcard)       | Yes       |
-| `time`   | Timer (interval) | Seconds as string (e.g. `"60"`)  | Yes       |
-| `ctcp`   | CTCP request     | CTCP type (e.g. `VERSION`)       | Yes       |
-| `notice` | Notice received  | Wildcard on text                 | Yes       |
-| `topic`  | Topic change     | Channel name wildcard            | Yes       |
-| `quit`   | User quit        | `nick!user@host` wildcard        | Yes       |
-| `invite` | Bot invited      | `#channel nick!user@host` or `*` | Yes       |
+| Type         | Trigger          | Mask matches against                               | Stackable |
+| ------------ | ---------------- | -------------------------------------------------- | --------- |
+| `pub`        | Channel message  | Exact command (case-insensitive)                   | No        |
+| `pubm`       | Channel message  | Wildcard on full text                              | Yes       |
+| `msg`        | Private message  | Exact command (case-insensitive)                   | No        |
+| `msgm`       | Private message  | Wildcard on full text                              | Yes       |
+| `join`       | User joins       | `#channel nick!user@host` or `*`                   | Yes       |
+| `part`       | User parts       | `#channel nick!user@host` or `*`                   | Yes       |
+| `kick`       | User kicked      | `#channel nick!user@host` or `*`                   | Yes       |
+| `nick`       | Nick change      | Wildcard on old nick                               | Yes       |
+| `mode`       | Mode change      | `#channel +/-mode` or `*`                          | Yes       |
+| `raw`        | Raw server line  | Command/numeric (wildcard)                         | Yes       |
+| `time`       | Timer (interval) | Seconds as string (e.g. `"60"`)                    | Yes       |
+| `ctcp`       | CTCP request     | Exact CTCP type (case-insensitive, e.g. `VERSION`) | Yes       |
+| `notice`     | Notice received  | Wildcard on text                                   | Yes       |
+| `topic`      | Topic change     | Channel name wildcard                              | Yes       |
+| `quit`       | User quit        | `nick!user@host` wildcard                          | Yes       |
+| `invite`     | Bot invited      | `#channel nick!user@host` or `*`                   | Yes       |
+| `join_error` | Bot join failed  | Error name wildcard or `*`                         | Yes       |
 
 Non-stackable types (`pub`, `msg`) replace any previous bind on the same mask. Stackable types fire all matching handlers.
 
@@ -169,17 +170,24 @@ Timer binds enforce a minimum interval of 10 seconds.
 
 Every handler receives a `ctx` object:
 
-| Field               | Type             | Description                                 |
-| ------------------- | ---------------- | ------------------------------------------- |
-| `nick`              | `string`         | Source nick                                 |
-| `ident`             | `string`         | Source ident (username)                     |
-| `hostname`          | `string`         | Source hostname                             |
-| `channel`           | `string \| null` | Channel name, or `null` for PMs             |
-| `text`              | `string`         | Full message text                           |
-| `command`           | `string`         | Parsed command (first word for `pub`/`msg`) |
-| `args`              | `string`         | Everything after the command                |
-| `reply(msg)`        | `function`       | Reply to the channel or PM source           |
-| `replyPrivate(msg)` | `function`       | Reply via NOTICE to the user                |
+| Field               | Type                          | Description                                 |
+| ------------------- | ----------------------------- | ------------------------------------------- |
+| `nick`              | `string`                      | Source nick                                 |
+| `ident`             | `string`                      | Source ident (username)                     |
+| `hostname`          | `string`                      | Source hostname                             |
+| `account`           | `string \| null \| undefined` | IRCv3 `account-tag` value (see below)       |
+| `channel`           | `string \| null`              | Channel name, or `null` for PMs             |
+| `text`              | `string`                      | Full message text                           |
+| `command`           | `string`                      | Parsed command (first word for `pub`/`msg`) |
+| `args`              | `string`                      | Everything after the command                |
+| `reply(msg)`        | `function`                    | Reply to the channel or PM source           |
+| `replyPrivate(msg)` | `function`                    | Reply via NOTICE to the user                |
+
+The `account` field carries the services account name from the IRCv3 `account-tag` on the inbound message:
+
+- **`string`** -- the server confirmed this account sent the message (authoritative).
+- **`null`** -- the server confirmed the sender is not identified (authoritative).
+- **`undefined`** -- no `account-tag` data available (cap not negotiated, non-PRIVMSG event, or server omitted the tag). Treat as "unknown, fall back to other signals".
 
 ---
 
@@ -305,6 +313,10 @@ interface ChannelUser {
   // string = identified as this account
   // null = known not identified
   // undefined = no IRCv3 data available
+  away?: boolean; // IRCv3 away-notify state
+  // true = user has set an AWAY message
+  // false = user is explicitly back
+  // undefined = no away-notify data received yet
 }
 ```
 
@@ -344,7 +356,7 @@ interface UserRecord {
 
 #### `permissions.checkFlags(requiredFlags, ctx): boolean`
 
-Check if the user in a HandlerContext has the required flags. Supports OR with `|` (e.g. `'+n|+m'`). Owner flag (`n`) implies all other flags.
+Check if the user in a HandlerContext has the required flags. Supports OR with `|` (e.g. `'n|m'`). Owner flag (`n`) implies all other flags.
 
 ---
 
@@ -404,37 +416,109 @@ Returns ISUPPORT values from the IRC server (e.g., `MODES`, `PREFIX`, `CHANMODES
 
 ---
 
+### Identity helpers
+
+#### `buildHostmask(source): string`
+
+Build a `nick!ident@hostname` string from any object with those three fields. Useful for constructing hostmasks from context or channel-user objects without manual string interpolation.
+
+```typescript
+const mask = api.buildHostmask(ctx); // "alice!~alice@example.com"
+```
+
+#### `isBotNick(nick): boolean`
+
+Returns `true` if `nick` case-folds to the bot's own configured nick using the network's CASEMAPPING. Use instead of comparing against `api.botConfig.irc.nick` directly.
+
+#### `getChannelKey(channel): string | undefined`
+
+Returns the configured channel key (from `config/bot.json`) for a channel, or `undefined` if no key is configured. Uses IRC-aware case folding for the channel name comparison.
+
+---
+
+### Ban store
+
+The core ban store is shared across all plugins and stored under a dedicated `_bans` namespace. It tracks bans set by the bot with optional expiry and sticky flags.
+
+#### `banStore.storeBan(channel, mask, by, durationMs)`
+
+Store a ban record. `durationMs` of `0` means permanent.
+
+#### `banStore.removeBan(channel, mask)`
+
+Remove a ban record.
+
+#### `banStore.getBan(channel, mask): BanRecord | null`
+
+Look up a specific ban.
+
+#### `banStore.getChannelBans(channel): BanRecord[]`
+
+Get all stored bans for a channel.
+
+#### `banStore.getAllBans(): BanRecord[]`
+
+Get all stored bans across all channels.
+
+#### `banStore.setSticky(channel, mask, sticky): boolean`
+
+Mark a ban as sticky (will be re-applied if removed). Returns `true` if the ban was found and updated.
+
+#### `banStore.liftExpiredBans(hasOps, mode): number`
+
+Check all bans for expiry and unset expired ones via the provided `mode` callback. Returns the number of bans lifted.
+
+#### `banStore.migrateFromPluginNamespace(pluginDb): number`
+
+Migrate ban records from a plugin's old namespace to the core `_bans` namespace. Returns the number of records migrated.
+
+```typescript
+interface BanRecord {
+  mask: string;
+  channel: string;
+  by: string;
+  ts: number;
+  expires: number; // 0 = permanent, otherwise unix timestamp ms
+  sticky?: boolean;
+}
+```
+
+---
+
 ### Channel settings
 
 Per-channel typed key/value store backed by the database. Plugins register settings with types and defaults; admins configure them at runtime with `.chanset`.
 
-#### `channelSettings.register(key, opts)`
+#### `channelSettings.register(defs)`
 
-Register a per-channel setting. Call this in `init()`. Settings are automatically unregistered on unload.
+Register per-channel setting definitions. Takes an array of `ChannelSettingDef` objects. Call this once in `init()`. Settings are automatically unregistered on unload.
 
 ```typescript
-api.channelSettings.register('greet_msg', {
-  type: 'string',
-  default: 'Welcome, {nick}!',
-  description: 'Message sent on join',
-});
-
-api.channelSettings.register('auto_op', {
-  type: 'flag',
-  default: false,
-  description: 'Auto-op flagged users on join',
-});
-
-api.channelSettings.register('max_lines', {
-  type: 'int',
-  default: 5,
-  description: 'Maximum response lines',
-});
+api.channelSettings.register([
+  {
+    key: 'greet_msg',
+    type: 'string',
+    default: 'Welcome, {nick}!',
+    description: 'Message sent on join',
+  },
+  {
+    key: 'auto_op',
+    type: 'flag',
+    default: false,
+    description: 'Auto-op flagged users on join',
+  },
+  {
+    key: 'max_lines',
+    type: 'int',
+    default: 5,
+    description: 'Maximum response lines',
+  },
+]);
 ```
 
-#### `channelSettings.get(channel, key): string | number | boolean | undefined`
+#### `channelSettings.get(channel, key): string | number | boolean`
 
-Get the value of a setting for a channel. Returns the configured value or the registered default.
+Get the value of a setting for a channel. Returns the configured value, the registered default, or `''` if the key is unknown.
 
 #### `channelSettings.getFlag(channel, key): boolean`
 
@@ -456,9 +540,15 @@ Set a per-channel setting value programmatically.
 
 Check whether a setting has been explicitly configured for a channel.
 
-#### `channelSettings.onChange(key, callback)`
+#### `channelSettings.onChange(callback)`
 
-Register a callback that fires when a setting value changes. Automatically cleaned up on unload.
+Register a callback that fires when any per-channel setting value changes. The callback receives `(channel, key, value)`. Automatically cleaned up on unload.
+
+```typescript
+api.channelSettings.onChange((channel, key, value) => {
+  api.log(`Setting ${key} changed in ${channel} to ${value}`);
+});
+```
 
 ---
 
@@ -471,18 +561,19 @@ Register help entries for the `!help` command. Entries are automatically removed
 ```typescript
 api.registerHelp([
   {
-    trigger: '!mycmd',
-    category: 'fun',
+    command: '!mycmd',
     description: 'Does something fun',
     usage: '!mycmd [args]',
     flags: '-',
+    category: 'fun', // optional — defaults to pluginId
+    detail: ['Extra detail line shown in !help mycmd'], // optional
   },
 ]);
 ```
 
 #### `getHelpEntries(): HelpEntry[]`
 
-Retrieve the help entries registered by this plugin.
+Retrieve all help entries registered across all plugins. Each entry includes a `pluginId` field identifying which plugin registered it.
 
 ---
 

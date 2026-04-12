@@ -1,5 +1,5 @@
 // flood — Inbound flood protection plugin.
-// Detects message floods, join/part spam, and nick-change spam.
+// Detects message floods, join spam, and nick-change spam.
 // Escalating responses: warn → kick → tempban (configurable).
 import type { ChannelHandlerContext, JoinContext, NickContext, PluginAPI } from '../../src/types';
 import { SlidingWindowCounter } from '../../src/utils/sliding-window';

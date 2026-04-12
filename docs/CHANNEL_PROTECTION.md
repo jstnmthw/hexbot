@@ -6,7 +6,7 @@ A practical guide to HexBot's channel protection features: what they do, how the
 
 HexBot's channel protection is built around three independent layers:
 
-1. **Passive protection** -- mode enforcement, bitch mode, enforcebans. The bot watches for unauthorized changes and corrects them.
+1. **Passive protection** -- mode enforcement, bitch mode, enforcebans, sticky bans, stopnethack. The bot watches for unauthorized changes and corrects them.
 2. **Reactive protection** -- rejoin on kick, revenge, join error recovery. The bot responds to hostile actions aimed at removing it from the channel.
 3. **Active protection** -- takeover detection with automatic escalation. The bot scores hostile events in a rolling window and escalates through ChanServ when a coordinated attack is detected.
 
@@ -107,6 +107,30 @@ When `protect_topic` is enabled, the bot maintains a snapshot of the channel top
 
 On Atheme networks, the RECOVER command sets +i and +m on the channel. After the bot is opped following a RECOVER, it automatically removes these modes.
 
+## Passive protection details
+
+### Sticky bans
+
+Bans marked as sticky in the ban store are automatically re-applied if anyone removes them. When a `-b` mode change is seen (not set by the bot itself) and the mask is flagged sticky, the bot immediately re-sets the ban. This prevents attackers from silently removing bans on known bad actors.
+
+### Stopnethack
+
+When a netsplit is detected (a burst of 3+ split-style quits within 5 seconds), the bot enters stopnethack mode and snapshots the current ops in all channels. For a configurable window (`split_timeout_ms`, default 300 seconds), any `+o` grant is checked against the snapshot:
+
+- **Mode 1 (isoptest)**: The target must be in the permissions database with an op flag. Server-opped users without flags are deopped.
+- **Mode 2 (wasoptest)**: The target must have held ops before the split. Server-opped users who were not opped pre-split are deopped.
+
+Set `stopnethack_mode` to `0` (default) to disable this feature.
+
+### Channel key and limit enforcement
+
+When `enforce_modes` is enabled, the bot also enforces the configured channel key and user limit:
+
+- `channel_key` -- if set, the bot re-applies the key when it is removed or changed. If empty and someone sets a key, the bot removes it.
+- `channel_limit` -- if set to a positive number, the bot re-applies the limit when it is removed or changed. If `0` and someone sets a limit, the bot removes it.
+
+These are separate chanset keys from `channel_modes` and can be configured independently.
+
 ## Join error recovery
 
 When the bot cannot join a channel (on startup, reconnect, or after being kicked), the join recovery system handles the error and retries.
@@ -167,7 +191,7 @@ flowchart TD
     DELAY --> REJOIN[Rejoin channel]
     DELAY1 --> REJOIN
     REJOIN --> OK{Joined?}
-    OK -- Yes --> RESET[Reset backoff]
+    OK -- Yes --> RESET[Reset backoff after 5m presence]
     OK -- No --> BACKOFF[Double backoff<br/>30s → 60s → ... → 300s cap]
 ```
 
@@ -176,9 +200,9 @@ flowchart TD
 Recovery attempts use exponential backoff to avoid flooding services:
 
 - Initial delay: 30 seconds
-- Each attempt doubles the delay: 30s, 60s, 120s, 240s
+- Each attempt doubles the delay: 30s, 60s, 120s, 240s, 300s (capped)
 - Maximum delay: 300 seconds (5 minutes)
-- Backoff resets when the bot successfully joins the channel
+- Backoff resets after sustained channel presence (5 minutes in the channel without being re-banned)
 
 ### Atheme vs Anope differences for key removal
 
@@ -272,19 +296,20 @@ sequenceDiagram
     B->>CS: INVITE #channel
     CS->>C: MODE -b *!*@hexbot.net
     CS->>B: INVITE #channel
-    Note over B: Wait 3s (services delay)
+    Note over B: Wait 0.5s (services processing)
     B->>C: JOIN #channel
     B->>CS: OP #channel HexBot
     CS->>C: MODE +o HexBot
     Note over B: revenge enabled?
-    B->>C: KICK Attacker :Don't kick me.
+    B->>C: MODE -o Attacker (default revenge_action)
 ```
 
 **Settings needed:**
 
 ```
 .chanset #chan chanserv_access op       # or higher
-.chanset #chan +chanserv_unban_on_kick
+.chanset #chan +chanserv_unban_on_kick  # on by default
+.chanset #chan +revenge                 # off by default; needed for counter-attack
 ```
 
 ### Scenario 2: Full lockdown (+b +k +i +l)
@@ -304,7 +329,7 @@ An attacker stacks all restrictive modes, kicks the bot, and locks the channel.
 ```
 .chanset #chan chanserv_access op        # Atheme: op+ for MODE -k
                                          # Anope: AOP+ for GETKEY
-.chanset #chan +chanserv_unban_on_kick
+.chanset #chan +chanserv_unban_on_kick   # on by default
 ```
 
 ### Scenario 3: Mass deop (takeover attempt)
@@ -350,9 +375,9 @@ sequenceDiagram
 
 ```
 .chanset #chan chanserv_access founder   # founder required for RECOVER
-.chanset #chan +takeover_detection
-.chanset #chan +mass_reop_on_recovery
-.chanset #chan takeover_punish kickban   # or deop, akick
+.chanset #chan +takeover_detection       # on by default
+.chanset #chan +mass_reop_on_recovery    # on by default
+.chanset #chan takeover_punish kickban   # default is 'deop'; also: none, akick
 ```
 
 ### Scenario 4: Startup with banned bot
@@ -389,7 +414,7 @@ An attacker changes the topic as part of a coordinated attack.
 
 ```
 .chanset #chan +protect_topic
-.chanset #chan +takeover_detection
+.chanset #chan +takeover_detection       # on by default
 ```
 
 ## Network-specific configuration
@@ -422,7 +447,7 @@ chanserv_services_type: "anope"
 
 ChanServ is not available. The ChanServ backend returns false for all capability checks.
 
-- Protection relies on passive features: `bitch`, `enforce_modes`, `enforcebans`.
+- Protection relies on passive features: `bitch`, `enforce_modes`, `enforcebans`, stopnethack.
 - Takeover detection still works for scoring and logging, but escalation has no backend to call. It will log warnings when it cannot escalate.
 - Future: the botnet backend (priority 1) will provide inter-bot op/deop on serviceless networks.
 
@@ -435,47 +460,52 @@ Recommended settings:
 .chanset #chan +enforcebans
 ```
 
+Stopnethack is configured globally in `plugins.json`, not per-channel:
+
+```json
+"stopnethack_mode": 2
+```
+
 ## Recommended settings
 
 ### Minimal protection
 
-Any network with ChanServ. Enables takeover detection so the bot can request ops and escalate through services when attacked.
+Any network with ChanServ. Both `takeover_detection` and `chanserv_unban_on_kick` are on by default, so only the access tier needs to be set.
 
 ```
 .chanset #chan chanserv_access founder
-.chanset #chan +takeover_detection
 ```
 
 ### Standard protection
 
-Adds mode enforcement, ban-on-kick recovery, and topic protection.
+Adds mode enforcement, ban-on-kick recovery, and topic protection. `takeover_detection` and `chanserv_unban_on_kick` are on by default but shown here for clarity.
 
 ```
 .chanset #chan chanserv_access founder
-.chanset #chan +takeover_detection
+.chanset #chan +takeover_detection       # on by default
 .chanset #chan +enforce_modes
 .chanset #chan channel_modes +nt
-.chanset #chan +chanserv_unban_on_kick
+.chanset #chan +chanserv_unban_on_kick   # on by default
 .chanset #chan +protect_topic
 ```
 
 ### Maximum protection
 
-Enables all defensive features. Suitable for high-value channels on networks where the bot has founder access.
+Enables all defensive features. Suitable for high-value channels on networks where the bot has founder access. Settings that are on by default are annotated but included for completeness.
 
 ```
 .chanset #chan chanserv_access founder
-.chanset #chan +takeover_detection
+.chanset #chan +takeover_detection       # on by default
 .chanset #chan +enforce_modes
 .chanset #chan channel_modes +nt
-.chanset #chan +chanserv_unban_on_kick
+.chanset #chan +chanserv_unban_on_kick   # on by default
 .chanset #chan +protect_topic
-.chanset #chan +mass_reop_on_recovery
+.chanset #chan +mass_reop_on_recovery    # on by default
 .chanset #chan +bitch
 .chanset #chan +protect_ops
 .chanset #chan +enforcebans
 .chanset #chan +revenge
-.chanset #chan takeover_punish kickban
+.chanset #chan takeover_punish kickban   # default is 'deop'
 ```
 
 ## Troubleshooting
@@ -493,7 +523,7 @@ The channel key in `bot.json` does not match the current key. Update the key in 
 Synthetic RECOVER requires founder access (QOP / level 10000). SOP (level 10) is not enough for MODE CLEAR. Verify the bot is the channel founder or has QOP access.
 
 **Mass re-op did not happen after recovery**
-Either `mass_reop_on_recovery` is off, or the bot was not opped during elevated threat (the threat window expired before ops were regained). Check that `takeover_window_ms` is long enough for the recovery sequence to complete.
+Either `mass_reop_on_recovery` was turned off (it is on by default), or the bot was not opped during elevated threat (the threat window expired before ops were regained). Check that `takeover_window_ms` is long enough for the recovery sequence to complete.
 
 **Topic was not restored after attack**
 Either `protect_topic` is not enabled, or no topic snapshot existed (the bot had not seen a topic change at threat level 0 since it joined the channel). The bot must observe the topic during normal operation to create a snapshot.

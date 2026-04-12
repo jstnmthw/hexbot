@@ -33,9 +33,10 @@ api.say(ctx.channel, `Hello ${ctx.text}`);
 
 ### 2.2 Command argument parsing
 
-- Strip control characters (IRC formatting codes: bold, color, underline) before parsing commands
+- The IRC bridge strips `\r`, `\n`, and `\0` from all inbound fields via `sanitize()` (`src/utils/sanitize.ts`) before they reach handlers — this is the primary injection defence
+- IRC formatting codes (bold, color, underline, etc.) are stripped from the command word via `stripFormatting()` (`src/utils/strip-formatting.ts`) before dispatch, so `\x03` colour codes can't disguise a command
 - Validate argument counts before accessing array indices
-- Reject arguments that contain newlines (`\r`, `\n`) — these can inject additional IRC commands
+- Reject arguments that contain newlines (`\r`, `\n`) — these can inject additional IRC commands (the bridge strips them, but defence in depth applies if a plugin constructs strings from multiple user inputs)
 - Limit argument length — don't pass unbounded strings to database queries or IRC output
 
 ```typescript
@@ -56,7 +57,9 @@ if (!target.match(/^[#&]?\w[\w\-\[\]\\`^{}]{0,49}$/)) {
 
 IRC commands are delimited by `\r\n`. If user input containing newlines is passed to `raw()` or interpolated into IRC protocol strings, the attacker can inject arbitrary IRC commands.
 
-**Rule:** Never pass raw user input to `client.raw()`. Always sanitize or use the library's typed methods (`say`, `notice`, `action`, `mode`). If `raw()` is ever needed, strip `\r` and `\n` from all interpolated values first.
+**Rule:** Never pass raw user input to `client.raw()`. Always sanitize or use the library's typed methods (`say`, `notice`, `action`, `mode`). If `raw()` is ever needed, strip `\r`, `\n`, and `\0` from all interpolated values first.
+
+**Implementation:** The IRC bridge calls `sanitize()` on every field of every inbound event (nick, ident, hostname, target, message). The plugin API's outbound methods (`api.say`, `api.notice`, `api.action`, `api.ctcpResponse`) also call `sanitize()` on the message before passing it to irc-framework, providing defence in depth.
 
 ### 2.4 Database input
 
@@ -76,12 +79,15 @@ Hostmask matching is the primary identity mechanism. Security depends on pattern
 
 | Pattern                 | Security      | Notes                                                   |
 | ----------------------- | ------------- | ------------------------------------------------------- |
+| `$a:accountname`        | **Strongest** | Matches by services account — requires identification   |
+| `*!*@user/account`      | Strong        | Network-verified cloak (Libera, etc.)                   |
 | `*!*@specific.host.com` | Good          | Static host, hard to spoof                              |
 | `*!ident@*.isp.com`     | Moderate      | Ident can be faked on some servers                      |
-| `*!*@user/account`      | Strong        | Network-verified cloak (Libera, etc.)                   |
 | `nick!*@*`              | **Dangerous** | Anyone can use any nick. Never use for privileged users |
 
-**Rule:** Warn when an admin adds a `nick!*@*` hostmask for a user with `+o` or higher flags. Log a `[security]` warning.
+**Account-based identity (`$a:` patterns):** The permissions system supports `$a:<accountpattern>` patterns that match a user's services account name instead of their hostmask. These are stronger than any hostmask pattern because they require the user to have identified with NickServ. The pattern supports wildcards (e.g., `$a:alice*`). Account data is sourced from IRCv3 `account-tag`, `account-notify`, and `extended-join` capabilities. When no account data is available for a user, `$a:` patterns are silently skipped and only hostmask patterns match.
+
+**Rule:** Warn when an admin adds a `nick!*@*` hostmask for a user with `+o` or higher flags. Log a `[security]` warning. Account patterns (`$a:`) skip this warning — they are inherently secure.
 
 ### 3.2 NickServ race condition
 
@@ -89,19 +95,23 @@ When a user joins a channel:
 
 1. Bot sees the JOIN event
 2. User may or may not have identified with NickServ yet
-3. Bot queries `NickServ ACC nick`
+3. Bot queries NickServ (ACC for Atheme, STATUS for Anope)
 4. Response arrives asynchronously
 
-**If the bot ops on join without waiting for ACC verification, an attacker can get ops by using an admin's nick before NickServ identifies them.**
+**If the bot ops on join without waiting for verification, an attacker can get ops by using an admin's nick before NickServ identifies them.**
 
-**Rule:** When `config.identity.require_acc_for` includes a flag level, the bot MUST wait for the ACC response (with timeout) before granting that privilege. Never skip verification for convenience.
+**Enforcement:** The dispatcher (`src/dispatcher.ts`) has a built-in `VerificationProvider` gate. When `config.identity.require_acc_for` includes a flag level (e.g., `["+o", "+n"]`), the dispatcher automatically checks identity **before** calling any handler whose required flags match that threshold. Plugin authors do not need to call `verifyUser()` themselves — the dispatcher handles it.
+
+**Fast path:** When the server supports IRCv3 `account-notify` / `extended-join`, the bot maintains a live nick-to-account map. The dispatcher checks this map first — if the account is already known, no NickServ round-trip is needed. The slow path (NickServ ACC/STATUS query with 5-second timeout) is used only when account data is not yet available.
+
+**Rule:** When `config.identity.require_acc_for` includes a flag level, the bot MUST wait for the verification response (with timeout) before granting that privilege. The dispatcher enforces this automatically. Never bypass the dispatcher for privileged actions.
 
 ### 3.3 Flag checking
 
 - The dispatcher MUST check flags before calling any handler that has a flag requirement
 - The `checkFlags` path must be: resolve hostmask → find user → check flags → (optionally) verify via NickServ
 - Flag checking must not short-circuit on the first matching hostmask if that hostmask belongs to a different user
-- The `-` flag (no requirement) is the only case where flag checking is skipped entirely
+- The `-` flag or an empty string `''` (no requirement) are the only cases where flag checking is skipped entirely
 - Owner flag (`n`) implies all other flags — this is intentional but means owner accounts are high-value targets. Limit `n` to trusted, verified hostmasks only.
 
 ### 3.4 DCC CHAT connection race
@@ -140,18 +150,19 @@ Plugins receive a `PluginAPI` object. They must NOT:
 - Access other plugins' state or database namespaces
 - **Call `eval()` or `new Function()` on user-supplied input** — this is a critical vulnerability class. CVE-2019-19010 (Limnoria, CVSS 9.8) demonstrated that an IRC bot plugin using `eval()` for user-submitted math expressions allows full code execution in the bot's process. Any plugin that needs to evaluate expressions must use a sandboxed library with no access to Node.js builtins.
 
-**Enforcement:** The plugin loader validates exports and the scoped API object is frozen (`Object.freeze` on nested objects where practical). Database namespace isolation is enforced at the `Database` class level, not by convention.
+**Enforcement:** The plugin loader validates exports. The scoped `PluginAPI` object returned by `createPluginApi()` is frozen at the top level via `Object.freeze(api)`, and every sub-object (`db`, `permissions`, `services`, `banStore`, `botConfig`, `config`, `channelSettings`) is individually `Object.freeze()`-d. Database namespace isolation is enforced at the `BotDatabase` class level — every plugin DB call is scoped to `pluginId` as the namespace, not by convention. The plugin-facing `botConfig` is a separate `PluginBotConfig` view with the NickServ password omitted and filesystem paths (`database`, `pluginDir`) excluded.
 
 ### 4.2 Plugin error containment
 
 - A thrown error in a plugin handler MUST NOT crash the bot or prevent other handlers from firing
-- The dispatcher wraps every handler call in try/catch and logs the error with `[plugin:name]` prefix
+- The dispatcher wraps every handler call in try/catch and logs the error with `(pluginId, type:mask)` context
 - A plugin that throws repeatedly should be logged but not auto-unloaded (that's an admin decision)
 
 ### 4.3 Plugin resource cleanup
 
 - `teardown()` must be called on unload — if it throws, log the error but continue the unload
 - `dispatcher.unbindAll(pluginId)` must remove ALL binds including timers
+- Help registry entries, channel setting definitions, channel setting change listeners, and `onModesReady` event listeners are all removed on unload
 - Timer intervals that aren't cleaned up will leak and accumulate on reload
 
 ---
@@ -162,8 +173,8 @@ Plugins receive a `PluginAPI` object. They must NOT:
 
 - IRC messages are limited to ~512 bytes including protocol overhead
 - The bot's own prefix (`nick!ident@host`) is prepended by the server, consuming ~60-100 bytes
-- **Rule:** Split long replies at word boundaries. Never send unbounded output.
-- Add rate limiting between multi-line replies to avoid flood disconnects
+- **Rule:** Split long replies at word boundaries. Never send unbounded output. `splitMessage()` (`src/utils/split-message.ts`) handles this automatically — it measures UTF-8 byte length (not JavaScript string length), preserves surrogate pairs, and caps output at 4 lines with `" ..."` truncation.
+- The message queue (`src/core/message-queue.ts`) rate-limits outbound messages to avoid flood disconnects — configurable via `config.queue` (default: 2 msg/sec, burst of 4). Messages are distributed across targets via per-target round-robin sub-queues.
 
 ### 5.2 No user-controlled formatting in sensitive output
 
@@ -178,7 +189,7 @@ api.say(channel, `User ${nick} has been granted ops`);
 api.say(channel, `User ${api.stripFormatting(nick)} has been granted ops`);
 ```
 
-`api.stripFormatting(text)` removes all IRC control characters (bold `\x02`, color `\x03`, italic `\x1D`, underline `\x1F`, strikethrough `\x1E`, monospace `\x11`, reset `\x0F`, reverse `\x16`) including color code parameters. Apply it to any user-controlled string appearing in:
+`api.stripFormatting(text)` removes all IRC control characters (bold `\x02`, color `\x03`, hex color `\x04`, italic `\x1D`, underline `\x1F`, strikethrough `\x1E`, monospace `\x11`, reset `\x0F`, reverse `\x16`) including color/hex-color parameters (e.g., `\x03` followed by `12,4` or `\x04` followed by `FF0000,00FF00`). Apply it to any user-controlled string appearing in:
 
 - Permission grant/revoke announcements
 - Op/kick/ban action messages
@@ -196,6 +207,8 @@ api.say(channel, `User ${api.stripFormatting(nick)} has been granted ops`);
 ## 6. Configuration security
 
 - High-value secrets are **never** stored inline in `config/bot.json`. Each secret field is named via a `<field>_env` suffix that points to an environment variable; the loader resolves it from `process.env` at startup. Fields covered: `services.password_env` (NickServ/SASL password), `botlink.password_env` (bot-link shared secret), `chanmod.nick_recovery_password_env` (NickServ GHOST password), `proxy.password_env` (SOCKS5 auth). See [docs/plans/config-secrets-env.md](plans/config-secrets-env.md) for the full spec.
+- **SASL PLAIN over plaintext is refused.** The bot will not start if `services.sasl` is `true`, `sasl_mechanism` is `"PLAIN"` (the default), and `irc.tls` is `false`. SASL PLAIN over cleartext leaks the NickServ password on the wire. Either enable TLS or use `sasl_mechanism: "EXTERNAL"` with a client certificate.
+- **SASL EXTERNAL (CertFP)** is the most secure authentication method: no password at all. Set `services.sasl_mechanism: "EXTERNAL"` and configure `irc.tls_cert` + `irc.tls_key` pointing to PEM files. The bot authenticates via the TLS client certificate fingerprint registered with NickServ.
 - **Channel `+k` keys are an exception**: they're low-sensitivity join tokens shared with every channel member and visible to any channel op via `/mode`. They may live inline on a channel entry (`{"name": "#chan", "key": "..."}`). For operators who want them out of the config anyway, `key_env` is available as an alternative.
 - `.env` files hold the actual secret values and MUST be in `.gitignore` (they are, via `.env` and `.env.*` patterns).
 - `config/bot.json` still MUST be in `.gitignore` — while it no longer contains secrets directly, it does contain operational details (hostmasks, connection details) that should not be public.
@@ -221,10 +234,14 @@ The bot should be safe out of the box, without requiring the admin to harden it:
 | `identity.method`          | `"hostmask"`   | Works on all networks, no services dependency               |
 | `identity.require_acc_for` | `["+o", "+n"]` | Privileged ops require NickServ verification when available |
 | `services.sasl`            | `true`         | SASL is more secure than PRIVMSG IDENTIFY                   |
+| `services.sasl_mechanism`  | `"PLAIN"`      | Falls back to EXTERNAL (CertFP) if configured               |
+| SASL PLAIN + plaintext     | **Refused**    | Bot refuses to start if SASL PLAIN is used without TLS      |
 | `irc.tls`                  | `true`         | Encrypted connection by default                             |
+| IRCv3 STS                  | Enforced       | Persisted per-host; prevents TLS downgrade on reconnect     |
 | Admin commands flag        | `+n`           | Only owner can run admin commands                           |
 | `.help` flag               | `-`            | Help is available to everyone (no info leak risk)           |
 | Plugin API `permissions`   | Read-only      | Plugins can check flags but not grant them                  |
+| Plugin API object          | Frozen         | `Object.freeze()` on the API and all sub-objects            |
 
 ---
 
@@ -239,7 +256,7 @@ IRCv3 message tags carry metadata alongside messages. Their trust level depends 
 
 **Rule:** Client-only tags (prefixed `+`) are relayed verbatim by the server without modification. An attacker can set any client-only tag to any value. Never use client-only tag values for security decisions.
 
-**Rule:** The `account` server tag (when present) identifies the sender's services account. It may be treated as server-verified, but only when the server has enabled the `account-tag` capability. HexBot's dispatcher uses the live account map from `account-notify` / `extended-join` rather than reading this tag directly.
+**Rule:** The `account` server tag (when present) identifies the sender's services account. It may be treated as server-verified, but only when the server has enabled the `account-tag` capability. HexBot's IRC bridge reads the `account` tag from inbound events via `extractAccountTag()` and feeds it into the live account map (used by the dispatcher's ACC verification fast path) and into `ctx.account` for handler access.
 
 ```typescript
 // BAD: reading a client-only tag as authoritative
@@ -249,15 +266,45 @@ const userRole = ctx.tags?.['+role']; // attacker can set this to anything
 const record = api.permissions.findByHostmask(`${ctx.nick}!${ctx.ident}@${ctx.hostname}`);
 ```
 
-## 9. Bot linking security
+## 9. IRCv3 Strict Transport Security (STS)
 
-The bot link protocol (`src/core/botlink.ts`) introduces a trusted TCP channel between bots. Security considerations:
+HexBot implements IRCv3 STS (`src/core/sts.ts`) — the IRC equivalent of HTTP HSTS. Once the bot receives a valid STS directive from a server (via `CAP LS`), it persists the policy in the `_sts` database namespace and enforces it on all subsequent connections:
+
+- **On TLS:** The server advertises `sts=duration=<N>`. The bot records the policy; it will refuse to downgrade to plaintext until the duration expires.
+- **On plaintext:** The server advertises `sts=port=<P>,duration=<N>`. The bot immediately disconnects and reconnects on the TLS port. If the config later changes to `tls: false`, the bot upgrades automatically or refuses to start if no port is known.
+- **Policy expiry:** `duration=0` clears the stored policy. Non-zero durations are honored even across bot restarts (SQLite persistence).
+
+**Why this matters:** Without STS, a MitM who intercepts DNS or performs a captive-portal downgrade sees every SASL PLAIN credential, every message, and every op action in cleartext. The SASL PLAIN + plaintext refusal (section 6) is the first defence; STS closes the reconnect-after-restart gap.
+
+## 10. Input flood protection
+
+### 10.1 Command flood limiting
+
+The dispatcher (`src/dispatcher.ts`) implements per-user sliding-window flood protection, configured via `config.flood`:
+
+- `pub`: limits channel commands (pub + pubm share one counter)
+- `msg`: limits private message commands (msg + msgm share one counter)
+- Users with the `n` (owner) flag bypass flood protection entirely
+- On the first blocked message per window, the bot sends a one-time NOTICE warning to the user
+- Flood checking runs **once per IRC message** in the bridge, before the paired dispatch calls — if blocked, both dispatch calls are skipped
+
+### 10.2 CTCP rate limiting
+
+The IRC bridge rate-limits CTCP responses to 3 per sender per 10 seconds. The rate limit is keyed on `ident@host` (the persistent portion of the identity), not on the nick alone, so an attacker cannot bypass the limit by rotating nicks during a CTCP flood.
+
+### 10.3 Output flood protection
+
+The message queue (`src/core/message-queue.ts`) enforces a configurable token-bucket rate limit on outbound messages (default: 2 msg/sec steady-state, burst of 4). Messages are queued per-target in round-robin sub-queues, preventing a single noisy channel from starving others. Long replies are automatically split by `splitMessage()` and capped at 4 lines per reply.
+
+## 11. Bot linking security
+
+The bot link protocol (`src/core/botlink-protocol.ts`, `src/core/botlink-hub.ts`, `src/core/botlink-leaf.ts`) introduces a trusted TCP channel between bots. Security considerations:
 
 ### Trust model
 
 **Hub-authoritative.** The hub is the single source of truth for permissions and executes all relayed commands. A compromised hub means total compromise of the botnet. Leaves trust frames from the hub unconditionally (permission syncs, command results, party line messages).
 
-**Leaf trust is limited.** The hub validates leaf identity via password hash and enforces rate limits. Hub-only frame types (`CMD`, `RELAY_*`, `PROTECT_ACK`) are never fanned out to other leaves — the hub processes them internally.
+**Leaf trust is limited.** The hub validates leaf identity via password hash and enforces rate limits. Hub-only frame types (`CMD`, `CMD_RESULT`, `BSAY`, `RELAY_*`, `PROTECT_ACK`, `ADDUSER`, `SETFLAGS`, `DELUSER`, `PARTY_WHOM`) are never fanned out to other leaves — the hub processes them internally. Permission-mutation frames (`ADDUSER`, `SETFLAGS`, `DELUSER`) are hub-only by design: if a leaf could fan them out, a compromised leaf could inject owner-level permissions across the entire botnet.
 
 ### Authentication
 
@@ -302,18 +349,20 @@ When a DCC user runs `.relay <botname>`, their input is proxied to the remote bo
 - Bot link connections are **unencrypted TCP**. For WAN deployments, use a VPN or SSH tunnel.
 - The `listen.host` config should be set to a private IP or `127.0.0.1` when bots are co-located. Do not expose the link port to the public internet without transport encryption.
 
-## 10. Security checklist for code review
+## 12. Security checklist for code review
 
 Use this checklist when reviewing any PR or code change:
 
 - [ ] All IRC input is validated before use (nicks, channels, message text)
-- [ ] No newlines (`\r`, `\n`) in values passed to `raw()` or interpolated into IRC protocol strings
+- [ ] No newlines (`\r`, `\n`, `\0`) in values passed to `raw()` or interpolated into IRC protocol strings — use `sanitize()` from `src/utils/sanitize.ts`
 - [ ] Database operations use parameterized queries (no string concatenation in SQL)
 - [ ] Permissions are checked before privileged actions
-- [ ] NickServ verification is awaited (not skipped) for flagged operations when configured
+- [ ] NickServ verification is awaited (not skipped) for flagged operations when configured — the dispatcher enforces this automatically via the `VerificationProvider` gate
 - [ ] Plugin uses only the scoped API, no direct imports from `src/`
+- [ ] Plugin does not read `process.env` directly — declare `<field>_env` in config and read from `api.config`
 - [ ] Long output is split and rate-limited
 - [ ] Errors in handlers are caught and don't crash the bot
-- [ ] No secrets in logged output
+- [ ] No secrets in logged output — log env var names, not values
 - [ ] Config examples contain no real credentials
-- [ ] Hostmask patterns for privileged users are specific (not `nick!*@*`)
+- [ ] Hostmask patterns for privileged users are specific (not `nick!*@*`) — prefer `$a:accountname` patterns where services are available
+- [ ] `stripFormatting()` applied to user-controlled strings in security-relevant output (permission grants, op/kick/ban messages, log entries)

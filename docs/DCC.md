@@ -134,13 +134,27 @@ Go to **Server → DCC Chat → Open DCC Chat** and enter the bot's nick, or typ
 
 ## Session interface
 
-On connect you will see a banner:
+On connect you will see a banner like:
 
 ```
-*** Connected to HexBot v0.2.0 — Sun, 22 Mar 2026 00:00:00 GMT
-*** Logged in as yourhandle (yournick!~ident@your.host)
-*** Console: 1 other(s) here: adminhandle
-*** Lines starting with . are commands (.help). Plain text is broadcast.
+  (HexBot ASCII art logo)
+
+Hey yourhandle! My name is hexbot and I am running HexBot v0.2.3,
+on Node.js v24.x.x on linux.
+
+Local time is now 4/12/2026, 12:00:00 AM
+
+Logged in as: yourhandle (yournick!~ident@your.host)
+Your flags: +nm
+
+Console: 1 other(s) here: adminhandle
+
+Use .help for basic help.
+Use .help <command> for help on a specific command.
+Use .console to see who is currently on the console.
+
+Commands start with '.' (like '.quit' or '.help')
+Everything else goes out to the console.
 ```
 
 ### Commands
@@ -207,21 +221,22 @@ When the REPL is being used locally, you will see:
 
 ### "No DCC CHAT offer received" / client shows nothing
 
-The bot sends its offer as a CTCP reply. Some clients suppress these. Check your client's DCC or CTCP log. In irssi: `/lastlog dcc`. In WeeChat: open the `irc.server.<name>` raw buffer.
+The bot sends its offer as a CTCP message. Some clients suppress these. Check your client's DCC or CTCP log. In irssi: `/lastlog dcc`. In WeeChat: open the `irc.server.<name>` raw buffer.
 
 ### Bot sends a NOTICE instead of opening a chat
 
 The NOTICE text will tell you why:
 
-| Notice contains         | Cause                                                       | Fix                                                    |
-| ----------------------- | ----------------------------------------------------------- | ------------------------------------------------------ |
-| `passive`               | Your client sent active DCC (non-zero ip/port)              | Configure your client to use passive DCC               |
-| `user database`         | Your hostmask is not registered                             | Add yourself with `.adduser` (see Prerequisites above) |
-| `insufficient flags`    | You don't have the required flags                           | Set your flags with `.flags handle +m`                 |
-| `maximum sessions`      | `max_sessions` limit reached                                | Wait for a session to end or increase `max_sessions`   |
-| `already connected`     | Your nick is already in an active session                   | Disconnect the existing session first                  |
-| `no ports available`    | All ports in `port_range` are in use                        | Wait or widen `port_range`                             |
-| `NickServ verification` | `nickserv_verify: true` and NickServ said you're not logged | Identify with NickServ first                           |
+| Notice contains                | Cause                                                       | Fix                                                    |
+| ------------------------------ | ----------------------------------------------------------- | ------------------------------------------------------ |
+| `passive DCC CHAT`             | Your client sent active DCC (non-zero ip/port)              | Enable passive/reverse DCC in your client settings     |
+| `user database`                | Your hostmask is not registered                             | Add yourself with `.adduser` (see Prerequisites above) |
+| `insufficient flags`           | You don't have the required flags                           | Set your flags with `.flags handle +m`                 |
+| `maximum sessions`             | `max_sessions` limit reached                                | Wait for a session to end or increase `max_sessions`   |
+| `active session`               | Your nick is already in an active session                   | Disconnect the existing session first                  |
+| `already pending`              | A previous DCC offer is still waiting for your connection   | Wait for it to expire (30s) or reconnect               |
+| `no ports available`           | All ports in `port_range` are in use                        | Wait or widen `port_range`                             |
+| `NickServ verification failed` | `nickserv_verify: true` and NickServ said you're not logged | Identify with NickServ first                           |
 
 ### Connection times out after the offer
 

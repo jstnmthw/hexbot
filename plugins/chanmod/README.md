@@ -4,21 +4,21 @@ Channel operator tools: auto-op/halfop/voice on join, mode enforcement, timed ba
 
 ## Commands
 
-All commands require the caller to have `+o` (op) flag in the channel, except `!bans` which is read-only.
+All commands require the caller to have `+o` (op) flag in the channel.
 
-| Command     | Usage                         | Description                                     |
-| ----------- | ----------------------------- | ----------------------------------------------- |
-| `!op`       | `!op [nick]`                  | Op a nick (or yourself if omitted)              |
-| `!deop`     | `!deop [nick]`                | Deop a nick (or yourself if omitted)            |
-| `!halfop`   | `!halfop [nick]`              | Halfop a nick (or yourself if omitted)          |
-| `!dehalfop` | `!dehalfop [nick]`            | Dehalfop a nick (or yourself if omitted)        |
-| `!voice`    | `!voice [nick]`               | Voice a nick (or yourself if omitted)           |
-| `!devoice`  | `!devoice [nick]`             | Devoice a nick (or yourself if omitted)         |
-| `!kick`     | `!kick <nick> [reason]`       | Kick a nick with an optional reason             |
-| `!ban`      | `!ban <nick\|mask> [minutes]` | Ban a nick or explicit mask, optionally timed   |
-| `!unban`    | `!unban <nick\|mask>`         | Remove a ban by nick (if present) or exact mask |
-| `!kickban`  | `!kickban <nick> [reason]`    | Ban and kick in one step                        |
-| `!bans`     | `!bans [channel]`             | List tracked bans and their expiry              |
+| Command     | Usage                      | Description                              |
+| ----------- | -------------------------- | ---------------------------------------- | ----------------------------------------------- |
+| `!op`       | `!op [nick]`               | Op a nick (or yourself if omitted)       |
+| `!deop`     | `!deop [nick]`             | Deop a nick (or yourself if omitted)     |
+| `!halfop`   | `!halfop [nick]`           | Halfop a nick (or yourself if omitted)   |
+| `!dehalfop` | `!dehalfop [nick]`         | Dehalfop a nick (or yourself if omitted) |
+| `!voice`    | `!voice [nick]`            | Voice a nick (or yourself if omitted)    |
+| `!devoice`  | `!devoice [nick]`          | Devoice a nick (or yourself if omitted)  |
+| `!kick`     | `!kick <nick> [reason]`    | Kick a nick with an optional reason      |
+| `!ban`      | `!ban <nick                | mask> [minutes]`                         | Ban a nick or explicit mask, optionally timed   |
+| `!unban`    | `!unban <nick              | mask>`                                   | Remove a ban by nick (if present) or exact mask |
+| `!kickban`  | `!kickban <nick> [reason]` | Ban and kick in one step                 |
+| `!bans`     | `!bans [channel]`          | List tracked bans and their expiry       |
 
 ## Per-channel settings (.chanset)
 
@@ -32,24 +32,24 @@ Most chanmod behaviors can be tuned per-channel using `.chanset` (requires `m` f
 .chanset #chan                     — list all settings with current values
 ```
 
-| Setting                  | Type   | Default  | Description                                                           |
-| ------------------------ | ------ | -------- | --------------------------------------------------------------------- |
-| `auto_op`                | flag   | on       | Auto-op/halfop/voice flagged users on join                            |
-| `bitch`                  | flag   | off      | Strip `+o`/`+h` from anyone without the required flag                 |
-| `enforce_modes`          | flag   | off      | Re-apply channel modes and user modes if removed                      |
-| `channel_modes`          | string | `""`     | Mode string to enforce, e.g. `"+nt-s"`; unmentioned modes left alone  |
-| `channel_key`            | string | `""`     | Channel key (`+k`) to enforce (empty = remove unauthorized keys)      |
-| `channel_limit`          | int    | `0`      | Channel user limit (`+l`) to enforce (0 = remove unauthorized limits) |
-| `protect_ops`            | flag   | off      | Kick/kickban anyone who deops a flagged user                          |
-| `enforcebans`            | flag   | off      | Kick users whose hostmask matches a newly-set ban                     |
-| `revenge`                | flag   | off      | Kick/deop/kickban whoever kicks the bot                               |
-| `chanserv_access`        | string | `"none"` | Bot's ChanServ access tier: `none`/`op`/`superop`/`founder`           |
-| `chanserv_unban_on_kick` | flag   | on       | Request UNBAN from services when bot is kicked                        |
-| `mass_reop_on_recovery`  | flag   | on       | Mass re-op flagged users after regaining ops during elevated threat   |
-| `takeover_punish`        | string | `"deop"` | Response to hostile actors: `none`/`deop`/`kickban`/`akick`           |
-| `takeover_detection`     | flag   | on       | Enable threat scoring and automatic escalation                        |
-| `protect_topic`          | flag   | off      | Restore pre-attack topic after takeover recovery                      |
-| `invite`                 | flag   | off      | Accept IRC INVITE from ops/masters and join the channel               |
+| Setting                  | Type   | Default  | Description                                                                             |
+| ------------------------ | ------ | -------- | --------------------------------------------------------------------------------------- |
+| `auto_op`                | flag   | on       | Auto-op/halfop/voice flagged users on join                                              |
+| `bitch`                  | flag   | off      | Strip `+o`/`+h` from anyone without the required flag                                   |
+| `enforce_modes`          | flag   | off      | Re-apply channel modes and user modes if removed                                        |
+| `channel_modes`          | string | `""`     | Mode string to enforce, e.g. `"+nt-s"`; unmentioned modes left alone                    |
+| `channel_key`            | string | `""`     | Channel key (`+k`) to enforce (empty = remove unauthorized keys)                        |
+| `channel_limit`          | int    | `0`      | Channel user limit (`+l`) to enforce (0 = remove unauthorized limits)                   |
+| `protect_ops`            | flag   | off      | Punish unauthorized users who deop a flagged op (users without op authority themselves) |
+| `enforcebans`            | flag   | off      | Kick users whose hostmask matches a newly-set ban                                       |
+| `revenge`                | flag   | off      | Kick/deop/kickban whoever kicks the bot                                                 |
+| `chanserv_access`        | string | `"none"` | Bot's ChanServ access tier: `none`/`op`/`superop`/`founder`                             |
+| `chanserv_unban_on_kick` | flag   | on       | Request UNBAN from services when bot is kicked                                          |
+| `mass_reop_on_recovery`  | flag   | on       | Mass re-op flagged users after regaining ops during elevated threat                     |
+| `takeover_punish`        | string | `"deop"` | Response to hostile actors: `none`/`deop`/`kickban`/`akick`                             |
+| `takeover_detection`     | flag   | on       | Enable threat scoring and automatic escalation                                          |
+| `protect_topic`          | flag   | off      | Restore pre-attack topic after takeover recovery                                        |
+| `invite`                 | flag   | off      | Accept IRC INVITE from ops/masters and join the channel                                 |
 
 **Example** -- set up mode enforcement and takeover protection for `#mychan`:
 
@@ -351,6 +351,8 @@ With `cycle_on_deop: true`, if the bot itself is deopped three times within 10 s
 | `chanserv_recover_cooldown_ms` | number             | `60000`      | Cooldown between RECOVER requests for the same channel, in milliseconds           |
 | `anope_recover_step_delay_ms`  | number             | `200`        | Delay between steps in Anope's synthetic RECOVER sequence, in milliseconds        |
 
+> **Deprecated:** The `chanserv_op` config key has been removed. ChanServ op-recovery is now handled automatically when `chanserv_access` is set to `op` or higher. You can safely delete `chanserv_op` from your `plugins.json`.
+
 ### Takeover detection
 
 | Key                          | Type   | Default | Description                                                                  |
@@ -446,7 +448,7 @@ Per-channel settings (`.chanset`) override global config. Set `chanserv_access` 
 
 ## Caveats
 
-- All moderation commands (`!op`, `!deop`, `!halfop`, `!dehalfop`, `!voice`, `!devoice`, `!kick`, `!ban`, `!unban`, `!kickban`) reply with an error message if the bot does not currently hold ops in the channel. `!bans` has no ops requirement (it is read-only).
+- All moderation commands (`!op`, `!deop`, `!halfop`, `!dehalfop`, `!voice`, `!devoice`, `!kick`, `!ban`, `!unban`, `!kickban`, `!bans`) require the caller to have `+o` flag. Commands that change channel state also require the bot to hold ops.
 - `!ban` by nick requires the target to be present in the channel so their hostmask can be resolved. For absent users, pass an explicit mask: `!ban *!*@1.2.3.4`.
 - `!unban <nick>` works if the target is still in the channel -- chanmod derives candidate masks from their hostmask and removes whichever one matches a stored record (or tries all three if no record is found). For absent users, provide an explicit mask: `!unban *!*@1.2.3.4`. Use `!bans` to list stored masks.
 - Timed bans are only lifted in channels where the bot has ops at the time the timer fires. Bans in channels the bot has left, or where it has lost ops, will not be lifted until it regains them.

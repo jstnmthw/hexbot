@@ -1,19 +1,19 @@
 # topic plugin
 
-Sets channel topics using pre-built IRC color theme borders. Ships with 22+ built-in themes.
+Sets channel topics using pre-built IRC color theme borders. Ships with 29 built-in themes.
 Includes optional topic protection: lock the current topic and the bot will restore it if anyone
 changes it without operator privileges.
 
 ## Commands
 
-| Command                         | Flags | Description                                                  |
-| ------------------------------- | ----- | ------------------------------------------------------------ |
-| `!topic <theme> <text>`         | `o`   | Set the channel topic wrapped in the theme's color border    |
-| `!topic lock`                   | `o`   | Lock the current topic — restores it on unauthorized changes |
-| `!topic unlock`                 | `o`   | Disable topic protection                                     |
-| `!topic preview <theme> <text>` | `o`   | Preview the themed topic as a channel message                |
-| `!topics`                       | `-`   | List all available theme names                               |
-| `!topics preview [text]`        | `-`   | PM all themes rendered with optional sample text             |
+| Command                         | Flags | Description                                                      |
+| ------------------------------- | ----- | ---------------------------------------------------------------- |
+| `!topic <theme> <text>`         | `o`   | Set the channel topic wrapped in the theme's color border        |
+| `!topic lock`                   | `o`   | Lock the current topic — restores it on unauthorized changes     |
+| `!topic unlock`                 | `o`   | Disable topic protection                                         |
+| `!topic preview <theme> <text>` | `o`   | Preview the themed topic as a channel message                    |
+| `!topics`                       | `-`   | List all available theme names                                   |
+| `!topics preview [text]`        | `-`   | PM all themes rendered with optional sample text (60 s cooldown) |
 
 ## Typical workflow
 
@@ -23,7 +23,11 @@ changes it without operator privileges.
 ```
 
 Then if anyone changes the topic without `+o`, the bot immediately restores it.
-To change the locked topic, set a new one and re-lock:
+If a user **with** `+o` changes the topic directly (e.g. via their IRC client), the stored
+topic text automatically updates to match their new text — the lock follows the change rather
+than reverting it.
+
+To change the locked topic from the bot, set a new one and re-lock:
 
 ```
 !topic rune Updated topic text
@@ -50,6 +54,12 @@ The protection state is also readable and writable via the REPL:
 ## Requirements
 
 The bot must have channel operator status (or the channel must have mode `-t`) to set topics.
+
+## Limits
+
+- **Topic length**: The bot warns when a topic exceeds 390 characters (typical IRC server limit).
+  Topics longer than this may be silently truncated by the server.
+- **Preview cooldown**: `!topics preview` has a 60-second per-user cooldown to prevent flooding.
 
 ## Theme list
 

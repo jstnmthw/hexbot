@@ -22,9 +22,10 @@ Copy the example configs:
 ```bash
 cp config/bot.example.json config/bot.json
 cp config/plugins.example.json config/plugins.json
+cp config/bot.env.example config/bot.env && chmod 600 config/bot.env
 ```
 
-Edit `config/bot.json` with your IRC server details and owner hostmask:
+Edit `config/bot.json` with your IRC server details and owner hostmask. Secrets (NickServ password, proxy credentials, etc.) go in `config/bot.env` via environment variables -- see the [NickServ / SASL](#nickserv--sasl) section below.
 
 ```json
 {
@@ -32,9 +33,9 @@ Edit `config/bot.json` with your IRC server details and owner hostmask:
     "host": "irc.rizon.net",
     "port": 6697,
     "tls": true,
-    "nick": "HexBot",
+    "nick": "Hexbot",
     "username": "hexbot",
-    "realname": "My HexBot",
+    "realname": "HexBot IRC Bot",
     "channels": ["#hexbot"]
   },
   "owner": {
@@ -55,10 +56,10 @@ Edit `config/plugins.json` to enable or disable plugins. All included plugins ar
 ## Run
 
 ```bash
-# Development — interactive REPL with auto-reload
+# Development — interactive REPL for live administration
 pnpm dev
 
-# Production — daemon mode, no REPL
+# Headless — no REPL, suitable for production / Docker
 pnpm start
 ```
 
@@ -66,7 +67,7 @@ On startup the bot connects to your configured server, joins channels, and boots
 
 ## First steps
 
-Once the bot is connected and you've joined a channel with it, try these commands from IRC (prefix with `.` for the REPL, `!` for channel commands):
+Once the bot is connected and you've joined a channel with it, try these commands. Built-in admin commands use the `.` prefix (configurable via `command_prefix` in `bot.json`) and work from both the REPL and IRC. Plugin commands use `!` by convention.
 
 ### From the REPL
 
@@ -81,12 +82,12 @@ The REPL gives you owner-level access to the bot directly from the terminal:
 
 ### From IRC
 
-Channel commands use the `!` prefix. These come from plugins:
+Plugin commands use the `!` prefix:
 
 ```
 !8ball Am I lucky?   # ask the magic 8-ball
 !seen alice          # when was alice last active?
-!roll 2d6            # roll dice (if the dice plugin is loaded)
+!help                # list available plugin commands
 ```
 
 Admin commands use the `.` prefix and require permission flags:
@@ -138,19 +139,21 @@ mkdir plugins/hello
 
 ```typescript
 // plugins/hello/index.ts
-import type { HandlerContext, PluginAPI } from '../../src/types.js';
+import type { PluginAPI } from '../../src/types';
 
 export const name = 'hello';
 export const version = '1.0.0';
 export const description = 'Friendly greeter command';
 
 export function init(api: PluginAPI): void {
-  api.bind('pub', '-', '!hello', (ctx: HandlerContext) => {
+  api.bind('pub', '-', '!hello', (ctx) => {
     ctx.reply(`Hello, ${ctx.nick}!`);
   });
 }
 
-export function teardown(): void {}
+export function teardown(): void {
+  // No cleanup needed — binds are auto-removed by the loader
+}
 ```
 
 Enable it in `config/plugins.json`:
@@ -176,7 +179,8 @@ See [plugins/README.md](../plugins/README.md) for the full plugin authoring guid
 ```bash
 cp config/bot.example.json config/bot.json
 cp config/plugins.example.json config/plugins.json
-# Edit both files
+cp config/bot.env.example config/bot.env && chmod 600 config/bot.env
+# Edit all three files
 docker compose up -d
 docker compose logs -f
 ```
@@ -185,21 +189,27 @@ Config and plugins live on the host via bind mounts. Edit a plugin and `.reload`
 
 ## NickServ / SASL
 
-If your network supports it, configure SASL authentication in `bot.json`:
+If your network supports it, configure SASL authentication in `bot.json`. Passwords are never stored inline -- use `password_env` to name an environment variable:
 
 ```json
 {
   "services": {
     "type": "atheme",
     "nickserv": "NickServ",
-    "password": "botpassword",
+    "password_env": "HEX_NICKSERV_PASSWORD",
     "sasl": true,
     "sasl_mechanism": "PLAIN"
   }
 }
 ```
 
-Set `type` to match your network's services package (`atheme` for Libera Chat, `anope` for Rizon, etc.).
+Set the env var before starting the bot (or add it to `config/bot.env`):
+
+```bash
+export HEX_NICKSERV_PASSWORD=your-password-here
+```
+
+Set `type` to match your network's services package (`atheme` for Libera Chat, `anope` for Rizon, etc.). Set `sasl_mechanism` to `"EXTERNAL"` to authenticate via TLS client certificate instead of a password.
 
 ## Local development with a test IRC server
 
