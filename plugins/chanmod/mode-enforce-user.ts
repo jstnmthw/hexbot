@@ -49,8 +49,10 @@ export function handleBitchMode(
     const targetFlags = getUserFlags(api, channel, target);
     const isAuthorized =
       modeStr === '+o'
-        ? hasAnyFlag(targetFlags, config.op_flags)
-        : config.halfop_flags.length > 0 && hasAnyFlag(targetFlags, config.halfop_flags);
+        ? hasAnyFlag(targetFlags, config.op_flags) && !targetFlags?.includes('d')
+        : config.halfop_flags.length > 0 &&
+          hasAnyFlag(targetFlags, config.halfop_flags) &&
+          !targetFlags?.includes('d');
 
     if (!isAuthorized) {
       api.log(`Bitch: stripping ${modeStr} from ${target} in ${channel} (not flagged)`);
@@ -113,7 +115,7 @@ export function handleUserModeEnforcement(
 
   if (modeStr === '-o') {
     if (!botHasOps(api, channel)) return;
-    const shouldBeOpped = hasAnyFlag(flags, config.op_flags);
+    const shouldBeOpped = hasAnyFlag(flags, config.op_flags) && !flags.includes('d');
     if (shouldBeOpped && enforceModes) {
       api.log(`Re-enforcing +o on ${target} in ${channel} (deopped by ${setter})`);
       state.scheduleEnforcement(config.enforce_delay_ms, () => {

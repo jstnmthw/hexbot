@@ -727,6 +727,21 @@ describe('chanmod plugin — mode enforcement', () => {
       ),
     ).toBeUndefined();
   });
+
+  it('should NOT re-op a user with +d flag when deopped externally', async () => {
+    bot.permissions.addUser('deopuser', '*!deop@deop.host', 'od', 'test');
+    addToChannel(bot, 'DeopUser', 'deop', 'deop.host', '#test');
+    bot.client.clearMessages();
+
+    simulateMode(bot, 'SomeOp', '#test', '-o', 'DeopUser');
+    await tick(50);
+
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('DeopUser'),
+      ),
+    ).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1703,6 +1718,20 @@ describe('chanmod plugin — bitch mode', () => {
         (m) => m.type === 'mode' && m.message === '-o' && m.args?.includes('Trusted'),
       ),
     ).toBeUndefined();
+  });
+
+  it('deops a +d user who gains +o even with op flags (bitch mode)', async () => {
+    bot.permissions.addUser('deopped', '*!deopped@deopped.host', 'od', 'test');
+    addToChannel(bot, 'Deopped', 'deopped', 'deopped.host', '#test');
+    giveBotOps(bot, '#test');
+    bot.client.clearMessages();
+    simulateMode(bot, 'SomeOp', '#test', '+o', 'Deopped');
+    await tick(20);
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '-o' && m.args?.includes('Deopped'),
+      ),
+    ).toBeDefined();
   });
 
   it('does NOT deop when the setter is a nodesynch nick', async () => {

@@ -336,7 +336,7 @@ Flag-based permissions with per-channel overrides.
 - `m` — master
 - `o` — op
 - `v` — voice
-- `d` — deop (suppress auto-op/halfop on join; auto-voice still works if user also has `+v`)
+- `d` — deop (suppress auto-op/halfop on join; does not revoke privileges — user can still `.op` themselves or be opped manually; mode enforcement will not re-op a `+d` user; auto-voice still works if user also has `+v`)
 - `-` — no flags required (anyone)
 
 **User records:** Each user has a handle, one or more hostmask patterns (with wildcards), global flags, and per-channel flag overrides.
