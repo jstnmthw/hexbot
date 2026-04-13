@@ -217,6 +217,8 @@ Send a CTCP reply. Used to respond to CTCP requests like VERSION or TIME.
 
 These are delegated to the IRCCommands core module, which handles mode batching and mod action logging.
 
+> **Auto-audit:** Every `api.op` / `api.deop` / `api.kick` / `api.ban` / `api.voice` / `api.devoice` / `api.halfop` / `api.dehalfop` / `api.invite` / `api.topic` / `api.mode` call writes a `mod_log` row tagged with `source='plugin'`, `plugin=<your plugin id>`, and `by=<your plugin id>`. You don't need to call `api.audit.log` for these — the wrapper does it for free, and trying to override the source or plugin name is impossible because the factory captures them in a frozen actor object. See [docs/AUDIT.md](AUDIT.md) for the full action vocabulary.
+
 #### `join(channel, key?)`
 
 Join a channel, optionally with a key.
@@ -280,6 +282,57 @@ Invite a user to a channel.
 #### `changeNick(nick)`
 
 Change the bot's own IRC nick. Used primarily for nick recovery when the desired nick becomes available.
+
+---
+
+### Audit
+
+Every plugin gets an `api.audit` writer scoped to its own plugin id. Use it for **non-IRC** privileged events — feed mutations, lockdown state changes, threat-level escalations, anything that doesn't fit the `api.irc.*` shape.
+
+```typescript
+api.audit.log(action: string, options?: {
+  channel?: string | null;
+  target?: string | null;
+  outcome?: 'success' | 'failure'; // default 'success'
+  reason?: string | null;
+  metadata?: Record<string, unknown> | null;
+}): void;
+```
+
+The factory forces `source='plugin'`, `plugin=<your id>`, and `by=<your id>`. You **cannot** override these — even if you stuff them into `options`, they're stripped. This is the enforcement boundary that keeps a misbehaving plugin from spoofing another plugin's identity or pretending to be a non-plugin source.
+
+Examples:
+
+```typescript
+// Flood plugin: lockdown triggered
+api.audit.log('flood-lockdown', {
+  channel: '#busy',
+  reason: '+R',
+  metadata: { mode: 'R', flooderCount: 5, durationMs: 300_000 },
+});
+
+// RSS plugin: feed added
+api.audit.log('rss-feed-add', {
+  channel: '#news',
+  target: feedId,
+  reason: feedUrl,
+  metadata: { interval: 3600 },
+});
+
+// Permission-denied path
+api.audit.log('rss-feed-add', {
+  channel: ctx.channel,
+  target: feedId,
+  outcome: 'failure',
+  reason: 'caller lacks +o',
+});
+```
+
+`api.audit.log` is wrapped in try/catch — a failed audit write never propagates an exception into your handler. The mutation is what matters; audit is best-effort.
+
+For privileged actions that map onto an `api.irc.*` call, you don't need to call `api.audit.log` at all — the IRC wrapper auto-logs the row. Reach for `api.audit.log` only when the event has no IRC analogue. The full action vocabulary, plus the rules for plugin authors, lives in [docs/AUDIT.md](AUDIT.md).
+
+A plugin **must not** call `db.logModAction` directly. The scoped API doesn't expose the database directly, and the audit factory is the only supported path.
 
 ---
 

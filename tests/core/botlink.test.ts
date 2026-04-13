@@ -2152,6 +2152,33 @@ describe('BotLinkHub relay routing', () => {
     expect(parseWritten(written2)).toEqual([]);
   });
 
+  it('delivers hub-origin RELAY_ACCEPT locally exactly once', async () => {
+    // Regression: with the hub as origin, routeRelayFrame used to deliver
+    // via sendOrDeliver → onLeafFrame, and then onSteadyState also dispatched
+    // the same frame to onLeafFrame a second time, producing doubled output.
+    hub.registerRelay('admin', 'leaf2');
+    const received: LinkFrame[] = [];
+    hub.onLeafFrame = (_botname, frame) => received.push(frame);
+
+    pushFrame(duplex2, { type: 'RELAY_ACCEPT', handle: 'admin' });
+    await tick();
+
+    const accepts = received.filter((f) => f.type === 'RELAY_ACCEPT');
+    expect(accepts).toHaveLength(1);
+  });
+
+  it('delivers hub-origin RELAY_OUTPUT locally exactly once', async () => {
+    hub.registerRelay('admin', 'leaf2');
+    const received: LinkFrame[] = [];
+    hub.onLeafFrame = (_botname, frame) => received.push(frame);
+
+    pushFrame(duplex2, { type: 'RELAY_OUTPUT', handle: 'admin', line: 'response' });
+    await tick();
+
+    const outputs = received.filter((f) => f.type === 'RELAY_OUTPUT');
+    expect(outputs).toHaveLength(1);
+  });
+
   it('routes RELAY_END from target back to origin', async () => {
     pushFrame(duplex1, {
       type: 'RELAY_REQUEST',

@@ -3,6 +3,7 @@
 import type { CommandHandler } from '../../command-handler';
 import type { BotDatabase } from '../../database';
 import { formatDuration, parseDuration } from '../../utils/duration';
+import { tryAudit } from '../audit';
 import type { BanStore } from '../ban-store';
 import type { BotLinkHub } from '../botlink-hub';
 import type { SharedBanList } from '../botlink-sharing';
@@ -131,7 +132,13 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
       }
 
       const durStr = durationMs === 0 ? 'permanent' : formatDuration(durationMs);
-      db.logModAction('ban', channel, mask, ctx.nick, reason ?? null);
+      tryAudit(db, ctx, {
+        action: 'ban',
+        channel,
+        target: mask,
+        reason: reason ?? null,
+        metadata: { durationMs },
+      });
       ctx.reply(`Banned ${mask} in ${channel} (${durStr}).`);
     },
   );
@@ -164,7 +171,7 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
         hub.broadcast({ type: 'CHAN_BAN_DEL', channel, mask });
       }
 
-      db.logModAction('unban', channel, mask, ctx.nick, null);
+      tryAudit(db, ctx, { action: 'unban', channel, target: mask });
       ctx.reply(`Unbanned ${mask} in ${channel}.`);
     },
   );
@@ -195,6 +202,7 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
         return;
       }
       ctx.reply(`Ban ${mask} in ${channel} is now sticky.`);
+      tryAudit(db, ctx, { action: 'stick', channel, target: mask });
     },
   );
 
@@ -224,6 +232,7 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
         return;
       }
       ctx.reply(`Ban ${mask} in ${channel} is no longer sticky.`);
+      tryAudit(db, ctx, { action: 'unstick', channel, target: mask });
     },
   );
 }

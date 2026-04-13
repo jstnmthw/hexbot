@@ -107,6 +107,13 @@ export function init(api: PluginAPI): void {
       api.channelSettings.set(ctx.channel, 'topic_text', live);
       api.channelSettings.set(ctx.channel, 'protect_topic', true);
       api.notice(ctx.nick, 'Topic locked.');
+      // The factory forces by=pluginId; record the operator nick + the
+      // locked text in metadata so audit queries can attribute the lock.
+      api.audit.log('topic-lock', {
+        channel: ctx.channel,
+        reason: live,
+        metadata: { lockedBy: ctx.nick },
+      });
       return;
     }
 
@@ -115,6 +122,10 @@ export function init(api: PluginAPI): void {
       api.channelSettings.set(ctx.channel, 'protect_topic', false);
       api.channelSettings.set(ctx.channel, 'topic_text', '');
       api.notice(ctx.nick, 'Topic protection disabled.');
+      api.audit.log('topic-unlock', {
+        channel: ctx.channel,
+        metadata: { unlockedBy: ctx.nick },
+      });
       return;
     }
 

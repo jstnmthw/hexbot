@@ -281,6 +281,77 @@ describe('IRCCommands', () => {
     expect(client.sent[1].args).toEqual(['#test', '-v', 'Bob']);
   });
 
+  // -------------------------------------------------------------------------
+  // Phase 2 — every mutating method logs + actor threading
+  // -------------------------------------------------------------------------
+
+  describe('actor threading and full mutating coverage', () => {
+    it.each([
+      ['op', (): void => irc.op('#t', 'Alice'), 'op'],
+      ['deop', (): void => irc.deop('#t', 'Alice'), 'deop'],
+      ['ban', (): void => irc.ban('#t', '*!*@evil'), 'ban'],
+      ['unban', (): void => irc.unban('#t', '*!*@evil'), 'unban'],
+      ['voice', (): void => irc.voice('#t', 'Alice'), 'voice'],
+      ['devoice', (): void => irc.devoice('#t', 'Alice'), 'devoice'],
+      ['halfop', (): void => irc.halfop('#t', 'Alice'), 'halfop'],
+      ['dehalfop', (): void => irc.dehalfop('#t', 'Alice'), 'dehalfop'],
+      ['quiet', (): void => irc.quiet('#t', '*!*@annoy'), 'quiet'],
+      ['invite', (): void => irc.invite('#t', 'Alice'), 'invite'],
+      ['kick', (): void => irc.kick('#t', 'Alice', 'bye'), 'kick'],
+      ['topic', (): void => irc.topic('#t', 'new topic'), 'topic'],
+    ])('%s writes a mod_log row under the default actor', (_name, fire, action) => {
+      fire();
+      const rows = db.getModLog({ action });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].by).toBe('bot');
+      expect(rows[0].source).toBe('system');
+    });
+
+    it('mode() writes one row per call with the mode string in reason', () => {
+      irc.mode('#t', '+mn');
+      const rows = db.getModLog({ action: 'mode' });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].reason).toBe('+mn');
+      expect(rows[0].metadata).toEqual({ params: [] });
+    });
+
+    it('mode() records params in metadata', () => {
+      irc.mode('#t', '+ov', 'Alice', 'Bob');
+      const rows = db.getModLog({ action: 'mode' });
+      expect(rows[0].metadata).toEqual({ params: ['Alice', 'Bob'] });
+    });
+
+    it('explicit actor parameter overrides the default', () => {
+      irc.op('#t', 'Alice', { by: 'alice', source: 'dcc' });
+      const [row] = db.getModLog({ action: 'op' });
+      expect(row.by).toBe('alice');
+      expect(row.source).toBe('dcc');
+    });
+
+    it('setDefaultActor swaps the fallback for subsequent calls', () => {
+      irc.setDefaultActor({ by: 'owner', source: 'repl' });
+      irc.kick('#t', 'Alice', 'bye');
+      const [row] = db.getModLog({ action: 'kick' });
+      expect(row.by).toBe('owner');
+      expect(row.source).toBe('repl');
+    });
+
+    it('actor with plugin source writes plugin column', () => {
+      irc.ban('#t', '*!*@bad', { by: 'flood', source: 'plugin', plugin: 'flood' });
+      const [row] = db.getModLog({ action: 'ban' });
+      expect(row.source).toBe('plugin');
+      expect(row.plugin).toBe('flood');
+      expect(row.by).toBe('flood');
+    });
+
+    it('topic() stores the new topic text in reason', () => {
+      irc.topic('#t', 'welcome, friends');
+      const [row] = db.getModLog({ action: 'topic' });
+      expect(row.reason).toBe('welcome, friends');
+      expect(row.target).toBeNull();
+    });
+  });
+
   it('should send INVITE via raw command', () => {
     irc.invite('#test', 'Alice');
 
@@ -434,13 +505,13 @@ describe('IRCCommands', () => {
     expect(() => ircNoLogger.kick('#test', 'Alice', 'bye')).not.toThrow();
   });
 
-  it('should log error via logger when db.logModAction throws', () => {
-    // Create a logger and spy on the child it will produce
+  it('should log a warning via logger when db.logModAction throws', () => {
+    // The audit helper centralizes the resilience pattern at warn level —
+    // tests assert the standardized message rather than the per-class one.
     const logger = new Logger(null, { value: 'debug' });
     const childLogger = logger.child('irc-commands');
-    const errorSpy = vi.spyOn(childLogger, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(childLogger, 'warn').mockImplementation(() => {});
 
-    // Spy on logger.child to return our spied-on child
     vi.spyOn(logger, 'child').mockReturnValue(childLogger);
 
     const ircWithLogger = new IRCCommands(client, db, undefined, logger);
@@ -452,6 +523,6 @@ describe('IRCCommands', () => {
 
     ircWithLogger.ban('#test', '*!*@bad.host');
 
-    expect(errorSpy).toHaveBeenCalledWith('Failed to log mod action:', dbError);
+    expect(warnSpy).toHaveBeenCalledWith('Failed to record mod_log entry for ban:', dbError);
   });
 });

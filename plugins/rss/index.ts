@@ -418,6 +418,12 @@ async function handleAdd(
   const feed: FeedConfig = { id, url, channels: [channel], interval };
   saveRuntimeFeed(api, feed);
   activeFeeds.set(id, feed);
+  api.audit.log('rss-feed-add', {
+    channel,
+    target: id,
+    reason: url,
+    metadata: { interval },
+  });
 
   // Seed every current item as seen, and return the newest as a one-shot
   // preview so the admin gets instant confirmation the feed is working.
@@ -469,6 +475,7 @@ function handleRemove(api: PluginAPI, ctx: ChannelHandlerContext, id: string | u
   activeFeeds.delete(id);
   api.notice(ctx.nick, `Feed "${id}" removed.`);
   logCmd(api, ctx, 'remove', 'ok', `id=${id}`);
+  api.audit.log('rss-feed-remove', { channel: ctx.channel, target: id });
 }
 
 async function handleCheck(

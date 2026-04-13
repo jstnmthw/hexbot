@@ -221,6 +221,8 @@ api.say(channel, `User ${api.stripFormatting(nick)} has been granted ops`);
 - Never log passwords, SASL credentials, or NickServ passwords — even at debug level
 - Sanitize nick/channel in log output to prevent log injection (strip control characters)
 
+The full audit contract — schema, action vocabulary, plugin author rules, the `.modlog` / `.audit-tail` operator UI, and the retention story — lives in [docs/AUDIT.md](AUDIT.md).
+
 ---
 
 ## 6. Configuration security

@@ -6,6 +6,7 @@
 //
 // This file is purely a factory — it has no mutable state of its own.
 // Plugin lifecycle (discovery, load, unload, reload) lives in plugin-loader.ts.
+import { type ModActor, tryLogModAction } from './core/audit';
 import type { BanStore } from './core/ban-store';
 import type { ChannelSettings } from './core/channel-settings';
 import type { ChannelState } from './core/channel-state';
@@ -29,6 +30,8 @@ import type {
   HandlerContext,
   HelpEntry,
   PluginAPI,
+  PluginAudit,
+  PluginAuditOptions,
   PluginBanStore,
   PluginBotConfig,
   PluginChannelSettings,
@@ -189,7 +192,7 @@ export function createPluginApi(
       dispatcher.unbind(type, mask, actual);
       perHandler?.delete(key);
     },
-    ...createPluginIrcActionsApi(deps.ircClient, deps.messageQueue, deps.ircCommands),
+    ...createPluginIrcActionsApi(deps.ircClient, deps.messageQueue, deps.ircCommands, pluginId),
     ...createPluginChannelStateApi(
       deps.channelState,
       deps.eventBus,
@@ -228,6 +231,7 @@ export function createPluginApi(
     stripFormatting(text: string): string {
       return stripFormatting(text);
     },
+    audit: createPluginAuditApi(deps.db, pluginId, pluginLogger),
     ...createPluginLogApi(pluginLogger),
   };
 
@@ -343,6 +347,7 @@ function createPluginIrcActionsApi(
   ircClient: IRCClientForPlugins | null | undefined,
   messageQueue: MessageQueue | null | undefined,
   ircCommands: IRCCommands | null | undefined,
+  pluginId: string,
 ): Pick<
   PluginAPI,
   | 'say'
@@ -369,6 +374,13 @@ function createPluginIrcActionsApi(
     if (messageQueue) messageQueue.enqueue(target, fn);
     else fn();
   }
+  // The actor every plugin-driven mutation lands under in mod_log. Frozen
+  // per-plugin so a misbehaving plugin can't mutate it cross-plugin.
+  const actor: ModActor = Object.freeze({
+    by: pluginId,
+    source: 'plugin',
+    plugin: pluginId,
+  });
   return {
     say(target: string, message: string): void {
       const safe = sanitize(message);
@@ -394,28 +406,28 @@ function createPluginIrcActionsApi(
       send(safeTarget, () => ircClient?.ctcpResponse(safeTarget, safeType, safeMsg));
     },
     op(channel: string, nick: string): void {
-      ircCommands?.op(channel, nick);
+      ircCommands?.op(channel, nick, actor);
     },
     deop(channel: string, nick: string): void {
-      ircCommands?.deop(channel, nick);
+      ircCommands?.deop(channel, nick, actor);
     },
     voice(channel: string, nick: string): void {
-      ircCommands?.voice(channel, nick);
+      ircCommands?.voice(channel, nick, actor);
     },
     devoice(channel: string, nick: string): void {
-      ircCommands?.devoice(channel, nick);
+      ircCommands?.devoice(channel, nick, actor);
     },
     halfop(channel: string, nick: string): void {
-      ircCommands?.halfop(channel, nick);
+      ircCommands?.halfop(channel, nick, actor);
     },
     dehalfop(channel: string, nick: string): void {
-      ircCommands?.dehalfop(channel, nick);
+      ircCommands?.dehalfop(channel, nick, actor);
     },
     kick(channel: string, nick: string, reason?: string): void {
-      ircCommands?.kick(channel, nick, reason);
+      ircCommands?.kick(channel, nick, reason, actor);
     },
     ban(channel: string, mask: string): void {
-      ircCommands?.ban(channel, mask);
+      ircCommands?.ban(channel, mask, actor);
     },
     mode(channel: string, modes: string, ...params: string[]): void {
       ircCommands?.mode(channel, modes, ...params);
@@ -424,10 +436,10 @@ function createPluginIrcActionsApi(
       ircCommands?.requestChannelModes(channel);
     },
     topic(channel: string, text: string): void {
-      ircCommands?.topic(channel, text);
+      ircCommands?.topic(channel, text, actor);
     },
     invite(channel: string, nick: string): void {
-      ircCommands?.invite(channel, nick);
+      ircCommands?.invite(channel, nick, actor);
     },
     join(channel: string, key?: string): void {
       ircCommands?.join(channel, key);
@@ -439,6 +451,42 @@ function createPluginIrcActionsApi(
       ircClient?.raw?.(`NICK ${sanitize(nick)}`);
     },
   };
+}
+
+/**
+ * Build the plugin-facing audit writer. The factory captures `pluginId` in
+ * the closure so the plugin cannot override `by`, `source`, or `plugin` —
+ * even if it tries to pass them in `options`, the explicit args here take
+ * precedence over any stowaway fields. Routes through `tryLogModAction`
+ * so a failed audit write never crashes the calling plugin handler.
+ */
+function createPluginAuditApi(
+  db: BotDatabase | null,
+  pluginId: string,
+  logger: Logger | null,
+): PluginAudit {
+  if (!db) {
+    return Object.freeze({ log() {} });
+  }
+  return Object.freeze({
+    log(action: string, options: PluginAuditOptions = {}): void {
+      tryLogModAction(
+        db,
+        {
+          action,
+          source: 'plugin',
+          plugin: pluginId,
+          by: pluginId,
+          channel: options.channel ?? null,
+          target: options.target ?? null,
+          outcome: options.outcome ?? 'success',
+          reason: options.reason ?? null,
+          metadata: options.metadata ?? null,
+        },
+        logger,
+      );
+    },
+  });
 }
 
 function createPluginChannelStateApi(

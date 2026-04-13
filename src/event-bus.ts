@@ -2,11 +2,28 @@
 // Typed EventEmitter for bot-level events (separate from the IRC dispatcher).
 import { EventEmitter } from 'node:events';
 
+import type { ModLogEntry } from './database';
+
 // ---------------------------------------------------------------------------
 // Event definitions
 // ---------------------------------------------------------------------------
 
+/**
+ * Payload emitted on the `audit:log` event. A snapshot of the row that was
+ * just persisted to `mod_log` — `id` and `timestamp` are populated from the
+ * insert, and `metadata` is already parsed from JSON. Subscribers must treat
+ * this object as read-only.
+ */
+export type AuditLogEvent = ModLogEntry;
+
 export interface BotEvents {
+  /**
+   * Fired by `BotDatabase` immediately after a successful `mod_log` insert.
+   * Lets a future audit-stream plugin ship records off-box (syslog, SIEM,
+   * webhook) without polling the table. Filtered consumers (e.g. the
+   * Phase 6 `.audit-tail` REPL command) can subscribe directly.
+   */
+  'audit:log': [entry: AuditLogEvent];
   'bot:connected': [];
   'bot:disconnected': [reason: string];
   'bot:error': [error: Error];

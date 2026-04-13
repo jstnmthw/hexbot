@@ -22,7 +22,12 @@ export interface RelayDCCView {
   getSessionList(): Array<{ handle: string; nick: string; connectedAt: number }>;
   getSession(
     nick: string,
-  ): Pick<DCCSessionEntry, 'writeLine' | 'isRelaying' | 'exitRelay' | 'confirmRelay'> | undefined;
+  ):
+    | Pick<
+        DCCSessionEntry,
+        'writeLine' | 'isRelaying' | 'exitRelay' | 'confirmRelay' | 'relayTarget'
+      >
+    | undefined;
   announce(message: string): void;
 }
 
@@ -144,11 +149,16 @@ export function handleRelayFrame(
   }
 
   if (frame.type === 'RELAY_OUTPUT' && deps.dccManager) {
-    // This bot is the origin — display output to the DCC session
+    // This bot is the origin — display output to the DCC session.
+    // Prefix lines with the target bot name so the user can always see which
+    // bot on the botnet produced the reply while in relay mode.
     for (const session of deps.dccManager.getSessionList()) {
       if (session.handle === handle) {
         const dccSession = deps.dccManager.getSession(session.nick);
-        dccSession?.writeLine(String(frame.line ?? ''));
+        if (!dccSession) continue;
+        const target = dccSession.relayTarget;
+        const line = String(frame.line ?? '');
+        dccSession.writeLine(target ? `[${target}] ${line}` : line);
       }
     }
     return;

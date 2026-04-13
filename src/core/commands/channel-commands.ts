@@ -1,8 +1,10 @@
 // HexBot — Per-channel settings commands
 // Registers .chanset and .chaninfo with the command handler.
 import type { CommandHandler } from '../../command-handler';
+import type { BotDatabase } from '../../database';
 import type { ChannelSettingEntry, ChannelSettingValue } from '../../types';
 import { sanitize } from '../../utils/sanitize';
+import { tryAudit } from '../audit';
 import type { ChannelSettings } from '../channel-settings';
 
 // -------------------------------------------------------------------------
@@ -46,10 +48,16 @@ function formatValueLines(items: SnapshotItem[], prefix = '  '): string[] {
 
 /**
  * Register .chanset and .chaninfo commands on the given command handler.
+ *
+ * `db` is used to write `chanset-set` / `chanset-unset` rows to `mod_log`
+ * — the admin-layer mutation flagged in the project memory must always
+ * be auditable, regardless of whether the command was driven from REPL,
+ * DCC, or relayed through bot-link.
  */
 export function registerChannelCommands(
   handler: CommandHandler,
   channelSettings: ChannelSettings,
+  db: BotDatabase | null,
 ): void {
   // ---------------------------------------------------------------------------
   // .chanset #chan [+/-]key [value]
@@ -111,6 +119,7 @@ export function registerChannelCommands(
         }
         channelSettings.set(channel, key, true);
         ctx.reply(`${channel} ${key} = ON`);
+        tryAudit(db, ctx, { action: 'chanset-set', channel, target: key, reason: 'true' });
         return;
       }
 
@@ -118,6 +127,7 @@ export function registerChannelCommands(
         channelSettings.unset(channel, key);
         const defaultVal = def.type === 'flag' ? (def.default ? 'ON' : 'OFF') : String(def.default);
         ctx.reply(`${channel} ${key} reverted to default (${defaultVal})`);
+        tryAudit(db, ctx, { action: 'chanset-unset', channel, target: key });
         return;
       }
 
@@ -152,6 +162,7 @@ export function registerChannelCommands(
         }
         channelSettings.set(channel, key, n);
         ctx.reply(`${channel} ${key} = ${n}`);
+        tryAudit(db, ctx, { action: 'chanset-set', channel, target: key, reason: String(n) });
       } else {
         if (def.allowedValues && !def.allowedValues.includes(rawValue)) {
           ctx.reply(
@@ -161,6 +172,7 @@ export function registerChannelCommands(
         }
         channelSettings.set(channel, key, rawValue);
         ctx.reply(`${channel} ${key} = ${rawValue}`);
+        tryAudit(db, ctx, { action: 'chanset-set', channel, target: key, reason: rawValue });
       }
     },
   );

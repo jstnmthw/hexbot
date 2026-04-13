@@ -1,10 +1,12 @@
 // HexBot — Services core module
 // NickServ integration — bot authentication and user identity verification.
+import type { BotDatabase } from '../database';
 import type { BotEventBus } from '../event-bus';
 import type { Logger } from '../logger';
 import type { ServicesConfig, VerifyResult } from '../types';
 import { toEventObject } from '../utils/irc-event';
 import { type Casemapping, ircLower } from '../utils/wildcard';
+import { tryLogModAction } from './audit';
 
 export type { VerifyResult };
 
@@ -31,6 +33,12 @@ export interface ServicesDeps {
   servicesConfig: ServicesConfig;
   eventBus: BotEventBus;
   logger?: Logger | null;
+  /**
+   * Database used to record `nickserv-verify-timeout` rows when a NickServ
+   * identity check times out. Optional so tests that don't care about the
+   * audit trail can leave it unset.
+   */
+  db?: BotDatabase | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -42,6 +50,7 @@ export class Services {
   private servicesConfig: ServicesConfig;
   private eventBus: BotEventBus;
   private logger: Logger | null;
+  private db: BotDatabase | null;
   private pending: Map<string, PendingVerify> = new Map();
   private noticeListener: ((...args: unknown[]) => void) | null = null;
   private casemapping: Casemapping = 'rfc1459';
@@ -51,6 +60,7 @@ export class Services {
     this.servicesConfig = deps.servicesConfig;
     this.eventBus = deps.eventBus;
     this.logger = deps.logger?.child('services') ?? null;
+    this.db = deps.db ?? null;
   }
 
   setCasemapping(cm: Casemapping): void {
@@ -123,6 +133,20 @@ export class Services {
       const timer = setTimeout(() => {
         this.pending.delete(lowerNick);
         this.logger?.warn(`Verification timeout for ${nick}`);
+        // Audit the silent failure mode — operators reviewing a denied
+        // privileged action need to distinguish "user not identified" from
+        // "services were unreachable". The action label leaves no doubt.
+        tryLogModAction(
+          this.db,
+          {
+            action: 'nickserv-verify-timeout',
+            source: 'system',
+            target: nick,
+            outcome: 'failure',
+            metadata: { timeoutMs },
+          },
+          this.logger,
+        );
         resolve({ verified: false, account: null });
       }, timeoutMs);
 

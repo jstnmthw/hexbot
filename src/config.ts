@@ -80,6 +80,7 @@ const ServicesConfigOnDiskSchema = z.strictObject({
 const LoggingConfigSchema = z.strictObject({
   level: z.enum(['debug', 'info', 'warn', 'error']),
   mod_actions: z.boolean(),
+  mod_log_retention_days: z.number().int().min(0).optional(),
 });
 
 const QueueConfigSchema = z.strictObject({

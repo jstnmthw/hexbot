@@ -100,6 +100,9 @@ export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginA
     error: noop,
     warn: noop,
     debug: noop,
+    audit: {
+      log: noop,
+    },
     ...overrides,
   };
 }

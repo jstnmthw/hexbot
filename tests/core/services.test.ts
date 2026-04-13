@@ -476,4 +476,39 @@ describe('Services', () => {
       expect(services.isNickServVerificationReply('NickServAlt', 'STATUS alice 3')).toBe(true);
     });
   });
+
+  describe('verifyUser timeout — audit', () => {
+    it('writes a nickserv-verify-timeout row when verification times out', async () => {
+      const { BotDatabase } = await import('../../src/database');
+      const db = new BotDatabase(':memory:');
+      db.open();
+      const client = new MockClient();
+      const eventBus = new BotEventBus();
+      const services = new Services({
+        client,
+        servicesConfig: {
+          type: 'atheme',
+          nickserv: 'NickServ',
+          password: 'pw',
+          sasl: false,
+        },
+        eventBus,
+        db,
+      });
+      services.attach();
+
+      // 1ms timeout — fires before the test fixture has a chance to inject
+      // a NickServ reply, exercising the timer branch.
+      const result = await services.verifyUser('Alice', 1);
+      expect(result.verified).toBe(false);
+
+      const rows = db.getModLog({ action: 'nickserv-verify-timeout' });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].source).toBe('system');
+      expect(rows[0].target).toBe('Alice');
+      expect(rows[0].outcome).toBe('failure');
+      expect(rows[0].metadata).toMatchObject({ timeoutMs: 1 });
+      db.close();
+    });
+  });
 });

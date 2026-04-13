@@ -3,6 +3,7 @@
 import type { BotDatabase } from '../database';
 import type { Logger } from '../logger';
 import { sanitize } from '../utils/sanitize';
+import { type ModActor, tryLogModAction } from './audit';
 import { type ServerCapabilities, defaultServerCapabilities } from './isupport';
 
 // ---------------------------------------------------------------------------
@@ -18,6 +19,13 @@ export interface IRCCommandsClient {
   raw(line: string): void;
   mode?(target: string, mode: string, ...params: string[]): void;
 }
+
+/**
+ * Default actor used when a caller doesn't pass one. Core command handlers
+ * pass an explicit `auditActor(ctx)`; unattributed background writes (auto-
+ * reconciliation, join-time fixups) fall back to this.
+ */
+const DEFAULT_ACTOR: ModActor = { by: 'bot', source: 'system' };
 
 // ---------------------------------------------------------------------------
 // Mode-string parsing
@@ -70,6 +78,7 @@ export class IRCCommands {
   private logger: Logger | null;
   private modesPerLine: number;
   private capabilities: ServerCapabilities = defaultServerCapabilities();
+  private defaultActor: ModActor = DEFAULT_ACTOR;
 
   constructor(
     client: IRCCommandsClient,
@@ -97,6 +106,16 @@ export class IRCCommands {
     this.modesPerLine = caps.modesPerLine;
   }
 
+  /**
+   * Batch-set the default actor recorded against mutations that don't pass
+   * one explicitly. Core command handlers always pass an explicit actor
+   * via `auditActor(ctx)`; this setter exists for plugin / background sites
+   * that want to tag a whole block of work with a consistent attribution.
+   */
+  setDefaultActor(actor: ModActor): void {
+    this.defaultActor = actor;
+  }
+
   // -------------------------------------------------------------------------
   // Channel operations
   // -------------------------------------------------------------------------
@@ -121,60 +140,69 @@ export class IRCCommands {
     this.client.part(channel, message);
   }
 
-  kick(channel: string, nick: string, reason?: string): void {
+  kick(channel: string, nick: string, reason?: string, actor?: ModActor): void {
     const safe = sanitize(reason ?? '');
     this.client.raw(`KICK ${sanitize(channel)} ${sanitize(nick)} :${safe}`);
-    this.logMod('kick', channel, nick, 'bot', reason ?? null);
+    this.logMod('kick', channel, nick, actor, reason ?? null);
   }
 
-  ban(channel: string, mask: string): void {
+  ban(channel: string, mask: string, actor?: ModActor): void {
     this.sendMode(channel, '+b', mask);
-    this.logMod('ban', channel, mask, 'bot', null);
+    this.logMod('ban', channel, mask, actor, null);
   }
 
-  unban(channel: string, mask: string): void {
+  unban(channel: string, mask: string, actor?: ModActor): void {
     this.sendMode(channel, '-b', mask);
-    this.logMod('unban', channel, mask, 'bot', null);
+    this.logMod('unban', channel, mask, actor, null);
   }
 
-  op(channel: string, nick: string): void {
+  op(channel: string, nick: string, actor?: ModActor): void {
     this.sendMode(channel, '+o', nick);
-    this.logMod('op', channel, nick, 'bot', null);
+    this.logMod('op', channel, nick, actor, null);
   }
 
-  deop(channel: string, nick: string): void {
+  deop(channel: string, nick: string, actor?: ModActor): void {
     this.sendMode(channel, '-o', nick);
-    this.logMod('deop', channel, nick, 'bot', null);
+    this.logMod('deop', channel, nick, actor, null);
   }
 
-  voice(channel: string, nick: string): void {
+  voice(channel: string, nick: string, actor?: ModActor): void {
     this.sendMode(channel, '+v', nick);
+    this.logMod('voice', channel, nick, actor, null);
   }
 
-  devoice(channel: string, nick: string): void {
+  devoice(channel: string, nick: string, actor?: ModActor): void {
     this.sendMode(channel, '-v', nick);
+    this.logMod('devoice', channel, nick, actor, null);
   }
 
-  halfop(channel: string, nick: string): void {
+  halfop(channel: string, nick: string, actor?: ModActor): void {
     this.sendMode(channel, '+h', nick);
+    this.logMod('halfop', channel, nick, actor, null);
   }
 
-  dehalfop(channel: string, nick: string): void {
+  dehalfop(channel: string, nick: string, actor?: ModActor): void {
     this.sendMode(channel, '-h', nick);
+    this.logMod('dehalfop', channel, nick, actor, null);
   }
 
-  invite(channel: string, nick: string): void {
+  invite(channel: string, nick: string, actor?: ModActor): void {
     this.client.raw(`INVITE ${sanitize(nick)} ${sanitize(channel)}`);
-    this.logMod('invite', channel, nick, 'bot', null);
+    this.logMod('invite', channel, nick, actor, null);
   }
 
-  topic(channel: string, text: string): void {
+  topic(channel: string, text: string, actor?: ModActor): void {
     const safe = sanitize(text);
     this.client.raw(`TOPIC ${sanitize(channel)} :${safe}`);
+    // Persist the new topic as `reason` so audit queries can grep topic
+    // changes by substring. Text is user-controlled but safely stored
+    // (parameterized insert); long topics are not truncated.
+    this.logMod('topic', channel, null, actor, text);
   }
 
-  quiet(channel: string, mask: string): void {
+  quiet(channel: string, mask: string, actor?: ModActor): void {
     this.sendMode(channel, '+q', mask);
+    this.logMod('quiet', channel, mask, actor, null);
   }
 
   /** Request the current channel modes from the server (triggers RPL_CHANNELMODEIS). */
@@ -247,6 +275,11 @@ export class IRCCommands {
       }
       flush();
     }
+
+    // Log the mode mutation as a single row — `reason` carries the full mode
+    // string and `metadata.params` the param list so audit queries can still
+    // answer "who set +m on #foo".
+    this.logMod('mode', channel, null, undefined, modeString, { params });
   }
 
   // -------------------------------------------------------------------------
@@ -275,16 +308,25 @@ export class IRCCommands {
   private logMod(
     action: string,
     channel: string,
-    target: string,
-    by: string,
+    target: string | null,
+    actor: ModActor | undefined,
     reason: string | null,
+    metadata?: Record<string, unknown>,
   ): void {
-    if (this.db) {
-      try {
-        this.db.logModAction(action, channel, target, by, reason);
-      } catch (err) {
-        this.logger?.error('Failed to log mod action:', err);
-      }
-    }
+    const a = actor ?? this.defaultActor;
+    tryLogModAction(
+      this.db,
+      {
+        action,
+        source: a.source,
+        by: a.by,
+        plugin: a.plugin,
+        channel,
+        target,
+        reason,
+        metadata: metadata ?? null,
+      },
+      this.logger,
+    );
   }
 }

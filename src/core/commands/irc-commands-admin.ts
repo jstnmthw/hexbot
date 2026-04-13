@@ -1,8 +1,10 @@
 // HexBot — IRC admin commands
 // Registers .say, .join, .part, .invite, .status with the command handler.
 import type { CommandHandler } from '../../command-handler';
+import type { BotDatabase } from '../../database';
 import { isValidCommandTarget, parseTargetMessage } from '../../utils/parse-args';
 import { sanitize } from '../../utils/sanitize';
+import { tryAudit } from '../audit';
 import type { ReconnectState } from '../reconnect-driver';
 
 /** Minimal IRC client interface for admin commands. */
@@ -27,11 +29,18 @@ export interface AdminBotInfo {
 
 /**
  * Register IRC admin commands on the given command handler.
+ *
+ * `db` is used to write `say`/`msg`/`join`/`part`/`invite` audit rows so
+ * arbitrary protocol injection through these commands is queryable in
+ * `mod_log`. `say` and `msg` write the target in `target` and the message
+ * in `metadata.message` so an audit reviewer can see both who did what
+ * and what was said — this is the single biggest gap the review surfaced.
  */
 export function registerIRCAdminCommands(
   handler: CommandHandler,
   client: AdminIRCClient,
   botInfo: AdminBotInfo,
+  db: BotDatabase | null,
 ): void {
   handler.registerCommand(
     'say',
@@ -53,6 +62,11 @@ export function registerIRCAdminCommands(
       }
       client.say(parsed.target, sanitize(parsed.message));
       ctx.reply(`Message sent to ${parsed.target}`);
+      tryAudit(db, ctx, {
+        action: 'say',
+        target: parsed.target,
+        metadata: { message: parsed.message },
+      });
     },
   );
 
@@ -72,6 +86,7 @@ export function registerIRCAdminCommands(
       }
       client.join(channel);
       ctx.reply(`Joining ${channel}`);
+      tryAudit(db, ctx, { action: 'join', channel });
     },
   );
 
@@ -93,6 +108,7 @@ export function registerIRCAdminCommands(
       const message = parts.slice(1).join(' ') || undefined;
       client.part(channel, message);
       ctx.reply(`Leaving ${channel}`);
+      tryAudit(db, ctx, { action: 'part', channel, reason: message ?? null });
     },
   );
 
@@ -117,6 +133,11 @@ export function registerIRCAdminCommands(
       }
       client.say(parsed.target, sanitize(parsed.message));
       ctx.reply(`Message sent to ${parsed.target}`);
+      tryAudit(db, ctx, {
+        action: 'msg',
+        target: parsed.target,
+        metadata: { message: parsed.message },
+      });
     },
   );
 
@@ -143,6 +164,7 @@ export function registerIRCAdminCommands(
       }
       client.raw(`INVITE ${sanitize(nick)} ${sanitize(channel)}`);
       ctx.reply(`Invited ${nick} to ${channel}`);
+      tryAudit(db, ctx, { action: 'invite', channel, target: nick });
     },
   );
 

@@ -30,6 +30,7 @@ import { registerChannelCommands } from './core/commands/channel-commands';
 import { registerDccConsoleCommands } from './core/commands/dcc-console-commands';
 import { registerDispatcherCommands } from './core/commands/dispatcher-commands';
 import { registerIRCAdminCommands } from './core/commands/irc-commands-admin';
+import { registerModlogCommands } from './core/commands/modlog-commands';
 import { registerPasswordCommands } from './core/commands/password-commands';
 import { registerPermissionCommands } from './core/commands/permission-commands';
 import { registerPluginCommands } from './core/commands/plugin-commands';
@@ -138,8 +139,12 @@ export class Bot {
     const dbDir = dirname(resolve(this.config.database));
     mkdirSync(dbDir, { recursive: true });
 
-    this.db = new BotDatabase(this.config.database, this.logger);
+    this.db = new BotDatabase(this.config.database, this.logger, {
+      modLogEnabled: this.config.logging.mod_actions,
+      modLogRetentionDays: this.config.logging.mod_log_retention_days,
+    });
     this.eventBus = new BotEventBus();
+    this.db.setEventBus(this.eventBus);
     this.permissions = new Permissions(this.db, this.logger, this.eventBus);
     this.dispatcher = new EventDispatcher(this.permissions, this.logger);
     this.commandHandler = new CommandHandler(this.permissions, this.config.command_prefix);
@@ -163,6 +168,7 @@ export class Bot {
       servicesConfig: this.config.services,
       eventBus: this.eventBus,
       logger: this.logger,
+      db: this.db,
     });
     this.helpRegistry = new HelpRegistry();
     this.channelSettings = new ChannelSettings(
@@ -270,17 +276,34 @@ export class Bot {
     registerPasswordCommands({
       handler: this.commandHandler,
       permissions: this.permissions,
+      db: this.db,
     });
     registerDispatcherCommands(this.commandHandler, this.dispatcher);
-    registerIRCAdminCommands(this.commandHandler, this.client, {
-      getUptime: () => Date.now() - this.startTime,
-      getChannels: () => this.configuredChannels.map((c) => c.name),
-      getBindCount: () => this.dispatcher.listBinds().length,
-      getUserCount: () => this.permissions.listUsers().length,
-      getReconnectState: () => this.getReconnectState(),
+    registerIRCAdminCommands(
+      this.commandHandler,
+      this.client,
+      {
+        getUptime: () => Date.now() - this.startTime,
+        getChannels: () => this.configuredChannels.map((c) => c.name),
+        getBindCount: () => this.dispatcher.listBinds().length,
+        getUserCount: () => this.permissions.listUsers().length,
+        getReconnectState: () => this.getReconnectState(),
+      },
+      this.db,
+    );
+    registerPluginCommands(
+      this.commandHandler,
+      this.pluginLoader,
+      resolve(this.config.pluginDir),
+      this.db,
+    );
+    registerChannelCommands(this.commandHandler, this.channelSettings, this.db);
+    registerModlogCommands({
+      handler: this.commandHandler,
+      db: this.db,
+      permissions: this.permissions,
+      eventBus: this.eventBus,
     });
-    registerPluginCommands(this.commandHandler, this.pluginLoader, resolve(this.config.pluginDir));
-    registerChannelCommands(this.commandHandler, this.channelSettings);
 
     this.botLogger.info('Starting...');
 
@@ -311,6 +334,7 @@ export class Bot {
         version: this.readPackageVersion(),
         botNick: this.config.irc.nick,
         logger: this.logger,
+        db: this.db,
         consoleFlagStore: {
           get: (handle) => this.db.get('dcc', `console_flags:${handle}`),
           set: (handle, flags) => this.db.set('dcc', `console_flags:${handle}`, flags),
@@ -325,7 +349,7 @@ export class Bot {
         }),
       });
       this._dccManager.attach();
-      registerDccConsoleCommands(this.commandHandler, this._dccManager);
+      registerDccConsoleCommands(this.commandHandler, this._dccManager, this.db);
       this.eventBus.on('user:removed', (handle: string) => {
         this.db.del('dcc', `console_flags:${handle}`);
       });
@@ -438,6 +462,7 @@ export class Bot {
       this._botLinkHub,
       this._botLinkLeaf,
       this.config.botlink ?? null,
+      this.db,
       this._dccManager,
       (target, message) => this.client.say(target, message),
     );

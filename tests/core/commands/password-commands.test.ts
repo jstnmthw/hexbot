@@ -19,7 +19,7 @@ function setup() {
   const db = new BotDatabase(':memory:');
   db.open();
   const perms = new Permissions(db);
-  registerPasswordCommands({ handler, permissions: perms });
+  registerPasswordCommands({ handler, permissions: perms, db });
   return { handler, perms, db };
 }
 
@@ -288,6 +288,89 @@ describe('.chpass', () => {
       expect(hash1).not.toBe(hash2);
       expect(await verifyPassword('firstpass1', hash2!)).toBe(false);
       expect(await verifyPassword('secondpass1', hash2!)).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 5 — failure-path audit rows
+  // -------------------------------------------------------------------------
+
+  describe('failure path audit', () => {
+    function chpassFailureRows(): ReturnType<typeof db.getModLog> {
+      return db
+        .getModLog({ action: 'chpass', outcome: 'failure' })
+        .filter((r) => r.outcome === 'failure');
+    }
+
+    it('writes a failure row when invoked over IRC', async () => {
+      perms.addUser('admin', '*!a@host', 'n', 'REPL');
+      const ctx = makeCtx({ source: 'irc', channel: '#test', nick: 'admin' });
+      await handler.execute('.chpass admin validpass1', ctx);
+      const rows = chpassFailureRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].source).toBe('irc');
+      expect(rows[0].reason).toContain('irc transport');
+      // Critical: never log the attempted password
+      expect(JSON.stringify(rows[0])).not.toContain('validpass1');
+    });
+
+    it('writes a failure row when target user does not exist', async () => {
+      const ctx = makeCtx();
+      await handler.execute('.chpass nobody validpass1', ctx);
+      const rows = chpassFailureRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].target).toBe('nobody');
+      expect(rows[0].reason).toContain('user not found');
+    });
+
+    it('writes a failure row when password is too short', async () => {
+      perms.addUser('admin', '*!a@host', 'n', 'REPL');
+      const ctx = makeCtx();
+      await handler.execute('.chpass admin short', ctx);
+      const rows = chpassFailureRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].target).toBe('admin');
+      expect(rows[0].reason).toMatch(/at least|length/i);
+      expect(JSON.stringify(rows[0])).not.toContain('short');
+    });
+
+    it('writes a failure row when DCC caller lacks owner flag for cross-handle rotation', async () => {
+      perms.addUser('owner', '*!owner@host', 'n', 'REPL');
+      perms.addUser('master', '*!master@host', 'm', 'REPL');
+      perms.addUser('victim', '*!v@host', 'o', 'REPL');
+      const ctx = makeCtx({
+        source: 'dcc',
+        nick: 'MasterNick',
+        ident: 'master',
+        hostname: 'host',
+      });
+      await handler.execute('.chpass victim newpass12', ctx);
+      const rows = chpassFailureRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].source).toBe('dcc');
+      expect(rows[0].target).toBe('victim');
+      expect(rows[0].reason).toContain('non-owner');
+    });
+
+    it('writes a failure row when DCC caller is not in the permissions DB', async () => {
+      perms.addUser('victim', '*!v@host', 'o', 'REPL');
+      const ctx = makeCtx({
+        source: 'dcc',
+        nick: 'Stranger',
+        ident: 'stranger',
+        hostname: 'host',
+      });
+      await handler.execute('.chpass victim newpass12', ctx);
+      const rows = chpassFailureRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].reason).toContain('hostmask unmatched');
+    });
+
+    it('does not write a failure row on success', async () => {
+      perms.addUser('admin', '*!a@host', 'n', 'REPL');
+      const ctx = makeCtx();
+      await handler.execute('.chpass admin validpass1', ctx);
+      expect(chpassFailureRows()).toHaveLength(0);
     });
   });
 });

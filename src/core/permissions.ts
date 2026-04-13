@@ -5,6 +5,7 @@ import type { BotEventBus } from '../event-bus';
 import type { Logger } from '../logger';
 import type { HandlerContext, UserRecord } from '../types';
 import { type Casemapping, ircLower, wildcardMatch } from '../utils/wildcard';
+import { tryLogModAction } from './audit';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -478,10 +479,13 @@ export class Permissions {
   }
 
   /**
-   * Write a mod_log row for a permissions mutation. Isolates the DB call
-   * from the mutation itself so a DB error never prevents the in-memory
-   * change from taking effect — operators see a warn and the command still
-   * succeeds. Mirrors the resilience pattern that ban-commands already uses.
+   * Write a mod_log row for a permissions mutation. Delegates to
+   * `tryLogModAction` so a DB error never prevents the in-memory change
+   * from taking effect — operators see a warn and the command still
+   * succeeds. Source is `'system'` because Permissions sits below the
+   * command handler and doesn't have a transport context to derive from;
+   * the upstream `by` string carries whatever attribution the caller
+   * managed to thread through.
    */
   private recordModAction(
     action: string,
@@ -490,10 +494,10 @@ export class Permissions {
     by: string,
     detail: string | null,
   ): void {
-    try {
-      this.db?.logModAction(action, channel, target, by, detail);
-    } catch (err) {
-      this.logger?.warn(`Failed to record mod_log entry for ${action}:`, err);
-    }
+    tryLogModAction(
+      this.db,
+      { action, source: 'system', by, channel, target, reason: detail },
+      this.logger,
+    );
   }
 }

@@ -13,6 +13,7 @@ import type { Server as NetServer, Socket } from 'node:net';
 import { createInterface as createReadline } from 'node:readline';
 
 import type { CommandExecutor } from '../command-handler';
+import type { BotDatabase } from '../database';
 import type { BindRegistrar } from '../dispatcher';
 import type { LogRecord, LogSink, Logger } from '../logger';
 import { Logger as LoggerClass } from '../logger';
@@ -20,6 +21,7 @@ import type { DccConfig, HandlerContext, PluginServices, UserRecord } from '../t
 import { toEventObject } from '../utils/irc-event';
 import { sanitize } from '../utils/sanitize';
 import { type Casemapping, ircLower } from '../utils/wildcard';
+import { tryLogModAction } from './audit';
 import {
   type ConsoleFlagLetter,
   type ConsoleFlagStore,
@@ -133,6 +135,8 @@ export interface DCCSessionEntry {
   readonly nick: string;
   readonly connectedAt: number;
   readonly isRelaying: boolean;
+  /** The botname this session is currently relaying to, or null if not relaying. */
+  readonly relayTarget: string | null;
   /** The authenticated user's permission flag string (e.g. `"nm"`). */
   readonly handleFlags: string;
   writeLine(line: string): void;
@@ -193,6 +197,13 @@ export interface DCCManagerDeps {
    * database-backed implementation.
    */
   consoleFlagStore?: ConsoleFlagStore;
+  /**
+   * Database used for `mod_log` writes from the DCC auth pipeline —
+   * `auth-fail` rows on every password rejection and a distinct
+   * `auth-lockout` row when the rate-limit triggers. Optional so the
+   * tests that don't care about audit can keep their existing fixtures.
+   */
+  db?: BotDatabase | null;
   /** Optional live stats provider for the DCC session banner. */
   getStats?: () => BannerStats;
 }
@@ -978,6 +989,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   private version: string;
   private logger: Logger | null;
   private getStatsFn: (() => BannerStats) | null;
+  private db: BotDatabase | null;
 
   private readonly sessions: Map<string, DCCSessionEntry>;
   private readonly portAllocator: PortAllocator;
@@ -1007,6 +1019,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     this.portAllocator = deps.portAllocator ?? new RangePortAllocator(deps.config.port_range);
     this.authTracker = deps.authTracker ?? new DCCAuthTracker();
     this.consoleFlagStore = deps.consoleFlagStore ?? createInMemoryConsoleFlagStore();
+    this.db = deps.db ?? null;
   }
 
   /** Read-only access to the console flag store — used by `.console <handle>`. */
@@ -1031,10 +1044,37 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   /** Called by DCCSession when the password prompt fails. */
   onAuthFailure(key: string, handle: string): void {
     const status = this.authTracker.recordFailure(key);
+    // Always emit an auth-fail row — never the attempted password, only the
+    // remote-peer key (`ip:port`) and the handle that was being authenticated.
+    tryLogModAction(
+      this.db,
+      {
+        action: 'auth-fail',
+        source: 'dcc',
+        target: handle,
+        outcome: 'failure',
+        metadata: { peer: key, failures: status.failures },
+      },
+      this.logger,
+    );
     if (status.locked) {
       const seconds = Math.ceil((status.lockedUntil - Date.now()) / 1000);
       this.logger?.warn(
         `DCC auth lockout: ${key} (handle=${handle}) locked for ~${seconds}s after repeated failures`,
+      );
+      // A distinct auth-lockout row makes brute-force attempts queryable as
+      // a single event instead of one row per individual failure.
+      tryLogModAction(
+        this.db,
+        {
+          action: 'auth-lockout',
+          source: 'dcc',
+          target: handle,
+          outcome: 'failure',
+          reason: `locked for ~${seconds}s`,
+          metadata: { peer: key, lockedUntil: status.lockedUntil },
+        },
+        this.logger,
       );
     }
   }

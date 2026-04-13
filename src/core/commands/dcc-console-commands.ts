@@ -3,6 +3,8 @@
 // subscription flags. Eggdrop-style `+mojkpbsdw` letters are parsed and
 // persisted per handle via the manager's ConsoleFlagStore.
 import type { CommandContext, CommandHandler } from '../../command-handler';
+import type { BotDatabase } from '../../database';
+import { tryAudit } from '../audit';
 import type { DCCManager, DCCSessionEntry } from '../dcc';
 import {
   CONSOLE_FLAG_DESCRIPTIONS,
@@ -16,8 +18,18 @@ import {
 /**
  * Register the `.console` command on the given command handler. The
  * command is DCC-only — REPL and IRC callers receive a clear error.
+ *
+ * `db` is used to record `console-set` rows when a handle's console flag
+ * subscription changes — this is privacy-relevant since the flags decide
+ * which log streams a DCC session sees, and cross-handle edits give an
+ * owner the ability to silently pipe another user's traffic into their
+ * own console.
  */
-export function registerDccConsoleCommands(handler: CommandHandler, dccManager: DCCManager): void {
+export function registerDccConsoleCommands(
+  handler: CommandHandler,
+  dccManager: DCCManager,
+  db: BotDatabase | null,
+): void {
   handler.registerCommand(
     'console',
     {
@@ -27,12 +39,17 @@ export function registerDccConsoleCommands(handler: CommandHandler, dccManager: 
       category: 'dcc',
     },
     (args, ctx) => {
-      handleConsoleCommand(args, ctx, dccManager);
+      handleConsoleCommand(args, ctx, dccManager, db);
     },
   );
 }
 
-function handleConsoleCommand(args: string, ctx: CommandContext, dccManager: DCCManager): void {
+function handleConsoleCommand(
+  args: string,
+  ctx: CommandContext,
+  dccManager: DCCManager,
+  db: BotDatabase | null,
+): void {
   if (!ctx.dccSession) {
     ctx.reply('This command is DCC-only.');
     return;
@@ -49,11 +66,29 @@ function handleConsoleCommand(args: string, ctx: CommandContext, dccManager: DCC
   // leading `+` or `-` means "mutate my own flags"; anything else is
   // interpreted as a target handle followed by the mutation tokens.
   if (trimmed.startsWith('+') || trimmed.startsWith('-')) {
-    mutateOwnFlags(trimmed, ctx, ctx.dccSession);
+    mutateOwnFlags(trimmed, ctx, ctx.dccSession, db);
     return;
   }
 
-  mutateOtherHandleFlags(trimmed, ctx, dccManager);
+  mutateOtherHandleFlags(trimmed, ctx, dccManager, db);
+}
+
+function recordConsoleAudit(
+  db: BotDatabase | null,
+  ctx: CommandContext,
+  target: string,
+  before: string,
+  after: string,
+): void {
+  // Action-specific wrapper kept because the metadata shape (before/after
+  // flag strings) is identical across both the own-flag and cross-handle
+  // paths — folding it inline would duplicate the formatter.
+  tryAudit(db, ctx, {
+    action: 'console-set',
+    target,
+    reason: `+${after || '-'}`,
+    metadata: { before: `+${before || '-'}`, after: `+${after || '-'}` },
+  });
 }
 
 function replyWithCurrentFlags(ctx: CommandContext, session: DCCSessionEntry): void {
@@ -68,7 +103,13 @@ function replyWithCurrentFlags(ctx: CommandContext, session: DCCSessionEntry): v
   ctx.reply(`Default: +${DEFAULT_CONSOLE_FLAGS}. Use .console +x / -x to toggle.`);
 }
 
-function mutateOwnFlags(input: string, ctx: CommandContext, session: DCCSessionEntry): void {
+function mutateOwnFlags(
+  input: string,
+  ctx: CommandContext,
+  session: DCCSessionEntry,
+  db: BotDatabase | null,
+): void {
+  const before = formatFlags(parseCanonicalFlags(session.getConsoleFlags()));
   const current = parseCanonicalFlags(session.getConsoleFlags());
   const result = parseFlagsMutation(input, current);
   if ('error' in result) {
@@ -78,9 +119,15 @@ function mutateOwnFlags(input: string, ctx: CommandContext, session: DCCSessionE
   session.setConsoleFlags(result.flags);
   const canonical = formatFlags(result.flags);
   ctx.reply(`Console flags: ${canonical.length > 0 ? `+${canonical}` : '+-'}`);
+  recordConsoleAudit(db, ctx, session.handle, before, canonical);
 }
 
-function mutateOtherHandleFlags(input: string, ctx: CommandContext, dccManager: DCCManager): void {
+function mutateOtherHandleFlags(
+  input: string,
+  ctx: CommandContext,
+  dccManager: DCCManager,
+  db: BotDatabase | null,
+): void {
   // Split off the first token as the target handle; the rest is the
   // mutation body. The permission flag on registerCommand already
   // required `+m`; extend to require `+n` (owner) for cross-handle
@@ -98,6 +145,7 @@ function mutateOtherHandleFlags(input: string, ctx: CommandContext, dccManager: 
   }
 
   const store = dccManager.getConsoleFlagStore();
+  const before = formatFlags(parseCanonicalFlags(store.get(handle) ?? DEFAULT_CONSOLE_FLAGS));
   const current = parseCanonicalFlags(store.get(handle) ?? DEFAULT_CONSOLE_FLAGS);
   const result = parseFlagsMutation(mutation, current);
   if ('error' in result) {
@@ -107,4 +155,5 @@ function mutateOtherHandleFlags(input: string, ctx: CommandContext, dccManager: 
   const canonical = formatFlags(result.flags);
   store.set(handle, canonical);
   ctx.reply(`Console flags for ${handle}: ${canonical.length > 0 ? `+${canonical}` : '+-'}`);
+  recordConsoleAudit(db, ctx, handle, before, canonical);
 }

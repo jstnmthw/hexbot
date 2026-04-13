@@ -204,7 +204,7 @@ describe('.chanset — allowedValues validation', () => {
     db.open();
     handler = new CommandHandler();
     channelSettings = new ChannelSettings(db);
-    registerChannelCommands(handler, channelSettings);
+    registerChannelCommands(handler, channelSettings, null);
 
     channelSettings.register('chanmod', [
       {

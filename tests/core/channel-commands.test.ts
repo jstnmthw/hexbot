@@ -38,7 +38,7 @@ describe('channel-commands', () => {
     // Add an op user for IRC permission checks
     permissions.addUser('admin', '*!admin@localhost', 'o', 'test');
     handler = new CommandHandler(permissions);
-    registerChannelCommands(handler, cs);
+    registerChannelCommands(handler, cs, db);
 
     // Register some test defs
     cs.register('testplugin', [

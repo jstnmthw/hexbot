@@ -211,6 +211,11 @@ export interface LoggingConfig {
    * database table. Useful for audit trails.
    */
   mod_actions: boolean;
+  /**
+   * Retention window for mod_log rows, in days. Default `0` (unlimited).
+   * On startup, rows older than the cutoff are deleted in a single pass.
+   */
+  mod_log_retention_days?: number;
 }
 
 // ---------------------------------------------------------------------------

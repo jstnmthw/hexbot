@@ -5,12 +5,22 @@
 // user's password; anyone can rotate their own). IRC PRIVMSG is explicitly
 // rejected to keep plaintext passwords off the wire.
 import type { CommandContext, CommandHandler } from '../../command-handler';
+import type { BotDatabase } from '../../database';
+import { tryAudit } from '../audit';
 import { hashPassword } from '../password';
 import type { Permissions } from '../permissions';
 
 export interface PasswordCommandDeps {
   handler: CommandHandler;
   permissions: Permissions;
+  /**
+   * Database used to write `chpass` failure rows. The success path is
+   * already logged by `Permissions.setPasswordHash`; the rejection path
+   * (IRC transport, denied permission, validation failure, missing user)
+   * was previously silent and is now mirrored into mod_log so password-
+   * change attempts are queryable end-to-end.
+   */
+  db?: BotDatabase | null;
 }
 
 /**
@@ -26,7 +36,17 @@ export interface PasswordCommandDeps {
  * password rotation — regardless of caller — lands in the audit trail.
  */
 export function registerPasswordCommands(deps: PasswordCommandDeps): void {
-  const { handler, permissions } = deps;
+  const { handler, permissions, db = null } = deps;
+  // Local sugar so each rejection branch stays a single line. Target may be
+  // null when the failure occurs before the target handle is parsed.
+  const failure = (ctx: CommandContext, reason: string, target: string | null = null): void => {
+    tryAudit(db, ctx, {
+      action: 'chpass',
+      target,
+      outcome: 'failure',
+      reason,
+    });
+  };
 
   handler.registerCommand(
     'chpass',
@@ -45,6 +65,7 @@ export function registerPasswordCommands(deps: PasswordCommandDeps): void {
         ctx.reply(
           'chpass: passwords must not be sent over IRC. Use the bot console (DCC) or REPL.',
         );
+        failure(ctx, 'rejected: irc transport');
         return;
       }
 
@@ -58,6 +79,7 @@ export function registerPasswordCommands(deps: PasswordCommandDeps): void {
       const resolved = resolveCallerAndTarget(parts, ctx, permissions);
       if ('error' in resolved) {
         ctx.reply(resolved.error);
+        failure(ctx, 'rejected: caller resolution failed');
         return;
       }
       const { targetHandle, newpass, isSelfRotation } = resolved;
@@ -68,16 +90,19 @@ export function registerPasswordCommands(deps: PasswordCommandDeps): void {
         const caller = permissions.findByHostmask(callerHostmask);
         if (!caller) {
           ctx.reply('chpass: permission denied.');
+          failure(ctx, 'denied: caller hostmask unmatched', targetHandle);
           return;
         }
         const callerIsOwner = caller.global.includes('n');
         if (!isSelfRotation && !callerIsOwner) {
           ctx.reply('chpass: only owners (+n) can rotate another user\u2019s password.');
+          failure(ctx, 'denied: non-owner cross-handle rotation', targetHandle);
           return;
         }
         /* v8 ignore start -- defence in depth: isSelfRotation is only set when caller.handle === targetHandle upstream, so this branch is unreachable from resolveCallerAndTarget */
         if (isSelfRotation && caller.handle !== targetHandle) {
           ctx.reply('chpass: permission denied.');
+          failure(ctx, 'denied: self-rotation handle mismatch', targetHandle);
           return;
         }
         /* v8 ignore stop */
@@ -87,12 +112,14 @@ export function registerPasswordCommands(deps: PasswordCommandDeps): void {
       const target = permissions.getUser(targetHandle);
       if (!target) {
         ctx.reply(`chpass: user "${targetHandle}" not found.`);
+        failure(ctx, 'rejected: user not found', targetHandle);
         return;
       }
       if (target.hostmasks.length === 0) {
         ctx.reply(
           `chpass: user "${targetHandle}" has no hostmask patterns — add one with .adduser/.addhost first.`,
         );
+        failure(ctx, 'rejected: target has no hostmask patterns', targetHandle);
         return;
       }
 
@@ -104,7 +131,9 @@ export function registerPasswordCommands(deps: PasswordCommandDeps): void {
       try {
         hash = await hashPassword(newpass);
       } catch (err) {
-        ctx.reply(`chpass: ${(err as Error).message}`);
+        const message = (err as Error).message;
+        ctx.reply(`chpass: ${message}`);
+        failure(ctx, `rejected: ${message}`, targetHandle);
         return;
       }
 

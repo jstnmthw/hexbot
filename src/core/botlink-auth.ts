@@ -10,6 +10,7 @@ import type { BotEventBus } from '../event-bus';
 import type { Logger } from '../logger';
 import type { BotlinkConfig } from '../types';
 import { AdminListStore } from '../utils/admin-list-store';
+import { tryLogModAction } from './audit';
 import { hashPassword } from './botlink-protocol';
 
 // ---------------------------------------------------------------------------
@@ -280,6 +281,22 @@ export class BotLinkAuthManager {
       tracker.failures = 0;
       this.logger?.warn(`IP ${ip} banned for ${banDuration}ms after ${maxFailures} auth failures`);
       this.eventBus?.emit('auth:ban', ip, maxFailures, banDuration);
+      // Distinct action from the manual `botlink-ban` so an operator can
+      // grep auto-escalation events separately. Carries the failure count
+      // and the escalation tier (banCount) so a brute-force review can
+      // see how aggressive the attacker has been.
+      tryLogModAction(
+        this.db,
+        {
+          action: 'botlink-autoban',
+          source: 'botlink',
+          target: ip,
+          outcome: 'failure',
+          reason: `${maxFailures} auth failures`,
+          metadata: { banDurationMs: banDuration, escalationTier: tracker.banCount },
+        },
+        this.logger,
+      );
     }
   }
 
@@ -420,11 +437,11 @@ export class BotLinkAuthManager {
    * never prevents the ban/unban from taking effect in memory.
    */
   private recordModAction(action: string, target: string, by: string, detail: string | null): void {
-    try {
-      this.db?.logModAction(action, null, target, by, detail);
-    } catch (err) {
-      this.logger?.warn(`Failed to record mod_log entry for ${action}:`, err);
-    }
+    tryLogModAction(
+      this.db,
+      { action, source: 'botlink', by, target, reason: detail },
+      this.logger,
+    );
   }
 
   /** Load persisted manual bans from DB into the hot path on startup. */

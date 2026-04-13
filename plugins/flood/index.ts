@@ -203,9 +203,15 @@ function triggerLockdown(channel: string): void {
 
   const lowerChannel = api.ircLower(channel);
   const mode = getLockMode(channel);
+  const flooderCount = lockFloderTimestamps.get(lowerChannel)?.length ?? 0;
 
   api.mode(channel, `+${mode}`);
   api.log(`Channel lockdown: set +${mode} on ${channel} (flood detected)`);
+  api.audit.log('flood-lockdown', {
+    channel,
+    reason: `+${mode}`,
+    metadata: { mode, flooderCount, durationMs: cfg.lockDurationMs },
+  });
 
   // Schedule auto-unlock
   const timer = setTimeout(() => {
@@ -223,6 +229,11 @@ function liftLockdown(channel: string, mode: string): void {
   if (botHasOps(channel)) {
     api.mode(channel, `-${mode}`);
     api.log(`Channel lockdown lifted: -${mode} on ${channel}`);
+    api.audit.log('flood-lockdown-lift', {
+      channel,
+      reason: `-${mode}`,
+      metadata: { mode },
+    });
   }
 }
 

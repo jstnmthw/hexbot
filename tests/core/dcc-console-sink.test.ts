@@ -14,6 +14,7 @@ import {
   parseCanonicalFlags,
   shouldDeliverToSession,
 } from '../../src/core/dcc-console-flags';
+import { BotDatabase } from '../../src/database';
 import { type LogRecord, Logger, createLogger } from '../../src/logger';
 import type { DccConfig, PluginServices } from '../../src/types';
 
@@ -66,6 +67,7 @@ function fakeSession(
     nick: handle,
     connectedAt: Date.now(),
     isRelaying: false,
+    relayTarget: null,
     handleFlags,
     received,
     writes,
@@ -210,7 +212,7 @@ describe('.console command', () => {
     const sessions = new Map<string, DCCSessionEntry>();
     const mgr = makeManager(sessions);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands(handler, mgr);
+    registerDccConsoleCommands(handler, mgr, null);
 
     const replies: string[] = [];
     await handler.execute('.console +d', {
@@ -229,7 +231,7 @@ describe('.console command', () => {
     sessions.set('alice', session);
     const mgr = makeManager(sessions);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands(handler, mgr);
+    registerDccConsoleCommands(handler, mgr, null);
 
     const replies: string[] = [];
     await handler.execute('.console', {
@@ -249,7 +251,7 @@ describe('.console command', () => {
     sessions.set('alice', session);
     const mgr = makeManager(sessions);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands(handler, mgr);
+    registerDccConsoleCommands(handler, mgr, null);
 
     const replies: string[] = [];
     await handler.execute('.console +d', {
@@ -273,7 +275,7 @@ describe('.console command', () => {
     sessions.set('alice', session);
     const mgr = makeManager(sessions);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands(handler, mgr);
+    registerDccConsoleCommands(handler, mgr, null);
 
     const replies: string[] = [];
     await handler.execute('.console +z', {
@@ -294,7 +296,7 @@ describe('.console command', () => {
     sessions.set('admin', owner);
     const mgr = makeManager(sessions, store);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands(handler, mgr);
+    registerDccConsoleCommands(handler, mgr, null);
 
     const replies: string[] = [];
     await handler.execute('.console bob +b', {
@@ -315,7 +317,7 @@ describe('.console command', () => {
     sessions.set('admin', owner);
     const mgr = makeManager(sessions, store);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands(handler, mgr);
+    registerDccConsoleCommands(handler, mgr, null);
 
     const replies: string[] = [];
     await handler.execute('.console bob', {
@@ -336,7 +338,7 @@ describe('.console command', () => {
     sessions.set('admin', owner);
     const mgr = makeManager(sessions, store);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands(handler, mgr);
+    registerDccConsoleCommands(handler, mgr, null);
 
     const replies: string[] = [];
     await handler.execute('.console bob +z', {
@@ -357,7 +359,7 @@ describe('.console command', () => {
     sessions.set('alice', session);
     const mgr = makeManager(sessions);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands(handler, mgr);
+    registerDccConsoleCommands(handler, mgr, null);
 
     const replies: string[] = [];
     await handler.execute('.console -all', {
@@ -379,7 +381,7 @@ describe('.console command', () => {
     sessions.set('master', master);
     const mgr = makeManager(sessions, store);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands(handler, mgr);
+    registerDccConsoleCommands(handler, mgr, null);
 
     const replies: string[] = [];
     await handler.execute('.console bob +b', {
@@ -392,5 +394,61 @@ describe('.console command', () => {
 
     expect(replies.some((r) => r.toLowerCase().includes('owner'))).toBe(true);
     expect(store.get('bob')).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 4 — audit coverage for .console flag mutations
+  // -------------------------------------------------------------------------
+
+  it('writes a console-set audit row for own-flag mutation', async () => {
+    const db = new BotDatabase(':memory:');
+    db.open();
+    const sessions = new Map<string, DCCSessionEntry>();
+    const session = fakeSession('alice', 'mojw');
+    sessions.set('alice', session);
+    const mgr = makeManager(sessions);
+    const handler = new CommandHandler(allowAll);
+    registerDccConsoleCommands(handler, mgr, db);
+
+    await handler.execute('.console +d', {
+      source: 'dcc',
+      nick: 'alice',
+      channel: null,
+      dccSession: session,
+      reply: () => {},
+    });
+
+    const [row] = db.getModLog({ action: 'console-set' });
+    expect(row).toBeDefined();
+    expect(row.target).toBe('alice');
+    expect(row.source).toBe('dcc');
+    expect(row.metadata).toBeDefined();
+    db.close();
+  });
+
+  it('writes a console-set audit row for cross-handle mutation', async () => {
+    const db = new BotDatabase(':memory:');
+    db.open();
+    const store = createInMemoryConsoleFlagStore();
+    const sessions = new Map<string, DCCSessionEntry>();
+    const owner = fakeSession('admin', 'mojw', 'nm');
+    sessions.set('admin', owner);
+    const mgr = makeManager(sessions, store);
+    const handler = new CommandHandler(allowAll);
+    registerDccConsoleCommands(handler, mgr, db);
+
+    await handler.execute('.console bob +b', {
+      source: 'dcc',
+      nick: 'admin',
+      channel: null,
+      dccSession: owner,
+      reply: () => {},
+    });
+
+    const [row] = db.getModLog({ action: 'console-set' });
+    expect(row).toBeDefined();
+    expect(row.target).toBe('bob');
+    expect(row.by).toBe('admin');
+    db.close();
   });
 });

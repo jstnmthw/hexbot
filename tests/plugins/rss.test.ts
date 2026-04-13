@@ -157,6 +157,7 @@ function makeMockAPI(db: BotDatabase, config: Record<string, unknown> = {}): Moc
     error: vi.fn(),
     warn: vi.fn(),
     debug: vi.fn(),
+    audit: { log: vi.fn() },
   };
 
   return api;

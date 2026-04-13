@@ -514,3 +514,65 @@ describe('auth brute-force protection', () => {
     expect(auth.manualCidrBans.has('192.168.99.0/24')).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Auto-ban audit row
+// ---------------------------------------------------------------------------
+
+describe('botlink auto-ban audit', () => {
+  it('writes a botlink-autoban row when noteFailure escalates to a ban', async () => {
+    const { BotDatabase } = await import('../../src/database');
+    const { BotLinkAuthManager } = await import('../../src/core/botlink-auth');
+    const db = new BotDatabase(':memory:');
+    db.open();
+
+    const auth = new BotLinkAuthManager(
+      hubConfig({ max_auth_failures: 2, auth_ban_duration_ms: 5000 }),
+      null,
+      null,
+      db,
+    );
+
+    auth.noteFailure('10.99.99.1', false);
+    auth.noteFailure('10.99.99.1', false); // triggers the auto-ban
+
+    const rows = db.getModLog({ action: 'botlink-autoban' });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].source).toBe('botlink');
+    expect(rows[0].target).toBe('10.99.99.1');
+    expect(rows[0].outcome).toBe('failure');
+    expect(rows[0].reason).toContain('2 auth failures');
+    expect(rows[0].metadata).toMatchObject({ banDurationMs: 5000, escalationTier: 1 });
+
+    auth.dispose();
+    db.close();
+  });
+
+  it('escalates the tier on repeat auto-bans', async () => {
+    const { BotDatabase } = await import('../../src/database');
+    const { BotLinkAuthManager } = await import('../../src/core/botlink-auth');
+    vi.useFakeTimers();
+    const db = new BotDatabase(':memory:');
+    db.open();
+
+    const auth = new BotLinkAuthManager(
+      hubConfig({ max_auth_failures: 1, auth_ban_duration_ms: 1000 }),
+      null,
+      null,
+      db,
+    );
+
+    auth.noteFailure('10.99.99.2', false);
+    vi.advanceTimersByTime(60_001); // window expires
+    auth.noteFailure('10.99.99.2', false);
+
+    const rows = db.getModLog({ action: 'botlink-autoban' });
+    expect(rows).toHaveLength(2);
+    // newest-first ordering
+    expect(rows[0].metadata).toMatchObject({ escalationTier: 2 });
+    expect(rows[1].metadata).toMatchObject({ escalationTier: 1 });
+
+    auth.dispose();
+    db.close();
+  });
+});

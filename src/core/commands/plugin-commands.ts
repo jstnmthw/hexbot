@@ -1,12 +1,15 @@
 // HexBot — Plugin management commands
 // .plugins, .load, .unload, .reload
 import type { CommandHandler } from '../../command-handler';
+import type { BotDatabase } from '../../database';
 import type { PluginLoader } from '../../plugin-loader';
+import { tryAudit } from '../audit';
 
 export function registerPluginCommands(
   handler: CommandHandler,
   pluginLoader: PluginLoader,
   pluginDir: string,
+  db: BotDatabase | null,
 ): void {
   handler.registerCommand(
     'plugins',
@@ -57,8 +60,15 @@ export function registerPluginCommands(
 
       if (result.status === 'ok') {
         ctx.reply(`Plugin "${name}" loaded successfully.`);
+        tryAudit(db, ctx, { action: 'plugin-load', target: name });
       } else {
         ctx.reply(`Failed to load "${name}": ${result.error}`);
+        tryAudit(db, ctx, {
+          action: 'plugin-load',
+          target: name,
+          outcome: 'failure',
+          reason: result.error ?? null,
+        });
       }
     },
   );
@@ -81,9 +91,16 @@ export function registerPluginCommands(
       try {
         await pluginLoader.unload(name);
         ctx.reply(`Plugin "${name}" unloaded.`);
+        tryAudit(db, ctx, { action: 'plugin-unload', target: name });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         ctx.reply(`Failed to unload "${name}": ${message}`);
+        tryAudit(db, ctx, {
+          action: 'plugin-unload',
+          target: name,
+          outcome: 'failure',
+          reason: message,
+        });
       }
     },
   );
@@ -107,12 +124,25 @@ export function registerPluginCommands(
         const result = await pluginLoader.reload(name);
         if (result.status === 'ok') {
           ctx.reply(`Plugin "${name}" reloaded successfully.`);
+          tryAudit(db, ctx, { action: 'plugin-reload', target: name });
         } else {
           ctx.reply(`Failed to reload "${name}": ${result.error}`);
+          tryAudit(db, ctx, {
+            action: 'plugin-reload',
+            target: name,
+            outcome: 'failure',
+            reason: result.error ?? null,
+          });
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         ctx.reply(`Failed to reload "${name}": ${message}`);
+        tryAudit(db, ctx, {
+          action: 'plugin-reload',
+          target: name,
+          outcome: 'failure',
+          reason: message,
+        });
       }
     },
   );

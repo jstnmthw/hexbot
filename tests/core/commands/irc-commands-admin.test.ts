@@ -9,6 +9,7 @@ import {
   registerIRCAdminCommands,
 } from '../../../src/core/commands/irc-commands-admin';
 import type { ReconnectState } from '../../../src/core/reconnect-driver';
+import { BotDatabase } from '../../../src/database';
 
 /** Helper: create a minimal CommandContext with a typed reply mock. */
 function makeCtx(
@@ -23,6 +24,7 @@ describe('irc-commands-admin', () => {
   let handler: CommandHandler;
   let mockClient: AdminIRCClient;
   let mockBotInfo: AdminBotInfo;
+  let db: BotDatabase;
 
   beforeEach(() => {
     handler = new CommandHandler();
@@ -41,7 +43,9 @@ describe('irc-commands-admin', () => {
       getUserCount: () => 2,
       getReconnectState: () => null,
     };
-    registerIRCAdminCommands(handler, mockClient, mockBotInfo);
+    db = new BotDatabase(':memory:');
+    db.open();
+    registerIRCAdminCommands(handler, mockClient, mockBotInfo, db);
   });
 
   describe('.say', () => {
@@ -390,6 +394,65 @@ describe('irc-commands-admin', () => {
       // eslint-disable-next-line no-control-regex
       const stripped = output.replace(/\x02|\x0F|\x03\d{2}/g, '');
       expect(stripped).toBe('Uptime: 2d 1h 1m 1s');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 4 — audit coverage for every privileged admin command
+  // ---------------------------------------------------------------------------
+
+  describe('audit coverage', () => {
+    it('.say writes a row with target and message metadata', async () => {
+      await handler.execute('.say #test Hello, world!', makeCtx());
+      const [row] = db.getModLog({ action: 'say' });
+      expect(row).toBeDefined();
+      expect(row.target).toBe('#test');
+      expect(row.metadata).toEqual({ message: 'Hello, world!' });
+      expect(row.by).toBe('admin');
+      expect(row.source).toBe('repl');
+    });
+
+    it('.msg writes a row carrying the message body', async () => {
+      await handler.execute('.msg NickServ identify hunter2', makeCtx());
+      const [row] = db.getModLog({ action: 'msg' });
+      expect(row.target).toBe('NickServ');
+      expect(row.metadata).toEqual({ message: 'identify hunter2' });
+    });
+
+    it('.join writes a row for the joined channel', async () => {
+      await handler.execute('.join #newchan', makeCtx());
+      const [row] = db.getModLog({ action: 'join' });
+      expect(row.channel).toBe('#newchan');
+    });
+
+    it('.part writes a row with the part message in reason', async () => {
+      await handler.execute('.part #oldchan goodbye for now', makeCtx());
+      const [row] = db.getModLog({ action: 'part' });
+      expect(row.channel).toBe('#oldchan');
+      expect(row.reason).toBe('goodbye for now');
+    });
+
+    it('.part writes a row with null reason when no part message', async () => {
+      await handler.execute('.part #silent', makeCtx());
+      const [row] = db.getModLog({ action: 'part' });
+      expect(row.reason).toBeNull();
+    });
+
+    it('.invite writes a row with channel + target nick', async () => {
+      await handler.execute('.invite #vip alice', makeCtx());
+      const [row] = db.getModLog({ action: 'invite' });
+      expect(row.channel).toBe('#vip');
+      expect(row.target).toBe('alice');
+    });
+
+    it('.say does not write a row on usage error', async () => {
+      await handler.execute('.say', makeCtx());
+      expect(db.getModLog({ action: 'say' })).toHaveLength(0);
+    });
+
+    it('.invite does not write a row when args are invalid', async () => {
+      await handler.execute('.invite', makeCtx());
+      expect(db.getModLog({ action: 'invite' })).toHaveLength(0);
     });
   });
 

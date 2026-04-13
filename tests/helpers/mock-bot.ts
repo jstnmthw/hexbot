@@ -134,15 +134,20 @@ export function createMockBot(options?: { botNick?: string; currentNick?: string
   // Register commands
   registerPermissionCommands(commandHandler, permissions);
   registerDispatcherCommands(commandHandler, dispatcher);
-  registerIRCAdminCommands(commandHandler, client, {
-    getUptime: () => 60_000,
-    getChannels: () => ['#test'],
-    getBindCount: () => dispatcher.listBinds().length,
-    getUserCount: () => permissions.listUsers().length,
-    getReconnectState: () => null,
-  });
-  registerPluginCommands(commandHandler, pluginLoader, './plugins');
-  registerChannelCommands(commandHandler, channelSettings);
+  registerIRCAdminCommands(
+    commandHandler,
+    client,
+    {
+      getUptime: () => 60_000,
+      getChannels: () => ['#test'],
+      getBindCount: () => dispatcher.listBinds().length,
+      getUserCount: () => permissions.listUsers().length,
+      getReconnectState: () => null,
+    },
+    db,
+  );
+  registerPluginCommands(commandHandler, pluginLoader, './plugins', db);
+  registerChannelCommands(commandHandler, channelSettings, db);
 
   return {
     client,

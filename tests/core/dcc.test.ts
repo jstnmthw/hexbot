@@ -195,6 +195,7 @@ function mockSession(
   return {
     connectedAt: Date.now(),
     isRelaying: false,
+    relayTarget: null,
     handleFlags: 'nm',
     writeLine: vi.fn(),
     close: vi.fn(),
@@ -1785,6 +1786,69 @@ describe('DCCManager.openSession prompt integration', () => {
     mgr.onAuthFailure(key, 'eve');
 
     expect(tracker.check(key).locked).toBe(true);
+  });
+
+  it('onAuthFailure writes an auth-fail mod_log row on every attempt', async () => {
+    const { BotDatabase } = await import('../../src/database');
+    const db = new BotDatabase(':memory:');
+    db.open();
+    const tracker = new DCCAuthTracker({ maxFailures: 3, baseLockMs: 60_000 });
+    const mgr = new DCCManager({
+      client: new MockIRCClient(),
+      dispatcher: makeDispatcher(),
+      permissions: makePermissions(null),
+      services: makeServices(),
+      commandHandler: makeCommandHandler(),
+      config: makeConfig(),
+      version: '1.0.0',
+      botNick: 'hexbot',
+      authTracker: tracker,
+      db,
+    });
+
+    mgr.onAuthFailure('Eve!eve@evil.host', 'eve');
+
+    const rows = db.getModLog({ action: 'auth-fail' });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].source).toBe('dcc');
+    expect(rows[0].target).toBe('eve');
+    expect(rows[0].outcome).toBe('failure');
+    expect(rows[0].metadata).toMatchObject({ peer: 'Eve!eve@evil.host', failures: 1 });
+    // Critical: never log the attempted password — the helper has no
+    // access to it, but a sanity check that nothing leaks via metadata.
+    const serialized = JSON.stringify(rows[0]);
+    expect(serialized).not.toMatch(/password|secret|hunter2/i);
+    db.close();
+  });
+
+  it('onAuthFailure writes a distinct auth-lockout row when the tracker locks', async () => {
+    const { BotDatabase } = await import('../../src/database');
+    const db = new BotDatabase(':memory:');
+    db.open();
+    const tracker = new DCCAuthTracker({ maxFailures: 2, baseLockMs: 60_000 });
+    const mgr = new DCCManager({
+      client: new MockIRCClient(),
+      dispatcher: makeDispatcher(),
+      permissions: makePermissions(null),
+      services: makeServices(),
+      commandHandler: makeCommandHandler(),
+      config: makeConfig(),
+      version: '1.0.0',
+      botNick: 'hexbot',
+      authTracker: tracker,
+      db,
+    });
+
+    mgr.onAuthFailure('Eve!eve@evil.host', 'eve');
+    mgr.onAuthFailure('Eve!eve@evil.host', 'eve');
+
+    expect(db.getModLog({ action: 'auth-fail' })).toHaveLength(2);
+    const lockoutRows = db.getModLog({ action: 'auth-lockout' });
+    expect(lockoutRows).toHaveLength(1);
+    expect(lockoutRows[0].target).toBe('eve');
+    expect(lockoutRows[0].outcome).toBe('failure');
+    expect(lockoutRows[0].metadata).toMatchObject({ peer: 'Eve!eve@evil.host' });
+    db.close();
   });
 
   it('onAuthSuccess clears the failure counter and registers the session', () => {

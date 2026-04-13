@@ -100,6 +100,7 @@ describe('handleRelayFrame', () => {
           getSession: () => ({
             writeLine: vi.fn(),
             isRelaying: true,
+            relayTarget: null,
             exitRelay: vi.fn(),
             confirmRelay,
           }),
@@ -162,6 +163,7 @@ describe('handleRelayFrame', () => {
           getSession: () => ({
             writeLine: vi.fn(),
             isRelaying: true,
+            relayTarget: null,
             exitRelay: vi.fn(),
             confirmRelay: vi.fn(),
           }),
@@ -204,8 +206,20 @@ describe('handleRelayFrame', () => {
           ],
           getSession: (nick: string) =>
             nick === 'Alice'
-              ? { writeLine, isRelaying: true, exitRelay: vi.fn(), confirmRelay: vi.fn() }
-              : { writeLine: vi.fn(), isRelaying: true, exitRelay: vi.fn(), confirmRelay: vi.fn() },
+              ? {
+                  writeLine,
+                  isRelaying: true,
+                  relayTarget: null,
+                  exitRelay: vi.fn(),
+                  confirmRelay: vi.fn(),
+                }
+              : {
+                  writeLine: vi.fn(),
+                  isRelaying: true,
+                  relayTarget: null,
+                  exitRelay: vi.fn(),
+                  confirmRelay: vi.fn(),
+                },
           announce: vi.fn(),
         },
       });
@@ -229,6 +243,7 @@ describe('handleRelayFrame', () => {
           getSession: () => ({
             writeLine,
             isRelaying: true,
+            relayTarget: null,
             exitRelay,
             confirmRelay: vi.fn(),
           }),
@@ -268,6 +283,7 @@ describe('handleRelayFrame', () => {
           getSession: () => ({
             writeLine,
             isRelaying: true,
+            relayTarget: null,
             exitRelay: vi.fn(),
             confirmRelay: vi.fn(),
           }),
@@ -371,6 +387,7 @@ describe('handleRelayFrame', () => {
           getSession: () => ({
             writeLine,
             isRelaying: true,
+            relayTarget: null,
             exitRelay: vi.fn(),
             confirmRelay: vi.fn(),
           }),
@@ -394,6 +411,29 @@ describe('handleRelayFrame', () => {
       handleRelayFrame({ type: 'RELAY_OUTPUT', handle: 'alice', line: 'text' }, deps, sessions);
       // No error thrown
     });
+
+    it('prefixes output with the relay target bot name when known', () => {
+      const writeLine = vi.fn();
+      const deps = createDeps({
+        dccManager: {
+          getSessionList: () => [{ handle: 'alice', nick: 'Alice', connectedAt: 0 }],
+          getSession: () => ({
+            writeLine,
+            isRelaying: true,
+            relayTarget: 'BlueAngel',
+            exitRelay: vi.fn(),
+            confirmRelay: vi.fn(),
+          }),
+          announce: vi.fn(),
+        },
+      });
+      handleRelayFrame(
+        { type: 'RELAY_OUTPUT', handle: 'alice', line: 'Message sent to #hexbot' },
+        deps,
+        new Map(),
+      );
+      expect(writeLine).toHaveBeenCalledWith('[BlueAngel] Message sent to #hexbot');
+    });
   });
 
   describe('RELAY_END', () => {
@@ -416,6 +456,7 @@ describe('handleRelayFrame', () => {
           getSession: () => ({
             writeLine,
             isRelaying: true,
+            relayTarget: null,
             exitRelay,
             confirmRelay: vi.fn(),
           }),
@@ -442,6 +483,7 @@ describe('handleRelayFrame', () => {
           getSession: () => ({
             writeLine: vi.fn(),
             isRelaying: false,
+            relayTarget: null,
             exitRelay,
             confirmRelay: vi.fn(),
           }),

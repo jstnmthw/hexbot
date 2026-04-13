@@ -271,6 +271,10 @@ describe('ban admin commands', () => {
       await commandHandler.execute('.stick #test *!*@evil.com', ctx);
       expect(banStore.getBan('#test', '*!*@evil.com')!.sticky).toBe(true);
       expect(reply).toHaveBeenCalledWith(expect.stringContaining('sticky'));
+      const [row] = db.getModLog({ action: 'stick' });
+      expect(row).toBeDefined();
+      expect(row.channel).toBe('#test');
+      expect(row.target).toBe('*!*@evil.com');
     });
 
     it('reports error when ban does not exist', async () => {
@@ -294,6 +298,10 @@ describe('ban admin commands', () => {
       await commandHandler.execute('.unstick #test *!*@evil.com', ctx);
       expect(banStore.getBan('#test', '*!*@evil.com')!.sticky).toBe(false);
       expect(reply).toHaveBeenCalledWith(expect.stringContaining('no longer sticky'));
+      const [row] = db.getModLog({ action: 'unstick' });
+      expect(row).toBeDefined();
+      expect(row.channel).toBe('#test');
+      expect(row.target).toBe('*!*@evil.com');
     });
 
     it('reports error when ban does not exist', async () => {

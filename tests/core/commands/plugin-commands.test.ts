@@ -242,4 +242,71 @@ describe('plugin-commands', () => {
       expect(ctx.reply).toHaveBeenCalledWith('Failed to reload "borked": unexpected');
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Phase 4 — audit coverage
+  // -------------------------------------------------------------------------
+  describe('audit coverage', () => {
+    it('writes plugin-load success row', async () => {
+      vi.spyOn(bot.pluginLoader, 'load').mockResolvedValue({ name: 'good', status: 'ok' });
+      await bot.commandHandler.execute('.load good', makeReplCtx());
+      const [row] = bot.db.getModLog({ action: 'plugin-load' });
+      expect(row.target).toBe('good');
+      expect(row.outcome).toBe('success');
+      expect(row.source).toBe('repl');
+    });
+
+    it('writes plugin-load failure row with the error in reason', async () => {
+      vi.spyOn(bot.pluginLoader, 'load').mockResolvedValue({
+        name: 'bad',
+        status: 'error',
+        error: 'syntax error',
+      });
+      await bot.commandHandler.execute('.load bad', makeReplCtx());
+      const [row] = bot.db.getModLog({ action: 'plugin-load', outcome: 'failure' });
+      expect(row).toBeDefined();
+      expect(row.reason).toBe('syntax error');
+    });
+
+    it('writes plugin-unload success row', async () => {
+      vi.spyOn(bot.pluginLoader, 'unload').mockResolvedValue(undefined);
+      await bot.commandHandler.execute('.unload removeme', makeReplCtx());
+      const [row] = bot.db.getModLog({ action: 'plugin-unload' });
+      expect(row.target).toBe('removeme');
+      expect(row.outcome).toBe('success');
+    });
+
+    it('writes plugin-unload failure row when teardown throws', async () => {
+      vi.spyOn(bot.pluginLoader, 'unload').mockRejectedValue(new Error('teardown crashed'));
+      await bot.commandHandler.execute('.unload broken', makeReplCtx());
+      const [row] = bot.db.getModLog({ action: 'plugin-unload', outcome: 'failure' });
+      expect(row).toBeDefined();
+      expect(row.reason).toBe('teardown crashed');
+    });
+
+    it('writes plugin-reload success row', async () => {
+      vi.spyOn(bot.pluginLoader, 'reload').mockResolvedValue({ name: 'r', status: 'ok' });
+      await bot.commandHandler.execute('.reload r', makeReplCtx());
+      const [row] = bot.db.getModLog({ action: 'plugin-reload' });
+      expect(row.outcome).toBe('success');
+    });
+
+    it('writes plugin-reload failure row from result', async () => {
+      vi.spyOn(bot.pluginLoader, 'reload').mockResolvedValue({
+        name: 'r',
+        status: 'error',
+        error: 'init failed',
+      });
+      await bot.commandHandler.execute('.reload r', makeReplCtx());
+      const [row] = bot.db.getModLog({ action: 'plugin-reload', outcome: 'failure' });
+      expect(row.reason).toBe('init failed');
+    });
+
+    it('writes plugin-reload failure row from thrown exception', async () => {
+      vi.spyOn(bot.pluginLoader, 'reload').mockRejectedValue(new Error('not loaded'));
+      await bot.commandHandler.execute('.reload missing', makeReplCtx());
+      const [row] = bot.db.getModLog({ action: 'plugin-reload', outcome: 'failure' });
+      expect(row.reason).toBe('not loaded');
+    });
+  });
 });

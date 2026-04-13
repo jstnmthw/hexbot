@@ -774,8 +774,14 @@ export class BotLinkHub {
         break;
     }
 
-    // Relay routing applies to all RELAY_* frames
-    this.routeRelayFrame(botname, frame);
+    // Relay routing applies to all RELAY_* frames. routeRelayFrame is
+    // authoritative: it delivers locally via sendOrDeliver → onLeafFrame when
+    // the hub itself is the relay origin/target, so skip the generic
+    // notification below to avoid double-dispatching the same frame.
+    if (frame.type.startsWith('RELAY_')) {
+      this.routeRelayFrame(botname, frame);
+      return;
+    }
 
     // Notify external handler
     this.onLeafFrame?.(botname, frame);

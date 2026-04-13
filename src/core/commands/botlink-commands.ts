@@ -1,9 +1,11 @@
 // HexBot — Bot link admin commands
 // Registers .botlink, .bots, .bottree, .whom, .bot, .bsay, .bannounce with the command handler.
 import type { CommandContext, CommandHandler } from '../../command-handler';
+import type { BotDatabase } from '../../database';
 import type { BotlinkConfig } from '../../types';
 import { formatDuration, parseDuration } from '../../utils/duration';
 import { sanitize } from '../../utils/sanitize';
+import { tryAudit } from '../audit';
 import { type BotLinkHub, isValidIP } from '../botlink-hub';
 import type { BotLinkLeaf } from '../botlink-leaf';
 import type { LinkFrame, PartyLineUser } from '../botlink-protocol';
@@ -115,6 +117,7 @@ function handleBotlinkDisconnect(
   ctx: CommandContext,
   hub: BotLinkHub | null,
   botname: string | undefined,
+  db: BotDatabase | null,
 ): void {
   const h = requireHub(ctx, hub);
   if (!h) return;
@@ -124,16 +127,28 @@ function handleBotlinkDisconnect(
   }
   if (!h.disconnectLeaf(botname)) {
     ctx.reply(`Leaf "${botname}" not found.`);
+    tryAudit(db, ctx, {
+      action: 'botlink-disconnect',
+      target: botname,
+      outcome: 'failure',
+      reason: 'leaf not found',
+    });
     return;
   }
   ctx.reply(`Disconnected "${botname}".`);
+  tryAudit(db, ctx, { action: 'botlink-disconnect', target: botname });
 }
 
-function handleBotlinkReconnect(ctx: CommandContext, leaf: BotLinkLeaf | null): void {
+function handleBotlinkReconnect(
+  ctx: CommandContext,
+  leaf: BotLinkLeaf | null,
+  db: BotDatabase | null,
+): void {
   const l = requireLeaf(ctx, leaf);
   if (!l) return;
   l.reconnect();
   ctx.reply('Reconnecting to hub...');
+  tryAudit(db, ctx, { action: 'botlink-reconnect' });
 }
 
 function handleBotlinkBans(ctx: CommandContext, hub: BotLinkHub | null): void {
@@ -213,6 +228,7 @@ export function registerBotlinkCommands(
   hub: BotLinkHub | null,
   leaf: BotLinkLeaf | null,
   config: BotlinkConfig | null,
+  db: BotDatabase | null,
   dccManager?: BotlinkDCCView | null,
   ircSay?: ((target: string, message: string) => void) | null,
 ): void {
@@ -232,9 +248,9 @@ export function registerBotlinkCommands(
         case 'status':
           return handleBotlinkStatus(ctx, config, hub, leaf);
         case 'disconnect':
-          return handleBotlinkDisconnect(ctx, hub, rest[0]);
+          return handleBotlinkDisconnect(ctx, hub, rest[0], db);
         case 'reconnect':
-          return handleBotlinkReconnect(ctx, leaf);
+          return handleBotlinkReconnect(ctx, leaf, db);
         case 'bans':
           return handleBotlinkBans(ctx, hub);
         case 'ban':
@@ -384,6 +400,11 @@ export function registerBotlinkCommands(
       );
 
       ctx.reply(`*** Requesting relay to ${targetBot}...`);
+      tryAudit(db, ctx, {
+        action: 'relay',
+        target: targetBot,
+        metadata: { handle: session.handle },
+      });
     },
   );
 
@@ -454,6 +475,17 @@ export function registerBotlinkCommands(
       const cmdText = command.startsWith('.') ? command.slice(1) : command;
       const [cmdName, ...cmdArgs] = cmdText.split(/\s+/);
 
+      // Audit the remote dispatch on the originating bot — remote command
+      // execution across the hub must land in the origin's audit trail
+      // before we hand off, so a deny on the leaf side still leaves a
+      // record of who tried what.
+      tryAudit(db, ctx, {
+        action: 'bot-remote',
+        target: targetBot,
+        reason: `.${cmdText}`,
+        metadata: { command: cmdName, args: cmdArgs.join(' ') },
+      });
+
       // Execute on self — just run the command locally
       if (targetBot === config.botname) {
         await handler.execute(`.${cmdText}`, ctx);
@@ -510,6 +542,11 @@ export function registerBotlinkCommands(
         return;
       }
       const [, botname, target, message] = match;
+      tryAudit(db, ctx, {
+        action: 'bsay',
+        target,
+        metadata: { botname, message },
+      });
 
       const sendLocal = (): void => {
         if (ircSay) ircSay(sanitize(target), sanitize(message));
@@ -571,6 +608,7 @@ export function registerBotlinkCommands(
         ctx.reply('Usage: .bannounce <message>');
         return;
       }
+      tryAudit(db, ctx, { action: 'bannounce', metadata: { message } });
 
       // Announce to local DCC sessions
       dccManager?.announce?.(`*** ${message}`);

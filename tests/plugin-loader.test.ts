@@ -967,32 +967,39 @@ describe('PluginLoader', () => {
 
       const api = getTestPluginApi();
 
+      // Plugin api.irc.* methods now thread an actor `{ by: pluginId, source:
+      // 'plugin', plugin: pluginId }` through to IRCCommands so the auto-
+      // logged mod_log row carries plugin attribution. The actor object is
+      // frozen and identical per call.
+      const pluginActor = { by: 'real-cmds', source: 'plugin', plugin: 'real-cmds' };
+
       api.op('#ch', 'nick');
-      expect(ircCommands.op).toHaveBeenCalledWith('#ch', 'nick');
+      expect(ircCommands.op).toHaveBeenCalledWith('#ch', 'nick', pluginActor);
 
       api.deop('#ch', 'nick');
-      expect(ircCommands.deop).toHaveBeenCalledWith('#ch', 'nick');
+      expect(ircCommands.deop).toHaveBeenCalledWith('#ch', 'nick', pluginActor);
 
       api.voice('#ch', 'nick');
-      expect(ircCommands.voice).toHaveBeenCalledWith('#ch', 'nick');
+      expect(ircCommands.voice).toHaveBeenCalledWith('#ch', 'nick', pluginActor);
 
       api.devoice('#ch', 'nick');
-      expect(ircCommands.devoice).toHaveBeenCalledWith('#ch', 'nick');
+      expect(ircCommands.devoice).toHaveBeenCalledWith('#ch', 'nick', pluginActor);
 
       api.kick('#ch', 'nick', 'bye');
-      expect(ircCommands.kick).toHaveBeenCalledWith('#ch', 'nick', 'bye');
+      expect(ircCommands.kick).toHaveBeenCalledWith('#ch', 'nick', 'bye', pluginActor);
 
       api.ban('#ch', '*!*@bad');
-      expect(ircCommands.ban).toHaveBeenCalledWith('#ch', '*!*@bad');
+      expect(ircCommands.ban).toHaveBeenCalledWith('#ch', '*!*@bad', pluginActor);
 
       api.mode('#ch', '+o', 'nick');
+      // mode() still takes variadic params; no actor parameter (mode batches).
       expect(ircCommands.mode).toHaveBeenCalledWith('#ch', '+o', 'nick');
 
       api.topic('#ch', 'new topic');
-      expect(ircCommands.topic).toHaveBeenCalledWith('#ch', 'new topic');
+      expect(ircCommands.topic).toHaveBeenCalledWith('#ch', 'new topic', pluginActor);
 
       api.invite('#ch', 'someuser');
-      expect(ircCommands.invite).toHaveBeenCalledWith('#ch', 'someuser');
+      expect(ircCommands.invite).toHaveBeenCalledWith('#ch', 'someuser', pluginActor);
     });
   });
 

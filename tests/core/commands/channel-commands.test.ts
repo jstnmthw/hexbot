@@ -16,13 +16,14 @@ function makeCtx(
 describe('channel-commands', () => {
   let handler: CommandHandler;
   let channelSettings: ChannelSettings;
+  let db: BotDatabase;
 
   beforeEach(() => {
-    const db = new BotDatabase(':memory:');
+    db = new BotDatabase(':memory:');
     db.open();
     handler = new CommandHandler();
     channelSettings = new ChannelSettings(db);
-    registerChannelCommands(handler, channelSettings);
+    registerChannelCommands(handler, channelSettings, db);
   });
 
   describe('.chanset', () => {
@@ -164,6 +165,56 @@ describe('channel-commands', () => {
       const ctx = makeCtx();
       await handler.execute('.chanset #test mystr hello world', ctx);
       expect(ctx.reply.mock.calls[0][0]).toContain('hello world');
+    });
+
+    // -----------------------------------------------------------------------
+    // Phase 4 — audit coverage
+    // -----------------------------------------------------------------------
+
+    it('writes a chanset-set mod_log row when a flag is set', async () => {
+      channelSettings.register('myplugin', [
+        { key: 'myflag', type: 'flag', default: false, description: 'flag' },
+      ]);
+      const ctx = makeCtx();
+      await handler.execute('.chanset #test +myflag', ctx);
+      const [row] = db.getModLog({ action: 'chanset-set' });
+      expect(row).toBeDefined();
+      expect(row.channel).toBe('#test');
+      expect(row.target).toBe('myflag');
+      expect(row.reason).toBe('true');
+      expect(row.by).toBe('admin');
+      expect(row.source).toBe('repl');
+    });
+
+    it('writes a chanset-unset row when a setting is reverted', async () => {
+      channelSettings.register('myplugin', [
+        { key: 'myflag', type: 'flag', default: false, description: 'flag' },
+      ]);
+      const ctx = makeCtx();
+      await handler.execute('.chanset #test -myflag', ctx);
+      const [row] = db.getModLog({ action: 'chanset-unset' });
+      expect(row).toBeDefined();
+      expect(row.target).toBe('myflag');
+    });
+
+    it('writes a chanset-set row with the int value in reason', async () => {
+      channelSettings.register('myplugin', [
+        { key: 'myint', type: 'int', default: 0, description: 'int' },
+      ]);
+      const ctx = makeCtx();
+      await handler.execute('.chanset #test myint 42', ctx);
+      const [row] = db.getModLog({ action: 'chanset-set' });
+      expect(row.reason).toBe('42');
+    });
+
+    it('writes a chanset-set row with the string value in reason', async () => {
+      channelSettings.register('myplugin', [
+        { key: 'mystr', type: 'string', default: '', description: 'string' },
+      ]);
+      const ctx = makeCtx();
+      await handler.execute('.chanset #test mystr hello world', ctx);
+      const [row] = db.getModLog({ action: 'chanset-set' });
+      expect(row.reason).toBe('hello world');
     });
   });
 

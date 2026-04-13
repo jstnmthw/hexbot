@@ -336,6 +336,35 @@ export interface PluginServices {
 }
 
 /** The scoped API object plugins receive in init(). */
+/**
+ * Options for {@link PluginAudit.log}. The factory injects `by`, `source`,
+ * and `plugin` so a plugin cannot spoof another plugin's identity or pretend
+ * to be a non-plugin source. Plugins control everything else.
+ */
+export interface PluginAuditOptions {
+  channel?: string | null;
+  target?: string | null;
+  outcome?: 'success' | 'failure';
+  reason?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+/**
+ * Scoped audit-writer surface a plugin sees on `api.audit`. Calling
+ * `api.audit.log('feed-add', ...)` writes a `mod_log` row with `source =
+ * 'plugin'`, `plugin = <pluginId>`, and `by = <pluginId>` — the pluginId is
+ * forced by the factory and cannot be overridden.
+ *
+ * Privileged actions that map onto `api.irc.*` (op/ban/kick/...) are
+ * already auto-audited by the underlying IRCCommands wrappers — call
+ * `api.audit.log` only for plugin-specific events that don't fit the
+ * IRC-command shape (feed mutations, lockdowns, threat-level escalations,
+ * config flips, ...).
+ */
+export interface PluginAudit {
+  log(action: string, options?: PluginAuditOptions): void;
+}
+
 export interface PluginAPI {
   pluginId: string;
 
@@ -437,6 +466,15 @@ export interface PluginAPI {
   error(...args: unknown[]): void;
   warn(...args: unknown[]): void;
   debug(...args: unknown[]): void;
+
+  /**
+   * Audit writer scoped to this plugin. The factory forces `source='plugin'`
+   * and `plugin/by=<pluginId>` so plugin code can't spoof identity. Use this
+   * for non-IRC privileged events (feed mutations, lockdowns, threat
+   * escalations, ...) — IRC mode/op/kick/ban actions are already
+   * auto-audited via the underlying `api.irc.*` wrappers.
+   */
+  audit: PluginAudit;
 }
 
 /** What a plugin module must export. */
@@ -611,6 +649,12 @@ export interface ServicesConfig {
 export interface LoggingConfig {
   level: 'debug' | 'info' | 'warn' | 'error';
   mod_actions: boolean;
+  /**
+   * Retention window for mod_log rows, in days. Optional; `0` or unset
+   * means unlimited. On startup, rows older than the cutoff are deleted
+   * in a single DELETE and the count is logged.
+   */
+  mod_log_retention_days?: number;
 }
 
 /** Message queue / flood-protection settings. */
