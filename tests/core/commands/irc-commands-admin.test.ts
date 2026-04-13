@@ -5,6 +5,7 @@ import {
   type AdminBotInfo,
   type AdminIRCClient,
   formatReconnectState,
+  formatUptimeColored,
   registerIRCAdminCommands,
 } from '../../../src/core/commands/irc-commands-admin';
 import type { ReconnectState } from '../../../src/core/reconnect-driver';
@@ -357,6 +358,63 @@ describe('irc-commands-admin', () => {
       expect(output).toContain('K-Lined');
       expect(output).toContain('4 consecutive failures');
       expect(output).toMatch(/next retry in \d+m/);
+    });
+  });
+
+  describe('.uptime', () => {
+    it('should reply with a colored uptime one-liner', async () => {
+      const ctx = makeCtx();
+      await handler.execute('.uptime', ctx);
+
+      expect(ctx.reply).toHaveBeenCalledTimes(1);
+      const output = ctx.reply.mock.calls[0][0];
+      // One line, not stacked like .status
+      expect(output).not.toContain('\n');
+      expect(output).toMatch(/^Uptime: /);
+      // Numbers are wrapped in bold+red (\x02\x0304...\x0F)
+      expect(output).toContain('\x02\x03041\x0Fh');
+      expect(output).toContain('\x02\x03041\x0Fm');
+      expect(output).toContain('\x02\x03041\x0Fs');
+      // Stripping mIRC formatting codes leaves the plain "1h 1m 1s" text
+      // eslint-disable-next-line no-control-regex
+      const stripped = output.replace(/\x02|\x0F|\x03\d{2}/g, '');
+      expect(stripped).toBe('Uptime: 1h 1m 1s');
+    });
+
+    it('should include days when uptime >= 1 day', async () => {
+      mockBotInfo.getUptime = () => 172_800_000 + 3_661_000; // 2d 1h 1m 1s
+      const ctx = makeCtx();
+      await handler.execute('.uptime', ctx);
+
+      const output = ctx.reply.mock.calls[0][0];
+      // eslint-disable-next-line no-control-regex
+      const stripped = output.replace(/\x02|\x0F|\x03\d{2}/g, '');
+      expect(stripped).toBe('Uptime: 2d 1h 1m 1s');
+    });
+  });
+
+  describe('formatUptimeColored', () => {
+    // eslint-disable-next-line no-control-regex
+    const strip = (s: string) => s.replace(/\x02|\x0F|\x03\d{2}/g, '');
+
+    it('formats sub-minute uptime as just seconds', () => {
+      expect(strip(formatUptimeColored(45_000))).toBe('45s');
+    });
+
+    it('wraps each numeric component in bold+red (\\x02\\x0304..\\x0F)', () => {
+      // 2d 1h 1m 1s — check that each digit run has formatting around it.
+      const out = formatUptimeColored(172_800_000 + 3_661_000);
+      expect(out).toBe('\x02\x03042\x0Fd \x02\x03041\x0Fh \x02\x03041\x0Fm \x02\x03041\x0Fs');
+    });
+
+    it('uses two-digit color code so digits after it do not merge', () => {
+      // With the one-digit form "\x034", uptime "4h" would emit "\x0344h"
+      // which irc clients parse as foreground 4, background 4. Guard against
+      // that regression by checking the raw bytes.
+      const out = formatUptimeColored(4 * 3600 * 1000);
+      expect(out).toContain('\x0304');
+      // eslint-disable-next-line no-control-regex
+      expect(out).not.toMatch(/\x03\d(?!\d)/);
     });
   });
 

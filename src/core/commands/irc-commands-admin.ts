@@ -147,6 +147,19 @@ export function registerIRCAdminCommands(
   );
 
   handler.registerCommand(
+    'uptime',
+    {
+      flags: '+o',
+      description: 'Show bot uptime',
+      usage: '.uptime',
+      category: 'irc',
+    },
+    (_args, ctx) => {
+      ctx.reply(`Uptime: ${formatUptimeColored(botInfo.getUptime())}`);
+    },
+  );
+
+  handler.registerCommand(
     'status',
     {
       flags: '+o',
@@ -222,5 +235,26 @@ function formatUptime(ms: number): string {
   if (hours > 0) parts.push(`${hours}h`);
   if (minutes > 0) parts.push(`${minutes}m`);
   parts.push(`${secs}s`);
+  return parts.join(' ');
+}
+
+// mIRC formatting: \x02 bold, \x034 red, \x0F reset (same convention as src/core/dcc.ts)
+/**
+ * Same output shape as formatUptime() but each numeric component is
+ * wrapped in bold+red so the digits pop while unit letters stay plain.
+ */
+export function formatUptimeColored(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+
+  const redBold = (n: number) => `\x02\x0304${n}\x0F`;
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${redBold(days)}d`);
+  if (hours > 0) parts.push(`${redBold(hours)}h`);
+  if (minutes > 0) parts.push(`${redBold(minutes)}m`);
+  parts.push(`${redBold(secs)}s`);
   return parts.join(' ');
 }
