@@ -148,6 +148,25 @@ export class Services {
     return this.servicesConfig.type !== 'none';
   }
 
+  /**
+   * Return true if the given notice looks like a NickServ ACC/STATUS reply —
+   * i.e. `nick` matches the configured NickServ target (nick-portion only,
+   * case-insensitive) AND `message` parses as either an ACC or STATUS
+   * response. Used by the DCC private-notice mirror to suppress the
+   * internal permission-verification chatter from operator consoles.
+   */
+  isNickServVerificationReply(nick: string, message: string): boolean {
+    const target = this.getNickServTarget();
+    const fromNick = target.includes('@') ? target.split('@')[0] : target;
+    if (nick.toLowerCase() !== fromNick.toLowerCase()) return false;
+    return Services.matchesVerificationShape(message);
+  }
+
+  /** Pure-function check: does this message parse as a NickServ ACC or STATUS reply? */
+  static matchesVerificationShape(message: string): boolean {
+    return /^(\S+)\s+ACC\s+\d+/i.test(message) || /^STATUS\s+(\S+)\s+\d+/i.test(message);
+  }
+
   // -------------------------------------------------------------------------
   // NickServ response parsing
   // -------------------------------------------------------------------------

@@ -42,6 +42,7 @@ export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginA
     services: {
       verifyUser: vi.fn().mockResolvedValue({ verified: false, account: null }),
       isAvailable: vi.fn().mockReturnValue(false),
+      isNickServVerificationReply: vi.fn().mockReturnValue(false),
     },
     db: {
       get: vi.fn().mockReturnValue(undefined),

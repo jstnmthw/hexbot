@@ -14,11 +14,20 @@ import { createInterface as createReadline } from 'node:readline';
 
 import type { CommandExecutor } from '../command-handler';
 import type { BindRegistrar } from '../dispatcher';
-import type { Logger } from '../logger';
+import type { LogRecord, LogSink, Logger } from '../logger';
+import { Logger as LoggerClass } from '../logger';
 import type { DccConfig, HandlerContext, PluginServices, UserRecord } from '../types';
 import { toEventObject } from '../utils/irc-event';
 import { sanitize } from '../utils/sanitize';
 import { type Casemapping, ircLower } from '../utils/wildcard';
+import {
+  type ConsoleFlagLetter,
+  type ConsoleFlagStore,
+  DEFAULT_CONSOLE_FLAGS,
+  formatFlags,
+  parseCanonicalFlags,
+  shouldDeliverToSession,
+} from './dcc-console-flags';
 import { verifyPassword } from './password';
 
 // ---------------------------------------------------------------------------
@@ -124,6 +133,8 @@ export interface DCCSessionEntry {
   readonly nick: string;
   readonly connectedAt: number;
   readonly isRelaying: boolean;
+  /** The authenticated user's permission flag string (e.g. `"nm"`). */
+  readonly handleFlags: string;
   writeLine(line: string): void;
   close(reason?: string): void;
   enterRelay(
@@ -134,6 +145,12 @@ export interface DCCSessionEntry {
   exitRelay(): void;
   /** Called when a RELAY_ACCEPT arrives — promotes a pending relay to confirmed. */
   confirmRelay(): void;
+  /** Return the current canonical console flag string (e.g. `"mojw"`). */
+  getConsoleFlags(): string;
+  /** Replace the session's console flags and persist them. */
+  setConsoleFlags(flags: Set<ConsoleFlagLetter>): void;
+  /** Deliver a log record to this session iff the filter accepts it. */
+  receiveLog(record: LogRecord): void;
 }
 
 /** The subset of DCCManager that botlink-commands depends on. */
@@ -169,6 +186,13 @@ export interface DCCManagerDeps {
   portAllocator?: PortAllocator;
   /** Injectable auth tracker. Default: new DCCAuthTracker() with stock parameters. */
   authTracker?: DCCAuthTracker;
+  /**
+   * Persistent store for per-handle DCC console flag preferences. When
+   * omitted the manager falls back to an in-memory store — fine for
+   * tests, but the production wiring in `bot.ts` always passes a
+   * database-backed implementation.
+   */
+  consoleFlagStore?: ConsoleFlagStore;
   /** Optional live stats provider for the DCC session banner. */
   getStats?: () => BannerStats;
 }
@@ -181,6 +205,24 @@ interface PendingDCC {
   server: NetServer;
   port: number;
   timer: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * Build an in-memory {@link ConsoleFlagStore}. Used as the default when
+ * DCC is constructed without a persistent store (tests, or a bot that
+ * hasn't wired up the database yet).
+ */
+export function createInMemoryConsoleFlagStore(): ConsoleFlagStore {
+  const map = new Map<string, string>();
+  return {
+    get: (handle) => map.get(handle) ?? null,
+    set: (handle, flags) => {
+      map.set(handle, flags);
+    },
+    delete: (handle) => {
+      map.delete(handle);
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +451,11 @@ export class DCCAuthTracker {
 
 export class DCCSession implements DCCSessionEntry {
   readonly handle: string;
+  /**
+   * User permission flag string (e.g. `"nm"`). Kept under the existing
+   * `flags` name for backwards compatibility with tests that read it
+   * directly; `handleFlags` is the DCCSessionEntry-visible alias.
+   */
   readonly flags: string;
   readonly nick: string;
   readonly ident: string;
@@ -423,6 +470,8 @@ export class DCCSession implements DCCSessionEntry {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   private logger: Logger | null;
+  private consoleFlagStore: ConsoleFlagStore | null;
+  private consoleFlags: Set<ConsoleFlagLetter>;
 
   /** Session state machine: prompt → active. */
   private phase: 'awaiting_password' | 'active' = 'awaiting_password';
@@ -443,6 +492,7 @@ export class DCCSession implements DCCSessionEntry {
     commandHandler: CommandExecutor;
     idleTimeoutMs: number;
     logger?: Logger | null;
+    consoleFlagStore?: ConsoleFlagStore | null;
   }) {
     this.manager = opts.manager;
     this.handle = opts.user.handle;
@@ -456,6 +506,11 @@ export class DCCSession implements DCCSessionEntry {
     this.idleTimeoutMs = opts.idleTimeoutMs;
     this.connectedAt = Date.now();
     this.logger = opts.logger ?? null;
+    this.consoleFlagStore = opts.consoleFlagStore ?? null;
+
+    const stored = this.consoleFlagStore?.get(this.handle) ?? null;
+    this.consoleFlags =
+      stored !== null ? parseCanonicalFlags(stored) : parseCanonicalFlags(DEFAULT_CONSOLE_FLAGS);
   }
 
   /** Key used for rate-limit tracking — `nick!ident@host`. */
@@ -586,10 +641,15 @@ export class DCCSession implements DCCSessionEntry {
     // Stats table
     this.writeLine('');
     const flagDisplay = this.flags ? `+${this.flags}` : '+-';
+    const consoleDisplay = (() => {
+      const f = formatFlags(this.consoleFlags);
+      return f.length > 0 ? `+${f}` : '+-';
+    })();
     this.writeLine(
       `  ${lbl('Session')}${B}${this.handle}${B} (${this.nick}!${this.ident}@${this.hostname})`,
     );
     this.writeLine(`  ${lbl('Flags')}${flagDisplay}`);
+    this.writeLine(`  ${lbl('ConFlags')}${consoleDisplay}`);
     if (stats) {
       const chanList = stats.channels.length > 0 ? stats.channels.join(', ') : grey('none');
       this.writeLine(
@@ -616,6 +676,34 @@ export class DCCSession implements DCCSessionEntry {
   /** Write a line followed by \r\n. No-op if socket is destroyed. */
   writeLine(line: string): void {
     this.write(line + '\r\n');
+  }
+
+  /** DCCSessionEntry alias for the user's permission flag string. */
+  get handleFlags(): string {
+    return this.flags;
+  }
+
+  /** Canonical string form of the current console flag set (e.g. `"mojw"`). */
+  getConsoleFlags(): string {
+    return formatFlags(this.consoleFlags);
+  }
+
+  /** Replace the session's console flags and persist them to the flag store. */
+  setConsoleFlags(flags: Set<ConsoleFlagLetter>): void {
+    this.consoleFlags = new Set(flags);
+    this.consoleFlagStore?.set(this.handle, formatFlags(this.consoleFlags));
+  }
+
+  /**
+   * Deliver a log record to this session if the filter permits. Silently
+   * skips the session while the password prompt is still pending — new
+   * log lines must not leak before authentication.
+   */
+  receiveLog(record: LogRecord): void {
+    if (this.closed) return;
+    if (this.phase !== 'active') return;
+    if (!shouldDeliverToSession(record, this.consoleFlags)) return;
+    this.writeLine(record.formatted);
   }
 
   private write(data: string): void {
@@ -729,7 +817,7 @@ export class DCCSession implements DCCSessionEntry {
       return;
     }
 
-    if (trimmed === '.console' || trimmed === '.who') {
+    if (trimmed === '.who') {
       const list = this.manager.getSessionList();
       if (list.length === 0) {
         this.writeLine('No users on the console.');
@@ -752,6 +840,7 @@ export class DCCSession implements DCCSessionEntry {
         ident: this.ident,
         hostname: this.hostname,
         channel: null,
+        dccSession: this,
         reply: (msg: string) => {
           for (const part of msg.split('\n')) {
             this.writeLine(part);
@@ -897,6 +986,8 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   private botNick: string;
   private ircListeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
   private authSweepTimer: NodeJS.Timeout | null = null;
+  private readonly consoleFlagStore: ConsoleFlagStore;
+  private logSink: LogSink | null = null;
 
   /** Failure tracker for the password prompt — exponential backoff on repeat. */
   readonly authTracker: DCCAuthTracker;
@@ -915,6 +1006,12 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     this.sessions = deps.sessions ?? new Map();
     this.portAllocator = deps.portAllocator ?? new RangePortAllocator(deps.config.port_range);
     this.authTracker = deps.authTracker ?? new DCCAuthTracker();
+    this.consoleFlagStore = deps.consoleFlagStore ?? createInMemoryConsoleFlagStore();
+  }
+
+  /** Read-only access to the console flag store — used by `.console <handle>`. */
+  getConsoleFlagStore(): ConsoleFlagStore {
+    return this.consoleFlagStore;
   }
 
   /** Called by DCCSession when the password prompt succeeds. */
@@ -949,24 +1046,8 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
     // Mirror incoming private messages and notices to all DCC sessions so
     // operators can see responses from services (e.g. NickServ, LimitServ).
-    /* v8 ignore start -- handlers registered via client.on() are unreachable: test MockIRCClient has a no-op on() */
-    const onNotice = (...args: unknown[]) => {
-      const e = toEventObject(args[0]);
-      const nick = String(e.nick ?? '');
-      const target = String(e.target ?? '');
-      const message = String(e.message ?? '');
-      if (/^[#&]/.test(target)) return; // skip channel notices
-      this.announce(`-${sanitize(nick)}- ${sanitize(message)}`);
-    };
-    const onPrivmsg = (...args: unknown[]) => {
-      const e = toEventObject(args[0]);
-      const nick = String(e.nick ?? '');
-      const target = String(e.target ?? '');
-      const message = String(e.message ?? '');
-      if (/^[#&]/.test(target)) return; // skip channel messages
-      this.announce(`<${sanitize(nick)}> ${sanitize(message)}`);
-    };
-    /* v8 ignore stop */
+    const onNotice = (...args: unknown[]) => this.mirrorNotice(args[0]);
+    const onPrivmsg = (...args: unknown[]) => this.mirrorPrivmsg(args[0]);
     this.client.on('notice', onNotice);
     this.client.on('privmsg', onPrivmsg);
     this.ircListeners = [
@@ -979,9 +1060,32 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     this.authSweepTimer = setInterval(() => this.authTracker.sweep(), 300_000);
     this.authSweepTimer.unref();
 
+    // Subscribe to the global logger so every log line gets a chance to
+    // reach a matching DCC session. The sink is removed in detach() so
+    // later logs do not walk a stale sessions map.
+    this.logSink = (record) => this.fanoutLogToSessions(record);
+    LoggerClass.addSink(this.logSink);
+
     this.logger?.info(
       `DCC CHAT listening (${this.config.ip}, ports ${this.config.port_range[0]}–${this.config.port_range[1]})`,
     );
+  }
+
+  /**
+   * Fan a single log record out to every active session. Exposed as a
+   * private method so it can be tested directly without pulling in the
+   * full Logger machinery.
+   */
+  private fanoutLogToSessions(record: LogRecord): void {
+    for (const session of this.sessions.values()) {
+      try {
+        session.receiveLog(record);
+        /* v8 ignore start -- defensive: one broken session must not block others */
+      } catch {
+        // Swallow — mirrors the Logger sink contract.
+      }
+      /* v8 ignore stop */
+    }
   }
 
   /** Detach and close all sessions. */
@@ -989,6 +1093,10 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     if (this.authSweepTimer) {
       clearInterval(this.authSweepTimer);
       this.authSweepTimer = null;
+    }
+    if (this.logSink) {
+      LoggerClass.removeSink(this.logSink);
+      this.logSink = null;
     }
     this.dispatcher.unbindAll(PLUGIN_ID);
     for (const { event, fn } of this.ircListeners) {
@@ -1021,6 +1129,32 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   onPartyJoin: ((handle: string, nick: string) => void) | null = null;
   /** Callback: local DCC session closed. */
   onPartyPart: ((handle: string, nick: string) => void) | null = null;
+
+  /**
+   * Forward a raw IRC notice to all DCC sessions, skipping channel notices
+   * and NickServ ACC/STATUS replies (internal permission-verification
+   * chatter that shouldn't reach operator consoles). Extracted from
+   * {@link attach} so unit tests can drive it directly.
+   */
+  mirrorNotice(raw: unknown): void {
+    const e = toEventObject(raw);
+    const nick = String(e.nick ?? '');
+    const target = String(e.target ?? '');
+    const message = String(e.message ?? '');
+    if (/^[#&]/.test(target)) return;
+    if (this.services.isNickServVerificationReply(nick, message)) return;
+    this.announce(`-${sanitize(nick)}- ${sanitize(message)}`);
+  }
+
+  /** Forward a raw IRC PRIVMSG to all DCC sessions, skipping channel messages. */
+  mirrorPrivmsg(raw: unknown): void {
+    const e = toEventObject(raw);
+    const nick = String(e.nick ?? '');
+    const target = String(e.target ?? '');
+    const message = String(e.message ?? '');
+    if (/^[#&]/.test(target)) return;
+    this.announce(`<${sanitize(nick)}> ${sanitize(message)}`);
+  }
 
   /** Send a message to all sessions except the one with the given handle. */
   broadcast(fromHandle: string, message: string): void {
@@ -1317,6 +1451,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
       commandHandler: this.commandHandler,
       idleTimeoutMs: this.config.idle_timeout_ms,
       logger: this.logger,
+      consoleFlagStore: this.consoleFlagStore,
     });
 
     this.logger?.info(`DCC CHAT: prompting ${pending.user.handle} (${pending.nick}) for password`);

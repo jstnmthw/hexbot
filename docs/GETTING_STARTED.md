@@ -148,7 +148,7 @@ DCC CHAT sessions require a **per-user password** in addition to a hostmask matc
 
 Passwords are hashed with scrypt before storage and must be at least 8 characters. Users can rotate their own password later from inside an active DCC session with `.chpass <newpassword>`. `.chpass` is rejected on the IRC PRIVMSG path — passwords never travel over channel messages.
 
-See [docs/DCC.md](DCC.md) for the full DCC setup walkthrough.
+See [docs/DCC.md](DCC.md) for the full DCC setup walkthrough. Once connected, use `.console` to view or change which log-line categories your session subscribes to — the defaults (`+mojw`) show operator actions, joins/parts, bot messages, and warnings. See [docs/DCC.md#console-flags](DCC.md#console-flags).
 
 ## Writing your first plugin
 

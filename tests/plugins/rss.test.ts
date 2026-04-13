@@ -137,6 +137,7 @@ function makeMockAPI(db: BotDatabase, config: Record<string, unknown> = {}): Moc
     services: {
       verifyUser: async () => ({ verified: false, account: null }),
       isAvailable: () => false,
+      isNickServVerificationReply: () => false,
     },
     db: pluginDb,
     banStore: {} as never,

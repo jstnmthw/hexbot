@@ -436,4 +436,44 @@ describe('Services', () => {
       expect(result.verified).toBe(true);
     });
   });
+
+  describe('isNickServVerificationReply', () => {
+    it('matches ACC replies from the configured NickServ', () => {
+      const { services } = createServices();
+      expect(services.isNickServVerificationReply('NickServ', 'alice ACC 3')).toBe(true);
+    });
+
+    it('matches STATUS replies from the configured NickServ', () => {
+      const { services } = createServices();
+      expect(services.isNickServVerificationReply('NickServ', 'STATUS alice 3')).toBe(true);
+    });
+
+    it('is case-insensitive on the sender nick', () => {
+      const { services } = createServices();
+      expect(services.isNickServVerificationReply('nickserv', 'STATUS alice 3')).toBe(true);
+    });
+
+    it('rejects replies from a non-NickServ sender', () => {
+      const { services } = createServices();
+      expect(services.isNickServVerificationReply('RandomBot', 'STATUS foo 3')).toBe(false);
+    });
+
+    it('rejects non-ACC/STATUS messages', () => {
+      const { services } = createServices();
+      expect(services.isNickServVerificationReply('NickServ', 'You are now identified.')).toBe(
+        false,
+      );
+    });
+
+    it('matches when services.nickserv uses a network-prefixed form (nick@host)', () => {
+      const { services } = createServices({ nickserv: 'nickserv@services.example.net' });
+      expect(services.isNickServVerificationReply('NickServ', 'STATUS alice 3')).toBe(true);
+    });
+
+    it('rejects verification shape from a custom NickServ nick when sender is different', () => {
+      const { services } = createServices({ nickserv: 'NickServAlt' });
+      expect(services.isNickServVerificationReply('NickServ', 'STATUS alice 3')).toBe(false);
+      expect(services.isNickServVerificationReply('NickServAlt', 'STATUS alice 3')).toBe(true);
+    });
+  });
 });

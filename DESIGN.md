@@ -90,6 +90,7 @@ hexbot/
 │       ├── botlink-relay-handler.ts # Remote command execution via CMD frames
 │       ├── connection-lifecycle.ts  # IRC connection/reconnection state machine
 │       ├── dcc.ts            # DCC CHAT + console (shared admin sessions)
+│       ├── dcc-console-flags.ts # Per-session console flag model + log-sink categorizer
 │       ├── help-registry.ts  # Stores/retrieves command help entries
 │       ├── message-queue.ts  # Token-bucket flood protection for outgoing messages
 │       └── commands/         # Command groups (each module registers its own)
@@ -99,6 +100,7 @@ hexbot/
 │           ├── plugin-commands.ts
 │           ├── channel-commands.ts   # .chanset, .chaninfo
 │           ├── ban-commands.ts       # .ban, .unban, .bans (global ban management)
+│           ├── dcc-console-commands.ts # .console flag view/mutate (DCC-only)
 │           └── botlink-commands.ts   # .botlink, .bots, .bottree, .relay, .whom
 ├── plugins/                  # Optional plugins (user-installable)
 │   ├── 8ball/                # Magic 8-ball command
@@ -583,6 +585,7 @@ Passive DCC CHAT for remote administration (`src/core/dcc.ts`). This is "Option 
 - **Passive DCC only** — bot opens port, user connects. Bot requires a public IPv4. Active DCC (user opens port) is rejected.
 - **Password authentication** — DCC uses per-user scrypt-hashed passwords (not hostmask-only). This follows the Eggdrop model and closes the Rizon-style vhost spoofing gap. See `src/core/password.ts`, `.chpass`, and section 2.6.
 - **Rate limiting** — per-hostmask failure counter with exponential backoff (`DCCAuthTracker`), modelled on `BotLinkAuthManager`. Repeated bad passwords from the same identity lock out the prompt path for escalating durations.
+- **Dual-path console output.** DCC consoles see two streams: (1) a private-notice mirror that forwards services/query traffic HexBot does not otherwise process (ChanServ, MemoServ, LimitServ, DMs), narrowed to skip the bot's own NickServ ACC/STATUS chatter; (2) a log sink subscribed to the global `Logger`, filtered per session by Eggdrop-style `.console +mojkpbsdw` flags (`src/core/dcc-console-flags.ts`). Flags default to `+mojw` and persist per handle in the `dcc` kv namespace. See `docs/DCC.md#console-flags`.
 - **Prompt phase idle timeout** — 30 seconds, shorter than active-session idle. Stalled prompts are killed quickly.
 - **No implicit owner** — DCC sessions get real flag enforcement (unlike the REPL which has implicit owner access).
 - **Core module, not plugin** — needs direct access to `CommandHandler` and `Permissions`, which are not in `PluginAPI`.

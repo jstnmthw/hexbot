@@ -171,6 +171,7 @@ function makeServices(verified = true): PluginServices {
   return {
     verifyUser: vi.fn().mockResolvedValue({ verified, account: 'testaccount' }),
     isAvailable: vi.fn().mockReturnValue(true),
+    isNickServVerificationReply: vi.fn().mockReturnValue(false),
   };
 }
 
@@ -194,11 +195,15 @@ function mockSession(
   return {
     connectedAt: Date.now(),
     isRelaying: false,
+    handleFlags: 'nm',
     writeLine: vi.fn(),
     close: vi.fn(),
     enterRelay: vi.fn(),
     exitRelay: vi.fn(),
     confirmRelay: vi.fn(),
+    getConsoleFlags: vi.fn().mockReturnValue('mojw'),
+    setConsoleFlags: vi.fn(),
+    receiveLog: vi.fn(),
     ...overrides,
   };
 }
@@ -631,6 +636,106 @@ describe('DCCManager', () => {
     manager.removeSession('bob');
     expect(manager.getSessionList().length).toBe(0);
   });
+
+  describe('notice/privmsg mirror', () => {
+    function makeMirrorManager(servicesOverride?: PluginServices): {
+      m: DCCManager;
+      write: ReturnType<typeof vi.fn>;
+    } {
+      const write = vi.fn();
+      const session = mockSession({ handle: 'alice', nick: 'alice', writeLine: write });
+      const sessMap = new Map<string, DCCSessionEntry>();
+      sessMap.set('alice', session);
+      const m = new DCCManager({
+        client: new MockIRCClient(),
+        dispatcher: makeDispatcher(),
+        permissions: makePermissions(makeUser()),
+        services: servicesOverride ?? makeServices(),
+        commandHandler: makeCommandHandler(),
+        config: makeConfig(),
+        version: '1.0.0',
+        botNick: 'hexbot',
+        sessions: sessMap,
+      });
+      return { m, write };
+    }
+
+    it('forwards a ChanServ notice to all sessions', () => {
+      const { m, write } = makeMirrorManager();
+      m.mirrorNotice({ nick: 'ChanServ', target: 'hexbot', message: 'Access granted.' });
+      expect(write).toHaveBeenCalledWith('-ChanServ- Access granted.');
+    });
+
+    it('forwards a MemoServ notice to all sessions', () => {
+      const { m, write } = makeMirrorManager();
+      m.mirrorNotice({ nick: 'MemoServ', target: 'hexbot', message: 'You have 1 new memo.' });
+      expect(write).toHaveBeenCalledWith('-MemoServ- You have 1 new memo.');
+    });
+
+    it('skips channel notices', () => {
+      const { m, write } = makeMirrorManager();
+      m.mirrorNotice({ nick: 'someone', target: '#hexbot', message: 'hi channel' });
+      expect(write).not.toHaveBeenCalled();
+    });
+
+    it('suppresses NickServ STATUS replies', () => {
+      const services = makeServices();
+      (services.isNickServVerificationReply as ReturnType<typeof vi.fn>).mockImplementation(
+        (nick: string, msg: string) =>
+          nick.toLowerCase() === 'nickserv' && /^STATUS\s+\S+\s+\d+/i.test(msg),
+      );
+      const { m, write } = makeMirrorManager(services);
+      m.mirrorNotice({ nick: 'NickServ', target: 'hexbot', message: 'STATUS alice 3' });
+      expect(write).not.toHaveBeenCalled();
+    });
+
+    it('suppresses NickServ ACC replies', () => {
+      const services = makeServices();
+      (services.isNickServVerificationReply as ReturnType<typeof vi.fn>).mockImplementation(
+        (nick: string, msg: string) =>
+          nick.toLowerCase() === 'nickserv' && /^\S+\s+ACC\s+\d+/i.test(msg),
+      );
+      const { m, write } = makeMirrorManager(services);
+      m.mirrorNotice({ nick: 'NickServ', target: 'hexbot', message: 'alice ACC 3' });
+      expect(write).not.toHaveBeenCalled();
+    });
+
+    it('does NOT suppress a non-NickServ sender using a STATUS-shaped message', () => {
+      const services = makeServices();
+      // Real filter would also match nick, so simulate that behavior.
+      (services.isNickServVerificationReply as ReturnType<typeof vi.fn>).mockImplementation(
+        (nick: string, msg: string) =>
+          nick.toLowerCase() === 'nickserv' && /^STATUS\s+\S+\s+\d+/i.test(msg),
+      );
+      const { m, write } = makeMirrorManager(services);
+      m.mirrorNotice({ nick: 'SomeBot', target: 'hexbot', message: 'STATUS foo 3' });
+      expect(write).toHaveBeenCalledWith('-SomeBot- STATUS foo 3');
+    });
+
+    it('forwards PRIVMSGs from services', () => {
+      const { m, write } = makeMirrorManager();
+      m.mirrorPrivmsg({ nick: 'LimitServ', target: 'hexbot', message: 'limit updated' });
+      expect(write).toHaveBeenCalledWith('<LimitServ> limit updated');
+    });
+
+    it('skips channel PRIVMSGs', () => {
+      const { m, write } = makeMirrorManager();
+      m.mirrorPrivmsg({ nick: 'alice', target: '#foo', message: 'hi' });
+      expect(write).not.toHaveBeenCalled();
+    });
+
+    it('defaults missing notice fields to empty strings', () => {
+      const { m, write } = makeMirrorManager();
+      m.mirrorNotice({});
+      expect(write).toHaveBeenCalledWith('-- ');
+    });
+
+    it('defaults missing privmsg fields to empty strings', () => {
+      const { m, write } = makeMirrorManager();
+      m.mirrorPrivmsg({});
+      expect(write).toHaveBeenCalledWith('<> ');
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -823,17 +928,7 @@ describe('DCCSession', () => {
     expect(duplex.destroyed).toBe(true);
   });
 
-  it('.console with no sessions reports empty', async () => {
-    const { socket, written, duplex } = makeMockSocket();
-    const session = buildSession(socket);
-    session.startActiveForTesting('1.0.0', 'hexbot');
-    duplex.push('.console\n');
-    await flushAsync(3);
-    expect(written.join('')).toContain('No users on the console');
-    session.close();
-  });
-
-  it('.who is an alias for .console', async () => {
+  it('.who with no sessions reports empty', async () => {
     const { socket, written, duplex } = makeMockSocket();
     const session = buildSession(socket);
     session.startActiveForTesting('1.0.0', 'hexbot');
@@ -843,27 +938,27 @@ describe('DCCSession', () => {
     session.close();
   });
 
-  it('.console shows (you) marker for the current user', async () => {
+  it('.who shows (you) marker for the current user', async () => {
     const { socket, written, duplex } = makeMockSocket();
     const mgr = makeMockManagerForSession({
       sessionList: [{ handle: 'testuser', nick: 'testnick', connectedAt: Date.now() - 5000 }],
     });
     const session = buildSession(socket, { manager: mgr });
     session.startActiveForTesting('1.0.0', 'hexbot');
-    duplex.push('.console\n');
+    duplex.push('.who\n');
     await flushAsync(3);
     expect(written.join('')).toContain('(you)');
     session.close();
   });
 
-  it('.console with other sessions lists them', async () => {
+  it('.who with other sessions lists them', async () => {
     const { socket, written, duplex } = makeMockSocket();
     const mgr = makeMockManagerForSession({
       sessionList: [{ handle: 'alice', nick: 'alice', connectedAt: Date.now() - 5000 }],
     });
     const session = buildSession(socket, { manager: mgr });
     session.startActiveForTesting('1.0.0', 'hexbot');
-    duplex.push('.console\n');
+    duplex.push('.who\n');
     await flushAsync(3);
     const output = written.join('');
     expect(output).toContain('Console (1)');
@@ -947,6 +1042,86 @@ describe('DCCSession', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe('console flags + log sink', () => {
+    it('handleFlags alias returns the user flag string', () => {
+      const { socket } = makeMockSocket();
+      const session = buildSession(socket, { user: makeUser('boss', 'nm') });
+      expect(session.handleFlags).toBe('nm');
+    });
+
+    it('getConsoleFlags returns the default string on first connect', () => {
+      const { socket } = makeMockSocket();
+      const session = buildSession(socket);
+      expect(session.getConsoleFlags()).toBe('mojw');
+    });
+
+    it('setConsoleFlags persists the canonical flag string', () => {
+      const { socket } = makeMockSocket();
+      const session = buildSession(socket);
+      session.setConsoleFlags(new Set(['m', 'w']));
+      expect(session.getConsoleFlags()).toBe('mw');
+    });
+
+    it('receiveLog drops records while the session is in the password-prompt phase', () => {
+      const { socket, written } = makeMockSocket();
+      const session = buildSession(socket);
+      // Session has not been started — phase is still awaiting_password.
+      session.receiveLog({
+        level: 'info',
+        timestamp: new Date(),
+        source: 'plugin:chanmod',
+        formatted: '[plugin:chanmod] voiced alice',
+        plain: '[plugin:chanmod] voiced alice',
+      });
+      expect(written.join('')).not.toContain('voiced alice');
+    });
+
+    it('receiveLog delivers matching records once the session is active', () => {
+      const { socket, written } = makeMockSocket();
+      const session = buildSession(socket);
+      session.startActiveForTesting('1.0.0', 'hexbot');
+      // Default flags mojw include 'o', which plugin:chanmod maps to.
+      session.receiveLog({
+        level: 'info',
+        timestamp: new Date(),
+        source: 'plugin:chanmod',
+        formatted: '[plugin:chanmod] voiced alice',
+        plain: '[plugin:chanmod] voiced alice',
+      });
+      expect(written.join('')).toContain('voiced alice');
+    });
+
+    it('receiveLog drops records filtered out by the current flag set', () => {
+      const { socket, written } = makeMockSocket();
+      const session = buildSession(socket);
+      session.startActiveForTesting('1.0.0', 'hexbot');
+      session.setConsoleFlags(new Set(['w'])); // only warnings/errors
+      session.receiveLog({
+        level: 'info',
+        timestamp: new Date(),
+        source: 'plugin:chanmod',
+        formatted: '[plugin:chanmod] voiced alice',
+        plain: '[plugin:chanmod] voiced alice',
+      });
+      expect(written.join('')).not.toContain('voiced alice');
+    });
+
+    it('receiveLog is a no-op after the session is closed', () => {
+      const { socket, written } = makeMockSocket();
+      const session = buildSession(socket);
+      session.startActiveForTesting('1.0.0', 'hexbot');
+      session.close('done');
+      session.receiveLog({
+        level: 'info',
+        timestamp: new Date(),
+        source: 'plugin:chanmod',
+        formatted: '[plugin:chanmod] post-close',
+        plain: '[plugin:chanmod] post-close',
+      });
+      expect(written.join('')).not.toContain('post-close');
+    });
   });
 });
 

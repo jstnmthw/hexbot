@@ -197,7 +197,8 @@ Console: 1 other(s) here: adminhandle
 
 Use .help for basic help.
 Use .help <command> for help on a specific command.
-Use .console to see who is currently on the console.
+Use .who to see who is currently on the console.
+Use .console to view or change your log-subscription flags.
 
 Commands start with '.' (like '.quit' or '.help')
 Everything else goes out to the console.
@@ -221,12 +222,74 @@ Your permission flags are enforced — you can only run commands you have flags 
 
 These work only inside a DCC session:
 
-| Command    | Description                             |
-| ---------- | --------------------------------------- |
-| `.console` | List connected console users and uptime |
-| `.who`     | Alias for `.console`                    |
-| `.quit`    | Disconnect from the console             |
-| `.exit`    | Alias for `.quit`                       |
+| Command           | Description                                             |
+| ----------------- | ------------------------------------------------------- |
+| `.who`            | List connected console users and uptime                 |
+| `.console`        | Show or modify this session's console flags (see below) |
+| `.console +d`     | Add flags (here: debug / dispatcher) to your session    |
+| `.console -m`     | Remove flags from your session                          |
+| `.console <h> +o` | Owner-only: set stored flags for another handle         |
+| `.quit`           | Disconnect from the console                             |
+| `.exit`           | Alias for `.quit`                                       |
+
+### Console flags
+
+The DCC console is a **filtered live view of the bot's log**. Every log
+line the bot writes to stdout is also offered to every DCC session. Each
+session decides which categories it wants to see via its `.console`
+flags, modelled after Eggdrop's partyline `+mojkpbsdw` mode letters.
+
+#### Flag letters
+
+| Letter | Category                          | Sources that map to it                                                  |
+| -----: | :-------------------------------- | :---------------------------------------------------------------------- |
+|    `m` | bot messages / services / memo    | `[bot]`, `[dcc]`, `[services]`, `[memo]`, `[database]`                  |
+|    `o` | operator actions / mode changes   | `[plugin:chanmod]`, `[plugin:chanset]`, `[irc-commands]`, `[ban-store]` |
+|    `k` | kicks / bans / channel protection | `[channel-protection]`, `[plugin:chanmod#k]`                            |
+|    `j` | joins / parts / signoffs / nicks  | `[channel-state]`, `[plugin:greeter]`, `[plugin:seen]`                  |
+|    `p` | public chat / command dispatch    | `[command-handler]`, `[plugin-loader]`                                  |
+|    `b` | botnet / botlink                  | `[botlink:hub]`, `[botlink:leaf]`, `[dcc-relay]`                        |
+|    `s` | server / connection               | `[connection]`, `[reconnect]`, `[irc-bridge]`, `[sts]`                  |
+|    `d` | debug / dispatcher                | `[dispatcher]` and every `debug`-level line                             |
+|    `w` | warnings / errors                 | any `warn` / `error` line regardless of source                          |
+
+#### Default flags
+
+`+mojw` on first connect — bot messages, operator actions, join/part
+activity, and warnings. Dispatcher debug chatter and public command
+routing are **off by default**; turn them on only while debugging. The
+default is a compile-time constant (`DEFAULT_CONSOLE_FLAGS` in
+`src/core/dcc-console-flags.ts`); there is no config knob for it.
+
+#### Usage
+
+```
+.console                 → Console flags: +mojw
+.console +p              → subscribe to command-handler dispatch
+.console -j              → stop seeing joins/parts
+.console +mojkdwpbs      → everything (firehose)
+.console +all            → sugar: add every known flag
+.console -all +mw        → reset to messages + warnings only
+.console alice +o        → set default flags for another handle (owner only)
+```
+
+Flags are **persisted per handle** in the kv store — the next time that
+handle connects, their last choice is restored. Unknown letters are
+rejected with `Unknown console flag: <letter>`.
+
+#### Recipes
+
+- **"I want to watch threats only"** → `.console -all +kw`
+- **"I'm debugging a plugin"** → `.console +dp`
+- **"I only want to hear about errors"** → `.console -all +w`
+- **"Firehose everything"** → `.console +all`
+
+Note that the private-notice mirror (which forwards services chatter
+from NickServ, ChanServ, LimitServ, etc. into the DCC console) is a
+separate path from the log sink. NickServ ACC/STATUS replies from the
+bot's own permission-verification path are filtered out of that mirror
+automatically — you'll only ever see services notices that HexBot did
+not already consume internally.
 
 ### Console (shared session)
 

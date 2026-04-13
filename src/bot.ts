@@ -27,6 +27,7 @@ import { ChannelState } from './core/channel-state';
 import { registerBanCommands } from './core/commands/ban-commands';
 import { registerBotlinkCommands } from './core/commands/botlink-commands';
 import { registerChannelCommands } from './core/commands/channel-commands';
+import { registerDccConsoleCommands } from './core/commands/dcc-console-commands';
 import { registerDispatcherCommands } from './core/commands/dispatcher-commands';
 import { registerIRCAdminCommands } from './core/commands/irc-commands-admin';
 import { registerPasswordCommands } from './core/commands/password-commands';
@@ -312,6 +313,11 @@ export class Bot {
         version: this.readPackageVersion(),
         botNick: this.config.irc.nick,
         logger: this.logger,
+        consoleFlagStore: {
+          get: (handle) => this.db.get('dcc', `console_flags:${handle}`),
+          set: (handle, flags) => this.db.set('dcc', `console_flags:${handle}`, flags),
+          delete: (handle) => this.db.del('dcc', `console_flags:${handle}`),
+        },
         getStats: () => ({
           channels: this.channelState.getAllChannels().map((ch) => ch.name),
           pluginCount: this.pluginLoader.list().length,
@@ -321,6 +327,10 @@ export class Bot {
         }),
       });
       this._dccManager.attach();
+      registerDccConsoleCommands(this.commandHandler, this._dccManager);
+      this.eventBus.on('user:removed', (handle: string) => {
+        this.db.del('dcc', `console_flags:${handle}`);
+      });
       this.botLogger.info('DCC CHAT enabled');
     }
 
@@ -555,12 +565,15 @@ export class Bot {
     // Construct the reconnect driver lazily here so `.start()` owns its
     // lifecycle. The driver's connect callback re-opens the socket using
     // the latest options (STS upgrades mutate this.config between retries).
+    const reconnectLogger = this.logger.child('reconnect');
     this._reconnectDriver = createReconnectDriver({
       connect: () => {
-        this.botLogger.info(`Reconnect attempt to ${this.config.irc.host}:${this.config.irc.port}`);
+        reconnectLogger.info(
+          `Reconnect attempt to ${this.config.irc.host}:${this.config.irc.port}`,
+        );
         this.client.connect(this.buildClientOptions());
       },
-      logger: this.botLogger,
+      logger: reconnectLogger,
       eventBus: this.eventBus,
       config: {
         transient_initial_ms: 1_000,
@@ -637,7 +650,7 @@ export class Bot {
           messageQueue: this.messageQueue,
           dispatcher: this.dispatcher,
           channelState: this.channelState,
-          logger: this.botLogger,
+          logger: this.logger.child('connection'),
         },
         resolve,
         reject,

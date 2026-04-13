@@ -1,6 +1,7 @@
 // HexBot — Command router
 // Parses command strings and dispatches to registered handlers.
 // Transport-agnostic — works with REPL, IRC, or any future input source.
+import type { DCCSessionEntry } from './core/dcc';
 import type { HandlerContext } from './types';
 import { formatTable } from './utils/table';
 
@@ -15,6 +16,12 @@ export interface CommandContext {
   ident?: string;
   hostname?: string;
   channel: string | null;
+  /**
+   * When the command arrived over DCC, the session that sent it. Set by
+   * {@link DCCSession.onLine}; undefined for every other transport. Used
+   * by DCC-only commands (e.g. `.console`) to reach per-session state.
+   */
+  dccSession?: DCCSessionEntry;
   reply(msg: string): void;
 }
 

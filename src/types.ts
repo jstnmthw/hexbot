@@ -327,6 +327,12 @@ export interface PluginServices {
   verifyUser(nick: string): Promise<VerifyResult>;
   /** True if the configured services adapter is available (type is not 'none'). */
   isAvailable(): boolean;
+  /**
+   * True if the given IRC notice matches a NickServ ACC/STATUS reply shape
+   * from the configured NickServ target. Used to filter internal
+   * verification chatter from operator consoles.
+   */
+  isNickServVerificationReply(nick: string, message: string): boolean;
 }
 
 /** The scoped API object plugins receive in init(). */

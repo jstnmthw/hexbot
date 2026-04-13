@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { Logger, createLogger } from '../src/logger';
+import { type LogRecord, type LogSink, Logger, createLogger } from '../src/logger';
 
 describe('Logger', () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
@@ -13,6 +13,7 @@ describe('Logger', () => {
 
   afterEach(() => {
     Logger.setOutputHook(null);
+    Logger.clearSinks();
     logSpy.mockRestore();
     errorSpy.mockRestore();
   });
@@ -239,16 +240,17 @@ describe('Logger', () => {
   // -------------------------------------------------------------------------
 
   describe('multiple arguments', () => {
-    it('should pass through additional arguments', () => {
+    it('should include additional arguments in the formatted output', () => {
       const logger = createLogger('info');
       const obj = { key: 'value' };
 
       logger.info('message', obj, 42);
 
       const callArgs = logSpy.mock.calls[0];
-      // Should contain the extra args after the formatted parts
-      expect(callArgs).toContain(obj);
-      expect(callArgs).toContain(42);
+      const fullOutput = callArgs.join(' ');
+      expect(fullOutput).toContain('message');
+      expect(fullOutput).toContain("key: 'value'");
+      expect(fullOutput).toContain('42');
     });
   });
 
@@ -324,6 +326,149 @@ describe('Logger', () => {
       expect(hook).toHaveBeenCalledTimes(1);
       expect(hook.mock.calls[0][0]).toContain('[irc]');
       expect(hook.mock.calls[0][0]).toContain('test');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Multi-sink API
+  // -------------------------------------------------------------------------
+
+  describe('multi-sink output', () => {
+    it('delivers records to sinks added via addSink alongside the console', () => {
+      const sink = vi.fn<LogSink>();
+      Logger.addSink(sink);
+
+      const logger = createLogger('info');
+      logger.info('hello');
+
+      // Console still receives the line (default consoleSink is not
+      // removed when an additional sink is added).
+      expect(logSpy).toHaveBeenCalledTimes(1);
+      expect(sink).toHaveBeenCalledTimes(1);
+
+      const record = sink.mock.calls[0][0];
+      expect(record.level).toBe('info');
+      expect(record.formatted).toContain('hello');
+      expect(record.plain).toContain('hello');
+      // eslint-disable-next-line no-control-regex
+      expect(record.plain).not.toMatch(/\u001b\[/);
+      expect(record.timestamp).toBeInstanceOf(Date);
+      expect(record.source).toBeNull();
+    });
+
+    it('records the child prefix in LogRecord.source', () => {
+      const sink = vi.fn<LogSink>();
+      Logger.addSink(sink);
+
+      const root = createLogger('info');
+      const child = root.child('plugin:chanmod');
+      child.info('voiced bob');
+
+      expect(sink).toHaveBeenCalledTimes(1);
+      expect(sink.mock.calls[0][0].source).toBe('plugin:chanmod');
+    });
+
+    it('embeds a category override in LogRecord.source', () => {
+      const sink = vi.fn<LogSink>();
+      Logger.addSink(sink);
+
+      const root = createLogger('info');
+      const child = root.child('plugin:chanmod', { category: 'k' });
+      child.info('ban foo');
+
+      expect(sink.mock.calls[0][0].source).toBe('plugin:chanmod#k');
+    });
+
+    it('delivers each record to every registered sink', () => {
+      const a = vi.fn<LogSink>();
+      const b = vi.fn<LogSink>();
+      Logger.addSink(a);
+      Logger.addSink(b);
+
+      const logger = createLogger('info');
+      logger.info('fanout');
+
+      expect(a).toHaveBeenCalledTimes(1);
+      expect(b).toHaveBeenCalledTimes(1);
+    });
+
+    it('removeSink stops further delivery', () => {
+      const sink = vi.fn<LogSink>();
+      Logger.addSink(sink);
+
+      const logger = createLogger('info');
+      logger.info('first');
+      Logger.removeSink(sink);
+      logger.info('second');
+
+      expect(sink).toHaveBeenCalledTimes(1);
+      expect(sink.mock.calls[0][0].plain).toContain('first');
+    });
+
+    it('a throwing sink does not break other sinks or the caller', () => {
+      const boom = vi.fn<LogSink>(() => {
+        throw new Error('boom');
+      });
+      const good = vi.fn<LogSink>();
+      Logger.addSink(boom);
+      Logger.addSink(good);
+
+      const logger = createLogger('info');
+      expect(() => logger.info('still works')).not.toThrow();
+      expect(good).toHaveBeenCalledTimes(1);
+      expect(good.mock.calls[0][0].plain).toContain('still works');
+    });
+
+    it('setOutputHook still receives formatted lines (back-compat)', () => {
+      const hook = vi.fn();
+      Logger.setOutputHook(hook);
+
+      const logger = createLogger('info');
+      logger.info('legacy');
+
+      expect(hook).toHaveBeenCalledTimes(1);
+      expect(hook.mock.calls[0][0]).toContain('legacy');
+      // Console must NOT also receive it — the hook owns stdout.
+      expect(logSpy).not.toHaveBeenCalled();
+    });
+
+    it('setOutputHook coexists with an addSink caller', () => {
+      const hook = vi.fn();
+      const extra = vi.fn<LogSink>();
+      Logger.setOutputHook(hook);
+      Logger.addSink(extra);
+
+      const logger = createLogger('info');
+      logger.info('both');
+
+      expect(hook).toHaveBeenCalledTimes(1);
+      expect(extra).toHaveBeenCalledTimes(1);
+      // Hook still owns stdout.
+      expect(logSpy).not.toHaveBeenCalled();
+    });
+
+    it('setOutputHook(null) restores the default console sink', () => {
+      const hook = vi.fn();
+      Logger.setOutputHook(hook);
+      Logger.setOutputHook(null);
+
+      const logger = createLogger('info');
+      logger.info('after clear');
+
+      expect(hook).not.toHaveBeenCalled();
+      expect(logSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('delivers warn and error records with the correct level', () => {
+      const sink = vi.fn<LogSink>();
+      Logger.addSink(sink);
+
+      const logger = createLogger('debug');
+      logger.warn('w');
+      logger.error('e');
+
+      const levels = sink.mock.calls.map((c) => (c[0] as LogRecord).level);
+      expect(levels).toEqual(['warn', 'error']);
     });
   });
 });

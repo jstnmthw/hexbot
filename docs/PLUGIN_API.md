@@ -611,6 +611,18 @@ Log an error.
 
 Log a debug message. Only visible when the bot's log level is set to `debug`.
 
+#### DCC console routing
+
+Every line written via `api.log` / `api.warn` / `api.error` / `api.debug` is
+offered to each connected DCC session. Whether it reaches a given session
+depends on that session's `.console` flags. By default a plugin's lines land
+in the `m` (bot messages) category, except for plugins whose prefix the core
+already maps elsewhere (`plugin:chanmod` → `o`, `plugin:greeter`/`plugin:seen`
+→ `j`, etc. — see [docs/DCC.md#console-flags](DCC.md#console-flags)). Debug
+lines only reach sessions holding the `d` flag; warn/error lines always
+reach sessions holding `w`. Plugin authors do not normally need to think
+about this — pick a clear log level and the category follows.
+
 ---
 
 ## Full example

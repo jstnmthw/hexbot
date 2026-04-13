@@ -97,7 +97,7 @@ export class MessageQueue {
     this.capacityMs = Math.max(this.costMs, this.burst * this.costMs);
     this.budgetMs = this.burst * this.costMs;
     this.lastRefill = Date.now();
-    this.logger = options.logger ?? null;
+    this.logger = options.logger?.child('message-queue') ?? null;
 
     this.start();
   }

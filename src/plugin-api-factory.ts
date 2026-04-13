@@ -321,6 +321,9 @@ function createPluginServicesApi(services: Services | null): PluginServices {
     isAvailable() {
       return services?.isAvailable() ?? false;
     },
+    isNickServVerificationReply(nick: string, message: string) {
+      return services?.isNickServVerificationReply(nick, message) ?? false;
+    },
   });
 }
 
