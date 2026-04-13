@@ -87,8 +87,7 @@
   "memo": {
     "memoserv_relay": true,
     "memoserv_nick": "MemoServ",
-    "delivery_cooldown_seconds": 60,
-    "response_timeout_ms": 3000
+    "delivery_cooldown_seconds": 60
   },
   "quit_message": "HexBot",
   "channel_rejoin_interval_ms": 30000

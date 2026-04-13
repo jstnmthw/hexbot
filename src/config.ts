@@ -151,7 +151,6 @@ const MemoConfigSchema = z.strictObject({
   memoserv_relay: z.boolean().optional(),
   memoserv_nick: z.string().optional(),
   delivery_cooldown_seconds: z.number().int().min(0).optional(),
-  response_timeout_ms: z.number().int().positive().optional(),
 });
 
 export const BotConfigOnDiskSchema = z.strictObject({

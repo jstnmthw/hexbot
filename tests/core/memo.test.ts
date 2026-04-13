@@ -112,7 +112,7 @@ describe('MemoManager', () => {
       expect(notices[0].message).toContain('[MemoServ] You have 1 new memo.');
     });
 
-    it('relays unsolicited notices to DCC console', () => {
+    it('does not duplicate MemoServ notices to DCC console (generic mirror handles it)', () => {
       memo = setupMemo(bot);
       const announced: string[] = [];
       memo.setDCCManager({
@@ -123,8 +123,7 @@ describe('MemoManager', () => {
 
       sendNotice(bot, 'MemoServ', 'You have 2 new memos.');
 
-      expect(announced).toHaveLength(1);
-      expect(announced[0]).toContain('[MemoServ] You have 2 new memos.');
+      expect(announced).toHaveLength(0);
     });
 
     it('ignores notices from non-MemoServ nicks', () => {
@@ -376,114 +375,6 @@ describe('MemoManager', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Response capture
-  // -------------------------------------------------------------------------
-
-  describe('Response capture', () => {
-    it('captures MemoServ response and delivers to requesting session', async () => {
-      memo = setupMemo(bot);
-
-      const replies: string[] = [];
-      await bot.commandHandler.execute('.memo list', dccCtx('admin', replies));
-
-      // Simulate MemoServ response
-      sendNotice(bot, 'MemoServ', 'Memos for HEX:');
-      sendNotice(bot, 'MemoServ', '  1  d3m0n`  Apr 06 2026 [unread]');
-      sendNotice(bot, 'MemoServ', 'End of memo list.');
-
-      // Advance past the response timeout
-      vi.advanceTimersByTime(3000);
-
-      expect(replies).toHaveLength(3);
-      expect(replies[0]).toContain('[MemoServ] Memos for HEX:');
-      expect(replies[1]).toContain('d3m0n`');
-      expect(replies[2]).toContain('End of memo list.');
-    });
-
-    it('buffers multi-line responses', async () => {
-      memo = setupMemo(bot);
-
-      const replies: string[] = [];
-      await bot.commandHandler.execute('.memo read', dccCtx('admin', replies));
-
-      sendNotice(bot, 'MemoServ', 'Memo 1 from d3m0n` (Apr 06 2026).');
-      sendNotice(bot, 'MemoServ', 'Hello world!');
-
-      vi.advanceTimersByTime(3000);
-
-      expect(replies).toHaveLength(2);
-      expect(replies[0]).toContain('Memo 1');
-      expect(replies[1]).toContain('Hello world!');
-    });
-
-    it('delivers "No response" on timeout with empty buffer', async () => {
-      memo = setupMemo(bot);
-
-      const replies: string[] = [];
-      await bot.commandHandler.execute('.memo info', dccCtx('admin', replies));
-
-      // No MemoServ response arrives
-      vi.advanceTimersByTime(3000);
-
-      expect(replies).toHaveLength(1);
-      expect(replies[0]).toContain('No response from MemoServ');
-    });
-
-    it('rejects concurrent requests', async () => {
-      memo = setupMemo(bot);
-
-      const replies1: string[] = [];
-      await bot.commandHandler.execute('.memo list', dccCtx('admin', replies1));
-
-      const replies2: string[] = [];
-      await bot.commandHandler.execute('.memo read', dccCtx('master', replies2));
-
-      expect(replies2).toHaveLength(1);
-      expect(replies2[0]).toContain('MemoServ request in progress');
-
-      // Clean up the first request
-      vi.advanceTimersByTime(3000);
-    });
-
-    it('does not relay captured responses to other admins', async () => {
-      memo = setupMemo(bot);
-      joinChannel(bot, 'admin', '#test');
-      joinChannel(bot, 'master', '#test');
-      bot.client.messages.length = 0;
-
-      const replies: string[] = [];
-      await bot.commandHandler.execute('.memo list', dccCtx('admin', replies));
-
-      sendNotice(bot, 'MemoServ', 'Memos for HEX:');
-      vi.advanceTimersByTime(3000);
-
-      // The response should go to the requesting session, NOT broadcast as notices
-      const notices = bot.client.messages.filter((m) => m.type === 'notice');
-      expect(notices).toHaveLength(0);
-      expect(replies).toHaveLength(1);
-    });
-
-    it('resets timeout on each new line from MemoServ', async () => {
-      memo = setupMemo(bot);
-
-      const replies: string[] = [];
-      await bot.commandHandler.execute('.memo list', dccCtx('admin', replies));
-
-      sendNotice(bot, 'MemoServ', 'Line 1');
-      vi.advanceTimersByTime(2000); // Less than timeout
-      sendNotice(bot, 'MemoServ', 'Line 2');
-      vi.advanceTimersByTime(2000); // Less than timeout
-      sendNotice(bot, 'MemoServ', 'Line 3');
-
-      // Not delivered yet — timer was reset
-      expect(replies).toHaveLength(0);
-
-      vi.advanceTimersByTime(3000); // Now timeout fires
-      expect(replies).toHaveLength(3);
-    });
-  });
-
-  // -------------------------------------------------------------------------
   // Join delivery
   // -------------------------------------------------------------------------
 
@@ -595,27 +486,6 @@ describe('MemoManager', () => {
       memo.notifyOnDCCConnect('admin', 'admin');
 
       expect(lines).toHaveLength(0);
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // MemoServ DCC relay
-  // -------------------------------------------------------------------------
-
-  describe('MemoServ DCC relay', () => {
-    it('announces MemoServ notices to DCC sessions', () => {
-      memo = setupMemo(bot);
-      const announced: string[] = [];
-      memo.setDCCManager({
-        announce: (msg) => announced.push(msg),
-        getSessionList: () => [],
-        getSession: () => undefined,
-      });
-
-      sendNotice(bot, 'MemoServ', 'You have 1 new memo.');
-
-      expect(announced).toHaveLength(1);
-      expect(announced[0]).toContain('[MemoServ]');
     });
   });
 });

@@ -698,8 +698,6 @@ export interface MemoConfig {
   memoserv_nick?: string;
   /** Cooldown in seconds between join-delivery notifications per user. Default: 60. */
   delivery_cooldown_seconds?: number;
-  /** How long (ms) to wait for MemoServ response after sending a command. Default: 3000. */
-  response_timeout_ms?: number;
 }
 
 /** Shape for config/bot.json. */
