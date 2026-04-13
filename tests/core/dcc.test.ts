@@ -198,6 +198,7 @@ function mockSession(
     close: vi.fn(),
     enterRelay: vi.fn(),
     exitRelay: vi.fn(),
+    confirmRelay: vi.fn(),
     ...overrides,
   };
 }
@@ -991,20 +992,22 @@ describe('DCCSession relay mode', () => {
     expect(written.join('')).toContain('Relay ended');
   });
 
-  it('.quit exits relay mode', async () => {
-    const { socket, written, duplex } = makeMockSocket();
+  it('.quit is forwarded in relay mode (does NOT exit)', async () => {
+    const { socket, duplex } = makeMockSocket();
     const mgr = makeMockManagerForSession();
     (mgr.getBotName as ReturnType<typeof vi.fn>).mockReturnValue('mybot');
     mgr.onRelayEnd = vi.fn();
     const session = buildSession(socket, { manager: mgr });
     session.startActiveForTesting('1.0.0', 'hexbot');
 
-    session.enterRelay('leaf1', () => {});
+    const forwarded: string[] = [];
+    session.enterRelay('leaf1', (line) => forwarded.push(line));
     duplex.push('.quit\r\n');
     await flushAsync();
 
-    expect(session.isRelaying).toBe(false);
-    expect(written.join('')).toContain('Relay ended');
+    expect(session.isRelaying).toBe(true);
+    expect(forwarded).toContain('.quit');
+    expect(mgr.onRelayEnd).not.toHaveBeenCalled();
   });
 
   it('exitRelay returns to normal mode', async () => {
@@ -1023,6 +1026,98 @@ describe('DCCSession relay mode', () => {
     duplex.push('normal text\r\n');
     await flushAsync();
     expect(mgr.broadcast).toHaveBeenCalled();
+  });
+
+  it('confirmRelay writes the "Now relaying" line and clears the pending timer', async () => {
+    vi.useFakeTimers();
+    try {
+      const { socket, written } = makeMockSocket();
+      const mgr = makeMockManagerForSession();
+      const session = buildSession(socket, { manager: mgr });
+      session.startActiveForTesting('1.0.0', 'hexbot');
+
+      const onTimeout = vi.fn();
+      session.enterRelay('leaf1', () => {}, { timeoutMs: 3000, onTimeout });
+      session.confirmRelay();
+
+      expect(written.join('')).toContain('Now relaying to leaf1');
+
+      // Advance past the original timeout — it should be cancelled
+      vi.advanceTimersByTime(5000);
+      expect(onTimeout).not.toHaveBeenCalled();
+      expect(session.isRelaying).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('pending relay timeout exits relay and fires onTimeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const { socket, written } = makeMockSocket();
+      const mgr = makeMockManagerForSession();
+      const session = buildSession(socket, { manager: mgr });
+      session.startActiveForTesting('1.0.0', 'hexbot');
+
+      const onTimeout = vi.fn();
+      session.enterRelay('leaf1', () => {}, { timeoutMs: 3000, onTimeout });
+      vi.advanceTimersByTime(3000);
+
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+      expect(session.isRelaying).toBe(false);
+      expect(written.join('')).toContain('Relay request to leaf1 timed out');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('confirmRelay is a no-op when not in relay mode', () => {
+    const { socket, written } = makeMockSocket();
+    const mgr = makeMockManagerForSession();
+    const session = buildSession(socket, { manager: mgr });
+    session.startActiveForTesting('1.0.0', 'hexbot');
+
+    session.confirmRelay();
+    expect(written.join('')).not.toContain('Now relaying');
+  });
+
+  it('exitRelay clears a pending timer set by enterRelay options', () => {
+    vi.useFakeTimers();
+    try {
+      const { socket } = makeMockSocket();
+      const mgr = makeMockManagerForSession();
+      const session = buildSession(socket, { manager: mgr });
+      session.startActiveForTesting('1.0.0', 'hexbot');
+
+      const onTimeout = vi.fn();
+      session.enterRelay('leaf1', () => {}, { timeoutMs: 3000, onTimeout });
+      session.exitRelay();
+      vi.advanceTimersByTime(5000);
+      expect(onTimeout).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('enterRelay clears a previous pending timer when re-entered', () => {
+    vi.useFakeTimers();
+    try {
+      const { socket } = makeMockSocket();
+      const mgr = makeMockManagerForSession();
+      const session = buildSession(socket, { manager: mgr });
+      session.startActiveForTesting('1.0.0', 'hexbot');
+
+      const onTimeout1 = vi.fn();
+      const onTimeout2 = vi.fn();
+      session.enterRelay('leafA', () => {}, { timeoutMs: 3000, onTimeout: onTimeout1 });
+      // Re-enter for a different target — first timer must be cancelled
+      session.enterRelay('leafB', () => {}, { timeoutMs: 3000, onTimeout: onTimeout2 });
+      vi.advanceTimersByTime(3000);
+      expect(onTimeout1).not.toHaveBeenCalled();
+      expect(onTimeout2).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

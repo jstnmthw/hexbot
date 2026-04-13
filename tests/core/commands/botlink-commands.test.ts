@@ -511,8 +511,12 @@ describe('botlink commands', () => {
       const replies: string[] = [];
       await handler.execute('.relay leaf1', makeCtx(replies, { source: 'dcc' }));
 
-      expect(replies[0]).toContain('Relaying to leaf1');
-      expect(enterRelayFn).toHaveBeenCalledWith('leaf1', expect.any(Function));
+      expect(replies[0]).toContain('Requesting relay to leaf1');
+      expect(enterRelayFn).toHaveBeenCalledWith(
+        'leaf1',
+        expect.any(Function),
+        expect.objectContaining({ timeoutMs: expect.any(Number) }),
+      );
       hub.close();
     });
 
@@ -533,7 +537,7 @@ describe('botlink commands', () => {
       const replies: string[] = [];
       await handler.execute('.relay somebot', makeCtx(replies, { source: 'dcc' }));
 
-      expect(replies[0]).toContain('Relaying to somebot');
+      expect(replies[0]).toContain('Requesting relay to somebot');
       expect(enterRelayFn).toHaveBeenCalled();
       leaf.disconnect();
     });

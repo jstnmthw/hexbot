@@ -852,7 +852,15 @@ export class Bot {
         },
       },
       stripFormatting,
+      logger: this._relayLogger,
     };
+  }
+
+  /** Lazy-initialized child logger for the relay handler. */
+  private _relayLoggerCache: Logger | null = null;
+  private get _relayLogger(): Logger {
+    this._relayLoggerCache ??= this.logger.child('botlink:relay');
+    return this._relayLoggerCache;
   }
 
   /** Handle incoming PROTECT_* frames — delegates to extracted handler with permission guards. */
@@ -930,11 +938,14 @@ export class Bot {
     this._dccManager.onPartyPart = (handle) => {
       sendFrame({ type: 'PARTY_PART', handle, fromBot: botname });
     };
-    this._dccManager.onRelayEnd = (handle, _targetBot) => {
-      sendFrame({ type: 'RELAY_END', handle, reason: 'User ended relay' });
-      // Clean up the hub's relay routing table when the hub originated the relay.
+    this._dccManager.onRelayEnd = (handle, targetBot) => {
+      const endFrame: LinkFrame = { type: 'RELAY_END', handle, reason: 'User ended relay' };
+      // Send only to the involved bot — no need to broadcast RELAY_END to unrelated leaves.
       if (link instanceof BotLinkHub) {
+        link.send(targetBot, endFrame);
         link.unregisterRelay(handle);
+      } else {
+        link.send(endFrame);
       }
     };
   }

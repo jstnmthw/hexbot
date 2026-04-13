@@ -110,6 +110,14 @@ export interface DCCSessionManager {
   onAuthFailure?(key: string, handle: string): void;
 }
 
+/** Options for DCCSessionEntry.enterRelay — optional pending-confirmation timeout. */
+export interface RelayEnterOptions {
+  /** If set, start a timer that fires onTimeout unless confirmRelay() is called first. */
+  timeoutMs: number;
+  /** Fired when the timer elapses without a confirmation. */
+  onTimeout: () => void;
+}
+
 /** The subset of DCCSession that DCCManager and consumers depend on. */
 export interface DCCSessionEntry {
   readonly handle: string;
@@ -118,8 +126,14 @@ export interface DCCSessionEntry {
   readonly isRelaying: boolean;
   writeLine(line: string): void;
   close(reason?: string): void;
-  enterRelay(targetBot: string, callback: (line: string) => void): void;
+  enterRelay(
+    targetBot: string,
+    callback: (line: string) => void,
+    options?: RelayEnterOptions,
+  ): void;
   exitRelay(): void;
+  /** Called when a RELAY_ACCEPT arrives — promotes a pending relay to confirmed. */
+  confirmRelay(): void;
 }
 
 /** The subset of DCCManager that botlink-commands depends on. */
@@ -129,7 +143,11 @@ export interface BotlinkDCCView {
     | {
         handle: string;
         isRelaying: boolean;
-        enterRelay(targetBot: string, callback: (line: string) => void): void;
+        enterRelay(
+          targetBot: string,
+          callback: (line: string) => void,
+          options?: RelayEnterOptions,
+        ): void;
       }
     | undefined;
   announce?(message: string): void;
@@ -599,17 +617,62 @@ export class DCCSession implements DCCSessionEntry {
   /** Relay callback — when set, all input is forwarded here instead of processed locally. */
   private _relayCallback: ((line: string) => void) | null = null;
   private _relayTarget: string | null = null;
+  /** True once the target bot has ACKed the RELAY_REQUEST. */
+  private _relayConfirmed = false;
+  /** Pending-confirmation timer — cleared on confirm or exit. */
+  private _relayTimer: NodeJS.Timeout | null = null;
 
-  /** Put this session into relay mode. All input goes to the callback. */
-  enterRelay(targetBot: string, callback: (line: string) => void): void {
+  /**
+   * Put this session into relay mode. All input goes to the callback.
+   * If `options` is provided, the relay starts in pending state: the caller
+   * must call `confirmRelay()` before `options.timeoutMs` elapses, otherwise
+   * `options.onTimeout` fires.
+   */
+  enterRelay(
+    targetBot: string,
+    callback: (line: string) => void,
+    options?: RelayEnterOptions,
+  ): void {
     this._relayCallback = callback;
     this._relayTarget = targetBot;
+    this._relayConfirmed = !options;
+    if (this._relayTimer) {
+      clearTimeout(this._relayTimer);
+      this._relayTimer = null;
+    }
+    if (options) {
+      this._relayTimer = setTimeout(() => {
+        this._relayTimer = null;
+        if (this._relayConfirmed) return;
+        const target = this._relayTarget;
+        this.exitRelay();
+        this.writeLine(`*** Relay request to ${target} timed out.`);
+        options.onTimeout();
+      }, options.timeoutMs);
+      this._relayTimer.unref?.();
+    }
+  }
+
+  /** Promote a pending relay to confirmed. No-op if already confirmed or not relaying. */
+  confirmRelay(): void {
+    if (!this._relayCallback || this._relayConfirmed) return;
+    this._relayConfirmed = true;
+    if (this._relayTimer) {
+      clearTimeout(this._relayTimer);
+      this._relayTimer = null;
+    }
+    this.writeLine(`*** Now relaying to ${this._relayTarget}. Type ${B}.relay end${B} to return.`);
   }
 
   /** Exit relay mode. */
   exitRelay(): void {
     this._relayCallback = null;
     this._relayTarget = null;
+    this._relayConfirmed = false;
+    if (this._relayTimer) {
+      clearTimeout(this._relayTimer);
+      this._relayTimer = null;
+    }
   }
 
   /** True if the session is currently relayed to a remote bot. */
@@ -635,9 +698,11 @@ export class DCCSession implements DCCSessionEntry {
 
     if (!trimmed) return;
 
-    // Relay mode: forward input to remote bot
+    // Relay mode: forward input to remote bot.
+    // Only `.relay end` exits — `.quit` is intentionally forwarded so the user
+    // is not surprised by an early exit (the usage string documents `.relay end`).
     if (this._relayCallback) {
-      if (trimmed === '.relay end' || trimmed === '.quit') {
+      if (trimmed === '.relay end') {
         const target = this._relayTarget;
         this.exitRelay();
         this.writeLine(`*** Relay ended. Back on ${this.manager.getBotName()}.`);

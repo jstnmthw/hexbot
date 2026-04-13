@@ -368,12 +368,22 @@ export function registerBotlinkCommands(
 
       sendFrame(link, requestFrame, targetBot);
 
-      // Enter relay mode — input goes to the remote bot
-      session.enterRelay(targetBot, (line: string) => {
-        sendFrame(link, { type: 'RELAY_INPUT', handle: session.handle, line }, targetBot);
-      });
+      // Enter relay mode pending — input is forwarded, but the confirmation
+      // message waits for RELAY_ACCEPT. Timeout rolls back on silent drop.
+      session.enterRelay(
+        targetBot,
+        (line: string) => {
+          sendFrame(link, { type: 'RELAY_INPUT', handle: session.handle, line }, targetBot);
+        },
+        {
+          timeoutMs: 3000,
+          onTimeout: () => {
+            if (link.kind === 'hub') link.hub.unregisterRelay(session.handle);
+          },
+        },
+      );
 
-      ctx.reply(`*** Relaying to ${targetBot}. Type .relay end to return.`);
+      ctx.reply(`*** Requesting relay to ${targetBot}...`);
     },
   );
 
