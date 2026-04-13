@@ -84,6 +84,7 @@ The REPL gives you owner-level access to the bot directly from the terminal:
 
 ```
 .status              # connection info and uptime
+.uptime              # just the uptime, as a one-liner
 .users               # list registered users
 .plugins             # list loaded plugins
 .help                # show all available commands
