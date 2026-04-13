@@ -126,9 +126,8 @@ export interface ParsedChannelModes {
 /**
  * Parse an Eggdrop-style mode string like "+nt-s" into structured add/remove sets.
  *
+ * - Must start with `+` or `-`; any other leading character yields empty sets.
  * - Characters after `+` go into `add`, characters after `-` go into `remove`.
- * - Backward compat: if the string contains no `+` or `-` at all (e.g. "nt"),
- *   every character is treated as additive (`+nt`). No warning emitted.
  * - A mode cannot be in both sets — last occurrence wins (e.g. "+n-n" → remove: {n}).
  * - Parameter modes (from `paramModes` arg) are stripped from both sets with a warning.
  * - Empty string → both sets empty.
@@ -141,17 +140,15 @@ export function parseChannelModes(
   const remove = new Set<string>();
 
   if (!modeStr) return { add, remove };
+  if (modeStr[0] !== '+' && modeStr[0] !== '-') return { add, remove };
 
-  // Backward compat: no +/- prefix means treat everything as additive
-  const hasDirection = modeStr.includes('+') || modeStr.includes('-');
   let direction: '+' | '-' = '+';
-
   for (const ch of modeStr) {
     if (ch === '+' || ch === '-') {
       direction = ch;
       continue;
     }
-    if (!hasDirection || direction === '+') {
+    if (direction === '+') {
       remove.delete(ch);
       add.add(ch);
     } else {

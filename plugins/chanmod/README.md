@@ -101,9 +101,7 @@ Three settings control what gets enforced -- all configurable globally via the c
 | `channel_key`   | string | Channel key (`+k`) -- re-applied if removed or changed to a different value        |
 | `channel_limit` | int    | Channel user limit (`+l`) -- re-applied if removed or changed to a different value |
 
-All three are independent. You can enforce just `+nt-s`, just `+k`, just `+l`, or any combination.
-
-**Migration from legacy format:** The old format `"nt"` (no `+`/`-` prefix) is auto-detected and treated as `"+nt"` -- additive only, with no removals. To also remove specific modes, switch to the new format: `"+nt-si"`. Operators who relied on the old exact-match behavior (where unmentioned modes were removed) must now explicitly list modes to remove.
+All three are independent. You can enforce just `+nt-s`, just `+k`, just `+l`, or any combination. `channel_modes` must start with `+` or `-`; a value like `"nt"` without a leading sign is rejected and no enforcement runs.
 
 When `enforce_modes` is on and `channel_key` is empty, any `+k` set by a user is treated as unauthorized and removed (using `-k <the_key>`). Likewise, when `channel_limit` is `0`, any `+l` is removed. This applies both reactively (the bot sees the mode change and reverts it) and proactively (on join, the bot queries the server for current modes and cleans up stale keys/limits).
 

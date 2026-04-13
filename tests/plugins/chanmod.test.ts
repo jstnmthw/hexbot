@@ -2521,7 +2521,7 @@ describe('chanmod plugin — channel_modes enforcement on bot join', () => {
       await freshBot.pluginLoader.load(PLUGIN_PATH, {
         chanmod: {
           enabled: true,
-          config: { enforce_channel_modes: 'n', enforce_modes: true, enforce_delay_ms: 5 },
+          config: { enforce_channel_modes: '+n', enforce_modes: true, enforce_delay_ms: 5 },
         },
       });
       giveBotOps(freshBot, '#newchan');
@@ -4746,9 +4746,9 @@ describe('parseChannelModes()', () => {
     expect(result.remove).toEqual(new Set(['s']));
   });
 
-  it('parses legacy "nt" as "+nt" (backward compat)', () => {
+  it('rejects unprefixed "nt" — returns empty sets', () => {
     const result = parseChannelModes('nt');
-    expect(result.add).toEqual(new Set(['n', 't']));
+    expect(result.add).toEqual(new Set());
     expect(result.remove).toEqual(new Set());
   });
 
@@ -4949,7 +4949,7 @@ describe('chanmod plugin — additive/subtractive sync on join', () => {
     }
   });
 
-  it('legacy format with extra modes does NOT remove them (additive only)', async () => {
+  it('unprefixed channel_modes value is rejected — no enforcement runs', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       await freshBot.pluginLoader.load(PLUGIN_PATH, {
@@ -4966,13 +4966,14 @@ describe('chanmod plugin — additive/subtractive sync on join', () => {
       freshBot.channelSettings.set('#chan', 'enforce_modes', true);
       freshBot.client.clearMessages();
 
-      // Legacy "nt" = "+nt" — s is unmentioned, should be left alone
-      simulateChannelInfo(freshBot, '#chan', '+nts');
+      // "nt" has no leading +/- — parser rejects it, so nothing is added or removed
+      simulateChannelInfo(freshBot, '#chan', '+s');
       await tick(20);
 
-      expect(
-        freshBot.client.messages.find((m) => m.type === 'raw' && m.message?.includes('-s')),
-      ).toBeUndefined();
+      const modeMessages = freshBot.client.messages.filter(
+        (m) => m.type === 'raw' && typeof m.message === 'string' && m.message.startsWith('MODE'),
+      );
+      expect(modeMessages).toEqual([]);
     } finally {
       freshBot.cleanup();
     }

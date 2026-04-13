@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### BREAKING
 
+- **`chanmod` `channel_modes` legacy format removed** (`plugins/chanmod/helpers.ts`): the parser used to accept an unprefixed string like `"nt"` and treat it as `"+nt"` (additive only). That fallback is gone — values must now start with `+` or `-`. An unprefixed `channel_modes` or `enforce_channel_modes` is rejected at parse time and no enforcement runs for that channel. Update any lingering configs to the Eggdrop-style format, e.g. `"nt"` → `"+nt"`, `"nts"` → `"+nts"`.
 - **DCC CHAT now requires per-user passwords** (following the Eggdrop model). The old hostmask-only trust path has been removed. Existing user records have no `password_hash` on file and **will be blocked from DCC until an admin sets one**. Migration:
   1. For each admin in your user database, run `.chpass <handle> <newpass>` from the REPL **before** they next try to connect via DCC. Passwords must be at least 8 characters; they are hashed with scrypt before storage.
   2. In existing DCC sessions, users can rotate their own password with `.chpass <newpass>`. Owners can rotate any user with `.chpass <handle> <newpass>`. `.chpass` is **rejected** over IRC PRIVMSG — passwords never travel over channel messages.

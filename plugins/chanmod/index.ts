@@ -92,7 +92,7 @@ export function init(api: PluginAPI): void {
       type: 'string',
       default: config.enforce_channel_modes,
       description:
-        'Mode string to enforce (e.g. "+nt-s"); modes not mentioned are left alone. Legacy format "nt" treated as "+nt".',
+        'Mode string to enforce (e.g. "+nt-s"); must start with + or -, modes not mentioned are left alone',
     },
     {
       key: 'channel_key',
