@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Import the plugin module (gets mocked rss-parser)
-import { formatItem, hashItem, init, teardown } from '../../plugins/rss/index';
+import { formatItem, hashItem, init, stripHtmlTags, teardown } from '../../plugins/rss/index';
 import { BotDatabase } from '../../src/database';
 import type {
   BindHandler,
@@ -242,6 +242,19 @@ describe('rss plugin — formatItem', () => {
     expect(result).not.toContain('<i>');
   });
 
+  it('strips nested/reconstructed tags by looping until stable', () => {
+    // Classic CodeQL "incomplete multi-character sanitization" vector —
+    // a single-pass regex could leave tag-like fragments behind depending
+    // on how the replacement unfolds. The fixed-point loop must leave no
+    // `<...>` substrings in the output.
+    const nasty = '<scr<script>ipt>alert(1)</scr</script>ipt> <<scrip<scrip<script>t>t>ipt>t> hi';
+    const result = formatItem(feed, { title: nasty, link: 'https://x.com' }, baseCfg);
+    // No angle-bracketed tag survives.
+    expect(result).not.toMatch(/<[^>]*>/);
+    // The plain-text tail is still visible.
+    expect(result).toContain('hi');
+  });
+
   it('truncates long titles with ellipsis', () => {
     const longTitle = 'A'.repeat(350);
     const result = formatItem(feed, { title: longTitle, link: 'https://x.com' }, baseCfg);
@@ -263,6 +276,68 @@ describe('rss plugin — formatItem', () => {
   it('handles missing title gracefully', () => {
     const result = formatItem(feed, { link: 'https://x.com' }, baseCfg);
     expect(result).toBe('\x02[Test Feed]\x02  \u2014 https://x.com');
+  });
+});
+
+describe('rss plugin — stripHtmlTags', () => {
+  it('returns plain text unchanged', () => {
+    expect(stripHtmlTags('hello world')).toBe('hello world');
+  });
+
+  it('strips a simple tag', () => {
+    expect(stripHtmlTags('<b>bold</b>')).toBe('bold');
+  });
+
+  it('strips multiple tags in one pass', () => {
+    expect(stripHtmlTags('<p>first</p><p>second</p>')).toBe('firstsecond');
+  });
+
+  it('strips tags with attributes', () => {
+    expect(stripHtmlTags('<a href="https://x.com">link</a>')).toBe('link');
+  });
+
+  it('handles empty string', () => {
+    expect(stripHtmlTags('')).toBe('');
+  });
+
+  it('handles a string with only tags', () => {
+    expect(stripHtmlTags('<br/><hr/>')).toBe('');
+  });
+
+  it('handles an unclosed tag gracefully (left alone)', () => {
+    // A bare `<` with no closing `>` is not a valid tag; the regex leaves it.
+    expect(stripHtmlTags('5 < 10')).toBe('5 < 10');
+  });
+
+  it('leaves a stray `>` alone', () => {
+    expect(stripHtmlTags('10 > 5')).toBe('10 > 5');
+  });
+
+  it('loops until stable on nested tags', () => {
+    // The canonical CodeQL vector for incomplete multi-character sanitization.
+    // After stripping, no `<…>` substring remains anywhere in the output.
+    const vectors = [
+      '<scr<script>ipt>alert(1)</script>',
+      '<<script>script>alert(1)</<script>script>',
+      '<b<b>></b>>',
+      '<<<<>>>>',
+    ];
+    for (const v of vectors) {
+      const stripped = stripHtmlTags(v);
+      expect(stripped).not.toMatch(/<[^>]*>/);
+    }
+  });
+
+  it('terminates on pathological inputs (no infinite loop)', () => {
+    // Any input must eventually stabilise — each iteration strictly shrinks
+    // or returns the same string, so the loop is bounded by input length.
+    const pathological = '<'.repeat(100) + '>'.repeat(100);
+    // Must not hang — bound the call with a simple wall-clock check.
+    const start = Date.now();
+    const result = stripHtmlTags(pathological);
+    expect(Date.now() - start).toBeLessThan(200);
+    // And the result must have no `<...>` substrings left.
+    expect(result).not.toMatch(/<[^>]*>/);
   });
 });
 
@@ -299,8 +374,8 @@ describe('rss plugin — integration', () => {
     api = makeMockAPI(db, BASE_CONFIG);
   });
 
-  afterEach(async () => {
-    await teardown();
+  afterEach(() => {
+    teardown();
     db.close();
   });
 

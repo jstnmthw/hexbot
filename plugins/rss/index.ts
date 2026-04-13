@@ -205,9 +205,31 @@ async function pollFeed(
 // Formatting and announcing
 // ---------------------------------------------------------------------------
 
+/**
+ * Strip HTML tags from a string by running the tag regex to a fixed point.
+ *
+ * A single-pass `replace(/<[^>]*>/g, '')` is flagged by CodeQL as
+ * "incomplete multi-character sanitization" because cleverly-nested input
+ * can leave tag-like fragments behind that would have been caught by a
+ * second pass. The output here goes to IRC (which doesn't render HTML) so
+ * the practical XSS risk is nil, but we still want clean-looking titles
+ * and we don't want this pattern to appear in future audits. Looping until
+ * the string stabilises is the canonical fix; it terminates because every
+ * non-terminal iteration strictly shortens the string.
+ */
+export function stripHtmlTags(input: string): string {
+  let prev: string;
+  let curr = input;
+  do {
+    prev = curr;
+    curr = curr.replace(/<[^>]*>/g, '');
+  } while (curr !== prev);
+  return curr;
+}
+
 export function formatItem(feed: FeedConfig, item: FeedItem, config: PluginConfig): string {
   const feedName = feed.name ?? feed.id;
-  let title = (item.title ?? '').replace(/<[^>]*>/g, '').trim();
+  let title = stripHtmlTags(item.title ?? '').trim();
   if (title.length > config.max_title_length) {
     title = title.substring(0, config.max_title_length) + '\u2026';
   }
