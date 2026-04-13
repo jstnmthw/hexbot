@@ -635,7 +635,7 @@ export class DCCSession implements DCCSessionEntry {
     // Owner-only notice
     if (this.flags.includes('n')) {
       this.writeLine('');
-      this.writeLine(`${red(`${B}★${B}`)} You are an owner of this bot.`);
+      this.writeLine(`${red(`${B}⛧${B}`)} You are an owner of this bot.`);
     }
 
     // Stats table
@@ -1018,10 +1018,14 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   onAuthSuccess(session: DCCSessionEntry): void {
     const key = (session as DCCSession).rateLimitKey;
     this.authTracker.recordSuccess(key);
+    // Emit the info log before registering the session so the DCC fanout
+    // sink does not echo "session active" back to the joining user's own
+    // console — they already saw the banner. Existing sessions and the
+    // stdout/file sinks still get it.
+    this.logger?.info(`DCC session active: ${session.handle} (${session.nick})`);
     this.sessions.set(ircLower(session.nick, this.casemapping), session);
     this.announce(`*** ${session.handle} has joined the console`);
     this.onPartyJoin?.(session.handle, session.nick);
-    this.logger?.info(`DCC session active: ${session.handle} (${session.nick})`);
   }
 
   /** Called by DCCSession when the password prompt fails. */
