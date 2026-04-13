@@ -629,20 +629,79 @@ describe('rss plugin — integration', () => {
       expect(allText).toContain('added');
     });
 
+    it('!rss add defaults channel to the invoking channel when omitted', async () => {
+      await init(api);
+      mockParseURL.mockResolvedValue({ items: [] });
+
+      await dispatchRss('add ctxfeed https://ctx.com/rss');
+
+      const raw = db.get('rss', 'rss:feed:ctxfeed');
+      expect(raw).toBeTruthy();
+      const feed = JSON.parse(raw!);
+      // makeAdminCtx sets ctx.channel = '#test'
+      expect(feed.channels).toEqual(['#test']);
+      expect(feed.interval).toBe(3600);
+    });
+
+    it('!rss add accepts interval without explicit channel', async () => {
+      await init(api);
+      mockParseURL.mockResolvedValue({ items: [] });
+
+      await dispatchRss('add ivfeed https://iv.com/rss 900');
+
+      const raw = db.get('rss', 'rss:feed:ivfeed');
+      expect(raw).toBeTruthy();
+      const feed = JSON.parse(raw!);
+      expect(feed.channels).toEqual(['#test']);
+      expect(feed.interval).toBe(900);
+    });
+
+    it('!rss add posts latest article as a preview on seed', async () => {
+      await init(api);
+      const previewItems = [
+        { guid: 'p-1', title: 'Newest Post', link: 'https://x.com/new' },
+        { guid: 'p-2', title: 'Older Post', link: 'https://x.com/old' },
+      ];
+      mockParseURL.mockResolvedValue({ items: previewItems });
+
+      api._says.length = 0;
+      await dispatchRss('add previewfeed https://p.com/rss #test 600');
+
+      // Exactly one item should have been announced (the newest)
+      expect(api._says.length).toBe(1);
+      expect(api._says[0].target).toBe('#test');
+      expect(api._says[0].message).toContain('Newest Post');
+
+      // A subsequent poll against the same feed contents must find nothing
+      // new — the older item must have been marked seen during the preview
+      // seed, not left behind for the next tick to announce.
+      api._says.length = 0;
+      mockParseURL.mockResolvedValue({ items: previewItems });
+      await dispatchRss('check previewfeed');
+      expect(api._says.length).toBe(0);
+
+      const allText = api._notices.map((n) => n.message).join(' ');
+      expect(allText).toContain('preview');
+    });
+
+    it('!rss add reports empty feed without a preview', async () => {
+      await init(api);
+      mockParseURL.mockResolvedValue({ items: [] });
+
+      api._says.length = 0;
+      await dispatchRss('add emptyfeed https://e.com/rss #test');
+
+      expect(api._says.length).toBe(0);
+      const allText = api._notices.map((n) => n.message).join(' ');
+      expect(allText).toContain('no items');
+    });
+
     it('!rss add rejects missing args', async () => {
       await init(api);
       await dispatchRss('add');
 
       const allText = api._notices.map((n) => n.message).join(' ');
       expect(allText).toContain('Usage');
-    });
-
-    it('!rss add rejects channel without #', async () => {
-      await init(api);
-      await dispatchRss('add badid https://x.com nochannel');
-
-      const allText = api._notices.map((n) => n.message).join(' ');
-      expect(allText).toContain('#');
     });
 
     it('!rss add rejects duplicate id', async () => {

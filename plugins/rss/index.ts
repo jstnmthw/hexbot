@@ -57,7 +57,7 @@ export async function init(api: PluginAPI): Promise<void> {
   // Silent first-run seeding: mark all existing items as seen without announcing
   for (const feed of activeFeeds.values()) {
     try {
-      await pollFeed(api, feed, cfg, false);
+      await pollFeed(api, feed, cfg, 'silent');
     } catch (err) {
       api.error(`Error seeding feed "${feed.id}":`, (err as Error).message);
     }
@@ -71,7 +71,7 @@ export async function init(api: PluginAPI): Promise<void> {
       if (Date.now() - lastPoll < interval) continue;
 
       try {
-        const items = await pollFeed(api, feed, cfg, true);
+        const items = await pollFeed(api, feed, cfg, 'announce');
         if (items.length > 0) {
           await announceItems(api, feed, items, cfg);
         }
@@ -118,7 +118,7 @@ export async function init(api: PluginAPI): Promise<void> {
       description: 'List all active RSS feeds',
       detail: [
         '!rss list — list all active feeds with channels and intervals',
-        '!rss add <id> <url> <#channel> [interval] — add a feed at runtime',
+        '!rss add <id> <url> [#channel] [interval] — add a feed at runtime; channel defaults to the one you ran this command in',
         '!rss remove <id> — remove a runtime-added feed',
         '!rss check [id] — manually poll a feed (or all feeds)',
       ],
@@ -180,22 +180,40 @@ function setLastPoll(api: PluginAPI, feedId: string): void {
 // Polling
 // ---------------------------------------------------------------------------
 
+/**
+ * Poll modes:
+ * - 'silent'      — mark every current item seen, announce nothing. Used on
+ *                   bot startup so config-file feeds don't replay on reboot.
+ * - 'announce'    — return up to max_per_poll unseen items. Used by the
+ *                   regular timer tick and by `!rss check`.
+ * - 'seedPreview' — mark every current item seen (like 'silent'), but return
+ *                   only the newest one so `!rss add` can post a single
+ *                   instant-feedback preview.
+ */
+type PollMode = 'silent' | 'announce' | 'seedPreview';
+
 async function pollFeed(
   api: PluginAPI,
   feed: FeedConfig,
   config: PluginConfig,
-  announce: boolean,
+  mode: PollMode,
 ): Promise<FeedItem[]> {
   const result = await parser.parseURL(feed.url);
   const newItems: FeedItem[] = [];
+  let previewCaptured = false;
 
   for (const item of result.items) {
     const hash = hashItem(item);
     if (hasSeen(api, feed.id, hash)) continue;
     markSeen(api, feed.id, hash);
-    if (announce) {
+    if (mode === 'announce') {
       newItems.push(item);
       if (newItems.length >= config.max_per_poll) break;
+    } else if (mode === 'seedPreview' && !previewCaptured) {
+      newItems.push(item);
+      previewCaptured = true;
+      // Don't break — keep marking the rest of the feed seen so they don't
+      // announce on the next tick. Only the first item goes to the channel.
     }
   }
 
@@ -359,25 +377,35 @@ async function handleAdd(
   args: string[],
   cfg: PluginConfig,
 ): Promise<void> {
-  // args: [id, url, #channel, interval?]
-  if (args.length < 3) {
-    api.notice(ctx.nick, 'Usage: !rss add <id> <url> <#channel> [interval]');
+  // Grammar: !rss add <id> <url> [#channel] [interval]
+  // Both trailing args are optional and distinguished by prefix:
+  //   '#'-prefixed token → channel (falls back to invoking channel)
+  //   anything else      → interval (digits validated below)
+  // If this command ever gains a msg/REPL path, channel must become
+  // mandatory in that context since ctx.channel would be null.
+  if (args.length < 2) {
+    api.notice(ctx.nick, 'Usage: !rss add <id> <url> [#channel] [interval]');
     logCmd(api, ctx, 'add', 'rejected', 'bad usage');
     return;
   }
 
-  const [id, url, channel] = args;
-  const interval = args[3] ? parseInt(args[3], 10) : 3600;
+  const [id, url] = args;
+
+  let channel: string | undefined;
+  let intervalStr: string | undefined;
+  for (const tok of args.slice(2)) {
+    if (tok.startsWith('#')) {
+      channel = tok;
+    } else {
+      intervalStr = tok;
+    }
+  }
+  if (!channel) channel = ctx.channel;
+  const interval = intervalStr ? parseInt(intervalStr, 10) : 3600;
 
   if (activeFeeds.has(id)) {
     api.notice(ctx.nick, `Feed "${id}" already exists.`);
     logCmd(api, ctx, 'add', 'rejected', `id collision: ${id}`);
-    return;
-  }
-
-  if (!channel.startsWith('#')) {
-    api.notice(ctx.nick, `Channel must start with #.`);
-    logCmd(api, ctx, 'add', 'rejected', 'channel missing #');
     return;
   }
 
@@ -391,10 +419,22 @@ async function handleAdd(
   saveRuntimeFeed(api, feed);
   activeFeeds.set(id, feed);
 
-  // Silent seed
+  // Seed every current item as seen, and return the newest as a one-shot
+  // preview so the admin gets instant confirmation the feed is working.
   try {
-    await pollFeed(api, feed, cfg, false);
-    api.notice(ctx.nick, `Feed "${id}" added and seeded. Will announce new items to ${channel}.`);
+    const preview = await pollFeed(api, feed, cfg, 'seedPreview');
+    if (preview.length > 0) {
+      await announceItems(api, feed, preview, cfg);
+      api.notice(
+        ctx.nick,
+        `Feed "${id}" added. Posted latest article to ${channel} as preview; future items will announce automatically.`,
+      );
+    } else {
+      api.notice(
+        ctx.nick,
+        `Feed "${id}" added (no items in feed yet). Future items will announce to ${channel}.`,
+      );
+    }
     logCmd(api, ctx, 'add', 'ok', `id=${id} url=${url} chan=${channel} interval=${interval}s`);
   } catch (err) {
     const errMsg = (err as Error).message;
@@ -450,7 +490,7 @@ async function handleCheck(
   let totalNew = 0;
   for (const feed of targets) {
     try {
-      const items = await pollFeed(api, feed, cfg, true);
+      const items = await pollFeed(api, feed, cfg, 'announce');
       if (items.length > 0) {
         await announceItems(api, feed, items, cfg);
         totalNew += items.length;
