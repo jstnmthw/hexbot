@@ -114,20 +114,39 @@ When a user joins a channel:
 - The `-` flag or an empty string `''` (no requirement) are the only cases where flag checking is skipped entirely
 - Owner flag (`n`) implies all other flags — this is intentional but means owner accounts are high-value targets. Limit `n` to trusted, verified hostmasks only.
 
-### 3.4 DCC CHAT connection race
+### 3.4 DCC CHAT authentication — trust model split
 
-DCC CHAT uses a passive handshake: the bot opens a TCP listener and tells the user which port to connect to via CTCP. The first TCP connection to that port is accepted as the session, regardless of source IP. An attacker who can observe the CTCP exchange and reach the bot's IP could race to connect before the legitimate user, obtaining a session with that user's permissions.
+DCC CHAT and in-channel commands use **different authentication models** on purpose:
 
-This is an inherent limitation of the DCC protocol — the token mechanism correlates the CTCP offer but does not authenticate the TCP connection.
+| Path                | Authenticator                         | Why                                                                                          |
+| ------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------- |
+| In-channel commands | Hostmask + IRCv3 account-tag          | Prompting on every channel message is impossible; the network already gates message delivery |
+| DCC CHAT session    | **Per-user password (scrypt-hashed)** | The socket-local prompt phase gives us a clean place to ask for proof-of-identity            |
+
+**Why the split matters:** On networks where a single vhost persists across nick changes (notably Rizon), the hostmask `*!~ident@vhost.cloak` identifies the _cloak_, not the user. An operator identified on their registered nick can `/nick` to an unregistered nick, keep the same cloak, and match any hostmask pattern that accepts the cloak. For in-channel commands this is inherent to the network — we mitigate with `require_acc_for` and account-tag matching. For DCC CHAT we have a better option: the bot holds its own secret (the password hash), independent of the network's notion of identity.
+
+**Password handling:**
+
+- Stored via scrypt (`src/core/password.ts`) with a 16-byte random salt and N=16384/r=8/p=1 parameters. Format prefix `scrypt$` so future rotation to argon2 is unambiguous.
+- Set via `.chpass` from the REPL or from inside an existing DCC session. The IRC PRIVMSG path is hard-rejected — passwords never travel over channel messages.
+- Minimum length 8 characters. No additional policy — operators are responsible for their own hygiene on a small admin user base.
+- Never logged. `mod_log` records `(action=chpass, target=<handle>, by=<source>)` with no plaintext or hash material.
+
+**Plaintext over DCC:** The password is sent in the clear over the DCC TCP connection. This is the same failure mode as NickServ IDENTIFY on most networks — a passive observer of the socket already sees every subsequent command, so the password adds no incremental exposure. TLS DCC (DCC SCHAT) is out of scope. Operators who need end-to-end encryption should run a bot-to-user TLS tunnel at the transport layer.
+
+**CTCP offer race:** A passive DCC handshake opens a TCP listener and advertises the port via CTCP. The first TCP connection is accepted, regardless of source IP. An attacker who observes the CTCP exchange and reaches the bot's IP could race to connect before the legitimate user — but they would then hit the password prompt and fail. This is a material improvement over the pre-0.3.0 model where a racer would inherit the legitimate user's session on connect.
 
 **Mitigations in place:**
 
-- The listening port is open for only 30 seconds before timing out
-- The listener accepts exactly one connection, then closes
-- Permission flags and (optionally) NickServ verification are checked before the port is offered
-- Session limits cap the total number of concurrent DCC sessions
+- The listening port is open for only 30 seconds before timing out.
+- The listener accepts exactly one connection, then closes.
+- Permission flags are checked before the port is offered.
+- The session enters an `awaiting_password` phase on connect — no commands run, no party-line broadcast, until the prompt succeeds.
+- Repeated bad-password attempts from the same hostmask trigger a per-identity lockout with exponential backoff (`DCCAuthTracker`).
+- Session limits cap total concurrent DCC sessions.
+- Users with no `password_hash` on file are rejected at connect with a migration notice pointing at `.chpass`.
 
-**Rule:** Administrators should understand this risk before enabling `dcc.enabled` in config. DCC CHAT is best used on networks where the bot's IP is not widely known, or where the CTCP exchange happens via private message rather than a public channel.
+**Rule:** Administrators should treat the DCC password as the root of trust for remote administration and rotate it periodically. Hostmask patterns on a handle are still required for the DCC path to _find_ the user, but they no longer _authorize_ the connection.
 
 ### 3.5 REPL context
 

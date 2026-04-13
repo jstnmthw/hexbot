@@ -295,10 +295,16 @@ function createPluginDbApi(db: BotDatabase | null, pluginId: string): PluginDB {
   });
 }
 
-function createPluginPermissionsApi(permissions: Permissions): PluginPermissions {
+/** Exported for unit tests — verifies `password_hash` is stripped from the plugin view. */
+export function createPluginPermissionsApi(permissions: Permissions): PluginPermissions {
   return Object.freeze({
     findByHostmask(hostmask: string) {
-      return permissions.findByHostmask(hostmask);
+      const record = permissions.findByHostmask(hostmask);
+      if (!record) return null;
+      // Strip password_hash before returning — plugins must never see secret material.
+      // Shallow clone is enough because password_hash is a string.
+      const { password_hash: _hash, ...publicRecord } = record;
+      return publicRecord;
     },
     checkFlags(requiredFlags: string, ctx: HandlerContext) {
       return permissions.checkFlags(requiredFlags, ctx);

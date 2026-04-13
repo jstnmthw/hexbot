@@ -129,6 +129,18 @@ Flags can also be scoped to a specific channel:
 .flags alice +o #mychannel
 ```
 
+## Setting a DCC password
+
+DCC CHAT sessions require a **per-user password** in addition to a hostmask match and the right flags. Set one with `.chpass` from the REPL before a user can connect via DCC:
+
+```
+.chpass alice <newpassword>
+```
+
+Passwords are hashed with scrypt before storage and must be at least 8 characters. Users can rotate their own password later from inside an active DCC session with `.chpass <newpassword>`. `.chpass` is rejected on the IRC PRIVMSG path — passwords never travel over channel messages.
+
+See [docs/DCC.md](DCC.md) for the full DCC setup walkthrough.
+
 ## Writing your first plugin
 
 Create a directory in `plugins/` with an `index.ts`:

@@ -1,8 +1,9 @@
 import type { Socket } from 'node:net';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CommandExecutor } from '../../src/command-handler';
 import {
+  DCCAuthTracker,
   DCCManager,
   DCCSession,
   RangePortAllocator,
@@ -11,6 +12,7 @@ import {
   parseDccChatPayload,
 } from '../../src/core/dcc';
 import type { DCCIRCClient, DCCSessionEntry, DCCSessionManager } from '../../src/core/dcc';
+import { hashPassword } from '../../src/core/password';
 import type { BindRegistrar } from '../../src/dispatcher';
 import type {
   DccConfig,
@@ -21,6 +23,11 @@ import type {
 } from '../../src/types';
 import { createMockLogger } from '../helpers/mock-logger';
 import { createMockSocket } from '../helpers/mock-socket';
+
+// Shared valid password for prompt-phase tests. Hashed once via beforeAll so
+// scrypt cost isn't paid per test.
+const TEST_PASSWORD = 'testpassword1';
+let TEST_PASSWORD_HASH = '';
 
 // ---------------------------------------------------------------------------
 // Helpers — unit tests
@@ -498,7 +505,10 @@ describe('DCCManager', () => {
     expect(client.notices.some((n) => n.message.includes('already pending'))).toBe(true);
   });
 
-  it('proceeds past NickServ verify when verification succeeds', async () => {
+  it('nickserv_verify is now a no-op — DCC proceeds regardless of NickServ state', async () => {
+    // With password auth in place, DCC no longer consults NickServ. A user
+    // whose NickServ verification would have failed should still be allowed
+    // through the CTCP accept path (the password prompt is the gate).
     const dispatcher = makeDispatcher();
     let handler!: (ctx: HandlerContext) => Promise<void>;
     (dispatcher.bind as ReturnType<typeof vi.fn>).mockImplementation(
@@ -512,7 +522,7 @@ describe('DCCManager', () => {
       client,
       dispatcher,
       permissions: makePermissions(makeUser()),
-      services: makeServices(true), // verification succeeds
+      services: makeServices(false), // would have failed verification
       commandHandler: makeCommandHandler(),
       config: makeConfig({ nickserv_verify: true, port_range: [50000, 50000] }),
       version: '1.0.0',
@@ -522,34 +532,51 @@ describe('DCCManager', () => {
     m.attach();
 
     await handler(makeCtx());
-    // Port exhausted → notice (proves the NickServ check passed without rejecting)
+    // The session should have proceeded past the CTCP accept checks and
+    // ultimately failed at port allocation — proving NickServ was not
+    // consulted. If the old check were still active it would reject with
+    // "NickServ verification failed".
+    expect(client.notices.some((n) => n.message.includes('NickServ'))).toBe(false);
     expect(client.notices.some((n) => n.message.includes('no ports available'))).toBe(true);
   });
 
-  it('rejects when NickServ verification fails', async () => {
-    const dispatcher = makeDispatcher();
-    let handler!: (ctx: HandlerContext) => Promise<void>;
-    (dispatcher.bind as ReturnType<typeof vi.fn>).mockImplementation(
-      (_t: string, _f: string, _m: string, fn: (ctx: HandlerContext) => Promise<void>) => {
-        handler = fn;
-      },
-    );
+  it('logs a deprecation warning when nickserv_verify is still set', () => {
+    const logger = createMockLogger();
     const m = new DCCManager({
       client,
-      dispatcher,
-      permissions: makePermissions(makeUser()),
-      services: makeServices(false), // verification fails
+      dispatcher: makeDispatcher(),
+      permissions: makePermissions(null),
+      services: makeServices(),
       commandHandler: makeCommandHandler(),
       config: makeConfig({ nickserv_verify: true }),
       version: '1.0.0',
       botNick: 'hexbot',
+      logger,
     });
     m.attach();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('nickserv_verify'));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('deprecated'));
+  });
 
-    await handler(makeCtx());
-    expect(client.notices.some((n) => n.message.includes('NickServ verification failed'))).toBe(
-      true,
+  it('does not log deprecation warning when nickserv_verify is false', () => {
+    const logger = createMockLogger();
+    const m = new DCCManager({
+      client,
+      dispatcher: makeDispatcher(),
+      permissions: makePermissions(null),
+      services: makeServices(),
+      commandHandler: makeCommandHandler(),
+      config: makeConfig({ nickserv_verify: false }),
+      version: '1.0.0',
+      botNick: 'hexbot',
+      logger,
+    });
+    m.attach();
+    const warnMock = logger.warn as ReturnType<typeof vi.fn>;
+    const nickservCalls = warnMock.mock.calls.filter((call) =>
+      call.some((arg) => typeof arg === 'string' && arg.includes('nickserv_verify')),
     );
+    expect(nickservCalls).toHaveLength(0);
   });
 
   it('rejects when port range is exhausted (in handler)', async () => {
@@ -643,11 +670,13 @@ function buildSession(
     commandHandler?: CommandExecutor;
     idleTimeoutMs?: number;
     user?: UserRecord;
+    passwordHash?: string;
   } = {},
 ): DCCSession {
   return new DCCSession({
     manager: overrides.manager ?? makeMockManagerForSession(),
     user: overrides.user ?? makeUser(),
+    passwordHash: overrides.passwordHash ?? 'scrypt$teststub$teststub',
     nick: 'testnick',
     ident: 'test',
     hostname: 'test.host',
@@ -702,6 +731,7 @@ describe('DCCSession', () => {
     const session = new DCCSession({
       manager: makeMockManagerForSession(),
       user: makeUser(),
+      passwordHash: 'scrypt$teststub$teststub',
       nick: 'testnick',
       ident: 'test',
       hostname: 'test.host',
@@ -736,7 +766,7 @@ describe('DCCSession', () => {
   it('start sends banner including bot name (no prompt)', async () => {
     const { socket, written } = makeMockSocket();
     const session = buildSession(socket);
-    session.start('1.0.0', 'hexbot');
+    session.startActiveForTesting('1.0.0', 'hexbot');
     await flushAsync();
     const output = written.join('');
     expect(output).toContain('hexbot');
@@ -748,7 +778,7 @@ describe('DCCSession', () => {
   it('start shows owner-only message for +n flag', async () => {
     const { socket, written } = makeMockSocket();
     const session = buildSession(socket, { user: makeUser('owner', 'nm') });
-    session.start('1.0.0', 'hexbot');
+    session.startActiveForTesting('1.0.0', 'hexbot');
     await flushAsync();
     expect(written.join('')).toContain('owner of this bot');
     session.close();
@@ -757,7 +787,7 @@ describe('DCCSession', () => {
   it('start does not show owner-only message for non-owner flags', async () => {
     const { socket, written } = makeMockSocket();
     const session = buildSession(socket, { user: makeUser('admin', 'm') });
-    session.start('1.0.0', 'hexbot');
+    session.startActiveForTesting('1.0.0', 'hexbot');
     await flushAsync();
     const output = written.join('');
     expect(output).not.toContain('owner of this bot');
@@ -768,7 +798,7 @@ describe('DCCSession', () => {
   it('start shows +- for user with no flags', async () => {
     const { socket, written } = makeMockSocket();
     const session = buildSession(socket, { user: makeUser('nobody', '') });
-    session.start('1.0.0', 'hexbot');
+    session.startActiveForTesting('1.0.0', 'hexbot');
     await flushAsync();
     expect(written.join('')).toContain('+-');
     session.close();
@@ -777,7 +807,7 @@ describe('DCCSession', () => {
   it('.quit closes the session', async () => {
     const { socket, duplex } = makeMockSocket();
     const session = buildSession(socket);
-    session.start('1.0.0', 'hexbot');
+    session.startActiveForTesting('1.0.0', 'hexbot');
     duplex.push('.quit\n');
     await flushAsync(3);
     expect(duplex.destroyed).toBe(true);
@@ -786,7 +816,7 @@ describe('DCCSession', () => {
   it('.exit closes the session', async () => {
     const { socket, duplex } = makeMockSocket();
     const session = buildSession(socket);
-    session.start('1.0.0', 'hexbot');
+    session.startActiveForTesting('1.0.0', 'hexbot');
     duplex.push('.exit\n');
     await flushAsync(3);
     expect(duplex.destroyed).toBe(true);
@@ -795,7 +825,7 @@ describe('DCCSession', () => {
   it('.console with no sessions reports empty', async () => {
     const { socket, written, duplex } = makeMockSocket();
     const session = buildSession(socket);
-    session.start('1.0.0', 'hexbot');
+    session.startActiveForTesting('1.0.0', 'hexbot');
     duplex.push('.console\n');
     await flushAsync(3);
     expect(written.join('')).toContain('No users on the console');
@@ -805,7 +835,7 @@ describe('DCCSession', () => {
   it('.who is an alias for .console', async () => {
     const { socket, written, duplex } = makeMockSocket();
     const session = buildSession(socket);
-    session.start('1.0.0', 'hexbot');
+    session.startActiveForTesting('1.0.0', 'hexbot');
     duplex.push('.who\n');
     await flushAsync(3);
     expect(written.join('')).toContain('No users on the console');
@@ -818,7 +848,7 @@ describe('DCCSession', () => {
       sessionList: [{ handle: 'testuser', nick: 'testnick', connectedAt: Date.now() - 5000 }],
     });
     const session = buildSession(socket, { manager: mgr });
-    session.start('1.0.0', 'hexbot');
+    session.startActiveForTesting('1.0.0', 'hexbot');
     duplex.push('.console\n');
     await flushAsync(3);
     expect(written.join('')).toContain('(you)');
@@ -831,7 +861,7 @@ describe('DCCSession', () => {
       sessionList: [{ handle: 'alice', nick: 'alice', connectedAt: Date.now() - 5000 }],
     });
     const session = buildSession(socket, { manager: mgr });
-    session.start('1.0.0', 'hexbot');
+    session.startActiveForTesting('1.0.0', 'hexbot');
     duplex.push('.console\n');
     await flushAsync(3);
     const output = written.join('');
@@ -844,7 +874,7 @@ describe('DCCSession', () => {
     const { socket, duplex } = makeMockSocket();
     const cmdHandler = makeCommandHandler();
     const session = buildSession(socket, { commandHandler: cmdHandler });
-    session.start('1.0.0', 'hexbot');
+    session.startActiveForTesting('1.0.0', 'hexbot');
     duplex.push('.help\n');
     await flushAsync(3);
     expect(cmdHandler.execute).toHaveBeenCalledWith(
@@ -863,7 +893,7 @@ describe('DCCSession', () => {
       },
     );
     const session = buildSession(socket, { commandHandler: cmdHandler });
-    session.start('1.0.0', 'hexbot');
+    session.startActiveForTesting('1.0.0', 'hexbot');
     duplex.push('.test\n');
     await flushAsync(3);
     const output = written.join('');
@@ -876,7 +906,7 @@ describe('DCCSession', () => {
     const { socket, duplex } = makeMockSocket();
     const mgr = makeMockManagerForSession();
     const session = buildSession(socket, { manager: mgr });
-    session.start('1.0.0', 'hexbot');
+    session.startActiveForTesting('1.0.0', 'hexbot');
     duplex.push('hello world\n');
     await flushAsync(3);
     expect(mgr.broadcast).toHaveBeenCalledWith('testuser', 'hello world');
@@ -887,7 +917,7 @@ describe('DCCSession', () => {
     const { socket, duplex } = makeMockSocket();
     const mgr = makeMockManagerForSession();
     const session = buildSession(socket, { manager: mgr });
-    session.start('1.0.0', 'hexbot');
+    session.startActiveForTesting('1.0.0', 'hexbot');
     duplex.push('   \n');
     await flushAsync(3);
     expect(mgr.broadcast).not.toHaveBeenCalled();
@@ -898,7 +928,7 @@ describe('DCCSession', () => {
     const { socket, duplex } = makeMockSocket();
     const mgr = makeMockManagerForSession();
     const session = buildSession(socket, { manager: mgr });
-    session.start('1.0.0', 'hexbot');
+    session.startActiveForTesting('1.0.0', 'hexbot');
     duplex.destroy();
     await flushAsync(3);
     expect(mgr.removeSession).toHaveBeenCalledWith('testnick');
@@ -910,7 +940,7 @@ describe('DCCSession', () => {
     try {
       const { socket, duplex } = makeMockSocket();
       const session = buildSession(socket, { idleTimeoutMs: 1000 });
-      session.start('1.0.0', 'hexbot');
+      session.startActiveForTesting('1.0.0', 'hexbot');
       vi.advanceTimersByTime(1001);
       expect(duplex.destroyed).toBe(true);
     } finally {
@@ -928,7 +958,7 @@ describe('DCCSession relay mode', () => {
     const { socket, duplex } = makeMockSocket();
     const mgr = makeMockManagerForSession();
     const session = buildSession(socket, { manager: mgr });
-    session.start('1.0.0', 'hexbot');
+    session.startActiveForTesting('1.0.0', 'hexbot');
 
     const relayed: string[] = [];
     session.enterRelay('leaf1', (line) => relayed.push(line));
@@ -950,7 +980,7 @@ describe('DCCSession relay mode', () => {
     (mgr.getBotName as ReturnType<typeof vi.fn>).mockReturnValue('mybot');
     mgr.onRelayEnd = vi.fn();
     const session = buildSession(socket, { manager: mgr });
-    session.start('1.0.0', 'hexbot');
+    session.startActiveForTesting('1.0.0', 'hexbot');
 
     session.enterRelay('leaf1', () => {});
     duplex.push('.relay end\r\n');
@@ -967,7 +997,7 @@ describe('DCCSession relay mode', () => {
     (mgr.getBotName as ReturnType<typeof vi.fn>).mockReturnValue('mybot');
     mgr.onRelayEnd = vi.fn();
     const session = buildSession(socket, { manager: mgr });
-    session.start('1.0.0', 'hexbot');
+    session.startActiveForTesting('1.0.0', 'hexbot');
 
     session.enterRelay('leaf1', () => {});
     duplex.push('.quit\r\n');
@@ -981,7 +1011,7 @@ describe('DCCSession relay mode', () => {
     const { socket, duplex } = makeMockSocket();
     const mgr = makeMockManagerForSession();
     const session = buildSession(socket, { manager: mgr });
-    session.start('1.0.0', 'hexbot');
+    session.startActiveForTesting('1.0.0', 'hexbot');
 
     session.enterRelay('leaf1', () => {});
     session.exitRelay();
@@ -1034,6 +1064,21 @@ describe('DCCManager new methods', () => {
     expect(chats).toEqual(['admin: hello']);
   });
 
+  it('getStats returns null when no stats provider was injected', () => {
+    const mgr = new DCCManager({
+      client: new MockIRCClient(),
+      dispatcher: makeDispatcher(),
+      permissions: makePermissions(null),
+      services: makeServices(),
+      commandHandler: makeCommandHandler(),
+      config: makeConfig({ ip: '127.0.0.1', port_range: [50000, 50010] }),
+      version: '1.0.0',
+      botNick: 'hexbot',
+      // no getStats
+    });
+    expect(mgr.getStats()).toBeNull();
+  });
+
   it('notifyPartyPart calls onPartyPart callback', () => {
     const mgr = new DCCManager({
       client: new MockIRCClient(),
@@ -1050,5 +1095,457 @@ describe('DCCManager new methods', () => {
     mgr.onPartyPart = (handle, nick) => parts.push(`${handle}:${nick}`);
     mgr.notifyPartyPart('admin', 'AdminNick');
     expect(parts).toEqual(['admin:AdminNick']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DCCSession — password prompt phase
+// ---------------------------------------------------------------------------
+
+describe('DCCSession password prompt', () => {
+  beforeAll(async () => {
+    TEST_PASSWORD_HASH = await hashPassword(TEST_PASSWORD);
+  });
+
+  /**
+   * Wait until the session's phase changes (or the timeout elapses). scrypt
+   * runs on libuv threads so a few microtask ticks aren't enough — we have
+   * to yield real wall-clock time before the verifyPassword callback fires.
+   */
+  async function waitForPhaseChange(
+    session: DCCSession,
+    from: 'awaiting_password' | 'active',
+    timeoutMs = 2000,
+  ): Promise<void> {
+    const start = Date.now();
+    while (session.currentPhase === from && Date.now() - start < timeoutMs) {
+      await new Promise<void>((r) => setTimeout(r, 5));
+    }
+  }
+
+  async function waitForClosed(duplex: { destroyed: boolean }, timeoutMs = 2000): Promise<void> {
+    const start = Date.now();
+    while (!duplex.destroyed && Date.now() - start < timeoutMs) {
+      await new Promise<void>((r) => setTimeout(r, 5));
+    }
+  }
+
+  /** Short helper: yields a few microtasks to drain pending listeners. */
+  async function flush(): Promise<void> {
+    for (let i = 0; i < 10; i++) {
+      await new Promise<void>((r) => setImmediate(r));
+    }
+  }
+
+  function buildPromptSession(opts: {
+    passwordHash: string;
+    user?: UserRecord;
+    manager?: DCCSessionManager;
+  }) {
+    const mock = createMockSocket();
+    const manager = opts.manager ?? makeMockManagerForSession();
+    const session = new DCCSession({
+      manager,
+      user: opts.user ?? makeUser('alice', 'nm'),
+      passwordHash: opts.passwordHash,
+      nick: 'AliceNick',
+      ident: 'alice',
+      hostname: 'alice.host',
+      socket: mock.socket,
+      commandHandler: makeCommandHandler(),
+      idleTimeoutMs: 60_000,
+    });
+    return { session, manager, ...mock };
+  }
+
+  it('start() sends the password prompt (no banner yet)', () => {
+    const { session, written } = buildPromptSession({ passwordHash: TEST_PASSWORD_HASH });
+    session.start('1.0.0', 'hexbot');
+    const output = written.join('');
+    expect(output).toContain('Password:');
+    expect(output).not.toContain('HexBot'); // banner art should be suppressed
+    expect(session.currentPhase).toBe('awaiting_password');
+    session.close();
+  });
+
+  it('correct password advances to active and renders banner', async () => {
+    const { session, written, duplex, manager } = buildPromptSession({
+      passwordHash: TEST_PASSWORD_HASH,
+    });
+    const onAuthSuccess = vi.fn();
+    manager.onAuthSuccess = onAuthSuccess;
+
+    session.start('1.0.0', 'hexbot');
+    duplex.push(`${TEST_PASSWORD}\r\n`);
+    await waitForPhaseChange(session, 'awaiting_password');
+
+    expect(session.currentPhase).toBe('active');
+    expect(onAuthSuccess).toHaveBeenCalledWith(session);
+    expect(written.join('')).toContain('alice');
+    session.close();
+  });
+
+  it('wrong password rejects, notifies onAuthFailure, and closes', async () => {
+    const { session, written, duplex, manager } = buildPromptSession({
+      passwordHash: TEST_PASSWORD_HASH,
+    });
+    const onAuthFailure = vi.fn();
+    manager.onAuthFailure = onAuthFailure;
+
+    session.start('1.0.0', 'hexbot');
+    duplex.push('wrongpassword\r\n');
+    await waitForClosed(duplex);
+
+    expect(onAuthFailure).toHaveBeenCalledWith('AliceNick!alice@alice.host', 'alice');
+    expect(written.join('')).toContain('bad password');
+    expect(duplex.destroyed).toBe(true);
+  });
+
+  it('empty line during prompt re-prompts rather than counting as a failure', async () => {
+    const { session, written, duplex, manager } = buildPromptSession({
+      passwordHash: TEST_PASSWORD_HASH,
+    });
+    const onAuthFailure = vi.fn();
+    manager.onAuthFailure = onAuthFailure;
+
+    session.start('1.0.0', 'hexbot');
+    duplex.push('\r\n');
+    await flush();
+
+    expect(session.currentPhase).toBe('awaiting_password');
+    expect(onAuthFailure).not.toHaveBeenCalled();
+    const output = written.join('');
+    // The second 'Password: ' prompt should be in the output
+    const occurrences = output.match(/Password:/g) ?? [];
+    expect(occurrences.length).toBeGreaterThanOrEqual(2);
+
+    // Subsequent correct password still works
+    duplex.push(`${TEST_PASSWORD}\r\n`);
+    await waitForPhaseChange(session, 'awaiting_password');
+    expect(session.currentPhase).toBe('active');
+    session.close();
+  });
+
+  it('does not broadcast to party line while awaiting password', async () => {
+    const { session, duplex, manager } = buildPromptSession({ passwordHash: TEST_PASSWORD_HASH });
+    const broadcast = manager.broadcast as ReturnType<typeof vi.fn>;
+
+    session.start('1.0.0', 'hexbot');
+    // A non-password line before auth should NOT reach party line
+    duplex.push('hello world\r\n');
+    await waitForClosed(duplex); // wrong password → session is destroyed after the failure
+
+    expect(broadcast).not.toHaveBeenCalled();
+    // Session was never in active phase — it went from prompt straight to closed.
+  });
+
+  it('does not run commands while awaiting password', async () => {
+    const cmdHandler = makeCommandHandler();
+    const mock = createMockSocket();
+    const session = new DCCSession({
+      manager: makeMockManagerForSession(),
+      user: makeUser('alice', 'nm'),
+      passwordHash: TEST_PASSWORD_HASH,
+      nick: 'AliceNick',
+      ident: 'alice',
+      hostname: 'alice.host',
+      socket: mock.socket,
+      commandHandler: cmdHandler,
+      idleTimeoutMs: 60_000,
+    });
+
+    session.start('1.0.0', 'hexbot');
+    mock.duplex.push('.help\r\n');
+    await waitForClosed(mock.duplex);
+
+    expect(cmdHandler.execute).not.toHaveBeenCalled();
+  });
+
+  it('prompt idle timer closes the session after 30s of silence', () => {
+    vi.useFakeTimers();
+    try {
+      const { session, duplex } = buildPromptSession({ passwordHash: TEST_PASSWORD_HASH });
+      session.start('1.0.0', 'hexbot');
+      // No input — the short prompt timer should fire and close the session.
+      vi.advanceTimersByTime(30_001);
+      expect(duplex.destroyed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('renderBannerPreview renders the banner without going through the prompt', () => {
+    // Back door used by scripts/preview-banner.ts — render the welcome banner
+    // directly so the preview script can capture it without scrypt overhead.
+    const { session, written } = buildPromptSession({ passwordHash: TEST_PASSWORD_HASH });
+    session.renderBannerPreview('1.0.0', 'hexbot');
+    const output = written.join('');
+    // Banner should contain the bot name and handle but NOT the password prompt.
+    expect(output).toContain('hexbot');
+    expect(output).toContain('alice');
+    expect(output).not.toContain('Password:');
+    expect(session.currentPhase).toBe('active');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DCCAuthTracker — per-hostmask failure counter with exponential backoff
+// ---------------------------------------------------------------------------
+
+describe('DCCAuthTracker', () => {
+  it('starts unlocked for an unknown key', () => {
+    const tracker = new DCCAuthTracker();
+    expect(tracker.check('some!ident@host').locked).toBe(false);
+  });
+
+  it('records failures and does not lock before the threshold', () => {
+    const tracker = new DCCAuthTracker({ maxFailures: 3 });
+    tracker.recordFailure('some!ident@host');
+    tracker.recordFailure('some!ident@host');
+    expect(tracker.check('some!ident@host').locked).toBe(false);
+  });
+
+  it('locks out after reaching the failure threshold', () => {
+    const tracker = new DCCAuthTracker({ maxFailures: 3, baseLockMs: 1000 });
+    tracker.recordFailure('some!ident@host');
+    tracker.recordFailure('some!ident@host');
+    const last = tracker.recordFailure('some!ident@host');
+    expect(last.locked).toBe(true);
+    expect(tracker.check('some!ident@host').locked).toBe(true);
+  });
+
+  it('exponential backoff doubles each re-ban', () => {
+    const tracker = new DCCAuthTracker({ maxFailures: 2, baseLockMs: 1000 });
+    // First lock
+    tracker.recordFailure('k');
+    const first = tracker.recordFailure('k');
+    const firstDuration = first.lockedUntil - Date.now();
+
+    // Fast-forward: pretend the first lock has expired and trigger a re-lock.
+    // Use the injected `now` parameter so we don't need fake timers.
+    const later = first.lockedUntil + 1_000;
+    tracker.recordFailure('k', later);
+    const second = tracker.recordFailure('k', later);
+    const secondDuration = second.lockedUntil - later;
+
+    expect(secondDuration).toBeGreaterThan(firstDuration);
+    expect(secondDuration).toBe(2 * firstDuration);
+  });
+
+  it('success zeroes the failure counter but preserves banCount', () => {
+    const tracker = new DCCAuthTracker({ maxFailures: 3, baseLockMs: 1000 });
+    tracker.recordFailure('k');
+    tracker.recordFailure('k');
+    tracker.recordSuccess('k');
+    expect(tracker.check('k').failures).toBe(0);
+  });
+
+  it('sweep removes stale entries with no bans', () => {
+    const tracker = new DCCAuthTracker({ windowMs: 1000 });
+    tracker.recordFailure('k', 1000);
+    tracker.sweep(1_000_000); // far in the future
+    expect(tracker.check('k').failures).toBe(0);
+  });
+
+  it('failure counter resets when a failure arrives after the window expires', () => {
+    const tracker = new DCCAuthTracker({ maxFailures: 5, windowMs: 1000 });
+    tracker.recordFailure('k', 1000);
+    tracker.recordFailure('k', 1500);
+    expect(tracker.check('k').failures).toBe(2);
+    // Record a failure after the window has elapsed — counter resets to 1
+    const status = tracker.recordFailure('k', 3000);
+    expect(status.failures).toBe(1);
+  });
+
+  it('sweep removes escalated entries once the 24h stale window has passed', () => {
+    const tracker = new DCCAuthTracker({ maxFailures: 1, baseLockMs: 1000, windowMs: 1000 });
+    // Trip the tracker — banCount becomes 1 (first lock duration = 1000 * 2^0 = 1000ms)
+    tracker.recordFailure('k', 1000);
+    // Sweep long after — entry should be pruned (banCount > 0 branch + STALE_MS elapsed).
+    tracker.sweep(2_000 + 86_400_001);
+    // Recording a new failure against the same key should start as if no prior
+    // history existed. If the escalated entry had *not* been pruned, the second
+    // lock would use banCount=1 (2x base lock); after pruning, banCount=0 again.
+    const fresh = tracker.recordFailure('k', 1_000_000_000);
+    const freshLockDuration = fresh.lockedUntil - 1_000_000_000;
+    expect(freshLockDuration).toBe(1000); // == baseLockMs * 2^0, proving banCount reset
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DCCManager.openSession — prompt integration (migration, lockout)
+// ---------------------------------------------------------------------------
+
+describe('DCCManager.openSession prompt integration', () => {
+  beforeAll(async () => {
+    if (!TEST_PASSWORD_HASH) {
+      TEST_PASSWORD_HASH = await hashPassword(TEST_PASSWORD);
+    }
+  });
+
+  function buildManager(overrides: Partial<DCCManager> = {}): DCCManager {
+    const client = new MockIRCClient();
+    const sessions = new Map<string, DCCSessionEntry>();
+    const mgr = new DCCManager({
+      client,
+      dispatcher: makeDispatcher(),
+      permissions: makePermissions(null),
+      services: makeServices(),
+      commandHandler: makeCommandHandler(),
+      config: makeConfig(),
+      version: '1.0.0',
+      botNick: 'hexbot',
+      sessions,
+    });
+    Object.assign(mgr, overrides);
+    return mgr;
+  }
+
+  function buildPending(user: UserRecord) {
+    return {
+      nick: 'AliceNick',
+      user,
+      ident: 'alice',
+      hostname: 'alice.host',
+      server: undefined as unknown as import('node:net').Server,
+      port: 0,
+      timer: setTimeout(() => {}, 0),
+    };
+  }
+
+  it('rejects a user with no password_hash with the migration notice', () => {
+    const mgr = buildManager();
+    const user: UserRecord = {
+      handle: 'alice',
+      hostmasks: ['*!alice@alice.host'],
+      global: 'nm',
+      channels: {},
+      // no password_hash
+    };
+    const pending = buildPending(user);
+    const { socket, written, duplex } = createMockSocket();
+
+    mgr.openSession(pending, socket);
+
+    expect(duplex.destroyed).toBe(true);
+    expect(written.join('')).toContain('no password set');
+    expect(written.join('')).toContain('.chpass');
+    clearTimeout(pending.timer);
+  });
+
+  it('creates a session and prompts when password_hash is present', () => {
+    const mgr = buildManager();
+    const user: UserRecord = {
+      handle: 'alice',
+      hostmasks: ['*!alice@alice.host'],
+      global: 'nm',
+      channels: {},
+      password_hash: TEST_PASSWORD_HASH,
+    };
+    const pending = buildPending(user);
+    const { socket, written, duplex } = createMockSocket();
+
+    mgr.openSession(pending, socket);
+
+    expect(duplex.destroyed).toBe(false);
+    expect(written.join('')).toContain('Password:');
+    expect(written.join('')).not.toContain('no password set');
+    // Clean up — session is still awaiting input
+    duplex.destroy();
+    clearTimeout(pending.timer);
+  });
+
+  it('rejects a currently-locked-out identity without prompting', () => {
+    const tracker = new DCCAuthTracker({ maxFailures: 1, baseLockMs: 60_000 });
+    tracker.recordFailure('AliceNick!alice@alice.host');
+
+    const client = new MockIRCClient();
+    const mgr = new DCCManager({
+      client,
+      dispatcher: makeDispatcher(),
+      permissions: makePermissions(null),
+      services: makeServices(),
+      commandHandler: makeCommandHandler(),
+      config: makeConfig(),
+      version: '1.0.0',
+      botNick: 'hexbot',
+      authTracker: tracker,
+    });
+
+    const user: UserRecord = {
+      handle: 'alice',
+      hostmasks: ['*!alice@alice.host'],
+      global: 'nm',
+      channels: {},
+      password_hash: TEST_PASSWORD_HASH,
+    };
+    const pending = buildPending(user);
+    const { socket, written, duplex } = createMockSocket();
+
+    mgr.openSession(pending, socket);
+
+    expect(duplex.destroyed).toBe(true);
+    expect(written.join('')).toContain('too many failed');
+    clearTimeout(pending.timer);
+  });
+
+  it('onAuthFailure escalates the tracker until lockout', async () => {
+    const tracker = new DCCAuthTracker({ maxFailures: 3, baseLockMs: 60_000 });
+    const client = new MockIRCClient();
+    const mgr = new DCCManager({
+      client,
+      dispatcher: makeDispatcher(),
+      permissions: makePermissions(null),
+      services: makeServices(),
+      commandHandler: makeCommandHandler(),
+      config: makeConfig(),
+      version: '1.0.0',
+      botNick: 'hexbot',
+      authTracker: tracker,
+    });
+
+    const key = 'Eve!eve@evil.host';
+    mgr.onAuthFailure(key, 'eve');
+    mgr.onAuthFailure(key, 'eve');
+    mgr.onAuthFailure(key, 'eve');
+
+    expect(tracker.check(key).locked).toBe(true);
+  });
+
+  it('onAuthSuccess clears the failure counter and registers the session', () => {
+    const tracker = new DCCAuthTracker({ maxFailures: 5 });
+    const client = new MockIRCClient();
+    const localSessions = new Map<string, DCCSessionEntry>();
+    const mgr = new DCCManager({
+      client,
+      dispatcher: makeDispatcher(),
+      permissions: makePermissions(null),
+      services: makeServices(),
+      commandHandler: makeCommandHandler(),
+      config: makeConfig(),
+      version: '1.0.0',
+      botNick: 'hexbot',
+      authTracker: tracker,
+      sessions: localSessions,
+    });
+
+    // Seed a failure so recordSuccess has something to clear
+    tracker.recordFailure('AliceNick!alice@alice.host');
+    const fakeSession = {
+      handle: 'alice',
+      nick: 'AliceNick',
+      connectedAt: Date.now(),
+      isRelaying: false,
+      rateLimitKey: 'AliceNick!alice@alice.host',
+      writeLine: vi.fn(),
+      close: vi.fn(),
+      enterRelay: vi.fn(),
+      exitRelay: vi.fn(),
+    } as unknown as DCCSession;
+
+    mgr.onAuthSuccess(fakeSession);
+
+    expect(tracker.check('AliceNick!alice@alice.host').failures).toBe(0);
+    expect(localSessions.size).toBe(1);
   });
 });

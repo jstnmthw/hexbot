@@ -341,7 +341,7 @@ Flag-based permissions with per-channel overrides.
 - `d` — deop (suppress auto-op/halfop on join; does not revoke privileges — user can still `.op` themselves or be opped manually; mode enforcement will not re-op a `+d` user; auto-voice still works if user also has `+v`)
 - `-` — no flags required (anyone)
 
-**User records:** Each user has a handle, one or more hostmask patterns (with wildcards), global flags, and per-channel flag overrides.
+**User records:** Each user has a handle, one or more hostmask patterns (with wildcards), global flags, per-channel flag overrides, and an optional scrypt password hash used by DCC CHAT authentication.
 
 ```typescript
 interface UserRecord {
@@ -349,6 +349,7 @@ interface UserRecord {
   hostmasks: string[];
   global: string;
   channels: Record<string, string>;
+  password_hash?: string; // scrypt — required for DCC CHAT, absent at rest is OK
 }
 
 // Example:
@@ -359,18 +360,24 @@ interface UserRecord {
 //   channels: {
 //     "#main": "o",
 //     "#games": "v"
-//   }
+//   },
+//   password_hash: "scrypt$<salt_hex>$<hash_hex>"
 // }
 ```
 
-**Identity verification:** Hostmask-based by default (like Eggdrop). The bot trusts a user because their connection matches a known hostmask pattern. Common formats:
+The `password_hash` field is stripped from the plugin-facing `PublicUserRecord` view returned by `PluginPermissions.findByHostmask` — plugins never see secret material.
+
+**Identity verification:** Two paths, depending on the surface:
+
+- **In-channel flag checks** (for `.op`, `.say`, plugin `pub` binds, etc.) — hostmask pattern matching plus IRCv3 `account-tag` / `account-notify` / `extended-join`. Optional NickServ ACC / STATUS verification can be required for privileged flag levels via `config.identity.require_acc_for`. This is the Eggdrop-style model.
+- **DCC CHAT sessions** — per-user scrypt-hashed password, prompted on every new connection. The hostmask pattern tells the bot _which_ handle is connecting; the password proves it. This closes the vhost-spoofing gap on networks where a single cloak persists across nick changes, and works uniformly on services-free networks like EFNet. See `src/core/password.ts`, `.chpass`, and section 2.15.
+
+Hostmask pattern formats:
 
 - `*!*@hostname.com` — static host
 - `*!ident@*.isp.com` — dynamic host with known ident
-- `$a:accountname` — IRCv3 account name (strongest; requires `account-notify` / `extended-join` caps)
+- `$a:accountname` — IRCv3 account name (strongest for in-channel auth; requires `account-notify` / `extended-join` caps)
 - `nick!*@*` — nick-only (least secure, not recommended)
-
-**Optional NickServ ACC enhancement:** When enabled in config, the bot queries NickServ ACC (Atheme) or STATUS (Anope) before granting privileged operations (+o, +n flagged commands). When the network supports IRCv3 `account-notify` and `extended-join`, the bot can skip the NickServ round-trip and use the live account map directly. Configurable per-network since not all networks have services.
 
 ### 2.7 Services integration (core module)
 
@@ -564,18 +571,22 @@ Passive DCC CHAT for remote administration (`src/core/dcc.ts`). This is "Option 
 
 1. User types `/dcc chat hexbot` in their IRC client — sends a CTCP DCC request to the bot.
 2. The bot receives it as a `ctcp` dispatcher event (`command: 'DCC'`).
-3. `DCCManager` validates the request (passive DCC only, hostmask auth, flag check).
+3. `DCCManager` validates the request (passive DCC only, hostmask lookup to resolve handle, flag check).
 4. Bot opens a TCP port from the configured range (`port_range` in `bot.json`), sends a passive DCC token back via CTCP reply.
-5. User's client connects to the bot's port. Bot shows a banner and command prompt.
-6. Lines starting with `.` are routed through `CommandHandler` with the user's real flags enforced.
-7. Plain text lines are broadcast to all connected DCC sessions (the console).
+5. User's client connects. The bot enters an `awaiting_password` phase: a `Password:` prompt is sent on the socket, and no commands run until a valid password is provided.
+6. On successful verification, the session transitions to `active`; the banner is rendered and `*** <handle> has joined the console` is broadcast.
+7. Lines starting with `.` are routed through `CommandHandler` with the user's real flags enforced.
+8. Plain text lines are broadcast to all connected DCC sessions (the console).
 
 **Key decisions:**
 
 - **Passive DCC only** — bot opens port, user connects. Bot requires a public IPv4. Active DCC (user opens port) is rejected.
+- **Password authentication** — DCC uses per-user scrypt-hashed passwords (not hostmask-only). This follows the Eggdrop model and closes the Rizon-style vhost spoofing gap. See `src/core/password.ts`, `.chpass`, and section 2.6.
+- **Rate limiting** — per-hostmask failure counter with exponential backoff (`DCCAuthTracker`), modelled on `BotLinkAuthManager`. Repeated bad passwords from the same identity lock out the prompt path for escalating durations.
+- **Prompt phase idle timeout** — 30 seconds, shorter than active-session idle. Stalled prompts are killed quickly.
+- **No implicit owner** — DCC sessions get real flag enforcement (unlike the REPL which has implicit owner access).
 - **Core module, not plugin** — needs direct access to `CommandHandler` and `Permissions`, which are not in `PluginAPI`.
 - **Wired in `bot.ts`** — created after IRC connect, torn down on shutdown. Enabled via `dcc.enabled` in `bot.json`.
-- **No implicit owner** — DCC sessions get real flag enforcement (unlike the REPL which has implicit owner access).
 
 **Config (`bot.json`):**
 
@@ -586,10 +597,11 @@ Passive DCC CHAT for remote administration (`src/core/dcc.ts`). This is "Option 
   "port_range": [49152, 49171],
   "require_flags": "m",
   "max_sessions": 5,
-  "idle_timeout_ms": 300000,
-  "nickserv_verify": false
+  "idle_timeout_ms": 300000
 }
 ```
+
+`dcc.nickserv_verify` is retained as a deprecated no-op for 0.3.0 (logs a startup warning) and will be removed in 0.4.0. The password prompt supersedes the NickServ gate.
 
 See `docs/DCC.md` for full setup, client instructions, and security notes.
 
@@ -761,13 +773,13 @@ ngircd -n  # foreground mode
 
 ## 8. Prior art and references
 
-| Project              | What we take from it                                                                                              |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **Eggdrop**          | Bind system, flag-based permissions, hostmask identity, two-tier module architecture, party line concept (→ REPL) |
-| **Darkbot**          | Keyword-based auto-response concept (relevant for AI module)                                                      |
-| **MrNodeBot**        | Proof that Node.js + Express + Socket.IO works for IRC bots with web panels                                       |
-| **Limnoria/Supybot** | ACL system design, plugin config patterns                                                                         |
-| **irc-framework**    | IRC protocol handling, IRCv3, SASL — we use this as our transport layer                                           |
+| Project              | What we take from it                                                                                                                                        |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Eggdrop**          | Bind system, flag-based permissions, hostmask identity, two-tier module architecture, party line concept (→ REPL), **per-user DCC password authentication** |
+| **Darkbot**          | Keyword-based auto-response concept (relevant for AI module)                                                                                                |
+| **MrNodeBot**        | Proof that Node.js + Express + Socket.IO works for IRC bots with web panels                                                                                 |
+| **Limnoria/Supybot** | ACL system design, plugin config patterns                                                                                                                   |
+| **irc-framework**    | IRC protocol handling, IRCv3, SASL — we use this as our transport layer                                                                                     |
 
 ---
 

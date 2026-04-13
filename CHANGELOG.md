@@ -6,8 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### BREAKING
+
+- **DCC CHAT now requires per-user passwords** (following the Eggdrop model). The old hostmask-only trust path has been removed. Existing user records have no `password_hash` on file and **will be blocked from DCC until an admin sets one**. Migration:
+  1. For each admin in your user database, run `.chpass <handle> <newpass>` from the REPL **before** they next try to connect via DCC. Passwords must be at least 8 characters; they are hashed with scrypt before storage.
+  2. In existing DCC sessions, users can rotate their own password with `.chpass <newpass>`. Owners can rotate any user with `.chpass <handle> <newpass>`. `.chpass` is **rejected** over IRC PRIVMSG — passwords never travel over channel messages.
+  3. The `dcc.nickserv_verify` config setting is now a **no-op** with a deprecation warning at startup; the new password path supersedes the NickServ gate on every network, not just services-enabled ones. The field will be removed in 0.4.0.
+
+  Rationale: on networks where a single vhost persists across nick changes (notably Rizon), an operator identified on their registered nick can `/nick` to an unregistered nick, keep the same cloak, and bypass DCC auth. The password prompt closes this uniformly — see [docs/DCC.md](docs/DCC.md#authentication-model) and [docs/SECURITY.md](docs/SECURITY.md#34-dcc-chat-authentication--trust-model-split). In-channel flag checks (for `.op`, `.say`, plugin `pub` binds) are unchanged — they keep hostmask + IRCv3 account-tag matching, because prompting on every channel message is not a workable UX.
+
 ### Added
 
+- **DCC CHAT password authentication** (`src/core/password.ts`, `src/core/commands/password-commands.ts`, prompt phase in `src/core/dcc.ts`): scrypt-hashed per-user passwords; `.chpass` command (REPL + DCC transports only, IRC path hard-rejected); password prompt with a 30-second idle timer; per-hostmask failure tracker with exponential backoff (`DCCAuthTracker`); migration notice for users with no `password_hash` on file; `user:passwordChanged` event bus event. `UserRecord` gains an optional `password_hash` field that is stripped from the plugin-facing `PublicUserRecord` view so plugins never see secret material.
 - **RSS plugin** (`plugins/rss/`): polls RSS/Atom feeds and announces new items to configured channels. Single 60s `time` bind drives all feeds with per-feed interval tracking; SHA-1-based deduplication via the KV store survives restarts; first-run silent seeding prevents backlog floods. Admin commands `!rss list/add/remove/check` (flags `m`) reply via private notice while feed announcements go to channels. Runtime-added feeds persist in KV alongside config-file feeds. Daily cleanup of dedup entries past `dedup_window_days`. New `rss-parser` dependency.
 - `d` (deop) permission flag — elective flag that suppresses auto-op/halfop on join without revoking privileges; user can still `.op` themselves or be opped manually; mode enforcement and bitch mode respect `+d`; auto-voice still works with explicit `+v`
 - Per-plugin channel scoping via `channels` array in `plugins.json` — restricts a plugin to specific channels

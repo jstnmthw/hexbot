@@ -135,6 +135,7 @@ const mockManager: DCCSessionManager = {
 const session = new DCCSession({
   manager: mockManager,
   user: { handle, hostmasks: [`${nick}!~${nick}@trusted.host`], global: flags, channels: {} },
+  passwordHash: 'scrypt$preview$preview', // placeholder — dev preview skips the prompt
   nick,
   ident: `~${nick}`,
   hostname: 'trusted.host',
@@ -143,7 +144,8 @@ const session = new DCCSession({
   idleTimeoutMs: 600_000,
 });
 
-session.start(version, botNick);
+// Skip the password prompt and render the banner directly — preview only.
+session.renderBannerPreview(version, botNick);
 
 // Flush and print — split the accumulated buffer on \r\n
 setTimeout(() => {

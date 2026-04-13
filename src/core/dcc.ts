@@ -15,20 +15,26 @@ import { createInterface as createReadline } from 'node:readline';
 import type { CommandExecutor } from '../command-handler';
 import type { BindRegistrar } from '../dispatcher';
 import type { Logger } from '../logger';
-import type {
-  DccConfig,
-  HandlerContext,
-  PluginPermissions,
-  PluginServices,
-  UserRecord,
-} from '../types';
+import type { DccConfig, HandlerContext, PluginServices, UserRecord } from '../types';
 import { toEventObject } from '../utils/irc-event';
 import { sanitize } from '../utils/sanitize';
 import { type Casemapping, ircLower } from '../utils/wildcard';
+import { verifyPassword } from './password';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+/**
+ * Permissions view DCC needs — a superset of `PluginPermissions`. The DCC
+ * path must see `password_hash` to verify the prompt, so `findByHostmask`
+ * returns a full `UserRecord` rather than the stripped plugin-facing view.
+ * The concrete `Permissions` class satisfies this interface structurally.
+ */
+export interface DCCPermissions {
+  findByHostmask(hostmask: string): UserRecord | null;
+  checkFlags(requiredFlags: string, ctx: HandlerContext): boolean;
+}
 
 /** Minimal IRC client interface needed by DCCManager. */
 export interface DCCIRCClient {
@@ -91,6 +97,17 @@ export interface DCCSessionManager {
   getBotName(): string;
   getStats(): BannerStats | null;
   onRelayEnd?: ((handle: string, targetBot: string) => void) | null;
+  /**
+   * Called when the password prompt succeeds. The session has entered the
+   * `active` phase and should be announced to other sessions. Implementations
+   * may also clear any rate-limit failure counters for the session's key.
+   */
+  onAuthSuccess?(session: DCCSessionEntry): void;
+  /**
+   * Called when the password prompt fails. The session is about to close.
+   * Implementations should increment failure counters and emit warnings.
+   */
+  onAuthFailure?(key: string, handle: string): void;
 }
 
 /** The subset of DCCSession that DCCManager and consumers depend on. */
@@ -121,7 +138,7 @@ export interface BotlinkDCCView {
 export interface DCCManagerDeps {
   client: DCCIRCClient;
   dispatcher: BindRegistrar;
-  permissions: PluginPermissions;
+  permissions: DCCPermissions;
   services: PluginServices;
   commandHandler: CommandExecutor;
   config: DccConfig;
@@ -132,6 +149,8 @@ export interface DCCManagerDeps {
   sessions?: Map<string, DCCSessionEntry>;
   /** Injectable port allocator. Default: RangePortAllocator from config.port_range. */
   portAllocator?: PortAllocator;
+  /** Injectable auth tracker. Default: new DCCAuthTracker() with stock parameters. */
+  authTracker?: DCCAuthTracker;
   /** Optional live stats provider for the DCC session banner. */
   getStats?: () => BannerStats;
 }
@@ -256,6 +275,120 @@ function formatUptime(ms: number): string {
   return parts.join(' ');
 }
 
+/**
+ * Shorter idle timeout used while the session is awaiting a password. Keeps
+ * stalled prompts from squatting on a DCC port.
+ */
+export const DCC_PROMPT_TIMEOUT_MS = 30_000;
+
+// ---------------------------------------------------------------------------
+// DCCAuthTracker — per-hostmask failure counter with exponential backoff
+// ---------------------------------------------------------------------------
+
+export interface DCCAuthLockStatus {
+  locked: boolean;
+  lockedUntil: number;
+  failures: number;
+}
+
+/**
+ * Tracks password-prompt failures per identity (hostmask). Mirrors the
+ * backoff strategy in `BotLinkAuthManager` but against DCC keys. Used by
+ * `DCCManager` to short-circuit the prompt path for abusive clients.
+ *
+ * Exported so tests can construct one in isolation. The class owns no
+ * timers — the sweep is driven by the enclosing DCCManager to match how
+ * the botlink tracker is driven by its enclosing hub.
+ */
+export class DCCAuthTracker {
+  private readonly trackers: Map<
+    string,
+    { failures: number; firstFailure: number; bannedUntil: number; banCount: number }
+  > = new Map();
+
+  /** Max failures per window before a lockout. */
+  readonly maxFailures: number;
+  /** Sliding window over which failures accumulate. */
+  readonly windowMs: number;
+  /** Base lockout duration. Doubles on each re-ban up to {@link maxLockMs}. */
+  readonly baseLockMs: number;
+  /** Upper bound on the exponential lockout duration. */
+  readonly maxLockMs: number;
+
+  constructor(
+    options: {
+      maxFailures?: number;
+      windowMs?: number;
+      baseLockMs?: number;
+      maxLockMs?: number;
+    } = {},
+  ) {
+    this.maxFailures = options.maxFailures ?? 5;
+    this.windowMs = options.windowMs ?? 60_000;
+    this.baseLockMs = options.baseLockMs ?? 300_000;
+    this.maxLockMs = options.maxLockMs ?? 86_400_000;
+  }
+
+  /** Is this key currently locked out? */
+  check(key: string, now: number = Date.now()): DCCAuthLockStatus {
+    const tracker = this.trackers.get(key);
+    if (!tracker) return { locked: false, lockedUntil: 0, failures: 0 };
+    if (tracker.bannedUntil > now) {
+      return { locked: true, lockedUntil: tracker.bannedUntil, failures: tracker.failures };
+    }
+    return { locked: false, lockedUntil: 0, failures: tracker.failures };
+  }
+
+  /** Record a failed attempt. May escalate to a lockout. */
+  recordFailure(key: string, now: number = Date.now()): DCCAuthLockStatus {
+    let tracker = this.trackers.get(key);
+    if (!tracker) {
+      tracker = { failures: 0, firstFailure: now, bannedUntil: 0, banCount: 0 };
+      this.trackers.set(key, tracker);
+    }
+    if (now - tracker.firstFailure > this.windowMs) {
+      tracker.failures = 0;
+      tracker.firstFailure = now;
+    }
+    tracker.failures++;
+    if (tracker.failures >= this.maxFailures) {
+      const lockDuration = Math.min(this.baseLockMs * 2 ** tracker.banCount, this.maxLockMs);
+      tracker.bannedUntil = now + lockDuration;
+      tracker.banCount++;
+      tracker.failures = 0;
+    }
+    return {
+      locked: tracker.bannedUntil > now,
+      lockedUntil: tracker.bannedUntil,
+      failures: tracker.failures,
+    };
+  }
+
+  /** Record a successful attempt — zeroes the failure counter but preserves banCount. */
+  recordSuccess(key: string): void {
+    const tracker = this.trackers.get(key);
+    if (tracker) {
+      tracker.failures = 0;
+    }
+  }
+
+  /** Prune expired trackers — called from DCCManager sweep. */
+  sweep(now: number = Date.now()): void {
+    const STALE_MS = 86_400_000;
+    for (const [key, tracker] of this.trackers) {
+      const banExpired = tracker.bannedUntil < now;
+      const failureWindowExpired = now - tracker.firstFailure > this.windowMs;
+      if (banExpired && failureWindowExpired) {
+        if (tracker.banCount === 0) {
+          this.trackers.delete(key);
+        } else if (now - tracker.bannedUntil > STALE_MS) {
+          this.trackers.delete(key);
+        }
+      }
+    }
+  }
+}
+
 export class DCCSession implements DCCSessionEntry {
   readonly handle: string;
   readonly flags: string;
@@ -273,9 +406,18 @@ export class DCCSession implements DCCSessionEntry {
   private closed = false;
   private logger: Logger | null;
 
+  /** Session state machine: prompt → active. */
+  private phase: 'awaiting_password' | 'active' = 'awaiting_password';
+  /** The password hash the prompt must match. Never logged. */
+  private readonly passwordHash: string;
+  /** Version / botNick captured from `start()` — needed by the deferred banner. */
+  private versionForBanner = '';
+  private botNickForBanner = '';
+
   constructor(opts: {
     manager: DCCSessionManager;
     user: UserRecord;
+    passwordHash: string;
     nick: string;
     ident: string;
     hostname: string;
@@ -287,6 +429,7 @@ export class DCCSession implements DCCSessionEntry {
     this.manager = opts.manager;
     this.handle = opts.user.handle;
     this.flags = opts.user.global;
+    this.passwordHash = opts.passwordHash;
     this.nick = opts.nick;
     this.ident = opts.ident;
     this.hostname = opts.hostname;
@@ -297,13 +440,88 @@ export class DCCSession implements DCCSessionEntry {
     this.logger = opts.logger ?? null;
   }
 
-  /** Start the session: send banner, begin readline loop. */
+  /** Key used for rate-limit tracking — `nick!ident@host`. */
+  get rateLimitKey(): string {
+    return `${this.nick}!${this.ident}@${this.hostname}`;
+  }
+
+  /**
+   * Start the session: wire up readline, send the password prompt, and wait
+   * for the first line of input. The banner is **not** sent until the
+   * password prompt succeeds — see {@link showBanner}.
+   */
   start(version: string, botNick: string): void {
-    // Wrap socket in readline — DCC uses \r\n but readline handles both
+    this.versionForBanner = version;
+    this.botNickForBanner = botNick;
+
     this.rl = createReadline({ input: this.socket, crlfDelay: Infinity });
     const rl = this.rl;
 
-    // Banner
+    // Password prompt — no trailing newline so the user types on the same line.
+    this.socket.write('Password: ');
+    this.phase = 'awaiting_password';
+    this.resetPromptIdle();
+
+    rl.on('line', (line: string) => {
+      this.onLine(line);
+    });
+
+    this.socket.on('close', () => this.onClose());
+    /* v8 ignore next -- socket error event unreachable in tests: Duplex.emit('error') propagates even with a handler */
+    this.socket.on('error', () => this.onClose());
+  }
+
+  /** Read-only view of the session phase — used by tests. */
+  get currentPhase(): 'awaiting_password' | 'active' {
+    return this.phase;
+  }
+
+  /**
+   * Render the welcome banner directly, without going through the password
+   * prompt. **Only for the dev preview script** (`scripts/preview-banner.ts`)
+   * and tests that need to verify banner output. Never called from the
+   * production DCC flow.
+   */
+  renderBannerPreview(version: string, botNick: string): void {
+    this.versionForBanner = version;
+    this.botNickForBanner = botNick;
+    this.phase = 'active';
+    this.showBanner();
+  }
+
+  /**
+   * Start the session in the `active` phase, bypassing the password prompt.
+   * **Test-only.** Production always goes through {@link start}, which sends
+   * the prompt and waits for a verified password. Existing tests that are
+   * *not* about the prompt itself use this entry point to stay focused on
+   * the behaviour under test (relay, command routing, idle timer, …).
+   * Prompt-specific tests invoke `start()` directly.
+   */
+  startActiveForTesting(version: string, botNick: string): void {
+    this.versionForBanner = version;
+    this.botNickForBanner = botNick;
+
+    this.rl = createReadline({ input: this.socket, crlfDelay: Infinity });
+    const rl = this.rl;
+
+    this.phase = 'active';
+    this.showBanner();
+    this.resetIdle();
+
+    rl.on('line', (line: string) => {
+      this.onLine(line);
+    });
+
+    this.socket.on('close', () => this.onClose());
+    /* v8 ignore next -- socket error event unreachable in tests: Duplex.emit('error') propagates even with a handler */
+    this.socket.on('error', () => this.onClose());
+  }
+
+  /** Send the welcome banner + stats. Called after the password prompt succeeds. */
+  private showBanner(): void {
+    const version = this.versionForBanner;
+    const botNick = this.botNickForBanner;
+
     const d = new Date();
     const time = d.toLocaleTimeString();
     const tz = d.toLocaleTimeString('en-US', { timeZoneName: 'short' }).split(' ').pop();
@@ -363,16 +581,6 @@ export class DCCSession implements DCCSessionEntry {
     this.writeLine('');
     this.writeLine(`Commands start with '.' — everything else is console chat.`);
     this.writeLine('');
-
-    this.resetIdle();
-
-    rl.on('line', (line: string) => {
-      this.onLine(line);
-    });
-
-    this.socket.on('close', () => this.onClose());
-    /* v8 ignore next -- socket error event unreachable in tests: Duplex.emit('error') propagates even with a handler */
-    this.socket.on('error', () => this.onClose());
   }
 
   /** Write a line followed by \r\n. No-op if socket is destroyed. */
@@ -412,6 +620,14 @@ export class DCCSession implements DCCSessionEntry {
   }
 
   private async onLine(line: string): Promise<void> {
+    // Password-prompt phase — consume one line and verify. No trimming of
+    // the password itself; users may intentionally use leading/trailing
+    // characters. But DCC protocol delivers lines without the CRLF already.
+    if (this.phase === 'awaiting_password') {
+      await this.handlePasswordLine(line);
+      return;
+    }
+
     const trimmed = line.trim();
     this.resetIdle();
 
@@ -480,6 +696,66 @@ export class DCCSession implements DCCSessionEntry {
     }, this.idleTimeoutMs);
   }
 
+  /** Shorter timer used while the password prompt is open. */
+  private resetPromptIdle(): void {
+    if (this.idleTimer !== null) clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => {
+      this.close('Password prompt timed out.');
+    }, DCC_PROMPT_TIMEOUT_MS);
+  }
+
+  /**
+   * Handle the first (and only) line received during the `awaiting_password`
+   * phase. On success, transition to `active` and show the banner. On
+   * failure, notify the manager (so it can escalate) and disconnect.
+   */
+  private async handlePasswordLine(line: string): Promise<void> {
+    // A DCC client may send CRLF or LF; readline already strips the trailing
+    // newline but a user may accidentally include whitespace. We accept the
+    // password verbatim minus leading/trailing whitespace.
+    const candidate = line.replace(/[\r\n]+$/g, '').trim();
+
+    // Treat the prompt itself as something that can be aborted with a blank
+    // line — otherwise the session would silently count it as a failure.
+    if (candidate.length === 0) {
+      this.socket.write('Password: ');
+      this.resetPromptIdle();
+      return;
+    }
+
+    let ok: boolean;
+    try {
+      ok = await verifyPassword(candidate, this.passwordHash);
+      /* v8 ignore start -- verifyPassword only throws on scrypt OOM / invalid params; defensive */
+    } catch (err) {
+      this.logger?.error(`DCC password verification error for ${this.handle}: ${String(err)}`);
+      ok = false;
+    }
+    /* v8 ignore stop */
+
+    if (this.closed) return; // session may have been closed while awaiting scrypt
+
+    if (!ok) {
+      this.logger?.warn(
+        `DCC CHAT: bad password from ${this.handle} (${this.nick}!${this.ident}@${this.hostname})`,
+      );
+      this.manager.onAuthFailure?.(this.rateLimitKey, this.handle);
+      this.socket.write('DCC CHAT: bad password.\r\n');
+      this.close('Authentication failed.');
+      return;
+    }
+
+    // Password accepted — transition to active phase.
+    this.phase = 'active';
+    if (this.idleTimer !== null) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+    this.manager.onAuthSuccess?.(this);
+    this.showBanner();
+    this.resetIdle();
+  }
+
   /** Close the session gracefully. */
   close(reason?: string): void {
     if (this.closed) return;
@@ -529,7 +805,7 @@ const PLUGIN_ID = 'core:dcc';
 export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   private client: DCCIRCClient;
   private dispatcher: BindRegistrar;
-  private permissions: PluginPermissions;
+  private permissions: DCCPermissions;
   private services: PluginServices;
   private commandHandler: CommandExecutor;
   private config: DccConfig;
@@ -544,6 +820,9 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   private botNick: string;
   private ircListeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
 
+  /** Failure tracker for the password prompt — exponential backoff on repeat. */
+  readonly authTracker: DCCAuthTracker;
+
   constructor(deps: DCCManagerDeps) {
     this.client = deps.client;
     this.dispatcher = deps.dispatcher;
@@ -557,6 +836,28 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     this.getStatsFn = deps.getStats ?? null;
     this.sessions = deps.sessions ?? new Map();
     this.portAllocator = deps.portAllocator ?? new RangePortAllocator(deps.config.port_range);
+    this.authTracker = deps.authTracker ?? new DCCAuthTracker();
+  }
+
+  /** Called by DCCSession when the password prompt succeeds. */
+  onAuthSuccess(session: DCCSessionEntry): void {
+    const key = (session as DCCSession).rateLimitKey;
+    this.authTracker.recordSuccess(key);
+    this.sessions.set(ircLower(session.nick, this.casemapping), session);
+    this.announce(`*** ${session.handle} has joined the console`);
+    this.onPartyJoin?.(session.handle, session.nick);
+    this.logger?.info(`DCC session active: ${session.handle} (${session.nick})`);
+  }
+
+  /** Called by DCCSession when the password prompt fails. */
+  onAuthFailure(key: string, handle: string): void {
+    const status = this.authTracker.recordFailure(key);
+    if (status.locked) {
+      const seconds = Math.ceil((status.lockedUntil - Date.now()) / 1000);
+      this.logger?.warn(
+        `DCC auth lockout: ${key} (handle=${handle}) locked for ~${seconds}s after repeated failures`,
+      );
+    }
   }
 
   setCasemapping(cm: Casemapping): void {
@@ -565,6 +866,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
   /** Attach to the dispatcher — starts listening for DCC CTCP requests. */
   attach(): void {
+    this.warnIfDeprecatedNickservVerify();
     this.dispatcher.bind('ctcp', '-', 'DCC', this.onDccCtcp.bind(this), PLUGIN_ID);
 
     // Mirror incoming private messages and notices to all DCC sessions so
@@ -719,7 +1021,9 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     if (!this.checkUserFlags(nick, ctx, user)) return null;
     if (!this.checkSessionLimit(nick)) return null;
     if (!this.checkNotAlreadyConnected(nick)) return null;
-    if (!(await this.checkNickServVerify(nick))) return null;
+    // `nickserv_verify` is no longer consulted — authentication now runs
+    // through the password prompt inside DCCSession. The config knob is
+    // kept as a no-op for 0.3.0 with a startup deprecation warning.
     return user;
   }
 
@@ -779,13 +1083,18 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     return true;
   }
 
-  /** Optionally await NickServ ACC verification before allocating a TCP port. */
-  private async checkNickServVerify(nick: string): Promise<boolean> {
-    if (!this.config.nickserv_verify) return true;
-    const result = await this.services.verifyUser(nick);
-    if (result.verified) return true;
-    this.client.notice(nick, 'DCC CHAT: NickServ verification failed. Please identify first.');
-    return false;
+  /**
+   * Log a startup deprecation warning if `nickserv_verify` is still set.
+   * Called once from `attach()` — the knob is retained for one release as a
+   * no-op so operators upgrading from 0.2.x don't fail on schema validation.
+   */
+  private warnIfDeprecatedNickservVerify(): void {
+    if (this.config.nickserv_verify) {
+      this.logger?.warn(
+        'nickserv_verify is deprecated and no longer used — DCC now requires per-user passwords. ' +
+          'See docs/DCC.md for the migration path. This setting will be removed in 0.4.0.',
+      );
+    }
   }
 
   /**
@@ -871,11 +1180,49 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   // Session management
   // -------------------------------------------------------------------------
 
-  /* v8 ignore start -- openSession requires a live TCP socket; covered by manual integration tests */
-  private openSession(pending: PendingDCC, socket: Socket): void {
+  /**
+   * Accept a newly-connected DCC CHAT socket. Gates on two new conditions
+   * beyond the CTCP accept: the user must have a password hash on file, and
+   * their hostmask must not be currently locked out by the auth tracker.
+   *
+   * Exposed (via this named helper, not `v8 ignore`'d) so tests can drive
+   * the flow with a mock socket and a `PendingDCC` built in-process.
+   */
+  openSession(pending: PendingDCC, socket: Socket): void {
+    const key = `${pending.nick}!${pending.ident}@${pending.hostname}`;
+
+    // Rate-limit gate — refuse new prompts for recently-abused identities.
+    const status = this.authTracker.check(key);
+    if (status.locked) {
+      const seconds = Math.max(1, Math.ceil((status.lockedUntil - Date.now()) / 1000));
+      socket.write(
+        `DCC CHAT: too many failed password attempts — locked for ~${seconds}s. Try again later.\r\n`,
+      );
+      socket.destroy();
+      this.logger?.warn(
+        `DCC CHAT: rejected ${pending.user.handle} (${key}) — locked out for ${seconds}s`,
+      );
+      return;
+    }
+
+    // Migration gate — no password means no DCC until an admin runs .chpass.
+    const passwordHash = pending.user.password_hash;
+    if (!passwordHash) {
+      socket.write(
+        'DCC CHAT: this handle has no password set. Ask an admin to run ' +
+          '.chpass <handle> <newpass> from the REPL, then reconnect.\r\n',
+      );
+      socket.destroy();
+      this.logger?.info(
+        `DCC CHAT: rejected ${pending.user.handle} (${key}) — no password_hash on file`,
+      );
+      return;
+    }
+
     const session = new DCCSession({
       manager: this,
       user: pending.user,
+      passwordHash,
       nick: pending.nick,
       ident: pending.ident,
       hostname: pending.hostname,
@@ -885,13 +1232,9 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
       logger: this.logger,
     });
 
-    this.sessions.set(ircLower(pending.nick, this.casemapping), session);
-    this.announce(`*** ${pending.user.handle} has joined the console`);
-    this.onPartyJoin?.(pending.user.handle, pending.nick);
-    this.logger?.info(`DCC session opened: ${pending.user.handle} (${pending.nick})`);
+    this.logger?.info(`DCC CHAT: prompting ${pending.user.handle} (${pending.nick}) for password`);
 
     session.start(this.version, this.botNick);
-    /* v8 ignore stop */
   }
 
   private closeAll(reason?: string): void {

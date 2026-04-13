@@ -1,20 +1,33 @@
 # DCC CHAT + Console
 
-HexBot supports **passive DCC CHAT** for remote administration. Users with sufficient flags connect directly from their IRC client, get a command prompt, and share a live console with other connected admins.
+HexBot supports **passive DCC CHAT** for remote administration. Users with sufficient flags connect directly from their IRC client, enter a password, and share a live console with other connected admins.
+
+---
+
+## Authentication model
+
+DCC CHAT uses **per-user passwords**, the same model Eggdrop has used for 30 years. The hostmask in the DCC handshake tells the bot _which_ handle is claiming to connect; the password proves it. This closes the known spoofing gap on networks where a single vhost persists across nick changes (e.g. Rizon), and it works uniformly on services-free networks like EFNet.
+
+Key properties:
+
+- Passwords are hashed with scrypt before storage — the bot never keeps plaintext.
+- Hostmask patterns continue to gate **in-channel** flag checks (`.op`, `.say`, plugin `pub` binds) — prompting on every channel message is not a workable UX.
+- DCC CHAT has its own socket-local prompt channel, so it can always ask for a password without looking clumsy.
 
 ---
 
 ## Requirements
 
 - **Bot must have a public IPv4 address** — passive DCC means users connect _to the bot_, not the other way around. A VPS or dedicated server works; a home connection behind NAT requires port forwarding.
-- **Required flags** — configurable, default `+m` (master). Users without the required flags are rejected.
+- **Required flags** — configurable, default `+m` (master). Users without the required flags are rejected before the password prompt.
+- **A per-user password** — set by an admin via `.chpass` before the user can connect.
 - Tested clients: **irssi**, **WeeChat**, **HexChat**, **mIRC**
 
 ---
 
-## Prerequisites: add yourself to the user database
+## Prerequisites: register yourself and set a password
 
-The DCC handshake authenticates you by your IRC hostmask (`nick!ident@host`). Before you can connect, your hostmask must be registered in the permissions database with at least the flags required by `require_flags` (default `m`).
+A DCC session requires three things: a matching hostmask, the required flags, and a password set by an admin. Step through these once.
 
 ### Step 1: Find your hostmask
 
@@ -36,7 +49,19 @@ hexbot> .adduser yourhandle *!myident@my.vps.com m
 
 Replace `*!myident@my.vps.com` with your actual hostmask pattern. Use `*` as a wildcard for parts that may vary (e.g., `*!*@my.static.ip`). For the owner, use flag `n` instead of `m`.
 
-### Step 3: Verify
+### Step 3: Set a password
+
+From the REPL:
+
+```
+hexbot> .chpass yourhandle <newpassword>
+```
+
+Passwords must be at least 8 characters. The bot confirms with `chpass: password for "yourhandle" has been updated.` You can rotate later from inside a DCC session with `.chpass <newpassword>` (self-form) or, as an owner, `.chpass <handle> <newpassword>`.
+
+`.chpass` is rejected if issued over IRC PRIVMSG — passwords must never travel on the wire in the clear. The only valid transports are the REPL and an existing DCC session.
+
+### Step 4: Verify
 
 ```
 hexbot> .flags yourhandle
@@ -83,8 +108,7 @@ sudo iptables -A INPUT -p tcp --dport 49152:49171 -j ACCEPT
   "port_range": [49152, 49171],
   "require_flags": "m",
   "max_sessions": 5,
-  "idle_timeout_ms": 300000,
-  "nickserv_verify": false
+  "idle_timeout_ms": 300000
 }
 ```
 
@@ -98,11 +122,16 @@ Replace `203.0.113.42` with the bot's **public** IPv4 address. This is what gets
 | `require_flags`   | string           | `"m"`    | Flags needed to connect (`m` = master, `n` = owner) |
 | `max_sessions`    | number           | `5`      | Maximum concurrent DCC sessions                     |
 | `idle_timeout_ms` | number           | `300000` | Idle disconnect timeout in ms (default 5 minutes)   |
-| `nickserv_verify` | boolean          | `false`  | Require NickServ ACC before accepting session       |
+
+> **Deprecated:** `nickserv_verify` is retained as a no-op for 0.3.0 and will be removed in 0.4.0. The bot now uses per-user password authentication, which closes the same spoofing gap without depending on services. If the field is still present and truthy, the bot logs a startup warning.
 
 ---
 
 ## Connecting
+
+After the DCC CHAT handshake completes, the bot sends a single `Password: ` prompt on the socket. Type your password and press enter. On success the banner and console are shown; on failure the bot sends `DCC CHAT: bad password.` and closes the connection. Repeated failures from the same hostmask escalate into a temporary lockout (exponential backoff, matching the bot-link auth policy).
+
+Sessions that have never had a password set are rejected with a one-line notice pointing at `.chpass`. Ask an admin to run `.chpass <handle> <newpassword>` from the REPL and try again.
 
 ### irssi
 
@@ -209,11 +238,13 @@ When the REPL is being used locally, you will see:
 
 ## Security notes
 
-- Authentication is **hostmask-based** — the same system used for IRC flag checks. The IRC network already authenticated the user; their `nick!ident@host` is matched against the permissions database.
-- Enable `nickserv_verify: true` on networks where you want an additional NickServ ACC check before opening a session.
+- Authentication is **password-based**, following the Eggdrop model. The hostmask tells the bot _which_ handle is connecting; the password hash proves it. Scrypt is the KDF — no plaintext is ever stored.
+- The password travels over the DCC TCP connection in the clear (same as NickServ IDENTIFY on most IRC networks). This is acceptable for the threat model — a passive eavesdropper on the socket already has a path to every subsequent console command. TLS DCC (DCC SCHAT) is out of scope; operators who need end-to-end encryption should run a bot-to-user tunnel at the transport layer.
+- `.chpass` is rejected on the IRC PRIVMSG path — passwords only flow via REPL or an existing DCC session. Do not route command-by-DM as a workaround.
 - Keep `require_flags` at `m` or `n` — do not lower it to `o` or `v` without understanding the risk.
 - The bot only supports **passive DCC** — it opens the TCP port, the user connects. Active DCC (user opens port, bot dials out) is not supported and will be rejected with a notice.
-- Sessions idle for longer than `idle_timeout_ms` are automatically disconnected.
+- Repeated bad-password attempts from the same hostmask trigger a per-identity lockout with exponential backoff; this matches the bot-link auth policy.
+- Sessions idle for longer than `idle_timeout_ms` are automatically disconnected. The prompt phase has a shorter 30-second timer — stalled prompts are killed quickly.
 
 ---
 
@@ -227,16 +258,19 @@ The bot sends its offer as a CTCP message. Some clients suppress these. Check yo
 
 The NOTICE text will tell you why:
 
-| Notice contains                | Cause                                                       | Fix                                                    |
-| ------------------------------ | ----------------------------------------------------------- | ------------------------------------------------------ |
-| `passive DCC CHAT`             | Your client sent active DCC (non-zero ip/port)              | Enable passive/reverse DCC in your client settings     |
-| `user database`                | Your hostmask is not registered                             | Add yourself with `.adduser` (see Prerequisites above) |
-| `insufficient flags`           | You don't have the required flags                           | Set your flags with `.flags handle +m`                 |
-| `maximum sessions`             | `max_sessions` limit reached                                | Wait for a session to end or increase `max_sessions`   |
-| `active session`               | Your nick is already in an active session                   | Disconnect the existing session first                  |
-| `already pending`              | A previous DCC offer is still waiting for your connection   | Wait for it to expire (30s) or reconnect               |
-| `no ports available`           | All ports in `port_range` are in use                        | Wait or widen `port_range`                             |
-| `NickServ verification failed` | `nickserv_verify: true` and NickServ said you're not logged | Identify with NickServ first                           |
+| Notice contains         | Cause                                                           | Fix                                                              |
+| ----------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `passive DCC CHAT`      | Your client sent active DCC (non-zero ip/port)                  | Enable passive/reverse DCC in your client settings               |
+| `user database`         | Your hostmask is not registered                                 | Add yourself with `.adduser` (see Prerequisites above)           |
+| `insufficient flags`    | You don't have the required flags                               | Set your flags with `.flags handle +m`                           |
+| `maximum sessions`      | `max_sessions` limit reached                                    | Wait for a session to end or increase `max_sessions`             |
+| `active session`        | Your nick is already in an active session                       | Disconnect the existing session first                            |
+| `already pending`       | A previous DCC offer is still waiting for your connection       | Wait for it to expire (30s) or reconnect                         |
+| `no ports available`    | All ports in `port_range` are in use                            | Wait or widen `port_range`                                       |
+| `no password set`       | The matched user has no `password_hash` on file                 | Ask an admin to run `.chpass <handle> <newpass>` from the REPL   |
+| `bad password`          | You typed the wrong password at the prompt                      | Try again; after several failures the hostmask is locked out     |
+| `too many failed`       | Per-hostmask lockout in effect after repeated password failures | Wait out the lockout (escalates exponentially); fix the password |
+| `Password prompt timed` | You took longer than 30s to answer the prompt                   | Reconnect and type the password promptly                         |
 
 ### Connection times out after the offer
 

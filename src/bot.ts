@@ -29,6 +29,7 @@ import { registerBotlinkCommands } from './core/commands/botlink-commands';
 import { registerChannelCommands } from './core/commands/channel-commands';
 import { registerDispatcherCommands } from './core/commands/dispatcher-commands';
 import { registerIRCAdminCommands } from './core/commands/irc-commands-admin';
+import { registerPasswordCommands } from './core/commands/password-commands';
 import { registerPermissionCommands } from './core/commands/permission-commands';
 import { registerPluginCommands } from './core/commands/plugin-commands';
 import {
@@ -249,6 +250,12 @@ export class Bot {
 
     // 4. Register commands
     registerPermissionCommands(this.commandHandler, this.permissions);
+    registerPasswordCommands({
+      handler: this.commandHandler,
+      permissions: this.permissions,
+      db: this.db,
+      logger: this.logger,
+    });
     registerDispatcherCommands(this.commandHandler, this.dispatcher);
     registerIRCAdminCommands(this.commandHandler, this.client, {
       getUptime: () => Date.now() - this.startTime,

@@ -187,6 +187,45 @@ export class Permissions {
     this.eventBus?.emit('user:flagsChanged', handle, record.global, record.channels);
   }
 
+  /**
+   * Store a password hash on a user record. Caller is responsible for hashing
+   * the plaintext — this method never receives or logs a plaintext password.
+   *
+   * Persists and emits `user:passwordChanged` (handle only — never the hash).
+   */
+  setPasswordHash(handle: string, hash: string, source?: string): void {
+    const record = this.getUser(handle);
+    if (!record) {
+      throw new Error(`User "${handle}" not found`);
+    }
+    record.password_hash = hash;
+    this.persist();
+
+    const by = source ?? 'unknown';
+    this.logger?.info(`Password hash set for ${handle} by ${by}`);
+    this.eventBus?.emit('user:passwordChanged', handle);
+  }
+
+  /** Return the stored password hash for a user, or null if none set / user unknown. */
+  getPasswordHash(handle: string): string | null {
+    const record = this.getUser(handle);
+    return record?.password_hash ?? null;
+  }
+
+  /** Remove the stored password hash from a user record. */
+  clearPasswordHash(handle: string, source?: string): void {
+    const record = this.getUser(handle);
+    if (!record) {
+      throw new Error(`User "${handle}" not found`);
+    }
+    delete record.password_hash;
+    this.persist();
+
+    const by = source ?? 'unknown';
+    this.logger?.info(`Password hash cleared for ${handle} by ${by}`);
+    this.eventBus?.emit('user:passwordChanged', handle);
+  }
+
   /** Set per-channel flags for a user (replaces existing for that channel). */
   setChannelFlags(handle: string, channel: string, flags: string, source?: string): void {
     const record = this.getUser(handle);

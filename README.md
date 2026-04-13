@@ -7,9 +7,9 @@ HexBot is a modular Internet Relay Chat bot for Node.js, written in TypeScript. 
 ## Highlights
 
 - **Event bind system** — register handlers for IRC events with `bind(type, flags, mask, handler)`.
-- **Flag-based permissions** — owner/master/op/voice flags with hostmask matching and optional NickServ verification
+- **Flag-based permissions** — owner/master/op/voice flags with hostmask and IRCv3 account-tag matching
 - **Hot-reloadable plugins** — load, unload, and reload plugins at runtime without restarting the bot
-- **DCC CHAT console** — remote admin party line with real flag enforcement
+- **DCC CHAT console** — remote admin party line with per-user scrypt passwords (Eggdrop-style auth)
 - **Bot linking** — hub-and-leaf multi-bot networking with permission sync, command relay, and ban sharing
 - **Flood protection** — token-bucket outgoing queue and per-user input rate limiting
 - **Docker-ready** — multi-stage build, healthcheck, bind-mount config and plugins
@@ -104,6 +104,7 @@ The bot's dot-commands (`.` prefix) provide administration via the REPL, IRC, or
 | `.adduser <handle> <hostmask> <flags>` | `+n`     | Add a bot user                              |
 | `.deluser <handle>`                    | `+n`     | Remove a bot user                           |
 | `.users`                               | `+o`     | List all bot users                          |
+| `.chpass [handle] <newpass>`           | REPL/DCC | Set or rotate a DCC password (see DCC.md)   |
 | `.chanset <#chan> [key] [value]`       | `+m`     | View or set per-channel plugin settings     |
 | `.chaninfo <#chan>`                    | `+o`     | Show all per-channel settings for a channel |
 | `.binds [plugin]`                      | `+o`     | List active event binds                     |

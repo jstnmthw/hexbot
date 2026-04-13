@@ -304,7 +304,11 @@ export interface PluginBanStore {
 
 /** Read-only permissions API for plugins. */
 export interface PluginPermissions {
-  findByHostmask(hostmask: string): UserRecord | null;
+  /**
+   * Look up a user by `nick!ident@host`. Returns a {@link PublicUserRecord}
+   * with `password_hash` stripped — plugins never see password material.
+   */
+  findByHostmask(hostmask: string): PublicUserRecord | null;
   checkFlags(requiredFlags: string, ctx: HandlerContext): boolean;
 }
 
@@ -483,7 +487,26 @@ export interface UserRecord {
   hostmasks: string[];
   global: string; // global flags, e.g. "nmov"
   channels: Record<string, string>; // per-channel flag overrides
+  /**
+   * Per-user scrypt password hash (stored format — see `src/core/password.ts`).
+   * Required to open a DCC CHAT session; optional at rest so existing records
+   * survive the migration into 0.3.0 and are blocked from DCC until an admin
+   * runs `.chpass` for them.
+   *
+   * **Security:** This field is secret. It is stripped from every
+   * plugin-facing view (see {@link PublicUserRecord}) and must never be
+   * logged, serialized outside the database, or sent over bot-link sync.
+   */
+  password_hash?: string;
 }
+
+/**
+ * Plugin-facing view of {@link UserRecord} with `password_hash` omitted.
+ * Produced by {@link PluginPermissions.findByHostmask}; plugins never see
+ * the hash even indirectly. Internal code (permissions, DCC, `.chpass`) uses
+ * {@link UserRecord} directly so it can read/write the hash.
+ */
+export type PublicUserRecord = Omit<UserRecord, 'password_hash'>;
 
 // ---------------------------------------------------------------------------
 // Config shapes

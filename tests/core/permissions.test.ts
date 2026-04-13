@@ -717,6 +717,168 @@ describe('Permissions', () => {
   // syncUser — default source fallback
   // -------------------------------------------------------------------------
 
+  // -------------------------------------------------------------------------
+  // password_hash
+  // -------------------------------------------------------------------------
+
+  describe('password hash persistence', () => {
+    let db: BotDatabase;
+
+    beforeEach(() => {
+      db = new BotDatabase(':memory:');
+      db.open();
+    });
+
+    afterEach(() => {
+      db.close();
+    });
+
+    it('setPasswordHash stores a hash on an existing user', () => {
+      const p = new Permissions(db);
+      p.addUser('admin', '*!a@h', 'n', 'REPL');
+      p.setPasswordHash('admin', 'scrypt$deadbeef$cafe', 'REPL');
+
+      expect(p.getPasswordHash('admin')).toBe('scrypt$deadbeef$cafe');
+    });
+
+    it('setPasswordHash round-trips through the database', () => {
+      const p1 = new Permissions(db);
+      p1.addUser('admin', '*!a@h', 'n', 'REPL');
+      p1.setPasswordHash('admin', 'scrypt$deadbeef$cafe', 'REPL');
+
+      const p2 = new Permissions(db);
+      p2.loadFromDb();
+
+      expect(p2.getPasswordHash('admin')).toBe('scrypt$deadbeef$cafe');
+    });
+
+    it('setPasswordHash throws for unknown user', () => {
+      const p = new Permissions(db);
+      expect(() => p.setPasswordHash('nobody', 'scrypt$x$y', 'REPL')).toThrow('not found');
+    });
+
+    it('getPasswordHash returns null for user with no hash', () => {
+      const p = new Permissions(db);
+      p.addUser('admin', '*!a@h', 'n', 'REPL');
+      expect(p.getPasswordHash('admin')).toBeNull();
+    });
+
+    it('getPasswordHash returns null for unknown user', () => {
+      const p = new Permissions(db);
+      expect(p.getPasswordHash('nobody')).toBeNull();
+    });
+
+    it('clearPasswordHash removes the hash', () => {
+      const p = new Permissions(db);
+      p.addUser('admin', '*!a@h', 'n', 'REPL');
+      p.setPasswordHash('admin', 'scrypt$x$y', 'REPL');
+      p.clearPasswordHash('admin', 'REPL');
+      expect(p.getPasswordHash('admin')).toBeNull();
+    });
+
+    it('clearPasswordHash throws for unknown user', () => {
+      const p = new Permissions(db);
+      expect(() => p.clearPasswordHash('nobody', 'REPL')).toThrow('not found');
+    });
+
+    it('existing users (no hash) load correctly — backward compat', () => {
+      // Write a legacy record with no password_hash field at all
+      db.set(
+        '_permissions',
+        'legacy',
+        JSON.stringify({
+          handle: 'legacy',
+          hostmasks: ['*!leg@host'],
+          global: 'n',
+          channels: {},
+        }),
+      );
+
+      const p = new Permissions(db);
+      p.loadFromDb();
+
+      const user = p.getUser('legacy');
+      expect(user).not.toBeNull();
+      expect(user!.password_hash).toBeUndefined();
+      expect(p.getPasswordHash('legacy')).toBeNull();
+    });
+
+    it('emits user:passwordChanged on set', () => {
+      const eventBus = {
+        emit: vi.fn(),
+      } as unknown as import('../../src/event-bus').BotEventBus;
+      const p = new Permissions(db, undefined, eventBus);
+      p.addUser('admin', '*!a@h', 'n', 'REPL');
+      p.setPasswordHash('admin', 'scrypt$x$y', 'REPL');
+      expect(eventBus.emit).toHaveBeenCalledWith('user:passwordChanged', 'admin');
+    });
+
+    it('never logs the hash in set/clear messages', () => {
+      const logs: string[] = [];
+      const mockLogger = {
+        info: (msg: string) => logs.push(msg),
+        warn: () => {},
+        debug: () => {},
+        error: () => {},
+        child: () => mockLogger,
+      } as unknown as import('../../src/logger').Logger;
+
+      const p = new Permissions(db, mockLogger);
+      p.addUser('admin', '*!a@h', 'n', 'REPL');
+      p.setPasswordHash('admin', 'scrypt$deadbeef$cafe', 'REPL');
+      p.clearPasswordHash('admin', 'REPL');
+
+      for (const line of logs) {
+        expect(line).not.toContain('scrypt$deadbeef$cafe');
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // PluginPermissions does not expose password_hash
+  // -------------------------------------------------------------------------
+
+  describe('plugin-facing permissions strips password_hash', () => {
+    it('createPluginPermissionsApi omits password_hash from findByHostmask', async () => {
+      const { createPluginPermissionsApi } = await import('../../src/plugin-api-factory');
+      const p = new Permissions();
+      p.addUser('admin', '*!a@host', 'n', 'REPL');
+      p.setPasswordHash('admin', 'scrypt$secretsalt$secrethash', 'REPL');
+
+      const pluginPerms = createPluginPermissionsApi(p);
+      const record = pluginPerms.findByHostmask('anynick!a@host');
+      expect(record).not.toBeNull();
+      expect(record!.handle).toBe('admin');
+      expect(record!.hostmasks).toEqual(['*!a@host']);
+      expect(record!.global).toBe('n');
+      // Runtime shape check — the type has been narrowed to PublicUserRecord,
+      // and the factory must also strip the field at runtime so plugins can't
+      // reflect it back via `Object.keys` or `JSON.stringify`.
+      expect((record as unknown as { password_hash?: string }).password_hash).toBeUndefined();
+      expect(Object.keys(record!)).not.toContain('password_hash');
+    });
+
+    it('createPluginPermissionsApi returns null for unknown hostmask', async () => {
+      const { createPluginPermissionsApi } = await import('../../src/plugin-api-factory');
+      const p = new Permissions();
+      const pluginPerms = createPluginPermissionsApi(p);
+      expect(pluginPerms.findByHostmask('nobody!nobody@nowhere')).toBeNull();
+    });
+
+    it('mutating the plugin view does not alter the underlying record', async () => {
+      const { createPluginPermissionsApi } = await import('../../src/plugin-api-factory');
+      const p = new Permissions();
+      p.addUser('admin', '*!a@host', 'n', 'REPL');
+      p.setPasswordHash('admin', 'scrypt$s$h', 'REPL');
+
+      const pluginPerms = createPluginPermissionsApi(p);
+      const view = pluginPerms.findByHostmask('anynick!a@host')!;
+      // Attempting to splat a hash onto the plugin view must not leak into the real record.
+      (view as unknown as { password_hash: string }).password_hash = 'tampered';
+      expect(p.getPasswordHash('admin')).toBe('scrypt$s$h');
+    });
+  });
+
   describe('syncUser', () => {
     it('uses "botlink" as default source when source is omitted', () => {
       const infoMsgs: string[] = [];

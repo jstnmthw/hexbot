@@ -22,6 +22,7 @@ export interface BotEvents {
   'user:flagsChanged': [handle: string, globalFlags: string, channelFlags: Record<string, string>];
   'user:hostmaskAdded': [handle: string, hostmask: string];
   'user:hostmaskRemoved': [handle: string, hostmask: string];
+  'user:passwordChanged': [handle: string];
   'channel:userJoined': [channel: string, nick: string];
   'channel:userLeft': [channel: string, nick: string];
   'channel:modeChanged': [channel: string, nick: string, mode: string];
