@@ -457,8 +457,9 @@ export class DCCSession implements DCCSessionEntry {
     this.rl = createReadline({ input: this.socket, crlfDelay: Infinity });
     const rl = this.rl;
 
-    // Password prompt — no trailing newline so the user types on the same line.
-    this.socket.write('Password: ');
+    // Password prompt — DCC CHAT clients are line-buffered, so the prompt
+    // must end in CRLF or it never renders before the user types.
+    this.socket.write('Password:\r\n');
     this.phase = 'awaiting_password';
     this.resetPromptIdle();
 
@@ -718,7 +719,7 @@ export class DCCSession implements DCCSessionEntry {
     // Treat the prompt itself as something that can be aborted with a blank
     // line — otherwise the session would silently count it as a failure.
     if (candidate.length === 0) {
-      this.socket.write('Password: ');
+      this.socket.write('Password:\r\n');
       this.resetPromptIdle();
       return;
     }
