@@ -1649,6 +1649,39 @@ describe('ChannelState', () => {
   });
 
   // -------------------------------------------------------------------------
+  // clearAllChannels — reconnect hygiene (mem-leak audit 2026-04-13)
+  // -------------------------------------------------------------------------
+
+  describe('clearAllChannels', () => {
+    it('drops every tracked channel so stale state cannot accumulate over reconnects', () => {
+      client.simulateEvent('join', {
+        nick: 'HexBot',
+        ident: 'h',
+        hostname: 'h.local',
+        channel: '#a',
+      });
+      client.simulateEvent('join', {
+        nick: 'HexBot',
+        ident: 'h',
+        hostname: 'h.local',
+        channel: '#b',
+      });
+      expect(state.getAllChannels().length).toBe(2);
+
+      state.clearAllChannels();
+
+      expect(state.getAllChannels().length).toBe(0);
+      expect(state.getChannel('#a')).toBeUndefined();
+      expect(state.getChannel('#b')).toBeUndefined();
+    });
+
+    it('is a no-op when no channels are tracked', () => {
+      expect(() => state.clearAllChannels()).not.toThrow();
+      expect(state.getAllChannels().length).toBe(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // `+l` NaN guard (§3)
   // -------------------------------------------------------------------------
 

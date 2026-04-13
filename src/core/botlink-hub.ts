@@ -52,8 +52,9 @@ export class BotLinkHub {
   private leaves: Map<string, LeafConnection> = new Map();
   /** Remote party line users tracked from PARTY_JOIN/PARTY_PART frames. Key: `handle@botname`. */
   private remotePartyUsers: Map<string, PartyLineUser> = new Map();
-  /** Active relay sessions. Key: handle. Value: { originBot, targetBot }. */
-  private activeRelays: Map<string, { originBot: string; targetBot: string }> = new Map();
+  /** Active relay sessions. Key: handle. Value: { originBot, targetBot, createdAt }. */
+  private activeRelays: Map<string, { originBot: string; targetBot: string; createdAt: number }> =
+    new Map();
   /** Pending protect requests. Key: ref. Value: { botname, createdAt }. */
   private protectRequests: Map<string, { botname: string; createdAt: number }> = new Map();
   /** CMD routing table — tracks toBot-routed commands for CMD_RESULT forwarding. Key: ref. Value: { botname, createdAt }. */
@@ -158,6 +159,15 @@ export class BotLinkHub {
     permissions: Permissions,
     eventBus: BotEventBus,
   ): void {
+    // Idempotent: drop any listeners registered by a previous call so we
+    // don't stack duplicate broadcasts on re-wire.
+    if (this.eventBusListeners.length > 0 && this.eventBus) {
+      for (const { event, fn } of this.eventBusListeners) {
+        (this.eventBus.off as (event: string, fn: (...args: unknown[]) => void) => void)(event, fn);
+      }
+      this.eventBusListeners = [];
+    }
+
     this.cmdHandler = commandHandler;
     this.cmdPermissions = permissions;
 
@@ -352,7 +362,11 @@ export class BotLinkHub {
    * arrive from leaves, so hub-originated relays must be registered explicitly.
    */
   registerRelay(handle: string, targetBot: string): void {
-    this.activeRelays.set(handle, { originBot: this.config.botname, targetBot });
+    this.activeRelays.set(handle, {
+      originBot: this.config.botname,
+      targetBot,
+      createdAt: Date.now(),
+    });
   }
 
   /** Remove a hub-originated relay (e.g. when the DCC user types .relay end). */
@@ -375,7 +389,7 @@ export class BotLinkHub {
         });
         return;
       }
-      this.activeRelays.set(handle, { originBot: fromBot, targetBot });
+      this.activeRelays.set(handle, { originBot: fromBot, targetBot, createdAt: Date.now() });
       this.send(targetBot, frame);
     } else if (frame.type === 'RELAY_ACCEPT') {
       const relay = this.activeRelays.get(handle);
@@ -497,6 +511,19 @@ export class BotLinkHub {
       this.server.close();
       this.server = null;
     }
+
+    // Dispose the auth manager — clears its sweep setInterval.
+    this.auth.dispose();
+
+    // Null callback fields so a stale closure from a prior lifecycle can't
+    // fire if the hub instance is ever reused after close.
+    this.onLeafConnected = null;
+    this.onLeafDisconnected = null;
+    this.onLeafFrame = null;
+    this.onSyncRequest = null;
+    this.onBsay = null;
+    this.getLocalPartyUsers = null;
+
     this.logger?.info('Hub closed');
   }
 
@@ -819,15 +846,25 @@ export class BotLinkHub {
     }, this.pingIntervalMs);
   }
 
-  /** Remove stale entries from protectRequests and cmdRoutes that have exceeded their TTL. */
+  /** Remove stale entries from protectRequests, cmdRoutes, activeRelays, and
+   *  remotePartyUsers. Covers the case where the matching END/PART frame is
+   *  lost in transit so the Map never gets cleaned via its normal path. */
   private sweepStaleRoutes(): void {
     const now = Date.now();
-    const TTL = 30_000; // 30 seconds
+    const SHORT_TTL = 30_000; // 30 seconds — request/reply cycles
+    const RELAY_TTL = 60 * 60_000; // 1 hour — live relay sessions
+    const PARTY_TTL = 7 * 86_400_000; // 7 days — remote DCC party members
     for (const [ref, entry] of this.protectRequests) {
-      if (now - entry.createdAt > TTL) this.protectRequests.delete(ref);
+      if (now - entry.createdAt > SHORT_TTL) this.protectRequests.delete(ref);
     }
     for (const [ref, entry] of this.cmdRoutes) {
-      if (now - entry.createdAt > TTL) this.cmdRoutes.delete(ref);
+      if (now - entry.createdAt > SHORT_TTL) this.cmdRoutes.delete(ref);
+    }
+    for (const [handle, entry] of this.activeRelays) {
+      if (now - entry.createdAt > RELAY_TTL) this.activeRelays.delete(handle);
+    }
+    for (const [key, user] of this.remotePartyUsers) {
+      if (now - user.connectedAt > PARTY_TTL) this.remotePartyUsers.delete(key);
     }
   }
 }

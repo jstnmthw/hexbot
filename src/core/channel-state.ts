@@ -211,6 +211,19 @@ export class ChannelState {
   }
 
   /**
+   * Drop the entire per-channel map. Called on reconnect alongside
+   * `clearNetworkAccounts()` so channels the bot used to be in but isn't
+   * rejoining cannot leave residual `ChannelInfo`/`UserInfo` graphs pinned
+   * in memory across years of uptime. NAMES for rejoined channels will
+   * repopulate fresh state on the new session.
+   */
+  clearAllChannels(): void {
+    if (this.channels.size === 0) return;
+    this.logger?.debug(`clearing ${this.channels.size} tracked channels on reconnect`);
+    this.channels.clear();
+  }
+
+  /**
    * Update the network-wide account map from a source outside the event
    * stream — currently only `irc-bridge` when consuming the IRCv3
    * `account-tag` on an incoming PRIVMSG. Centralising this here keeps the

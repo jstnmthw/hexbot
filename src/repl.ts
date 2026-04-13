@@ -89,13 +89,14 @@ export class BotREPL {
 
     this.rl.on('close', () => {
       this.logger?.info('Shutting down...');
+      this.stop();
       this.bot.shutdown().then(() => process.exit(0));
     });
 
     this.rl.prompt();
   }
 
-  /** Stop the REPL. */
+  /** Stop the REPL. Idempotent — safe to call from rl.on('close') and .quit. */
   stop(): void {
     Logger.setOutputHook(null);
     for (const { event, fn } of this.ircListeners) {
@@ -103,8 +104,9 @@ export class BotREPL {
     }
     this.ircListeners = [];
     if (this.rl) {
-      this.rl.close();
+      const rl = this.rl;
       this.rl = null;
+      rl.close();
     }
   }
 

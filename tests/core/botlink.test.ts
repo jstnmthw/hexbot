@@ -3695,6 +3695,77 @@ describe('BotLinkHub BSAY routing', () => {
 });
 
 // ---------------------------------------------------------------------------
+// BotLinkHub stale relay/party TTL sweep (mem-leak audit 2026-04-13)
+// ---------------------------------------------------------------------------
+
+describe('BotLinkHub sweepStaleRoutes — relay & party TTL', () => {
+  it('drops activeRelays older than 1h and remotePartyUsers older than 7d', () => {
+    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const now = Date.now();
+
+    // Reach into the private state to seed both kinds of stale entries.
+    type HubInternals = {
+      activeRelays: Map<string, { originBot: string; targetBot: string; createdAt: number }>;
+      remotePartyUsers: Map<
+        string,
+        { handle: string; nick: string; botname: string; connectedAt: number; idle: number }
+      >;
+      protectRequests: Map<string, { botname: string; createdAt: number }>;
+      cmdRoutes: Map<string, { botname: string; createdAt: number }>;
+      sweepStaleRoutes: () => void;
+    };
+    const internals = hub as unknown as HubInternals;
+
+    // Stale + fresh protect request and cmd route — covers the SHORT_TTL branches.
+    internals.protectRequests.set('stale-protect', { botname: 'leaf1', createdAt: now - 60_000 });
+    internals.protectRequests.set('fresh-protect', { botname: 'leaf1', createdAt: now });
+    internals.cmdRoutes.set('stale-route', { botname: 'leaf1', createdAt: now - 60_000 });
+    internals.cmdRoutes.set('fresh-route', { botname: 'leaf1', createdAt: now });
+
+    // Stale + fresh relay session
+    internals.activeRelays.set('stale-relay', {
+      originBot: 'leaf1',
+      targetBot: 'leaf2',
+      createdAt: now - 2 * 60 * 60_000, // 2h ago — past 1h TTL
+    });
+    internals.activeRelays.set('fresh-relay', {
+      originBot: 'leaf1',
+      targetBot: 'leaf2',
+      createdAt: now - 60_000, // 1min ago — well under 1h
+    });
+
+    // Stale + fresh remote party user
+    internals.remotePartyUsers.set('stale@leaf1', {
+      handle: 'stale',
+      nick: 'stale',
+      botname: 'leaf1',
+      connectedAt: now - 8 * 86_400_000, // 8 days ago — past 7d TTL
+      idle: 0,
+    });
+    internals.remotePartyUsers.set('fresh@leaf1', {
+      handle: 'fresh',
+      nick: 'fresh',
+      botname: 'leaf1',
+      connectedAt: now - 60_000,
+      idle: 0,
+    });
+
+    internals.sweepStaleRoutes();
+
+    expect(internals.protectRequests.has('stale-protect')).toBe(false);
+    expect(internals.protectRequests.has('fresh-protect')).toBe(true);
+    expect(internals.cmdRoutes.has('stale-route')).toBe(false);
+    expect(internals.cmdRoutes.has('fresh-route')).toBe(true);
+    expect(internals.activeRelays.has('stale-relay')).toBe(false);
+    expect(internals.activeRelays.has('fresh-relay')).toBe(true);
+    expect(internals.remotePartyUsers.has('stale@leaf1')).toBe(false);
+    expect(internals.remotePartyUsers.has('fresh@leaf1')).toBe(true);
+
+    hub.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // BotLinkLeaf incoming CMD execution
 // ---------------------------------------------------------------------------
 

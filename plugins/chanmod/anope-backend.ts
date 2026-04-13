@@ -32,8 +32,8 @@ export class AnopeBackend implements ProtectionBackend {
   private chanservNick: string;
   private recoverStepDelayMs: number;
   private probeState: ProbeState | null;
-  /** Track active recover timers for cleanup. */
-  private recoverTimers: ReturnType<typeof setTimeout>[] = [];
+  /** Track active recover timers for cleanup. Entries self-remove on fire. */
+  private recoverTimers: Set<ReturnType<typeof setTimeout>> = new Set();
 
   constructor(
     api: PluginAPI,
@@ -148,16 +148,18 @@ export class AnopeBackend implements ProtectionBackend {
 
     // Step 2-4: After delay, unban + invite
     const t1 = setTimeout(() => {
+      this.recoverTimers.delete(t1);
       this.sendChanServ(`UNBAN ${channel}`);
       this.sendChanServ(`INVITE ${channel}`);
 
       // Step 5-6: After another delay, request op
       const t2 = setTimeout(() => {
+        this.recoverTimers.delete(t2);
         this.sendChanServ(`OP ${channel}`);
       }, this.recoverStepDelayMs);
-      this.recoverTimers.push(t2);
+      this.recoverTimers.add(t2);
     }, this.recoverStepDelayMs);
-    this.recoverTimers.push(t1);
+    this.recoverTimers.add(t1);
   }
 
   requestClearBans(channel: string): void {
@@ -271,7 +273,7 @@ export class AnopeBackend implements ProtectionBackend {
   /** Cancel pending recover timers (called from teardown). */
   clearTimers(): void {
     for (const t of this.recoverTimers) clearTimeout(t);
-    this.recoverTimers.length = 0;
+    this.recoverTimers.clear();
   }
 
   // ---------------------------------------------------------------------------

@@ -100,6 +100,13 @@ export function init(api: PluginAPI): void {
     if (last !== undefined && now - last < cooldownMs) {
       return; // silently drop — still in cooldown
     }
+    // Inline sweep: cap map size and drop any entries past their cooldown
+    // window so the set is bounded by recent activity, not all-time !help users.
+    if (cooldowns.size > 1000) {
+      for (const [k, t] of cooldowns) {
+        if (now - t >= cooldownMs) cooldowns.delete(k);
+      }
+    }
     cooldowns.set(cooldownKey, now);
 
     // Filter entries by permission

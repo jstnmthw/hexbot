@@ -105,6 +105,14 @@ export function isWhitelisted(ip: string, cidrs: string[]): boolean {
 /** Hard cap on manually-banned CIDR ranges to prevent connection-path DoS. */
 const MAX_CIDR_BANS = 500;
 
+/** Hard cap on the per-IP auth failure tracker. Defends against a distributed
+ *  scanner briefly spiking the map between sweep runs (every 300s). At 200
+ *  conns/s worst case, one sweep window is ~60k attempts, but steady state
+ *  post-sweep is bounded by actual live tracker lifetimes. Oldest entries
+ *  are evicted first — they haven't been touched by `noteFailure` recently
+ *  so they are the safest to drop. */
+const MAX_AUTH_TRACKERS = 10_000;
+
 /**
  * Owns authentication state for the bot-link hub: password hash, per-IP
  * failure tracker with exponential ban backoff, pending-handshake counting,
@@ -238,7 +246,20 @@ export class BotLinkAuthManager {
     const now = Date.now();
     let tracker = this.authTracker.get(ip);
     if (!tracker) {
+      // Evict oldest entries first when the hard cap is hit. JS Maps keep
+      // insertion order, so `keys().next()` gives the oldest entry — and we
+      // touch-update entries on every hit (delete + set) to promote them
+      // to "most recently touched", making this true LRU.
+      while (this.authTracker.size >= MAX_AUTH_TRACKERS) {
+        const oldest = this.authTracker.keys().next().value;
+        if (oldest === undefined) break;
+        this.authTracker.delete(oldest);
+      }
       tracker = { failures: 0, firstFailure: now, bannedUntil: 0, banCount: 0 };
+      this.authTracker.set(ip, tracker);
+    } else {
+      // Promote to most-recently-touched in the insertion-order map.
+      this.authTracker.delete(ip);
       this.authTracker.set(ip, tracker);
     }
 

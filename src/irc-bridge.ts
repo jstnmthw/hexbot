@@ -112,6 +112,7 @@ export class IRCBridge {
   private listeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
   private ctcpRateLimiter = new SlidingWindowCounter();
   private topicStartupGrace = false;
+  private topicStartupGraceTimer: NodeJS.Timeout | null = null;
   private capabilities: ServerCapabilities = defaultServerCapabilities();
 
   constructor(options: IRCBridgeOptions) {
@@ -158,8 +159,9 @@ export class IRCBridge {
 
     // Suppress topic events during the initial channel join burst
     this.topicStartupGrace = true;
-    setTimeout(() => {
+    this.topicStartupGraceTimer = setTimeout(() => {
       this.topicStartupGrace = false;
+      this.topicStartupGraceTimer = null;
     }, STARTUP_GRACE_MS);
 
     this.logger?.info('Attached to IRC client');
@@ -167,6 +169,11 @@ export class IRCBridge {
 
   /** Remove all listeners (for clean shutdown). */
   detach(): void {
+    if (this.topicStartupGraceTimer) {
+      clearTimeout(this.topicStartupGraceTimer);
+      this.topicStartupGraceTimer = null;
+    }
+    this.topicStartupGrace = false;
     for (const { event, fn } of this.listeners) {
       this.client.removeListener(event, fn);
     }

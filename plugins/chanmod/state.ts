@@ -24,7 +24,8 @@ export interface SharedState {
   intentionalModeChanges: Map<string, number>;
   enforcementCooldown: Map<string, { count: number; expiresAt: number }>;
   cycleTimers: Set<ReturnType<typeof setTimeout>>;
-  cycleScheduled: Set<string>;
+  /** Value is expiresAt (ms). Entries are TTL-pruned if the expected follow-up event never arrives. */
+  cycleScheduled: Map<string, number>;
   enforcementTimers: Set<ReturnType<typeof setTimeout>>;
   startupTimer: ReturnType<typeof setTimeout> | null;
   // Stopnethack
@@ -36,12 +37,12 @@ export interface SharedState {
   // Takeover threat detection
   threatScores: Map<string, ThreatState>;
   // Kick+ban recovery
-  /** Channels where RECOVER was used and post-recovery +i +m cleanup is needed. */
-  pendingRecoverCleanup: Set<string>;
+  /** Channels where RECOVER was used and post-recovery +i +m cleanup is needed. Value is expiresAt. */
+  pendingRecoverCleanup: Map<string, number>;
   /** Last-known channel modes before the bot was kicked (for +i/+k detection). */
   lastKnownModes: Map<string, { modes: string; key?: string }>;
-  /** Channels where we already sent requestUnban (prevent double-sends). */
-  unbanRequested: Set<string>;
+  /** Channels where we already sent requestUnban (prevent double-sends). Value is expiresAt. */
+  unbanRequested: Map<string, number>;
   // Topic recovery
   /** Known-good topic per channel — updated at threat level 0, frozen during elevated threat. */
   knownGoodTopics: Map<string, { topic: string; setAt: number }>;
@@ -57,13 +58,16 @@ export interface SharedState {
 export const INTENTIONAL_TTL_MS = 5000;
 export const COOLDOWN_WINDOW_MS = 10_000;
 export const MAX_ENFORCEMENTS = 3;
+/** How long a `pendingRecoverCleanup`/`unbanRequested`/`cycleScheduled` entry
+ *  can live waiting for its expected follow-up event before it's pruned. */
+export const PENDING_STATE_TTL_MS = 5 * 60_000;
 
 export function createState(): SharedState {
   const state: SharedState = {
     intentionalModeChanges: new Map(),
     enforcementCooldown: new Map(),
     cycleTimers: new Set(),
-    cycleScheduled: new Set(),
+    cycleScheduled: new Map(),
     enforcementTimers: new Set(),
     startupTimer: null,
     splitActive: false,
@@ -72,9 +76,9 @@ export function createState(): SharedState {
     splitQuitCount: 0,
     splitQuitWindowStart: 0,
     threatScores: new Map(),
-    pendingRecoverCleanup: new Set(),
+    pendingRecoverCleanup: new Map(),
     lastKnownModes: new Map(),
-    unbanRequested: new Set(),
+    unbanRequested: new Map(),
     knownGoodTopics: new Map(),
     takeoverWarnedChannels: new Set(),
     scheduleEnforcement(delayMs: number, fn: () => void): void {
@@ -95,7 +99,9 @@ export function createState(): SharedState {
   return state;
 }
 
-/** Prune expired entries from intentionalModeChanges and enforcementCooldown. */
+/** Prune expired entries from intentionalModeChanges and enforcementCooldown,
+ *  plus TTL-based cleanup of pendingRecoverCleanup/unbanRequested/cycleScheduled
+ *  so a dropped follow-up event (services outage, etc.) doesn't leak entries. */
 export function pruneExpiredState(state: SharedState): void {
   const now = Date.now();
   for (const [key, expiresAt] of state.intentionalModeChanges) {
@@ -103,6 +109,15 @@ export function pruneExpiredState(state: SharedState): void {
   }
   for (const [key, entry] of state.enforcementCooldown) {
     if (now >= entry.expiresAt) state.enforcementCooldown.delete(key);
+  }
+  for (const [key, expiresAt] of state.pendingRecoverCleanup) {
+    if (now >= expiresAt) state.pendingRecoverCleanup.delete(key);
+  }
+  for (const [key, expiresAt] of state.unbanRequested) {
+    if (now >= expiresAt) state.unbanRequested.delete(key);
+  }
+  for (const [key, expiresAt] of state.cycleScheduled) {
+    if (now >= expiresAt) state.cycleScheduled.delete(key);
   }
 }
 

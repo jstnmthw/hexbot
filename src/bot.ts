@@ -412,14 +412,18 @@ export class Bot {
         this.botLogger.info('Bot link leaf connecting to hub');
       }
     }
-    // Clean up orphaned relay virtual sessions when a linked bot disconnects
-    this.eventBus.on('botlink:disconnected', (botname: string) => {
+    // Clean up orphaned relay virtual sessions when a linked bot disconnects.
+    // Hoisted to a named field so shutdown() can remove it — if any code path
+    // ever re-creates a Bot in the same process, the previous Bot would be
+    // pinned by this listener's closure over _relayVirtualSessions.
+    this._onBotlinkDisconnectedCleanup = (botname: string, _reason: string) => {
       for (const [handle, session] of this._relayVirtualSessions) {
         if (session.fromBot === botname) {
           this._relayVirtualSessions.delete(handle);
         }
       }
-    });
+    };
+    this.eventBus.on('botlink:disconnected', this._onBotlinkDisconnectedCleanup);
 
     registerBotlinkCommands(
       this.commandHandler,
@@ -478,6 +482,11 @@ export class Bot {
       this._lifecycleHandle.stopPresenceCheck();
       this._lifecycleHandle.removeListeners();
       this._lifecycleHandle = null;
+    }
+
+    if (this._onBotlinkDisconnectedCleanup) {
+      this.eventBus.off('botlink:disconnected', this._onBotlinkDisconnectedCleanup);
+      this._onBotlinkDisconnectedCleanup = null;
     }
 
     if (this._botLinkHub) {
@@ -595,6 +604,11 @@ export class Bot {
             // the new connection. Fresh account data will arrive via
             // extended-join / account-notify / account-tag on rejoin.
             this.channelState.clearNetworkAccounts();
+            // Drop every tracked channel — if the autojoin set shrinks
+            // across reconnects, residual ChannelInfo/UserInfo graphs
+            // would otherwise sit in memory forever. NAMES will repopulate
+            // fresh state on the new session.
+            this.channelState.clearAllChannels();
           },
           onSTSDirective: (directive, currentTls) => {
             // Persist the directive so future startups inherit the policy.
@@ -892,6 +906,9 @@ export class Bot {
 
   /** Virtual relay sessions on this bot (as target). */
   private _relayVirtualSessions: RelaySessionMap = new Map();
+
+  /** Handler attached to `botlink:disconnected` — held for removal in shutdown(). */
+  private _onBotlinkDisconnectedCleanup: ((botname: string, reason: string) => void) | null = null;
 
   /** Wire local DCC party line events to a botlink hub or leaf. */
   private wirePartyLine(link: BotLinkHub | BotLinkLeaf): void {

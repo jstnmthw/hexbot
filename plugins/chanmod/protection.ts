@@ -11,7 +11,7 @@ import {
 } from './helpers';
 import type { ThreatCallback } from './mode-enforce';
 import type { ProtectionChain } from './protection-backend';
-import type { ChanmodConfig, SharedState } from './state';
+import { type ChanmodConfig, PENDING_STATE_TTL_MS, type SharedState } from './state';
 import { setupStopnethack } from './stopnethack';
 
 // ---------------------------------------------------------------------------
@@ -71,7 +71,7 @@ export function setupProtection(
     if (chain && unbanOnKick && chain.canUnban(channel)) {
       // Immediately request UNBAN — speed matters during a takeover
       chain.requestUnban(channel);
-      state.unbanRequested.add(chanKey);
+      state.unbanRequested.set(chanKey, Date.now() + PENDING_STATE_TTL_MS);
       api.log(`Backend recovery: sent UNBAN for ${channel} after kick`);
 
       // If channel had +i or +k, also request invite

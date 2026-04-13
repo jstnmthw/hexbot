@@ -20,7 +20,7 @@ Stale records older than `max_age_days` are automatically cleaned up both when a
 
 | Key            | Type   | Default | Description                                                                                                                                               |
 | -------------- | ------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `max_age_days` | number | `365`   | Records older than this are purged. Setting to `0` expires all records immediately. Use a very large value (e.g. `99999`) to effectively disable cleanup. |
+| `max_age_days` | number | `90`    | Records older than this are purged. Setting to `0` expires all records immediately. Use a very large value (e.g. `99999`) to effectively disable cleanup. |
 
 Example override in `config/plugins.json`:
 

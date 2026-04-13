@@ -11,6 +11,11 @@ export type { BanRecord } from '../types.js';
 // ---------------------------------------------------------------------------
 
 const NAMESPACE = '_bans';
+/** Grace window after an expired ban passes its deadline before we drop the
+ *  record even if the bot can't actually lift it on IRC (no ops, or the bot
+ *  no longer sits in the channel). Prevents the record from persisting
+ *  forever in abandoned channels. */
+const ORPHAN_BAN_GRACE_MS = 24 * 60 * 60_000;
 
 export class BanStore {
   private readonly store: AdminListStore<BanRecord>;
@@ -71,23 +76,41 @@ export class BanStore {
 
   /**
    * Lift expired bans in channels where the bot has ops.
+   *
+   * Two-pass sweep:
+   *  1. Channels where the bot has ops: send -b and drop the record.
+   *  2. Orphaned records (no ops, or the channel is no longer tracked)
+   *     that have been expired for more than {@link ORPHAN_BAN_GRACE_MS}:
+   *     drop the record anyway so abandoned channels don't accumulate
+   *     records forever.
+   *
    * @param hasOps - check if bot has ops in a channel
    * @param mode - send a MODE command to IRC
-   * @returns count of bans lifted
+   * @param isTracked - optional predicate: is this channel still in channel state?
+   * @returns count of bans actually lifted on IRC (not counting orphan drops)
    */
   liftExpiredBans(
     hasOps: (channel: string) => boolean,
     mode: (channel: string, modes: string, param: string) => void,
+    isTracked?: (channel: string) => boolean,
   ): number {
     const now = Date.now();
     let lifted = 0;
     for (const record of this.getAllBans()) {
-      if (record.expires > 0 && record.expires <= now) {
-        if (hasOps(record.channel)) {
-          mode(record.channel, '-b', record.mask);
-          this.removeBan(record.channel, record.mask);
-          lifted++;
-        }
+      if (record.expires <= 0 || record.expires > now) continue;
+      if (hasOps(record.channel)) {
+        mode(record.channel, '-b', record.mask);
+        this.removeBan(record.channel, record.mask);
+        lifted++;
+        continue;
+      }
+      // Orphan cleanup: bot can't send -b, so the on-IRC ban is stuck, but
+      // the record itself has no reason to live past its expiry forever.
+      const orphaned =
+        now - record.expires > ORPHAN_BAN_GRACE_MS ||
+        (isTracked !== undefined && !isTracked(record.channel));
+      if (orphaned) {
+        this.removeBan(record.channel, record.mask);
       }
     }
     return lifted;

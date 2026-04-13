@@ -6,7 +6,7 @@ export const name = 'seen';
 export const version = '1.1.0';
 export const description = 'Tracks and reports when users were last seen';
 
-const DEFAULT_MAX_AGE_DAYS = 365;
+const DEFAULT_MAX_AGE_DAYS = 90;
 
 export function init(api: PluginAPI): void {
   api.registerHelp([

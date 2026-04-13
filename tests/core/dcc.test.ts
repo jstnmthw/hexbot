@@ -1215,8 +1215,9 @@ describe('DCCSession password prompt', () => {
     expect(session.currentPhase).toBe('awaiting_password');
     expect(onAuthFailure).not.toHaveBeenCalled();
     const output = written.join('');
-    // The second 'Password: ' prompt should be in the output
-    const occurrences = output.match(/Password:/g) ?? [];
+    // Both the initial 'Password:' and the re-prompt 'Enter your password:'
+    // should appear — case-insensitive to span both phrasings.
+    const occurrences = output.match(/password:/gi) ?? [];
     expect(occurrences.length).toBeGreaterThanOrEqual(2);
 
     // Subsequent correct password still works

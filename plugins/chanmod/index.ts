@@ -12,7 +12,7 @@ import type { ThreatCallback } from './mode-enforce';
 import { setupModeEnforce } from './mode-enforce';
 import { setupProtection } from './protection';
 import { ProtectionChain } from './protection-backend';
-import { createState, pruneExpiredState, readConfig } from './state';
+import { PENDING_STATE_TTL_MS, createState, pruneExpiredState, readConfig } from './state';
 import { setupStickyBans } from './sticky';
 import { assessThreat } from './takeover-detect';
 import { setupTopicRecovery } from './topic-recovery';
@@ -24,6 +24,10 @@ export const description = 'Automated channel moderation and operator tools';
 let teardowns: Array<() => void> = [];
 
 export function init(api: PluginAPI): void {
+  // Reset in case a previous teardown threw — otherwise the next unload
+  // would re-run stale closures against disposed state.
+  teardowns = [];
+
   const config = readConfig(api);
   const state = createState();
 
@@ -60,7 +64,7 @@ export function init(api: PluginAPI): void {
     const backend = new AthemeBackend(api, config.chanserv_nick);
     // Wire post-RECOVER callback: mark channel for +i +m cleanup
     backend.onRecoverCallback = (channel: string) => {
-      state.pendingRecoverCleanup.add(api.ircLower(channel));
+      state.pendingRecoverCleanup.set(api.ircLower(channel), Date.now() + PENDING_STATE_TTL_MS);
     };
     chain.addBackend(backend);
     concreteBackend = backend;

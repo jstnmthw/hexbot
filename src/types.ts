@@ -297,6 +297,7 @@ export interface PluginBanStore {
   liftExpiredBans(
     hasOps: (channel: string) => boolean,
     mode: (channel: string, modes: string, param: string) => void,
+    isTracked?: (channel: string) => boolean,
   ): number;
   /** Migrate ban records from a plugin's old namespace to the core _bans namespace. */
   migrateFromPluginNamespace(pluginDb: PluginDB): number;

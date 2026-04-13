@@ -122,4 +122,41 @@ describe('SlidingWindowCounter', () => {
       expect(counter.size).toBe(1);
     });
   });
+
+  describe('peek()', () => {
+    it('returns 0 for an unknown key without recording it', () => {
+      const counter = new SlidingWindowCounter();
+      expect(counter.peek('missing', 1000)).toBe(0);
+      expect(counter.size).toBe(0);
+    });
+
+    it('returns live count without adding a new timestamp', () => {
+      const counter = new SlidingWindowCounter();
+      counter.check('key', 1000, 10);
+      counter.check('key', 1000, 10);
+      expect(counter.peek('key', 1000)).toBe(2);
+      // peek is read-only — count is still 2
+      expect(counter.peek('key', 1000)).toBe(2);
+    });
+
+    it('opportunistically deletes the key when every timestamp is stale', () => {
+      const counter = new SlidingWindowCounter();
+      counter.check('key', 1000, 10);
+      counter.check('key', 1000, 10);
+      vi.advanceTimersByTime(1001);
+      expect(counter.peek('key', 1000)).toBe(0);
+      expect(counter.size).toBe(0);
+    });
+
+    it('rewrites the timestamp array when some entries are stale but not all', () => {
+      const counter = new SlidingWindowCounter();
+      counter.check('key', 2000, 10); // t=0
+      vi.advanceTimersByTime(1500);
+      counter.check('key', 2000, 10); // t=1500
+      vi.advanceTimersByTime(600);
+      // t=2100: first entry is stale (>2000ms), second is still alive
+      expect(counter.peek('key', 2000)).toBe(1);
+      expect(counter.size).toBe(1);
+    });
+  });
 });

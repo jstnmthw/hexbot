@@ -174,6 +174,59 @@ describe('BanStore', () => {
       const lifted = store.liftExpiredBans(() => true, mode);
       expect(lifted).toBe(0);
     });
+
+    it('drops orphaned records past the 24h grace window even without ops', () => {
+      // Long-expired record (more than 24h past expiry) in a channel where
+      // the bot can't send -b. Should be removed regardless.
+      store.storeBan('#abandoned', '*!*@stale.com', 'admin', 60_000);
+      const ban = store.getBan('#abandoned', '*!*@stale.com')!;
+      ban.expires = Date.now() - 25 * 60 * 60_000; // 25h ago
+      db.set('_bans', `ban:#abandoned:*!*@stale.com`, JSON.stringify(ban));
+
+      const mode = vi.fn();
+      const lifted = store.liftExpiredBans(() => false, mode);
+
+      // Not "lifted" on IRC, but the record is gone.
+      expect(lifted).toBe(0);
+      expect(mode).not.toHaveBeenCalled();
+      expect(store.getBan('#abandoned', '*!*@stale.com')).toBeNull();
+    });
+
+    it('drops orphaned records when the channel is no longer tracked', () => {
+      store.storeBan('#abandoned', '*!*@stale.com', 'admin', 60_000);
+      const ban = store.getBan('#abandoned', '*!*@stale.com')!;
+      ban.expires = Date.now() - 1000; // just expired, well under the 24h grace
+      db.set('_bans', `ban:#abandoned:*!*@stale.com`, JSON.stringify(ban));
+
+      const mode = vi.fn();
+      const lifted = store.liftExpiredBans(
+        () => false,
+        mode,
+        () => false, // channel is no longer tracked
+      );
+
+      expect(lifted).toBe(0);
+      expect(store.getBan('#abandoned', '*!*@stale.com')).toBeNull();
+    });
+
+    it('keeps recently-expired records when the channel is still tracked', () => {
+      store.storeBan('#test', '*!*@stale.com', 'admin', 60_000);
+      const ban = store.getBan('#test', '*!*@stale.com')!;
+      ban.expires = Date.now() - 1000; // just expired
+      db.set('_bans', `ban:#test:*!*@stale.com`, JSON.stringify(ban));
+
+      const mode = vi.fn();
+      const lifted = store.liftExpiredBans(
+        () => false,
+        mode,
+        () => true, // tracked, but no ops
+      );
+
+      // Bot can't lift it AND the channel is still alive AND we're inside
+      // the 24h grace window — leave the record alone.
+      expect(lifted).toBe(0);
+      expect(store.getBan('#test', '*!*@stale.com')).not.toBeNull();
+    });
   });
 
   // -------------------------------------------------------------------------

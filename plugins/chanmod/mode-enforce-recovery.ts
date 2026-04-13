@@ -21,6 +21,7 @@ import {
   COOLDOWN_WINDOW_MS,
   type ChanmodConfig,
   MAX_ENFORCEMENTS,
+  PENDING_STATE_TTL_MS,
   type SharedState,
 } from './state';
 import { THREAT_ACTIVE, THREAT_ALERT, getThreatLevel, getThreatState } from './takeover-detect';
@@ -74,7 +75,7 @@ export function handleBotSelfDeop(
         const isInviteOnly = ch?.modes.includes('i');
         if (!isInviteOnly) {
           api.log(`Cycling ${channel} to regain ops`);
-          state.cycleScheduled.add(api.ircLower(channel));
+          state.cycleScheduled.set(api.ircLower(channel), Date.now() + PENDING_STATE_TTL_MS);
           state.scheduleCycle(config.cycle_delay_ms, () => {
             api.part(channel, 'Cycling to regain ops');
             state.scheduleCycle(2000, () => {

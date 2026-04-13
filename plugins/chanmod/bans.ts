@@ -23,18 +23,19 @@ export function migrateBansToCore(api: PluginAPI): number {
 export function setupBans(api: PluginAPI, _config: ChanmodConfig, state: SharedState): () => void {
   const hasOps = (ch: string) => botHasOps(api, ch);
   const setMode = (ch: string, modes: string, param: string) => api.mode(ch, modes, param);
+  const isTracked = (ch: string) => api.getChannel(ch) !== null;
 
   // Lift bans that expired during downtime (after a short delay to allow joining + getting ops)
   state.startupTimer = setTimeout(() => {
     state.startupTimer = null;
-    const lifted = api.banStore.liftExpiredBans(hasOps, setMode);
+    const lifted = api.banStore.liftExpiredBans(hasOps, setMode, isTracked);
     if (lifted > 0) {
       api.log(`Lifted ${lifted} expired ban${lifted === 1 ? '' : 's'} after downtime`);
     }
   }, 5000);
 
   api.bind('time', '-', '60', () => {
-    api.banStore.liftExpiredBans(hasOps, setMode);
+    api.banStore.liftExpiredBans(hasOps, setMode, isTracked);
   });
 
   return () => {

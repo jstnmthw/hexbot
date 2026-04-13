@@ -11,10 +11,29 @@ export class SlidingWindowCounter {
    */
   check(key: string, windowMs: number, limit: number): boolean {
     const now = Date.now();
-    const timestamps = (this.windows.get(key) ?? []).filter((t) => now - t < windowMs);
+    const existing = this.windows.get(key);
+    const timestamps = existing ? existing.filter((t) => now - t < windowMs) : [];
     timestamps.push(now);
     this.windows.set(key, timestamps);
     return timestamps.length > limit;
+  }
+
+  /**
+   * Check without recording. Opportunistically evicts the key if every
+   * timestamp has fallen outside the window — lets callers that only read
+   * keep the map bounded without scheduling a sweep.
+   */
+  peek(key: string, windowMs: number): number {
+    const existing = this.windows.get(key);
+    if (!existing) return 0;
+    const now = Date.now();
+    const live = existing.filter((t) => now - t < windowMs);
+    if (live.length === 0) {
+      this.windows.delete(key);
+      return 0;
+    }
+    if (live.length !== existing.length) this.windows.set(key, live);
+    return live.length;
   }
 
   /** Remove all timestamp history for a specific key. */

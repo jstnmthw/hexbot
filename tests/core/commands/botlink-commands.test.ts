@@ -13,6 +13,18 @@ import type { BotlinkDCCView } from '../../../src/core/dcc';
 import type { BotlinkConfig } from '../../../src/types';
 import { createMockSocket, parseWritten, pushFrame } from '../../helpers/mock-socket';
 
+// Track hubs so afterEach can close() them — otherwise BotLinkAuthManager's
+// 5-minute sweepTimer leaks across the test run (unref'd so process still exits).
+const _createdHubs: BotLinkHub[] = [];
+function makeHub(...args: ConstructorParameters<typeof BotLinkHub>): BotLinkHub {
+  const h = new BotLinkHub(...args);
+  _createdHubs.push(h);
+  return h;
+}
+afterEach(() => {
+  while (_createdHubs.length) _createdHubs.pop()?.close();
+});
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -104,7 +116,7 @@ describe('botlink commands', () => {
 
   describe('hub mode', () => {
     it('.botlink status shows hub info with no leaves', async () => {
-      const hub = new BotLinkHub(hubConfig(), '1.0.0');
+      const hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
       registerBotlinkCommands(handler, hub, null, hubConfig());
 
@@ -119,7 +131,7 @@ describe('botlink commands', () => {
     });
 
     it('.bots lists the hub bot', async () => {
-      const hub = new BotLinkHub(hubConfig(), '1.0.0');
+      const hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
       registerBotlinkCommands(handler, hub, null, hubConfig());
 
@@ -132,7 +144,7 @@ describe('botlink commands', () => {
     });
 
     it('.bottree shows the hub as root', async () => {
-      const hub = new BotLinkHub(hubConfig(), '1.0.0');
+      const hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
       registerBotlinkCommands(handler, hub, null, hubConfig());
 
@@ -145,7 +157,7 @@ describe('botlink commands', () => {
     });
 
     it('.botlink disconnect requires a botname', async () => {
-      const hub = new BotLinkHub(hubConfig(), '1.0.0');
+      const hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
       registerBotlinkCommands(handler, hub, null, hubConfig());
 
@@ -158,7 +170,7 @@ describe('botlink commands', () => {
     });
 
     it('.botlink reconnect is hub-only error', async () => {
-      const hub = new BotLinkHub(hubConfig(), '1.0.0');
+      const hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
       registerBotlinkCommands(handler, hub, null, hubConfig());
 
@@ -181,7 +193,7 @@ describe('botlink commands', () => {
       handler: CommandHandler;
       leafWritten: string[];
     }> {
-      hub = new BotLinkHub(hubConfig(), '1.0.0');
+      hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
       registerBotlinkCommands(handler, hub, null, hubConfig());
 
@@ -379,7 +391,7 @@ describe('botlink commands', () => {
     });
 
     it('shows usage when no target is given', async () => {
-      const hub = new BotLinkHub(hubConfig(), '1.0.0');
+      const hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
       registerBotlinkCommands(handler, hub, null, hubConfig());
 
@@ -392,7 +404,7 @@ describe('botlink commands', () => {
     });
 
     it('rejects from non-DCC source (repl)', async () => {
-      const hub = new BotLinkHub(hubConfig(), '1.0.0');
+      const hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
       registerBotlinkCommands(handler, hub, null, hubConfig());
 
@@ -406,7 +418,7 @@ describe('botlink commands', () => {
     });
 
     it('says DCC not enabled when dccManager is null (from DCC source)', async () => {
-      const hub = new BotLinkHub(hubConfig(), '1.0.0');
+      const hub = makeHub(hubConfig(), '1.0.0');
       // Provide a permissive permissions provider so the DCC source passes the flag check
       const allowAll = { checkFlags: () => true };
       const handler = new CommandHandler(allowAll);
@@ -423,7 +435,7 @@ describe('botlink commands', () => {
 
   describe('.relay DCC integration', () => {
     it('session not found returns error', async () => {
-      const hub = new BotLinkHub(hubConfig(), '1.0.0');
+      const hub = makeHub(hubConfig(), '1.0.0');
       const allowAll = { checkFlags: () => true };
       const handler = new CommandHandler(allowAll);
       const mockDcc = {
@@ -439,7 +451,7 @@ describe('botlink commands', () => {
     });
 
     it('already relaying returns error', async () => {
-      const hub = new BotLinkHub(hubConfig(), '1.0.0');
+      const hub = makeHub(hubConfig(), '1.0.0');
       const allowAll = { checkFlags: () => true };
       const handler = new CommandHandler(allowAll);
       const mockSession = { handle: 'admin', isRelaying: true, enterRelay: vi.fn() };
@@ -456,7 +468,7 @@ describe('botlink commands', () => {
     });
 
     it('hub mode: target bot not connected returns error', async () => {
-      const hub = new BotLinkHub(hubConfig(), '1.0.0');
+      const hub = makeHub(hubConfig(), '1.0.0');
       const allowAll = { checkFlags: () => true };
       const handler = new CommandHandler(allowAll);
       const mockSession = { handle: 'admin', isRelaying: false, enterRelay: vi.fn() };
@@ -473,7 +485,7 @@ describe('botlink commands', () => {
     });
 
     it('hub mode: sends relay request and enters relay mode', async () => {
-      const hub = new BotLinkHub(hubConfig(), '1.0.0');
+      const hub = makeHub(hubConfig(), '1.0.0');
       // Connect a leaf so it's a valid target
       const { socket: leafSocket, written: leafWritten, duplex: leafDuplex } = createMockSocket();
       hub.addConnection(leafSocket);
@@ -600,7 +612,7 @@ describe('botlink commands', () => {
     });
 
     it('reports no users when hub has no remote party users and no DCC', async () => {
-      const hub = new BotLinkHub(hubConfig(), '1.0.0');
+      const hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
       registerBotlinkCommands(handler, hub, null, hubConfig(), null);
 
@@ -624,7 +636,7 @@ describe('botlink commands', () => {
     });
 
     it('lists local DCC users via mock dccManager', async () => {
-      const hub = new BotLinkHub(hubConfig(), '1.0.0');
+      const hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
       const mockDcc = {
         getSessionList: () => [
@@ -681,7 +693,7 @@ describe('botlink commands', () => {
 
   describe('unknown subcommand', () => {
     it('.botlink foo shows usage', async () => {
-      const hub = new BotLinkHub(hubConfig(), '1.0.0');
+      const hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
       registerBotlinkCommands(handler, hub, null, hubConfig());
 
@@ -701,7 +713,7 @@ describe('botlink commands', () => {
 
 describe('branch coverage edge cases', () => {
   it('.botlink with empty string defaults to status', async () => {
-    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const hub = makeHub(hubConfig(), '1.0.0');
     const handler = new CommandHandler();
     registerBotlinkCommands(handler, hub, null, hubConfig());
 
@@ -712,7 +724,7 @@ describe('branch coverage edge cases', () => {
   });
 
   it('.bottree with multiple leaves shows ├─ and └─ prefixes', async () => {
-    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const hub = makeHub(hubConfig(), '1.0.0');
     const { socket: s1, duplex: d1 } = createMockSocket();
     hub.addConnection(s1);
     pushFrame(d1, {
@@ -742,7 +754,7 @@ describe('branch coverage edge cases', () => {
   });
 
   it('.whom shows idle time when idle > 0', async () => {
-    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const hub = makeHub(hubConfig(), '1.0.0');
     // Inject a remote party user with idle time
     const { socket, duplex } = createMockSocket();
     hub.addConnection(socket);
@@ -861,7 +873,7 @@ describe('.bot command', () => {
   });
 
   it('hub sends command to connected leaf', async () => {
-    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const hub = makeHub(hubConfig(), '1.0.0');
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
     pushFrame(duplex, {
@@ -893,7 +905,7 @@ describe('.bot command', () => {
   });
 
   it('hub returns error for unknown leaf', async () => {
-    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const hub = makeHub(hubConfig(), '1.0.0');
     const handler = new CommandHandler();
     registerBotlinkCommands(handler, hub, null, hubConfig());
     const replies: string[] = [];
@@ -987,7 +999,7 @@ describe('.bsay command', () => {
   });
 
   it('broadcasts to all bots when target is *', async () => {
-    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const hub = makeHub(hubConfig(), '1.0.0');
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
     pushFrame(duplex, {
@@ -1030,7 +1042,7 @@ describe('.bsay command', () => {
   });
 
   it('hub sends to specific remote bot', async () => {
-    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const hub = makeHub(hubConfig(), '1.0.0');
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
     pushFrame(duplex, {
@@ -1054,7 +1066,7 @@ describe('.bsay command', () => {
   });
 
   it('hub returns error for unknown bot', async () => {
-    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const hub = makeHub(hubConfig(), '1.0.0');
     const handler = new CommandHandler();
     registerBotlinkCommands(handler, hub, null, hubConfig());
     const replies: string[] = [];
@@ -1109,7 +1121,7 @@ describe('.bannounce command', () => {
   });
 
   it('announces to local DCC and hub leaves', async () => {
-    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const hub = makeHub(hubConfig(), '1.0.0');
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
     pushFrame(duplex, {
@@ -1164,7 +1176,7 @@ describe('.bannounce command', () => {
 
 describe('.botlink ban subcommands', () => {
   it('.botlink bans shows active link bans', async () => {
-    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const hub = makeHub(hubConfig(), '1.0.0');
     await hub.listen(0, '127.0.0.1');
     hub.manualBan('10.0.0.1', 0, 'test', 'admin');
 
@@ -1179,7 +1191,7 @@ describe('.botlink ban subcommands', () => {
   });
 
   it('.botlink bans shows "No active link bans" when empty', async () => {
-    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const hub = makeHub(hubConfig(), '1.0.0');
     await hub.listen(0, '127.0.0.1');
 
     const handler = new CommandHandler();
@@ -1192,7 +1204,7 @@ describe('.botlink ban subcommands', () => {
   });
 
   it('.botlink ban adds a manual ban', async () => {
-    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const hub = makeHub(hubConfig(), '1.0.0');
     await hub.listen(0, '127.0.0.1');
 
     const handler = new CommandHandler();
@@ -1206,7 +1218,7 @@ describe('.botlink ban subcommands', () => {
   });
 
   it('.botlink ban rejects invalid IP', async () => {
-    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const hub = makeHub(hubConfig(), '1.0.0');
     await hub.listen(0, '127.0.0.1');
 
     const handler = new CommandHandler();
@@ -1219,7 +1231,7 @@ describe('.botlink ban subcommands', () => {
   });
 
   it('.botlink ban shows usage when no args', async () => {
-    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const hub = makeHub(hubConfig(), '1.0.0');
     await hub.listen(0, '127.0.0.1');
 
     const handler = new CommandHandler();
@@ -1232,7 +1244,7 @@ describe('.botlink ban subcommands', () => {
   });
 
   it('.botlink unban removes a ban', async () => {
-    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const hub = makeHub(hubConfig(), '1.0.0');
     await hub.listen(0, '127.0.0.1');
     hub.manualBan('10.0.0.1', 0, 'test', 'admin');
 
@@ -1247,7 +1259,7 @@ describe('.botlink ban subcommands', () => {
   });
 
   it('.botlink unban shows usage when no args', async () => {
-    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const hub = makeHub(hubConfig(), '1.0.0');
     await hub.listen(0, '127.0.0.1');
 
     const handler = new CommandHandler();

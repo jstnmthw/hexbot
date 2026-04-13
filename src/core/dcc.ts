@@ -538,6 +538,7 @@ export class DCCSession implements DCCSessionEntry {
         : 'you are the only one here';
 
     // Logo
+    this.writeLine('');
     for (const line of bannerLogo(version)) {
       this.writeLine(line);
     }
@@ -719,7 +720,7 @@ export class DCCSession implements DCCSessionEntry {
     // Treat the prompt itself as something that can be aborted with a blank
     // line — otherwise the session would silently count it as a failure.
     if (candidate.length === 0) {
-      this.socket.write('Password:\r\n');
+      this.socket.write('Enter your password:\r\n');
       this.resetPromptIdle();
       return;
     }
@@ -820,6 +821,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   private casemapping: Casemapping = 'rfc1459';
   private botNick: string;
   private ircListeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
+  private authSweepTimer: NodeJS.Timeout | null = null;
 
   /** Failure tracker for the password prompt — exponential backoff on repeat. */
   readonly authTracker: DCCAuthTracker;
@@ -897,6 +899,11 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
       { event: 'privmsg', fn: onPrivmsg },
     ];
 
+    // Periodic sweep of the auth tracker — mirrors BotLinkAuthManager.
+    // Without this, failed-DCC-auth hostmasks accumulate forever.
+    this.authSweepTimer = setInterval(() => this.authTracker.sweep(), 300_000);
+    this.authSweepTimer.unref();
+
     this.logger?.info(
       `DCC CHAT listening (${this.config.ip}, ports ${this.config.port_range[0]}–${this.config.port_range[1]})`,
     );
@@ -904,6 +911,10 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
   /** Detach and close all sessions. */
   detach(reason = 'Bot shutting down.'): void {
+    if (this.authSweepTimer) {
+      clearInterval(this.authSweepTimer);
+      this.authSweepTimer = null;
+    }
     this.dispatcher.unbindAll(PLUGIN_ID);
     for (const { event, fn } of this.ircListeners) {
       this.client.removeListener(event, fn);

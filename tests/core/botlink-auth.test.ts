@@ -8,6 +8,18 @@ import { BotEventBus } from '../../src/event-bus';
 import type { BotlinkConfig } from '../../src/types';
 import { createMockSocket, parseWritten, pushFrame } from '../helpers/mock-socket';
 
+// Track hubs so afterEach can close() them — otherwise BotLinkAuthManager's
+// 5-minute sweepTimer leaks across the test run (unref'd so process still exits).
+const _createdHubs: BotLinkHub[] = [];
+function makeHub(...args: ConstructorParameters<typeof BotLinkHub>): BotLinkHub {
+  const h = new BotLinkHub(...args);
+  _createdHubs.push(h);
+  return h;
+}
+afterEach(() => {
+  while (_createdHubs.length) _createdHubs.pop()?.close();
+});
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -113,7 +125,7 @@ describe('auth brute-force protection', () => {
   afterEach(() => vi.useRealTimers());
 
   it('does not ban after fewer than max_auth_failures', async () => {
-    const hub = new BotLinkHub(hubConfig({ max_auth_failures: 5 }), '1.0.0');
+    const hub = makeHub(hubConfig({ max_auth_failures: 5 }), '1.0.0');
     const ip = '10.99.0.1';
 
     for (let i = 0; i < 4; i++) {
@@ -127,7 +139,7 @@ describe('auth brute-force protection', () => {
   });
 
   it('bans after max_auth_failures and immediately drops next connection', async () => {
-    const hub = new BotLinkHub(hubConfig({ max_auth_failures: 3 }), '1.0.0');
+    const hub = makeHub(hubConfig({ max_auth_failures: 3 }), '1.0.0');
     const ip = '10.99.0.2';
 
     for (let i = 0; i < 3; i++) {
@@ -143,10 +155,7 @@ describe('auth brute-force protection', () => {
 
   it('allows connections again after ban expires', async () => {
     vi.useFakeTimers();
-    const hub = new BotLinkHub(
-      hubConfig({ max_auth_failures: 3, auth_ban_duration_ms: 10_000 }),
-      '1.0.0',
-    );
+    const hub = makeHub(hubConfig({ max_auth_failures: 3, auth_ban_duration_ms: 10_000 }), '1.0.0');
     const ip = '10.99.0.3';
 
     for (let i = 0; i < 3; i++) {
@@ -173,7 +182,7 @@ describe('auth brute-force protection', () => {
     const bans: number[] = [];
     eventBus.on('auth:ban', (_ip, _failures, duration) => bans.push(duration));
 
-    const hub = new BotLinkHub(
+    const hub = makeHub(
       hubConfig({ max_auth_failures: 1, auth_ban_duration_ms: 1000 }),
       '1.0.0',
       null,
@@ -200,7 +209,7 @@ describe('auth brute-force protection', () => {
   });
 
   it('whitelisted IPs are never tracked or banned', async () => {
-    const hub = new BotLinkHub(
+    const hub = makeHub(
       hubConfig({ max_auth_failures: 1, auth_ip_whitelist: ['10.0.0.0/8'] }),
       '1.0.0',
     );
@@ -220,7 +229,7 @@ describe('auth brute-force protection', () => {
     const events: Array<{ ip: string; failures: number; duration: number }> = [];
     eventBus.on('auth:ban', (ip, failures, duration) => events.push({ ip, failures, duration }));
 
-    const hub = new BotLinkHub(
+    const hub = makeHub(
       hubConfig({ max_auth_failures: 2, auth_ban_duration_ms: 60_000 }),
       '1.0.0',
       null,
@@ -236,7 +245,7 @@ describe('auth brute-force protection', () => {
   });
 
   it('respects custom max_auth_failures config', async () => {
-    const hub = new BotLinkHub(hubConfig({ max_auth_failures: 2 }), '1.0.0');
+    const hub = makeHub(hubConfig({ max_auth_failures: 2 }), '1.0.0');
     const ip = '10.99.0.7';
 
     await sendBadAuth(hub, ip);
@@ -250,7 +259,7 @@ describe('auth brute-force protection', () => {
 
   it('resets failure count when auth_window_ms expires', async () => {
     vi.useFakeTimers();
-    const hub = new BotLinkHub(hubConfig({ max_auth_failures: 3, auth_window_ms: 5000 }), '1.0.0');
+    const hub = makeHub(hubConfig({ max_auth_failures: 3, auth_window_ms: 5000 }), '1.0.0');
     const ip = '10.99.0.8';
 
     await sendBadAuth(hub, ip, fakeTick);
@@ -268,7 +277,7 @@ describe('auth brute-force protection', () => {
   });
 
   it('enforces per-IP pending handshake limit', async () => {
-    const hub = new BotLinkHub(hubConfig({ max_pending_handshakes: 2 }), '1.0.0');
+    const hub = makeHub(hubConfig({ max_pending_handshakes: 2 }), '1.0.0');
     const ip = '10.99.0.9';
 
     const s1 = createMockSocketWithIP(ip);
@@ -288,7 +297,7 @@ describe('auth brute-force protection', () => {
 
   it('fires handshake timeout at configured duration', async () => {
     vi.useFakeTimers();
-    const hub = new BotLinkHub(hubConfig({ handshake_timeout_ms: 2000 }), '1.0.0');
+    const hub = makeHub(hubConfig({ handshake_timeout_ms: 2000 }), '1.0.0');
     const { socket, written } = createMockSocketWithIP('10.99.0.10');
     hub.addConnection(socket);
 
@@ -300,10 +309,7 @@ describe('auth brute-force protection', () => {
 
   it('sweeps stale non-escalated tracker entries', async () => {
     vi.useFakeTimers();
-    const hub = new BotLinkHub(
-      hubConfig({ max_auth_failures: 3, auth_ban_duration_ms: 5000 }),
-      '1.0.0',
-    );
+    const hub = makeHub(hubConfig({ max_auth_failures: 3, auth_ban_duration_ms: 5000 }), '1.0.0');
 
     await sendBadAuth(hub, '10.99.1.1', fakeTick);
 
@@ -332,7 +338,7 @@ describe('auth brute-force protection', () => {
       }),
     };
 
-    const hub = new BotLinkHub(hubConfig(), '1.0.0', mockLogger as never);
+    const hub = makeHub(hubConfig(), '1.0.0', mockLogger as never);
     await sendBadAuth(hub, '10.99.0.11');
 
     expect(warnings.some((w) => w.includes('10.99.0.11'))).toBe(true);
@@ -349,7 +355,7 @@ describe('auth brute-force protection', () => {
       }),
     };
 
-    const hub = new BotLinkHub(hubConfig(), '1.0.0', mockLogger as never);
+    const hub = makeHub(hubConfig(), '1.0.0', mockLogger as never);
     await sendGoodAuth(hub, '10.99.0.12', 'leaf-log');
 
     expect(infos.some((i) => i.includes('10.99.0.12'))).toBe(true);
@@ -357,7 +363,7 @@ describe('auth brute-force protection', () => {
 
   it('sweeps escalated tracker entries 24h after ban expiry', async () => {
     vi.useFakeTimers();
-    const hub = new BotLinkHub(
+    const hub = makeHub(
       hubConfig({ max_auth_failures: 1, auth_ban_duration_ms: 1000, auth_window_ms: 1000 }),
       '1.0.0',
     );
@@ -403,5 +409,108 @@ describe('auth brute-force protection', () => {
     const { written } = await sendGoodAuth(hub, ip, 'leaf-after-sweep', fakeTick);
     const frames = parseWritten(written);
     expect(frames[0]).toMatchObject({ type: 'WELCOME' });
+  });
+
+  it('promotes touched authTracker entries to most-recently-used (LRU)', async () => {
+    const hub = makeHub(hubConfig({ max_auth_failures: 99 }), '1.0.0');
+    // Reach into private state to verify insertion-order promotion.
+    type AuthInternals = { authTracker: Map<string, unknown> };
+    const auth = (hub as unknown as { auth: AuthInternals }).auth;
+
+    await sendBadAuth(hub, '10.50.0.1');
+    await sendBadAuth(hub, '10.50.0.2');
+    await sendBadAuth(hub, '10.50.0.3');
+    expect(Array.from(auth.authTracker.keys())).toEqual(['10.50.0.1', '10.50.0.2', '10.50.0.3']);
+
+    // Touch the first IP again — it should be promoted to the end.
+    await sendBadAuth(hub, '10.50.0.1');
+    expect(Array.from(auth.authTracker.keys())).toEqual(['10.50.0.2', '10.50.0.3', '10.50.0.1']);
+  });
+
+  it('LRU-evicts the oldest authTracker entry when the hard cap is hit', async () => {
+    const hub = makeHub(hubConfig({ max_auth_failures: 99 }), '1.0.0');
+    type AuthInternals = {
+      authTracker: Map<
+        string,
+        { failures: number; firstFailure: number; bannedUntil: number; banCount: number }
+      >;
+    };
+    const auth = (hub as unknown as { auth: AuthInternals }).auth;
+
+    // Seed 10_000 entries directly to fill the cap, then trigger one more
+    // failure — the oldest seeded entry should be evicted.
+    const now = Date.now();
+    for (let i = 0; i < 10_000; i++) {
+      auth.authTracker.set(`10.${Math.floor(i / 65536)}.${Math.floor(i / 256) % 256}.${i % 256}`, {
+        failures: 0,
+        firstFailure: now,
+        bannedUntil: 0,
+        banCount: 0,
+      });
+    }
+    const oldestKey = auth.authTracker.keys().next().value!;
+    expect(auth.authTracker.size).toBe(10_000);
+
+    // A brand-new IP triggers eviction of the oldest seeded entry.
+    await sendBadAuth(hub, '192.0.2.123');
+    expect(auth.authTracker.has(oldestKey)).toBe(false);
+    expect(auth.authTracker.has('192.0.2.123')).toBe(true);
+    expect(auth.authTracker.size).toBe(10_000);
+  });
+
+  it('sweeps expired CIDR manual bans on connection-driven sweep', async () => {
+    const hub = makeHub(hubConfig(), '1.0.0');
+    type AuthInternals = {
+      manualCidrBans: Map<
+        string,
+        { ip: string; bannedUntil: number; reason: string; setBy: string; setAt: number }
+      >;
+    };
+    const auth = (hub as unknown as { auth: AuthInternals }).auth;
+
+    // Seed an expired CIDR ban directly, then trigger sweep via a connection.
+    auth.manualCidrBans.set('203.0.113.0/24', {
+      ip: '203.0.113.0/24',
+      bannedUntil: Date.now() - 1000, // expired 1s ago
+      reason: 'old',
+      setBy: 'test',
+      setAt: Date.now() - 60_000,
+    });
+
+    // Any new connection drives `admit()` which calls `sweepStaleTrackers()`.
+    await sendGoodAuth(hub, '198.51.100.1', 'leaf-sweep-cidr');
+
+    expect(auth.manualCidrBans.has('203.0.113.0/24')).toBe(false);
+  });
+
+  it('rejects new CIDR bans once MAX_CIDR_BANS is reached', () => {
+    const warnings: string[] = [];
+    const mockLogger = {
+      child: () => ({
+        info: () => {},
+        warn: (msg: string) => warnings.push(msg),
+        debug: () => {},
+        error: () => {},
+      }),
+    };
+    const hub = makeHub(hubConfig(), '1.0.0', mockLogger as never);
+
+    // Seed the manualCidrBans map directly to skip 500 round-trips.
+    type AuthInternals = { manualCidrBans: Map<string, unknown> };
+    const auth = (hub as unknown as { auth: AuthInternals }).auth;
+    for (let i = 0; i < 500; i++) {
+      auth.manualCidrBans.set(`10.${Math.floor(i / 256)}.${i % 256}.0/24`, {
+        ip: `10.${Math.floor(i / 256)}.${i % 256}.0/24`,
+        bannedUntil: 0,
+        reason: 'seed',
+        setBy: 'test',
+        setAt: Date.now(),
+      });
+    }
+
+    // The 501st should be rejected with a warning.
+    hub.manualBan('192.168.99.0/24', 0, 'overflow', 'admin');
+    expect(warnings.some((w) => w.includes('CIDR ban limit'))).toBe(true);
+    expect(auth.manualCidrBans.has('192.168.99.0/24')).toBe(false);
   });
 });
