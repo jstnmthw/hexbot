@@ -139,6 +139,7 @@ export function createMockBot(options?: { botNick?: string; currentNick?: string
     getChannels: () => ['#test'],
     getBindCount: () => dispatcher.listBinds().length,
     getUserCount: () => permissions.listUsers().length,
+    getReconnectState: () => null,
   });
   registerPluginCommands(commandHandler, pluginLoader, './plugins');
   registerChannelCommands(commandHandler, channelSettings);

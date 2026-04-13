@@ -682,6 +682,29 @@ All core infrastructure is implemented and production-ready. See [CHANGELOG.md](
 
 ---
 
+## 5. Connection & session management
+
+HexBot owns the IRC reconnect loop end-to-end. `irc-framework`'s built-in `auto_reconnect` is disabled (`auto_reconnect: false`) because it silently gives up when a reconnect reaches TCP-connected but fails to complete IRC registration (the 2026-04-13 zombie-bot incident). Instead, `src/core/reconnect-driver.ts` is the single source of truth for every retry — initial connection failure, ping timeout, K-line, SASL auth — with no time-based give-up cap.
+
+**Three retry tiers.** On every disconnect, `classifyCloseReason()` in `connection-lifecycle.ts` inspects the most recent `ERROR :…` text and picks a tier:
+
+- **Transient** (TCP hiccup, ping timeout, registration timeout, unknown reason) — short exponential backoff (1s → 30s cap) plus jitter. Status `reconnecting`.
+- **Rate-limited** (K/G/Z-line, DNSBL, "Banned from server", "Throttled", "Excess Flood") — long backoff (5min → 30min cap, doubling capped at 3 steps). Status `reconnecting`, flipping to `degraded` after 3 consecutive failures. Retries continue indefinitely — these conditions expire on their own (operator action, auto-kline timeout, cooldown drain), so giving up would leave the bot down longer than necessary.
+- **Fatal** (SASL 904/908, TLS certificate untrusted, hostname mismatch, expired cert) — exit immediately with code 2. Retrying a bad SASL password is never safe (account lockout risk), and TLS config errors won't resolve until an operator changes config.
+
+**Operator visibility.** The reconnect state surface is readable from `.status`:
+
+```
+Connection: connected
+Connection: reconnecting (ping timeout, next retry in 4s)
+Connection: degraded (K-Lined, 4 consecutive failures, next retry in 18m)
+Connection: stopped
+```
+
+Supervisors (systemd, Docker `--restart unless-stopped`) should wrap the process with a restart policy so a fatal exit cycles the bot after an operator fixes the config; transient and rate-limited tiers never reach the supervisor because the in-process loop handles them.
+
+---
+
 ## 6. AI module design notes
 
 Deferred to Phase 4, but architectural decisions made now:

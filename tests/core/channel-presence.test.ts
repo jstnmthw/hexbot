@@ -81,6 +81,22 @@ interface TestContext {
   handle: ConnectionLifecycleHandle;
 }
 
+function makeStubDriver(): import('../../src/core/reconnect-driver').ReconnectDriver {
+  return {
+    onDisconnect: () => {},
+    onConnected: () => {},
+    cancel: () => {},
+    getState: () => ({
+      status: 'connected',
+      lastError: null,
+      lastErrorTier: null,
+      consecutiveFailures: 0,
+      nextAttemptAt: null,
+      attemptCount: 0,
+    }),
+  };
+}
+
 function setup(
   configuredChannels: Array<{ name: string; key?: string }>,
   configOverrides?: Partial<BotConfig>,
@@ -100,6 +116,7 @@ function setup(
     dispatcher: { bind: vi.fn() },
     logger,
     channelState,
+    reconnectDriver: makeStubDriver(),
   };
 
   const handle = registerConnectionEvents(
@@ -289,6 +306,7 @@ describe('channel presence check', () => {
       dispatcher: { bind: vi.fn() },
       logger,
       channelState,
+      reconnectDriver: makeStubDriver(),
     };
 
     const handle = registerConnectionEvents(

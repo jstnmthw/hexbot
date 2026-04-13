@@ -4,8 +4,10 @@ import { type CommandContext, CommandHandler } from '../../../src/command-handle
 import {
   type AdminBotInfo,
   type AdminIRCClient,
+  formatReconnectState,
   registerIRCAdminCommands,
 } from '../../../src/core/commands/irc-commands-admin';
+import type { ReconnectState } from '../../../src/core/reconnect-driver';
 
 /** Helper: create a minimal CommandContext with a typed reply mock. */
 function makeCtx(
@@ -36,6 +38,7 @@ describe('irc-commands-admin', () => {
       getChannels: () => ['#test', '#dev'],
       getBindCount: () => 5,
       getUserCount: () => 2,
+      getReconnectState: () => null,
     };
     registerIRCAdminCommands(handler, mockClient, mockBotInfo);
   });
@@ -305,6 +308,138 @@ describe('irc-commands-admin', () => {
 
       const output = ctx.reply.mock.calls[0][0];
       expect(output).toContain('unknown');
+    });
+
+    it('should include Connection line when reconnect state is connected', async () => {
+      mockBotInfo.getReconnectState = () => ({
+        status: 'connected',
+        lastError: null,
+        lastErrorTier: null,
+        consecutiveFailures: 0,
+        nextAttemptAt: null,
+        attemptCount: 0,
+      });
+      const ctx = makeCtx();
+      await handler.execute('.status', ctx);
+      expect(ctx.reply.mock.calls[0][0]).toContain('Connection: connected');
+    });
+
+    it('should show reconnecting details when in reconnecting state', async () => {
+      mockBotInfo.getReconnectState = () => ({
+        status: 'reconnecting',
+        lastError: 'ping timeout',
+        lastErrorTier: 'transient',
+        consecutiveFailures: 1,
+        nextAttemptAt: Date.now() + 4_000,
+        attemptCount: 1,
+      });
+      const ctx = makeCtx();
+      await handler.execute('.status', ctx);
+      const output = ctx.reply.mock.calls[0][0];
+      expect(output).toContain('Connection: reconnecting');
+      expect(output).toContain('ping timeout');
+      expect(output).toMatch(/next retry in \ds/);
+    });
+
+    it('should show degraded state with consecutive failure count', async () => {
+      mockBotInfo.getReconnectState = () => ({
+        status: 'degraded',
+        lastError: 'K-Lined',
+        lastErrorTier: 'rate-limited',
+        consecutiveFailures: 4,
+        nextAttemptAt: Date.now() + 18 * 60_000,
+        attemptCount: 4,
+      });
+      const ctx = makeCtx();
+      await handler.execute('.status', ctx);
+      const output = ctx.reply.mock.calls[0][0];
+      expect(output).toContain('Connection: degraded');
+      expect(output).toContain('K-Lined');
+      expect(output).toContain('4 consecutive failures');
+      expect(output).toMatch(/next retry in \d+m/);
+    });
+  });
+
+  describe('formatReconnectState', () => {
+    const connected: ReconnectState = {
+      status: 'connected',
+      lastError: null,
+      lastErrorTier: null,
+      consecutiveFailures: 0,
+      nextAttemptAt: null,
+      attemptCount: 0,
+    };
+
+    it('renders connected as a single word', () => {
+      expect(formatReconnectState(connected)).toBe('connected');
+    });
+
+    it('renders stopped as a single word', () => {
+      expect(formatReconnectState({ ...connected, status: 'stopped' })).toBe('stopped');
+    });
+
+    it('omits failure count when only one failure', () => {
+      const state: ReconnectState = {
+        status: 'reconnecting',
+        lastError: 'ping timeout',
+        lastErrorTier: 'transient',
+        consecutiveFailures: 1,
+        nextAttemptAt: Date.now() + 3_000,
+        attemptCount: 1,
+      };
+      const output = formatReconnectState(state);
+      expect(output).not.toContain('consecutive failures');
+      expect(output).toContain('ping timeout');
+    });
+
+    it('omits the error label when lastError is null', () => {
+      const state: ReconnectState = {
+        status: 'reconnecting',
+        lastError: null,
+        lastErrorTier: 'transient',
+        consecutiveFailures: 1,
+        nextAttemptAt: Date.now() + 2_000,
+        attemptCount: 1,
+      };
+      const output = formatReconnectState(state);
+      expect(output).toMatch(/^reconnecting \(next retry in /);
+    });
+
+    it('says "retry pending" when nextAttemptAt is null', () => {
+      const state: ReconnectState = {
+        status: 'reconnecting',
+        lastError: 'ping timeout',
+        lastErrorTier: 'transient',
+        consecutiveFailures: 1,
+        nextAttemptAt: null,
+        attemptCount: 1,
+      };
+      expect(formatReconnectState(state)).toContain('retry pending');
+    });
+
+    it('clamps a negative delay to 0s', () => {
+      const state: ReconnectState = {
+        status: 'reconnecting',
+        lastError: 'ping timeout',
+        lastErrorTier: 'transient',
+        consecutiveFailures: 1,
+        nextAttemptAt: Date.now() - 5_000,
+        attemptCount: 1,
+      };
+      expect(formatReconnectState(state)).toContain('next retry in 0s');
+    });
+
+    it('formats delay in hours for long waits', () => {
+      const state: ReconnectState = {
+        status: 'degraded',
+        lastError: 'K-Lined',
+        lastErrorTier: 'rate-limited',
+        consecutiveFailures: 5,
+        nextAttemptAt: Date.now() + 2 * 60 * 60 * 1000,
+        attemptCount: 5,
+      };
+      const output = formatReconnectState(state);
+      expect(output).toMatch(/next retry in \dh/);
     });
   });
 });

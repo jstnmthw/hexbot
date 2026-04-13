@@ -1,6 +1,7 @@
 // HexBot — Connection lifecycle
-// Handles the IRC connection events: registered, close, reconnecting, socket error.
-// Extracted from Bot to keep bot.ts a thin orchestrator.
+// Handles the IRC connection events: registered, close, socket error. All
+// reconnect scheduling is delegated to the ReconnectDriver — this module
+// only classifies the disconnect reason and tells the driver about it.
 import type { BotEventBus } from '../event-bus';
 import type { Logger } from '../logger';
 import type { BotConfig, Casemapping } from '../types';
@@ -8,6 +9,7 @@ import type { BindHandler, BindType } from '../types';
 import { toEventObject } from '../utils/irc-event';
 import { ircLower } from '../utils/wildcard';
 import { type ServerCapabilities, parseISupport } from './isupport';
+import type { ReconnectDriver } from './reconnect-driver';
 import { type STSDirective, parseSTSDirective } from './sts';
 
 // ---------------------------------------------------------------------------
@@ -59,13 +61,19 @@ export interface ConnectionLifecycleDeps {
    */
   applyServerCapabilities: (caps: ServerCapabilities) => void;
   /**
-   * Called when irc-framework signals a reconnect attempt is starting.
-   * Consumers use this hook to drop identity caches that can't survive
-   * across sessions — specifically networkAccounts, where a stale entry
-   * could let an imposter who took a known user's nick inherit permissions
-   * on the new session.
+   * Called on every disconnect — used to drop identity caches that can't
+   * survive across sessions (specifically networkAccounts, where a stale
+   * entry could let an imposter who took a known user's nick inherit
+   * permissions on the new session). Fresh account data will arrive via
+   * extended-join / account-notify / account-tag on rejoin.
    */
   onReconnecting?: () => void;
+  /**
+   * Reconnect driver — owns backoff state and schedules the next retry.
+   * Required for the bot to recover from any disconnect; if absent, a
+   * single disconnect leaves the process idle.
+   */
+  reconnectDriver: ReconnectDriver;
   /**
    * Called when a parsed IRCv3 STS directive is received on the connection.
    * Consumers persist the policy and, when the directive arrived on a
@@ -81,10 +89,6 @@ export interface ConnectionLifecycleDeps {
   logger: Logger;
   /** Channel state tracker — required for periodic presence check. */
   channelState?: PresenceCheckChannelState;
-  /** Callback to re-attempt the IRC connection (for startup retry with backoff).
-   *  irc-framework does not auto-reconnect on initial connection failure, so we
-   *  handle retries ourselves. If not provided, initial failure is immediately fatal. */
-  reconnect?: () => void;
 }
 
 /** Handle returned by registerConnectionEvents for cleanup on shutdown. */
@@ -93,8 +97,8 @@ export interface ConnectionLifecycleHandle {
   stopPresenceCheck(): void;
   /** Remove all IRC client listeners registered by connection lifecycle. */
   removeListeners(): void;
-  /** Cancel any pending startup retry timer. */
-  cancelStartupRetry(): void;
+  /** Cancel any pending reconnect attempt scheduled on the driver. */
+  cancelReconnect(): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -103,37 +107,31 @@ export interface ConnectionLifecycleHandle {
 
 /**
  * Register all IRC connection lifecycle event listeners on the client.
- * The returned promise resolves when the bot successfully registers,
- * and rejects on a socket error before registration.
+ * The returned promise resolves on the first successful registration so
+ * Bot.start() can proceed past `connect()`. After that, every disconnect
+ * is routed to the injected ReconnectDriver, which schedules the next
+ * `client.connect()` call — we never reject after the initial resolve.
  *
- * Returns a handle with a `stopPresenceCheck()` method for cleanup on shutdown.
+ * The `reject` callback is only used if listeners throw synchronously
+ * while being wired up (an internal error — retained for safety).
  */
 export function registerConnectionEvents(
   deps: ConnectionLifecycleDeps,
   resolve: () => void,
-  reject: (err: Error) => void,
+  _reject: (err: Error) => void,
 ): ConnectionLifecycleHandle {
-  const { client, config, logger } = deps;
+  const { client, config, logger, reconnectDriver } = deps;
   const cfg = config.irc;
-  let registered = false;
+  // `firstConnect` exists only so Bot.start()'s await completes on the first
+  // successful registration. Every subsequent reconnect cycle is handled
+  // by the driver — we just notify it via onDisconnect/onConnected.
+  let firstConnect = true;
   let presenceTimer: ReturnType<typeof setInterval> | null = null;
-  // Tracks whether irc-framework signalled another reconnect attempt is coming.
-  // Set to true by 'reconnecting', cleared by 'close'. If 'close' fires after
-  // registration without a preceding 'reconnecting', retries are exhausted.
-  let expectingReconnect = false;
-  // Captures the last IRC ERROR reason or socket error so we can include it
-  // in the 'close' log — irc-framework's 'close' event only passes a boolean.
+  // Captures the last IRC ERROR reason or socket error so we can classify
+  // it when 'close' fires — irc-framework's 'close' event only passes a boolean.
   let lastCloseReason: string | null = null;
 
-  // Startup retry state — irc-framework does not auto-reconnect on initial
-  // connection failure (only after a successful registration), so we handle
-  // retries ourselves with exponential backoff.
-  const maxStartupRetries = 10;
-  const maxRetryWait = 30_000;
-  let startupAttempt = 0;
-
   const listeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
-  let startupRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
   function listen(event: string, fn: (...args: unknown[]) => void): void {
     client.on(event, fn);
@@ -146,10 +144,8 @@ export function registerConnectionEvents(
   bindCoreInviteHandler(deps);
 
   const onRegistered = () => {
-    registered = true;
-    expectingReconnect = false;
     lastCloseReason = null;
-    startupAttempt = 0;
+    reconnectDriver.onConnected();
     logger.info(`Connected to ${cfg.host}:${cfg.port} as ${cfg.nick}`);
 
     if (cfg.tls) {
@@ -168,7 +164,10 @@ export function registerConnectionEvents(
     if (presenceTimer !== null) clearInterval(presenceTimer);
     presenceTimer = startChannelPresenceCheck(deps);
 
-    resolve();
+    if (firstConnect) {
+      firstConnect = false;
+      resolve();
+    }
   };
 
   // Capture the server's IRC ERROR message (e.g. "Closing Link: ... (Throttled)")
@@ -184,82 +183,21 @@ export function registerConnectionEvents(
   };
 
   const onClose = () => {
-    if (registered && !expectingReconnect) {
-      // irc-framework exhausted all reconnect attempts — the bot is a zombie.
-      // If the ERROR reason says we were K/G-lined, exit non-zero immediately
-      // instead of exiting after the usual exhaustion path (supervisord
-      // should surface the reason in the restart log).
-      const detail = lastCloseReason ? ` (${lastCloseReason})` : '';
-      const policy = classifyCloseReason(lastCloseReason);
-      if (policy.kind === 'banned') {
-        logger.error(
-          `FATAL: ${policy.label} on ${cfg.host} — refusing to reconnect. ` +
-            `Resolve the ban before restarting the bot.`,
-        );
-      } else {
-        logger.error(`Reconnect attempts exhausted${detail} — exiting`);
-      }
-      deps.eventBus.emit('bot:disconnected', 'reconnect attempts exhausted');
-      // Exit non-zero so supervisord / docker know this is a fault and log
-      // it appropriately. See docs/audits/irc-logic-2026-04-11.md §9 on the
-      // exit-on-exhaustion contract.
-      process.exit(1);
-    }
-    if (!registered) {
-      // Connection failed before registration — log the reason so the user
-      // can diagnose throttling, bans, TLS rejection, etc.
-      const reason = lastCloseReason ?? 'no error detail from server';
-      logger.error(`Connection failed: ${reason}`);
-      deps.eventBus.emit('bot:disconnected', `connection failed: ${reason}`);
-
-      // Interpret the server's ERROR reason (if any) and apply a retry
-      // policy. K/G-line / banned-IP responses abort startup with a fatal
-      // non-zero exit so we stop hammering a server that won't take us.
-      // Throttle-class responses use a longer backoff multiplier than the
-      // default exponential curve.
-      const policy = classifyCloseReason(lastCloseReason);
-      if (policy.kind === 'banned') {
-        logger.error(
-          `FATAL: ${policy.label} on ${cfg.host} — refusing to retry. ` +
-            `Resolve the ban before restarting the bot.`,
-        );
-        deps.eventBus.emit('bot:disconnected', `banned: ${policy.label}`);
-        // Exit to prevent hammering a banned server. supervisord will see
-        // the non-zero exit and decide whether to keep restarting us.
-        process.exit(1);
-      }
-
-      // irc-framework does not auto-reconnect on initial connection failure.
-      // Retry with exponential backoff if the caller provided a reconnect callback.
-      if (deps.reconnect && startupAttempt < maxStartupRetries) {
-        startupAttempt++;
-        const jitter = Math.floor(Math.random() * 5000);
-        const baseDelay = Math.min(1000 * 2 ** startupAttempt, maxRetryWait);
-        const delay = Math.floor(baseDelay * policy.backoffMultiplier) + jitter;
-        logger.info(
-          `Retrying connection in ${Math.round(delay / 1000)}s ` +
-            `(attempt ${startupAttempt + 1}/${maxStartupRetries + 1})` +
-            (policy.kind === 'throttled' ? ` — server asked us to slow down` : '') +
-            `...`,
-        );
-        lastCloseReason = null;
-        startupRetryTimer = setTimeout(() => deps.reconnect!(), delay);
-      } else {
-        reject(new Error(`Connection failed: ${reason}`));
-      }
-      return;
-    }
-    expectingReconnect = false;
-    logger.info('Connection closed');
-    deps.eventBus.emit('bot:disconnected', 'connection closed');
-  };
-
-  const onReconnecting = () => {
-    expectingReconnect = true;
+    const reason = lastCloseReason ?? 'connection closed';
+    const policy = classifyCloseReason(lastCloseReason);
     lastCloseReason = null;
+
+    logger.info(`Connection closed: ${reason}`);
+    deps.eventBus.emit('bot:disconnected', reason);
+
+    // Drop per-session identity caches and the outgoing message queue on
+    // every disconnect. The hook was previously tied to 'reconnecting',
+    // but with auto_reconnect:false that event is never emitted.
     deps.messageQueue.clear();
     deps.onReconnecting?.();
-    logger.info('Reconnecting...');
+
+    // Driver owns backoff, tier escalation, fatal exit, and status state.
+    reconnectDriver.onDisconnect(policy);
   };
 
   const onSocketError = (err: unknown) => {
@@ -267,15 +205,12 @@ export function registerConnectionEvents(
     lastCloseReason = error.message;
     logger.error('Socket error:', error.message);
     deps.eventBus.emit('bot:error', error);
-    if (!registered) {
-      reject(error);
-    }
+    // Note: no reject() — the driver will retry on the subsequent 'close'.
   };
 
   listen('registered', onRegistered);
   listen('irc error', onIrcError);
   listen('close', onClose);
-  listen('reconnecting', onReconnecting);
   listen('socket error', onSocketError);
 
   return {
@@ -291,11 +226,8 @@ export function registerConnectionEvents(
       }
       listeners.length = 0;
     },
-    cancelStartupRetry() {
-      if (startupRetryTimer !== null) {
-        clearTimeout(startupRetryTimer);
-        startupRetryTimer = null;
-      }
+    cancelReconnect() {
+      reconnectDriver.cancel();
     },
   };
 }
@@ -341,28 +273,55 @@ function applyServerCapabilities(deps: ConnectionLifecycleDeps): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Outcome of classifying an `ERROR :Closing Link (...)` string:
+ * A retry tier plus the human-readable label that should appear in logs and
+ * the `.status` command. The driver in `reconnect-driver.ts` picks the
+ * backoff curve from the tier; connection-lifecycle only classifies.
  *
- * - `'normal'`    — no recognised pattern; use the default backoff
- * - `'throttled'` — transient overload; pause longer before retry
- * - `'banned'`    — K/G-line or DNSBL block; abort reconnect entirely
+ * - `transient`    — TCP hiccup, ping timeout, server restart, unknown reason.
+ *                    Short exponential backoff (1s → 30s cap).
+ * - `rate-limited` — K-line, DNSBL, throttled. Long backoff (5min → 30min cap);
+ *                    the bot keeps retrying indefinitely, since these expire.
+ * - `fatal`        — bad SASL, unsupported mech, cert mismatch. Process exits
+ *                    so a supervisor can page someone instead of the bot
+ *                    silently locking an account in a retry loop.
  */
-type CloseReasonPolicy =
-  | { kind: 'normal'; backoffMultiplier: 1 }
-  | { kind: 'throttled'; label: string; backoffMultiplier: number }
-  | { kind: 'banned'; label: string; backoffMultiplier: 1 };
+export type ReconnectPolicy =
+  | { tier: 'transient'; label?: string }
+  | { tier: 'rate-limited'; label: string }
+  | { tier: 'fatal'; label: string; exitCode: number };
 
-const BANNED_PATTERNS: Array<[RegExp, string]> = [
+// Exit code 2 = fatal config error. A single code keeps supervisor wrappers
+// simple; the log line carries the actual cause.
+const FATAL_EXIT_CODE = 2;
+
+const FATAL_PATTERNS: Array<[RegExp, string]> = [
+  // SASL 904 — "SASL authentication failed". Must fire on first hit, before
+  // the account-lockout counter on services ticks past its threshold.
+  [/SASL.*(authentication\s+failed|failed)/i, 'SASL authentication failed'],
+  // SASL 908 — server advertises no acceptable mechanism for us. Config
+  // error, retrying won't fix it.
+  [/mechanism(?:s)?\s+not\s+supported/i, 'SASL mechanism not supported'],
+  [/no\s+such\s+mechanism/i, 'SASL mechanism not supported'],
+  // TLS cert verification failures surfaced by node's tls module. If the
+  // operator set tls_verify=true, these are permanent until config change.
+  [/Hostname\/IP\s+does\s+not\s+match/i, 'TLS hostname mismatch'],
+  [/unable\s+to\s+verify\s+the\s+first\s+certificate/i, 'TLS certificate untrusted'],
+  [/self[-\s]signed\s+certificate/i, 'TLS self-signed certificate'],
+  [/CERT_HAS_EXPIRED/i, 'TLS certificate expired'],
+];
+
+const RATE_LIMITED_PATTERNS: Array<[RegExp, string]> = [
+  // Ban-class responses — operators lift these, auto-klines expire, DNSBLs
+  // drain. Long backoff lets the bot recover automatically.
   [/K[\s-]?Line/i, 'K-Lined'],
   [/G[\s-]?Line/i, 'G-Lined'],
   [/Z[\s-]?Line/i, 'Z-Lined'],
   [/Banned\s+from\s+server/i, 'banned from server'],
   [/You are banned/i, 'banned from server'],
-  [/DNSBL/i, 'blocked by DNSBL'],
   [/You are not welcome/i, 'banned from server'],
-];
-
-const THROTTLED_PATTERNS: Array<[RegExp, string]> = [
+  [/DNSBL/i, 'blocked by DNSBL'],
+  [/Your\s+(host|IP)\s+is\s+listed/i, 'IP listed in DNSBL'],
+  // Throttle-class responses — transient but we need to slow down hard.
   [/Throttled/i, 'throttled'],
   [/Reconnect(?:ing)?\s+too\s+fast/i, 'reconnecting too fast'],
   [/Too\s+many\s+connections/i, 'too many connections'],
@@ -370,23 +329,35 @@ const THROTTLED_PATTERNS: Array<[RegExp, string]> = [
   [/Excess\s+Flood/i, 'excess flood'],
 ];
 
+const TRANSIENT_LABEL_PATTERNS: Array<[RegExp, string]> = [
+  // These still classify as `transient` — the label just makes the log
+  // line name the cause instead of saying "unknown reason".
+  [/ping\s+timeout/i, 'ping timeout'],
+  [/registration\s+tim(?:e|ed)\s*out/i, 'registration timeout'],
+  [/server\s+shutting\s+down/i, 'server shutting down'],
+  [/restart\s+in\s+progress/i, 'server restart'],
+  [/closing\s+link/i, 'closing link'],
+];
+
 /**
- * Inspect an IRC `ERROR :...` reason (as captured on `irc error`/`close`)
- * and return a retry policy. Unknown reasons fall through to `'normal'`
- * so legacy code paths continue to work unchanged.
+ * Inspect an IRC `ERROR :...` reason (from `irc error` / socket error /
+ * TLS failure) and assign a retry tier. Unknown reasons fall through to
+ * `'transient'` with no label — the common case on a flaky network.
+ *
+ * Exported so unit tests can exercise the pattern matrix directly.
  */
-function classifyCloseReason(reason: string | null): CloseReasonPolicy {
-  if (!reason) return { kind: 'normal', backoffMultiplier: 1 };
-  for (const [re, label] of BANNED_PATTERNS) {
-    if (re.test(reason)) return { kind: 'banned', label, backoffMultiplier: 1 };
+export function classifyCloseReason(reason: string | null): ReconnectPolicy {
+  if (!reason) return { tier: 'transient' };
+  for (const [re, label] of FATAL_PATTERNS) {
+    if (re.test(reason)) return { tier: 'fatal', label, exitCode: FATAL_EXIT_CODE };
   }
-  for (const [re, label] of THROTTLED_PATTERNS) {
-    // 4× the default exponential delay keeps us off a shared server while
-    // the throttle window drains, without turning every retry into an hour
-    // of dead time.
-    if (re.test(reason)) return { kind: 'throttled', label, backoffMultiplier: 4 };
+  for (const [re, label] of RATE_LIMITED_PATTERNS) {
+    if (re.test(reason)) return { tier: 'rate-limited', label };
   }
-  return { kind: 'normal', backoffMultiplier: 1 };
+  for (const [re, label] of TRANSIENT_LABEL_PATTERNS) {
+    if (re.test(reason)) return { tier: 'transient', label };
+  }
+  return { tier: 'transient' };
 }
 
 /**

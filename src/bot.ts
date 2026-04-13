@@ -43,6 +43,11 @@ import { MemoManager } from './core/memo';
 import { MessageQueue } from './core/message-queue';
 import { ensureOwner } from './core/owner-bootstrap';
 import { Permissions } from './core/permissions';
+import {
+  type ReconnectDriver,
+  type ReconnectState,
+  createReconnectDriver,
+} from './core/reconnect-driver';
 import { Services } from './core/services';
 import { STSStore, enforceSTS } from './core/sts';
 import { BotDatabase } from './database';
@@ -90,8 +95,14 @@ export class Bot {
   private _botLinkLeaf: BotLinkLeaf | null = null;
   private _sharedBanList: SharedBanList | null = null;
   private _lifecycleHandle: ConnectionLifecycleHandle | null = null;
+  private _reconnectDriver: ReconnectDriver | null = null;
   private botLogger: Logger;
   private _casemapping: Casemapping = 'rfc1459';
+
+  /** Snapshot of the reconnect driver state — used by the `.status` command. */
+  getReconnectState(): ReconnectState | null {
+    return this._reconnectDriver?.getState() ?? null;
+  }
 
   getCasemapping(): Casemapping {
     return this._casemapping;
@@ -267,6 +278,7 @@ export class Bot {
       getChannels: () => this.configuredChannels.map((c) => c.name),
       getBindCount: () => this.dispatcher.listBinds().length,
       getUserCount: () => this.permissions.listUsers().length,
+      getReconnectState: () => this.getReconnectState(),
     });
     registerPluginCommands(this.commandHandler, this.pluginLoader, resolve(this.config.pluginDir));
     registerChannelCommands(this.commandHandler, this.channelSettings);
@@ -455,8 +467,16 @@ export class Bot {
   async shutdown(): Promise<void> {
     this.botLogger.info('Shutting down...');
 
+    // Cancel any pending reconnect BEFORE tearing down the client so a
+    // stray timer cannot fire mid-shutdown and re-open a socket.
+    if (this._reconnectDriver) {
+      this._reconnectDriver.cancel();
+      this._reconnectDriver = null;
+    }
+
     if (this._lifecycleHandle) {
       this._lifecycleHandle.stopPresenceCheck();
+      this._lifecycleHandle.removeListeners();
       this._lifecycleHandle = null;
     }
 
@@ -508,8 +528,40 @@ export class Bot {
     // TLS-consistent view for the rest of the session.
     this.applySTSPolicyToConfig();
 
+    // Defensive idempotency: if connect() is ever called twice (future STS
+    // path, manual .reconnect command), tear down the prior driver and
+    // lifecycle handle so we don't stack listeners or leak a retry timer.
+    if (this._reconnectDriver) {
+      this._reconnectDriver.cancel();
+      this._reconnectDriver = null;
+    }
+    if (this._lifecycleHandle) {
+      this._lifecycleHandle.stopPresenceCheck();
+      this._lifecycleHandle.removeListeners();
+      this._lifecycleHandle = null;
+    }
+
     const options = this.buildClientOptions();
     this.botLogger.info(`Connecting to ${this.config.irc.host}:${this.config.irc.port}...`);
+    // Construct the reconnect driver lazily here so `.start()` owns its
+    // lifecycle. The driver's connect callback re-opens the socket using
+    // the latest options (STS upgrades mutate this.config between retries).
+    this._reconnectDriver = createReconnectDriver({
+      connect: () => {
+        this.botLogger.info(`Reconnect attempt to ${this.config.irc.host}:${this.config.irc.port}`);
+        this.client.connect(this.buildClientOptions());
+      },
+      logger: this.botLogger,
+      eventBus: this.eventBus,
+      config: {
+        transient_initial_ms: 1_000,
+        transient_max_ms: 30_000,
+        rate_limited_initial_ms: 300_000,
+        rate_limited_max_ms: 1_800_000,
+        jitter_ms: 5_000,
+      },
+      exit: (code) => process.exit(code),
+    });
     return new Promise<void>((resolve, reject) => {
       this._lifecycleHandle = registerConnectionEvents(
         {
@@ -517,6 +569,7 @@ export class Bot {
           config: this.config,
           configuredChannels: this.configuredChannels,
           eventBus: this.eventBus,
+          reconnectDriver: this._reconnectDriver!,
           applyCasemapping: (cm) => {
             this._casemapping = cm;
             this.channelState.setCasemapping(cm);
@@ -571,7 +624,6 @@ export class Bot {
           dispatcher: this.dispatcher,
           channelState: this.channelState,
           logger: this.botLogger,
-          reconnect: () => this.client.connect(),
         },
         resolve,
         reject,
@@ -629,9 +681,11 @@ export class Bot {
       nick: cfg.nick,
       username: cfg.username,
       gecos: cfg.realname,
-      auto_reconnect: true,
-      auto_reconnect_max_wait: 30000,
-      auto_reconnect_max_retries: 10,
+      // HexBot owns the reconnect loop via src/core/reconnect-driver.ts —
+      // irc-framework's auto_reconnect gives up when a reconnect reaches
+      // TCP-connected but fails to complete IRC registration, leaving the
+      // process as a zombie (2026-04-13 incident).
+      auto_reconnect: false,
       // Disable irc-framework's built-in CTCP VERSION reply —
       // we handle it ourselves in irc-bridge.ts via the dispatcher
       version: null,

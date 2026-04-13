@@ -3,6 +3,7 @@
 import type { CommandHandler } from '../../command-handler';
 import { isValidCommandTarget, parseTargetMessage } from '../../utils/parse-args';
 import { sanitize } from '../../utils/sanitize';
+import type { ReconnectState } from '../reconnect-driver';
 
 /** Minimal IRC client interface for admin commands. */
 export interface AdminIRCClient {
@@ -20,6 +21,8 @@ export interface AdminBotInfo {
   getChannels(): string[];
   getBindCount(): number;
   getUserCount(): number;
+  /** Current reconnect-driver state, or null if the bot hasn't connected yet. */
+  getReconnectState(): ReconnectState | null;
 }
 
 /**
@@ -158,6 +161,7 @@ export function registerIRCAdminCommands(
       const channels = botInfo.getChannels();
       const binds = botInfo.getBindCount();
       const users = botInfo.getUserCount();
+      const reconnectState = botInfo.getReconnectState();
 
       const lines = [
         `Status: ${connected} as ${nick}`,
@@ -165,9 +169,45 @@ export function registerIRCAdminCommands(
         `Channels: ${channels.length > 0 ? channels.join(', ') : '(none)'}`,
         `Binds: ${binds} | Users: ${users}`,
       ];
+      if (reconnectState) {
+        lines.push(`Connection: ${formatReconnectState(reconnectState)}`);
+      }
       ctx.reply(lines.join('\n'));
     },
   );
+}
+
+/**
+ * Render the reconnect driver state for the `.status` command. Returns
+ * a single human-readable line — never more — since `.status` stacks
+ * short labelled lines.
+ */
+export function formatReconnectState(state: ReconnectState): string {
+  if (state.status === 'connected') {
+    return 'connected';
+  }
+  if (state.status === 'stopped') {
+    return 'stopped';
+  }
+  // reconnecting or degraded — include tier, failure count, and next retry
+  const errorPart = state.lastError ? `${state.lastError}, ` : '';
+  const failurePart =
+    state.consecutiveFailures > 1 ? `${state.consecutiveFailures} consecutive failures, ` : '';
+  const nextPart = state.nextAttemptAt
+    ? `next retry in ${formatDelay(state.nextAttemptAt - Date.now())}`
+    : 'retry pending';
+  return `${state.status} (${errorPart}${failurePart}${nextPart})`;
+}
+
+/** Format a millisecond delta as the shortest sensible "5s" / "3m" / "1h" string. */
+function formatDelay(ms: number): string {
+  if (ms < 0) return '0s';
+  const seconds = Math.ceil(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.ceil(minutes / 60);
+  return `${hours}h`;
 }
 
 function formatUptime(ms: number): string {

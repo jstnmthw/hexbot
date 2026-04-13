@@ -4,8 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type ConnectionLifecycleDeps,
   type LifecycleIRCClient,
+  type ReconnectPolicy,
+  classifyCloseReason,
   registerConnectionEvents,
 } from '../../src/core/connection-lifecycle';
+import type { ReconnectDriver, ReconnectState } from '../../src/core/reconnect-driver';
 import { BotEventBus } from '../../src/event-bus';
 import type { Logger } from '../../src/logger';
 import type { BotConfig } from '../../src/types';
@@ -56,6 +59,36 @@ const MINIMAL_BOT_CONFIG: BotConfig = {
 
 const makeLogger = createMockLogger;
 
+interface MockReconnectDriver extends ReconnectDriver {
+  onDisconnect: ReturnType<typeof vi.fn<(policy: ReconnectPolicy) => void>>;
+  onConnected: ReturnType<typeof vi.fn<() => void>>;
+  cancel: ReturnType<typeof vi.fn<() => void>>;
+  lastPolicy: ReconnectPolicy | null;
+}
+
+function makeMockDriver(): MockReconnectDriver {
+  let lastPolicy: ReconnectPolicy | null = null;
+  const state: ReconnectState = {
+    status: 'connected',
+    lastError: null,
+    lastErrorTier: null,
+    consecutiveFailures: 0,
+    nextAttemptAt: null,
+    attemptCount: 0,
+  };
+  const driver: MockReconnectDriver = {
+    onDisconnect: vi.fn((policy: ReconnectPolicy) => {
+      lastPolicy = policy;
+      driver.lastPolicy = policy;
+    }),
+    onConnected: vi.fn(() => {}),
+    cancel: vi.fn(() => {}),
+    getState: () => state,
+    lastPolicy,
+  };
+  return driver;
+}
+
 interface TestContext {
   client: MockClient;
   eventBus: BotEventBus;
@@ -63,6 +96,7 @@ interface TestContext {
   applyCasemapping: ReturnType<typeof vi.fn>;
   messageQueue: { clear: ReturnType<typeof vi.fn> };
   dispatcher: { bind: ReturnType<typeof vi.fn> };
+  reconnectDriver: MockReconnectDriver;
   deps: ConnectionLifecycleDeps;
 }
 
@@ -73,6 +107,7 @@ function makeContext(overrides?: Partial<ConnectionLifecycleDeps>): TestContext 
   const applyCasemapping = vi.fn();
   const messageQueue = { clear: vi.fn() };
   const dispatcher = { bind: vi.fn() };
+  const reconnectDriver = makeMockDriver();
 
   const deps: ConnectionLifecycleDeps = {
     client,
@@ -84,10 +119,20 @@ function makeContext(overrides?: Partial<ConnectionLifecycleDeps>): TestContext 
     messageQueue,
     dispatcher,
     logger,
+    reconnectDriver,
     ...overrides,
   };
 
-  return { client, eventBus, logger, applyCasemapping, messageQueue, dispatcher, deps };
+  return {
+    client,
+    eventBus,
+    logger,
+    applyCasemapping,
+    messageQueue,
+    dispatcher,
+    reconnectDriver,
+    deps,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -406,209 +451,95 @@ describe('registerConnectionEvents', () => {
         () => {},
       );
       client.emit('close');
-      expect(handler).toHaveBeenCalledWith('connection failed: no error detail from server');
+      expect(handler).toHaveBeenCalledWith('connection closed');
     });
 
-    it('includes IRC ERROR reason when close fires before registration', () => {
-      const { client, deps, eventBus } = makeContext();
+    it('forwards the IRC ERROR reason to the driver', () => {
+      const { client, deps, eventBus, reconnectDriver } = makeContext();
       const handler = vi.fn();
       eventBus.on('bot:disconnected', handler);
-      const reject = vi.fn();
-      registerConnectionEvents(deps, () => {}, reject);
-      // Server sends ERROR before closing
+      registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
       client.emit('irc error', { error: 'irc', reason: 'Closing Link: (Throttled)' });
       client.emit('close');
-      expect(handler).toHaveBeenCalledWith('connection failed: Closing Link: (Throttled)');
-      expect(reject).toHaveBeenCalledWith(
-        expect.objectContaining({ message: 'Connection failed: Closing Link: (Throttled)' }),
-      );
+      expect(handler).toHaveBeenCalledWith('Closing Link: (Throttled)');
+      expect(reconnectDriver.onDisconnect).toHaveBeenCalledOnce();
+      const policy = reconnectDriver.onDisconnect.mock.calls[0][0];
+      expect(policy.tier).toBe('rate-limited');
     });
 
-    it('includes socket error reason when close fires before registration', () => {
-      const { client, deps, eventBus } = makeContext();
-      const handler = vi.fn();
-      eventBus.on('bot:disconnected', handler);
-      const reject = vi.fn();
-      registerConnectionEvents(deps, () => {}, reject);
-      client.emit('socket error', new Error('unable to verify the first certificate'));
+    it('delegates a post-registration close to the driver as transient by default', () => {
+      const { client, deps, reconnectDriver } = makeContext();
+      registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      client.emit('registered');
+      client.emit('close'); // no ERROR reason
+      expect(reconnectDriver.onDisconnect).toHaveBeenCalledOnce();
+      const policy = reconnectDriver.onDisconnect.mock.calls[0][0];
+      expect(policy.tier).toBe('transient');
+    });
+
+    it('delegates a K-lined close to the driver as rate-limited (no exit)', () => {
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+      try {
+        const { client, deps, reconnectDriver } = makeContext();
+        registerConnectionEvents(
+          deps,
+          () => {},
+          () => {},
+        );
+        client.emit('irc error', {
+          error: 'irc',
+          reason: 'Closing Link: 1.2.3.4 (K-Lined: spam)',
+        });
+        client.emit('close');
+        expect(reconnectDriver.onDisconnect).toHaveBeenCalledOnce();
+        const policy = reconnectDriver.onDisconnect.mock.calls[0][0];
+        expect(policy.tier).toBe('rate-limited');
+        expect('label' in policy ? policy.label : null).toBe('K-Lined');
+        // Lifecycle no longer calls process.exit — the driver is responsible
+        // for fatal tiers, and this isn't one.
+        expect(exitSpy).not.toHaveBeenCalled();
+      } finally {
+        exitSpy.mockRestore();
+      }
+    });
+
+    it('delegates a K-lined close AFTER registration to the driver', () => {
+      const { client, deps, reconnectDriver } = makeContext();
+      registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      client.emit('registered');
+      client.emit('irc error', {
+        error: 'irc',
+        reason: 'Closing Link: 1.2.3.4 (K-Lined: spam)',
+      });
       client.emit('close');
-      expect(handler).toHaveBeenCalledWith(
-        'connection failed: unable to verify the first certificate',
-      );
+      expect(reconnectDriver.onDisconnect).toHaveBeenCalledOnce();
+      expect(reconnectDriver.onDisconnect.mock.calls[0][0].tier).toBe('rate-limited');
     });
 
-    it('exits when close fires after registration with no pending reconnect', () => {
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
-      try {
-        const { client, deps, eventBus } = makeContext();
-        const handler = vi.fn();
-        eventBus.on('bot:disconnected', handler);
-        registerConnectionEvents(
-          deps,
-          () => {},
-          () => {},
-        );
-        client.emit('registered');
-        client.emit('close'); // no preceding 'reconnecting' → retries exhausted
-        expect(exitSpy).toHaveBeenCalledWith(1);
-        expect(handler).toHaveBeenCalledWith('reconnect attempts exhausted');
-      } finally {
-        exitSpy.mockRestore();
-      }
-    });
-
-    it('does not exit when close follows a reconnecting event', () => {
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
-      try {
-        const { client, deps } = makeContext();
-        registerConnectionEvents(
-          deps,
-          () => {},
-          () => {},
-        );
-        client.emit('registered');
-        client.emit('reconnecting'); // irc-framework signals retry
-        client.emit('close');
-        expect(exitSpy).not.toHaveBeenCalled();
-      } finally {
-        exitSpy.mockRestore();
-      }
-    });
-
-    it('does not exit on close before registration (startup failure)', () => {
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
-      try {
-        const { client, deps } = makeContext();
-        registerConnectionEvents(
-          deps,
-          () => {},
-          () => {},
-        );
-        client.emit('close'); // before registered — not a zombie
-        expect(exitSpy).not.toHaveBeenCalled();
-      } finally {
-        exitSpy.mockRestore();
-      }
-    });
-
-    it('exits immediately on a K-lined close reason without retrying (§9)', () => {
-      // K-line / G-line / DNSBL responses should not burn retry attempts.
-      // The bot exits non-zero and supervisord decides whether to resurrect it.
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
-      try {
-        const { client, deps } = makeContext();
-        const reconnect = vi.fn();
-        (deps as { reconnect?: () => void }).reconnect = reconnect;
-        registerConnectionEvents(
-          deps,
-          () => {},
-          () => {},
-        );
-        client.emit('irc error', {
-          error: 'irc',
-          reason: 'Closing Link: 1.2.3.4 (K-Lined: spam)',
-        });
-        client.emit('close');
-        expect(exitSpy).toHaveBeenCalledWith(1);
-        expect(reconnect).not.toHaveBeenCalled();
-      } finally {
-        exitSpy.mockRestore();
-      }
-    });
-
-    it('exits immediately on a K-lined close AFTER registration', () => {
-      // Post-registration ban: bot was K-lined while connected.
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
-      try {
-        const { client, deps } = makeContext();
-        registerConnectionEvents(
-          deps,
-          () => {},
-          () => {},
-        );
-        // First, register successfully
-        client.emit('registered');
-        // Then receive a K-line error and close
-        client.emit('irc error', {
-          error: 'irc',
-          reason: 'Closing Link: 1.2.3.4 (K-Lined: spam)',
-        });
-        client.emit('close');
-        expect(exitSpy).toHaveBeenCalledWith(1);
-      } finally {
-        exitSpy.mockRestore();
-      }
-    });
-
-    it('applies a longer backoff for a Throttled close reason (§9)', () => {
-      vi.useFakeTimers();
-      try {
-        const { client, deps } = makeContext();
-        const reconnect = vi.fn();
-        (deps as { reconnect?: () => void }).reconnect = reconnect;
-        registerConnectionEvents(
-          deps,
-          () => {},
-          () => {},
-        );
-        client.emit('irc error', {
-          error: 'irc',
-          reason: 'Closing Link: 1.2.3.4 (Throttled: reconnecting too fast)',
-        });
-        client.emit('close');
-        // Default first attempt would be ~2s + jitter; throttled multiplies by 4
-        // so we expect reconnect to NOT fire until significantly later than 2s.
-        vi.advanceTimersByTime(3_000);
-        expect(reconnect).not.toHaveBeenCalled();
-        vi.advanceTimersByTime(20_000);
-        expect(reconnect).toHaveBeenCalledOnce();
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it('uses normal backoff for an unrecognised close reason', () => {
-      vi.useFakeTimers();
-      try {
-        const { client, deps } = makeContext();
-        const reconnect = vi.fn();
-        (deps as { reconnect?: () => void }).reconnect = reconnect;
-        registerConnectionEvents(
-          deps,
-          () => {},
-          () => {},
-        );
-        client.emit('irc error', {
-          error: 'irc',
-          reason: 'Closing Link: transient glitch',
-        });
-        client.emit('close');
-        // First retry uses a ~4s base (2^2) + jitter. Advance enough to
-        // be sure reconnect has fired.
-        vi.advanceTimersByTime(10_000);
-        expect(reconnect).toHaveBeenCalledOnce();
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-  });
-
-  describe('reconnecting event', () => {
-    it('clears the message queue', () => {
+    it('clears the message queue on every close', () => {
       const { client, deps, messageQueue } = makeContext();
       registerConnectionEvents(
         deps,
         () => {},
         () => {},
       );
-      client.emit('reconnecting');
+      client.emit('close');
       expect(messageQueue.clear).toHaveBeenCalledOnce();
     });
 
-    it('invokes onReconnecting so identity caches can drop before retry (§7)', () => {
-      // Without clearing networkAccounts on reconnect, a user who took a
-      // known op's nick between sessions would inherit their permissions
-      // when account data flowed through the new session.
+    it('invokes onReconnecting on every close so identity caches drop (§7)', () => {
       const onReconnecting = vi.fn();
       const { client, deps } = makeContext({ onReconnecting });
       registerConnectionEvents(
@@ -616,38 +547,23 @@ describe('registerConnectionEvents', () => {
         () => {},
         () => {},
       );
-      client.emit('reconnecting');
+      client.emit('close');
       expect(onReconnecting).toHaveBeenCalledOnce();
     });
   });
 
   describe('socket error event', () => {
-    it('calls reject with the Error before registration', () => {
-      const { client, deps } = makeContext();
-      const reject = vi.fn();
-      registerConnectionEvents(deps, () => {}, reject);
-      client.emit('socket error', new Error('ECONNREFUSED'));
-      expect(reject).toHaveBeenCalledOnce();
-      expect((reject.mock.calls[0][0] as Error).message).toBe('ECONNREFUSED');
-    });
-
-    it('wraps a non-Error value in an Error', () => {
-      const { client, deps } = makeContext();
-      const reject = vi.fn();
-      registerConnectionEvents(deps, () => {}, reject);
-      client.emit('socket error', 'plain string');
-      const err = reject.mock.calls[0][0] as Error;
-      expect(err).toBeInstanceOf(Error);
-      expect(err.message).toBe('plain string');
-    });
-
-    it('does not call reject after registration', () => {
-      const { client, deps } = makeContext();
-      const reject = vi.fn();
-      registerConnectionEvents(deps, () => {}, reject);
-      client.emit('registered');
-      client.emit('socket error', new Error('SSL_ERROR'));
-      expect(reject).not.toHaveBeenCalled();
+    it('captures the socket error for driver classification', () => {
+      const { client, deps, reconnectDriver } = makeContext();
+      registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      client.emit('socket error', new Error('unable to verify the first certificate'));
+      client.emit('close');
+      const policy = reconnectDriver.onDisconnect.mock.calls[0][0];
+      expect(policy.tier).toBe('fatal');
     });
 
     it('emits bot:error with the error object', () => {
@@ -828,42 +744,68 @@ describe('registerConnectionEvents', () => {
       expect(client.listenerCount('registered')).toBe(0);
       expect(client.listenerCount('close')).toBe(0);
       expect(client.listenerCount('irc error')).toBe(0);
-      expect(client.listenerCount('reconnecting')).toBe(0);
       expect(client.listenerCount('socket error')).toBe(0);
       expect(client.listenerCount('unknown command')).toBe(0);
     });
 
-    it('cancelStartupRetry() is a no-op when no retry is pending', () => {
-      const { deps } = makeContext();
+    it('cancelReconnect() forwards to the driver', () => {
+      const { deps, reconnectDriver } = makeContext();
       const handle = registerConnectionEvents(
         deps,
         () => {},
         () => {},
       );
-      // No close event → no retry timer → cancelStartupRetry should be safe
-      handle.cancelStartupRetry();
+      handle.cancelReconnect();
+      expect(reconnectDriver.cancel).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('classifyCloseReason', () => {
+    const cases: Array<[string, ReconnectPolicy['tier'], string | undefined]> = [
+      // Transient — unknown / well-known non-fatal causes
+      ['ping timeout', 'transient', 'ping timeout'],
+      ['Registration timed out', 'transient', 'registration timeout'],
+      ['Server shutting down', 'transient', 'server shutting down'],
+      ['Restart in progress', 'transient', 'server restart'],
+      ['some garbage nobody has seen before', 'transient', undefined],
+      // Rate-limited — K/G/Z line, DNSBL, throttle
+      ['Closing Link: K-Lined: spam', 'rate-limited', 'K-Lined'],
+      ['Closing Link: G-Lined', 'rate-limited', 'G-Lined'],
+      ['Closing Link: Z-Lined', 'rate-limited', 'Z-Lined'],
+      ['Banned from server', 'rate-limited', 'banned from server'],
+      ['You are not welcome on this network', 'rate-limited', 'banned from server'],
+      ['Your IP is listed in DNSBL', 'rate-limited', 'blocked by DNSBL'],
+      ['Throttled: reconnecting too fast', 'rate-limited', 'throttled'],
+      ['Too many connections from your IP', 'rate-limited', 'too many connections'],
+      ['Excess Flood', 'rate-limited', 'excess flood'],
+      // Fatal — SASL / TLS
+      ['SASL authentication failed', 'fatal', 'SASL authentication failed'],
+      ['SASL failed: invalid credentials', 'fatal', 'SASL authentication failed'],
+      ['SASL mechanism not supported', 'fatal', 'SASL mechanism not supported'],
+      ['unable to verify the first certificate', 'fatal', 'TLS certificate untrusted'],
+      ["Hostname/IP does not match certificate's altnames", 'fatal', 'TLS hostname mismatch'],
+      ['CERT_HAS_EXPIRED', 'fatal', 'TLS certificate expired'],
+    ];
+
+    it.each(cases)('%s → tier %s (label: %s)', (reason, tier, label) => {
+      const policy = classifyCloseReason(reason);
+      expect(policy.tier).toBe(tier);
+      if (label !== undefined) {
+        expect('label' in policy ? policy.label : undefined).toBe(label);
+      }
     });
 
-    it('cancelStartupRetry() prevents a pending retry from firing', () => {
-      vi.useFakeTimers();
-      try {
-        const reconnect = vi.fn();
-        const { client, deps } = makeContext({ reconnect });
-        const handle = registerConnectionEvents(
-          deps,
-          () => {},
-          () => {},
-        );
+    it('null reason → transient with no label', () => {
+      const policy = classifyCloseReason(null);
+      expect(policy.tier).toBe('transient');
+      expect('label' in policy ? policy.label : undefined).toBeUndefined();
+    });
 
-        // Trigger a close before registration to schedule a retry
-        client.emit('close');
-
-        handle.cancelStartupRetry();
-        vi.advanceTimersByTime(120_000);
-
-        expect(reconnect).not.toHaveBeenCalled();
-      } finally {
-        vi.useRealTimers();
+    it('fatal policy carries exitCode 2', () => {
+      const policy = classifyCloseReason('SASL authentication failed');
+      expect(policy.tier).toBe('fatal');
+      if (policy.tier === 'fatal') {
+        expect(policy.exitCode).toBe(2);
       }
     });
   });

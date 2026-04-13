@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Reconnect loop rewritten** (`src/core/reconnect-driver.ts`, `src/core/connection-lifecycle.ts`, `src/bot.ts`): HexBot now owns the IRC reconnect loop end-to-end. irc-framework's built-in `auto_reconnect` is disabled because it silently gave up when a reconnect reached TCP-connected but failed to complete IRC registration, leaving the process as a zombie (2026-04-13 incident). Disconnects are classified into three tiers: **transient** (ping timeout, TCP hiccup, unknown) retries with 1s→30s backoff; **rate-limited** (K/G-line, DNSBL, Throttled) retries indefinitely with 5min→30min backoff and flips `.status` to `degraded` after 3 consecutive failures; **fatal** (SASL 904/908, TLS cert errors) exits with code 2 so a supervisor can page someone instead of the bot silently locking an account. K-lines and DNSBL blocks no longer cause the bot to exit — they expire on their own, so the bot now recovers automatically. New `Connection:` line in `.status` shows current state, last error, consecutive failure count, and time until next retry.
+
 ### BREAKING
 
 - **DCC CHAT now requires per-user passwords** (following the Eggdrop model). The old hostmask-only trust path has been removed. Existing user records have no `password_hash` on file and **will be blocked from DCC until an admin sets one**. Migration:
