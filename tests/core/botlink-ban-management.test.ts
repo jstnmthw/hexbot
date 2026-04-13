@@ -111,14 +111,14 @@ describe('BotLinkHub — link ban management', () => {
   describe('unban', () => {
     it('removes a manual single IP ban', () => {
       hub.manualBan('10.0.0.99', 0, 'test', 'admin');
-      hub.unban('10.0.0.99');
+      hub.unban('10.0.0.99', 'admin');
       expect(hub.getAuthBans()).toHaveLength(0);
       expect(db.get('_linkbans', '10.0.0.99')).toBeNull();
     });
 
     it('removes a manual CIDR ban', () => {
       hub.manualBan('172.16.0.0/24', 0, 'test', 'admin');
-      hub.unban('172.16.0.0/24');
+      hub.unban('172.16.0.0/24', 'admin');
       expect(hub.getAuthBans()).toHaveLength(0);
       expect(db.get('_linkbans', '172.16.0.0/24')).toBeNull();
     });
@@ -127,7 +127,7 @@ describe('BotLinkHub — link ban management', () => {
       const spy = vi.fn();
       eventBus.on('auth:unban', spy);
       hub.manualBan('10.0.0.99', 0, 'test', 'admin');
-      hub.unban('10.0.0.99');
+      hub.unban('10.0.0.99', 'admin');
       expect(spy).toHaveBeenCalledWith('10.0.0.99');
     });
   });

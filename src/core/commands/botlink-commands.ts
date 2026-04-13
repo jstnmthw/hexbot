@@ -195,7 +195,7 @@ function handleBotlinkUnban(
     ctx.reply('Usage: .botlink unban <ip|cidr>');
     return;
   }
-  h.unban(unbanIp);
+  h.unban(unbanIp, ctx.nick);
   ctx.reply(`Unbanned ${unbanIp}.`);
 }
 

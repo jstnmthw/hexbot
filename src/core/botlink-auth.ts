@@ -131,6 +131,7 @@ export class BotLinkAuthManager {
   private readonly config: BotlinkConfig;
   private readonly logger: Logger | null;
   private readonly eventBus: BotEventBus | null;
+  private readonly db: BotDatabase | null;
   private readonly expectedHash: string;
   private readonly authTracker: Map<string, AuthTracker> = new Map();
   private readonly pendingHandshakes: Map<string, number> = new Map();
@@ -147,6 +148,7 @@ export class BotLinkAuthManager {
     this.config = config;
     this.logger = logger;
     this.eventBus = eventBus;
+    this.db = db;
     this.expectedHash = hashPassword(config.password);
     this.linkBanStore = db
       ? new AdminListStore<LinkBan>(db, {
@@ -396,12 +398,12 @@ export class BotLinkAuthManager {
       this.authTracker.set(ip, tracker);
     }
 
-    this.logger?.info(`Manual ban: ${ip} by ${setBy} (${reason})`);
+    this.recordModAction('botlink-ban', ip, setBy, reason);
     this.eventBus?.emit('auth:ban', ip, 0, durationMs);
   }
 
   /** Remove a ban (auto or manual) for an IP or CIDR. */
-  unban(ip: string): void {
+  unban(ip: string, by: string): void {
     // Remove from authTracker (single IPs)
     this.authTracker.delete(ip);
     // Remove from CIDR map
@@ -409,8 +411,20 @@ export class BotLinkAuthManager {
     // Remove from DB
     this.linkBanStore?.del(ip);
 
-    this.logger?.info(`Unbanned: ${ip}`);
+    this.recordModAction('botlink-unban', ip, by, null);
     this.eventBus?.emit('auth:unban', ip);
+  }
+
+  /**
+   * Write a mod_log row for a manual ban action. Wrapped so a DB error
+   * never prevents the ban/unban from taking effect in memory.
+   */
+  private recordModAction(action: string, target: string, by: string, detail: string | null): void {
+    try {
+      this.db?.logModAction(action, null, target, by, detail);
+    } catch (err) {
+      this.logger?.warn(`Failed to record mod_log entry for ${action}:`, err);
+    }
   }
 
   /** Load persisted manual bans from DB into the hot path on startup. */

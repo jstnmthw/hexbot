@@ -475,8 +475,8 @@ export class BotLinkHub {
   }
 
   /** Remove a ban (auto or manual) for an IP or CIDR. */
-  unban(ip: string): void {
-    this.auth.unban(ip);
+  unban(ip: string, by: string): void {
+    this.auth.unban(ip, by);
   }
 
   /** Shut down the hub: close all leaf connections and the server. */
