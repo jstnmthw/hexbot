@@ -660,7 +660,7 @@ export class DCCSession implements DCCSessionEntry {
       `  ${lbl('Session')}${B}${this.handle}${B} (${this.nick}!${this.ident}@${this.hostname})`,
     );
     this.writeLine(`  ${lbl('Flags')}${flagDisplay}`);
-    this.writeLine(`  ${lbl('ConFlags')}${consoleDisplay}`);
+    this.writeLine(`  ${lbl('Console')}${consoleDisplay}`);
     if (stats) {
       const chanList = stats.channels.length > 0 ? stats.channels.join(', ') : grey('none');
       this.writeLine(
@@ -672,7 +672,7 @@ export class DCCSession implements DCCSessionEntry {
       this.writeLine(`  ${lbl('Users')}${B}${stats.userCount}${B} registered`);
       this.writeLine(`  ${lbl('Uptime')}${formatUptime(stats.uptime)}`);
     }
-    this.writeLine(`  ${lbl('Console')}${consoleLine}`);
+    this.writeLine(`  ${lbl('Online')}${consoleLine}`);
 
     // Quick-start commands
     this.writeLine('');
