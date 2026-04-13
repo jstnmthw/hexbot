@@ -5,16 +5,12 @@
 // user's password; anyone can rotate their own). IRC PRIVMSG is explicitly
 // rejected to keep plaintext passwords off the wire.
 import type { CommandContext, CommandHandler } from '../../command-handler';
-import type { BotDatabase } from '../../database';
-import type { Logger } from '../../logger';
 import { hashPassword } from '../password';
 import type { Permissions } from '../permissions';
 
 export interface PasswordCommandDeps {
   handler: CommandHandler;
   permissions: Permissions;
-  db: BotDatabase | null;
-  logger?: Logger | null;
 }
 
 /**
@@ -26,9 +22,11 @@ export interface PasswordCommandDeps {
  *
  * The command never relays to a hub: passwords are per-bot secrets. The
  * `relayToHub` flag is intentionally omitted so a leaf's `.chpass` stays local.
+ * The mod_log row is written by {@link Permissions.setPasswordHash} so every
+ * password rotation — regardless of caller — lands in the audit trail.
  */
 export function registerPasswordCommands(deps: PasswordCommandDeps): void {
-  const { handler, permissions, db, logger } = deps;
+  const { handler, permissions } = deps;
 
   handler.registerCommand(
     'chpass',
@@ -112,14 +110,6 @@ export function registerPasswordCommands(deps: PasswordCommandDeps): void {
 
       const source = ctx.source === 'repl' ? 'REPL' : ctx.nick;
       permissions.setPasswordHash(targetHandle, hash, source);
-
-      // mod_log — record handle, set_by, timestamp (db does the ts). Never store
-      // the plaintext or hash here.
-      try {
-        db?.logModAction('chpass', null, targetHandle, source, null);
-      } catch (err) {
-        logger?.warn('Failed to log .chpass mod action:', err);
-      }
 
       if (isSelfRotation) {
         ctx.reply(`chpass: your password has been updated.`);

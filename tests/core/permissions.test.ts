@@ -813,11 +813,11 @@ describe('Permissions', () => {
       expect(eventBus.emit).toHaveBeenCalledWith('user:passwordChanged', 'admin');
     });
 
-    it('never logs the hash in set/clear messages', () => {
+    it('never records the hash in logs or mod_log', () => {
       const logs: string[] = [];
       const mockLogger = {
         info: (msg: string) => logs.push(msg),
-        warn: () => {},
+        warn: (msg: string) => logs.push(msg),
         debug: () => {},
         error: () => {},
         child: () => mockLogger,
@@ -831,6 +831,9 @@ describe('Permissions', () => {
       for (const line of logs) {
         expect(line).not.toContain('scrypt$deadbeef$cafe');
       }
+      const modLog = db.getModLog();
+      const serialized = JSON.stringify(modLog);
+      expect(serialized).not.toContain('scrypt$deadbeef$cafe');
     });
   });
 

@@ -270,8 +270,6 @@ export class Bot {
     registerPasswordCommands({
       handler: this.commandHandler,
       permissions: this.permissions,
-      db: this.db,
-      logger: this.logger,
     });
     registerDispatcherCommands(this.commandHandler, this.dispatcher);
     registerIRCAdminCommands(this.commandHandler, this.client, {

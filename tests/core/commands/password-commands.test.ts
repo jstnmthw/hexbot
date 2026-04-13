@@ -16,10 +16,10 @@ function makeCtx(overrides: Partial<CommandContext> = {}): CtxWithMocks {
 
 function setup() {
   const handler = new CommandHandler();
-  const perms = new Permissions();
   const db = new BotDatabase(':memory:');
   db.open();
-  registerPasswordCommands({ handler, permissions: perms, db });
+  const perms = new Permissions(db);
+  registerPasswordCommands({ handler, permissions: perms });
   return { handler, perms, db };
 }
 
@@ -202,13 +202,14 @@ describe('.chpass', () => {
   describe('mod_log resilience', () => {
     it('still replies success if db.logModAction throws', async () => {
       const handler = new CommandHandler();
-      const perms = new Permissions();
-      perms.addUser('admin', '*!a@host', 'n', 'REPL');
 
       const throwingDb = {
         logModAction: vi.fn(() => {
           throw new Error('database offline');
         }),
+        list: () => [],
+        del: () => {},
+        set: () => {},
       } as unknown as BotDatabase;
       const warns: unknown[][] = [];
       const logger = {
@@ -219,7 +220,10 @@ describe('.chpass', () => {
         child: () => logger,
       } as unknown as import('../../../src/logger').Logger;
 
-      registerPasswordCommands({ handler, permissions: perms, db: throwingDb, logger });
+      const perms = new Permissions(throwingDb, logger);
+      perms.addUser('admin', '*!a@host', 'n', 'REPL');
+
+      registerPasswordCommands({ handler, permissions: perms });
 
       const ctx = makeCtx();
       await handler.execute('.chpass admin resilientpassword', ctx);
@@ -227,7 +231,7 @@ describe('.chpass', () => {
       // Password was still set despite the mod_log failure
       expect(perms.getPasswordHash('admin')).not.toBeNull();
       // The warn logger should have been called with a descriptive message
-      expect(warns.some((args) => String(args[0]).includes('Failed to log'))).toBe(true);
+      expect(warns.some((args) => String(args[0]).includes('Failed to record'))).toBe(true);
       // The user should have been told the password was updated
       expect(ctx.reply.mock.calls.some(([msg]) => String(msg).includes('updated'))).toBe(true);
     });
