@@ -78,7 +78,16 @@ export interface PluginApiDeps {
   getServerSupports: () => Record<string, string>;
   /** Shared map of onModesReady listeners, keyed by pluginId, for cleanup on unload. */
   modesReadyListeners: Map<string, Array<(channel: string) => void>>;
+  /** Shared map of onPermissionsChanged listeners, keyed by pluginId, for cleanup on unload. */
+  permissionsChangedListeners: Map<string, Array<(handle: string) => void>>;
 }
+
+/** Internal fan-out list for the permissions-change listener wiring. */
+const PERMISSIONS_CHANGE_EVENTS = [
+  'user:added',
+  'user:flagsChanged',
+  'user:hostmaskAdded',
+] as const;
 
 // ---------------------------------------------------------------------------
 // Main factory
@@ -186,6 +195,7 @@ export function createPluginApi(
       deps.eventBus,
       pluginId,
       deps.modesReadyListeners,
+      deps.permissionsChangedListeners,
     ),
     permissions: createPluginPermissionsApi(deps.permissions),
     services: createPluginServicesApi(deps.services),
@@ -436,7 +446,11 @@ function createPluginChannelStateApi(
   eventBus: BotEventBus,
   pluginId: string,
   modesReadyListeners: Map<string, Array<(channel: string) => void>>,
-): Pick<PluginAPI, 'getChannel' | 'getUsers' | 'getUserHostmask' | 'onModesReady'> {
+  permissionsChangedListeners: Map<string, Array<(handle: string) => void>>,
+): Pick<
+  PluginAPI,
+  'getChannel' | 'getUsers' | 'getUserHostmask' | 'onModesReady' | 'onPermissionsChanged'
+> {
   return {
     onModesReady(callback: (channel: string) => void): void {
       const wrappedListener = (...args: unknown[]) => callback(args[0] as string);
@@ -444,6 +458,17 @@ function createPluginChannelStateApi(
       const list = modesReadyListeners.get(pluginId) ?? [];
       list.push(wrappedListener);
       modesReadyListeners.set(pluginId, list);
+    },
+    onPermissionsChanged(callback: (handle: string) => void): void {
+      // One wrapper fans three events into the plugin callback. All three
+      // carry `handle` as arg 0, which is the only field we surface.
+      const wrappedListener = (...args: unknown[]) => callback(args[0] as string);
+      for (const ev of PERMISSIONS_CHANGE_EVENTS) {
+        eventBus.on(ev, wrappedListener);
+      }
+      const list = permissionsChangedListeners.get(pluginId) ?? [];
+      list.push(wrappedListener);
+      permissionsChangedListeners.set(pluginId, list);
     },
     getChannel(name: string) {
       if (!channelState) return undefined;

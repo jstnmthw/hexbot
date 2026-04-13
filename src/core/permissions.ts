@@ -95,13 +95,18 @@ export class Permissions {
     this.persist();
 
     const by = source ?? 'unknown';
-    this.logger?.info(`User added: ${handle} (${hostmask}, flags: ${flags}) by ${by}`);
+    this.recordModAction('adduser', null, handle, by, `hostmask=${hostmask} flags=${flags}`);
     this.eventBus?.emit('user:added', handle);
   }
 
   /**
    * Add or replace a user from a bot-link sync frame.
    * Unlike addUser(), does not throw if the user already exists.
+   *
+   * Emits `user:flagsChanged` so downstream listeners (e.g. chanmod's auto-op
+   * reconciler on the leaf) can react to the sync immediately. Safe because
+   * only botlink-hub listens to this event for rebroadcast, and a leaf never
+   * runs a hub — so there's no echo loop.
    */
   syncUser(
     handle: string,
@@ -117,6 +122,7 @@ export class Permissions {
 
     const by = source ?? 'botlink';
     this.logger?.info(`User synced: ${handle} (flags: ${flags}) from ${by}`);
+    this.eventBus?.emit('user:flagsChanged', handle, flags, channelFlags);
   }
 
   /** Remove a user by handle. */
@@ -129,7 +135,7 @@ export class Permissions {
     this.persist();
 
     const by = source ?? 'unknown';
-    this.logger?.info(`User removed: ${handle} by ${by}`);
+    this.recordModAction('deluser', null, handle, by, null);
     this.eventBus?.emit('user:removed', handle);
   }
 
@@ -183,7 +189,7 @@ export class Permissions {
     this.persist();
 
     const by = source ?? 'unknown';
-    this.logger?.info(`Global flags for ${handle} set to "${record.global}" by ${by}`);
+    this.recordModAction('flags', null, handle, by, `global=${record.global}`);
     this.eventBus?.emit('user:flagsChanged', handle, record.global, record.channels);
   }
 
@@ -202,7 +208,7 @@ export class Permissions {
     this.persist();
 
     const by = source ?? 'unknown';
-    this.logger?.info(`Password hash set for ${handle} by ${by}`);
+    this.recordModAction('chpass', null, handle, by, null);
     this.eventBus?.emit('user:passwordChanged', handle);
   }
 
@@ -243,7 +249,7 @@ export class Permissions {
     this.persist();
 
     const by = source ?? 'unknown';
-    this.logger?.info(`Channel flags for ${handle} in ${channel} set to "${normalized}" by ${by}`);
+    this.recordModAction('flags', channel, handle, by, `channel=${normalized}`);
     this.eventBus?.emit('user:flagsChanged', handle, record.global, record.channels);
   }
 
@@ -469,5 +475,25 @@ export class Permissions {
   /** Auto-persist to database after changes. */
   private persist(): void {
     this.saveToDb();
+  }
+
+  /**
+   * Write a mod_log row for a permissions mutation. Isolates the DB call
+   * from the mutation itself so a DB error never prevents the in-memory
+   * change from taking effect — operators see a warn and the command still
+   * succeeds. Mirrors the resilience pattern that ban-commands already uses.
+   */
+  private recordModAction(
+    action: string,
+    channel: string | null,
+    target: string,
+    by: string,
+    detail: string | null,
+  ): void {
+    try {
+      this.db?.logModAction(action, channel, target, by, detail);
+    } catch (err) {
+      this.logger?.warn(`Failed to record mod_log entry for ${action}:`, err);
+    }
   }
 }

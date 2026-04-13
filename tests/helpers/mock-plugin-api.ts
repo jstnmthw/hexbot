@@ -32,6 +32,7 @@ export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginA
     invite: noop,
     changeNick: noop,
     onModesReady: noop,
+    onPermissionsChanged: noop,
     getChannel: vi.fn().mockReturnValue(undefined),
     getUsers: vi.fn().mockReturnValue([]),
     getUserHostmask: vi.fn().mockReturnValue(undefined),

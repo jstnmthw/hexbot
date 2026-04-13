@@ -376,6 +376,14 @@ export interface PluginAPI {
   getUsers(channel: string): ChannelUser[];
   getUserHostmask(channel: string, nick: string): string | undefined;
 
+  /**
+   * Register a callback for when a bot user's permissions record changes in a
+   * way that might affect mode placement — currently `user:added`,
+   * `user:flagsChanged`, and `user:hostmaskAdded`. Fires with the handle of
+   * the changed user. Auto-cleaned on unload.
+   */
+  onPermissionsChanged(callback: (handle: string) => void): void;
+
   // Permissions (read-only)
   permissions: PluginPermissions;
 

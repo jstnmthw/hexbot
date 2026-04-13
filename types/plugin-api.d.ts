@@ -527,6 +527,20 @@ export interface PluginAPI {
   onModesReady(callback: (channel: string) => void): void;
 
   /**
+   * Register a callback for when a bot user's permissions record changes in a
+   * way that might affect mode placement. Fires on `user:added`,
+   * `user:flagsChanged`, and `user:hostmaskAdded` with the handle of the
+   * changed user. Auto-cleaned on plugin unload.
+   *
+   * Use this to react immediately to `.adduser`, `.flags`, and `.addhostmask`
+   * instead of waiting for the user to rejoin (e.g. auto-voice a user you
+   * just granted +v, without needing them to PART/JOIN).
+   *
+   * @param callback Called with the handle of the changed user.
+   */
+  onPermissionsChanged(callback: (handle: string) => void): void;
+
+  /**
    * Get the current state of a channel.
    * @param name Channel name (case-insensitive).
    * @returns Channel state object, or `undefined` if the bot is not in the channel.

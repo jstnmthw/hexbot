@@ -102,6 +102,7 @@ export class PluginLoader {
   private getCasemapping: () => Casemapping;
   private getServerSupports: () => Record<string, string>;
   private modesReadyListeners: Map<string, Array<(channel: string) => void>> = new Map();
+  private permissionsChangedListeners: Map<string, Array<(handle: string) => void>> = new Map();
   /** Absolute paths of plugin entry files already imported in this process. */
   private importedOnce: Set<string> = new Set();
 
@@ -288,6 +289,16 @@ export class PluginLoader {
         for (const fn of modesListeners) this.eventBus.off('channel:modesReady', fn);
         this.modesReadyListeners.delete(pluginName);
       }
+      // Remove permissionsChanged listeners
+      const permsListeners = this.permissionsChangedListeners.get(pluginName);
+      if (permsListeners) {
+        for (const fn of permsListeners) {
+          this.eventBus.off('user:added', fn);
+          this.eventBus.off('user:flagsChanged', fn);
+          this.eventBus.off('user:hostmaskAdded', fn);
+        }
+        this.permissionsChangedListeners.delete(pluginName);
+      }
       return { name: pluginName, status: 'error', error: `Plugin init() threw: ${message}` };
     }
 
@@ -348,6 +359,17 @@ export class PluginLoader {
     if (modesListeners) {
       for (const fn of modesListeners) this.eventBus.off('channel:modesReady', fn);
       this.modesReadyListeners.delete(pluginName);
+    }
+
+    // Remove permissionsChanged listeners
+    const permsListeners = this.permissionsChangedListeners.get(pluginName);
+    if (permsListeners) {
+      for (const fn of permsListeners) {
+        this.eventBus.off('user:added', fn);
+        this.eventBus.off('user:flagsChanged', fn);
+        this.eventBus.off('user:hostmaskAdded', fn);
+      }
+      this.permissionsChangedListeners.delete(pluginName);
     }
 
     // Remove from loaded map
@@ -419,6 +441,7 @@ export class PluginLoader {
         getCasemapping: this.getCasemapping,
         getServerSupports: this.getServerSupports,
         modesReadyListeners: this.modesReadyListeners,
+        permissionsChangedListeners: this.permissionsChangedListeners,
       },
       pluginId,
       config,

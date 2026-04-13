@@ -322,6 +322,318 @@ describe('chanmod plugin — auto-op', () => {
     expect(bot.client.messages.find((m) => m.type === 'mode')).toBeUndefined();
   });
 
+  it('should voice an already-joined user when +v flag is added (no rejoin)', async () => {
+    const liveBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(liveBot, '#test');
+    try {
+      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      // User joins with no bot-user record yet — should get nothing.
+      simulateJoin(liveBot, 'BlueAngel', 'blue', 'blue.host', '#test');
+      await tick();
+      expect(liveBot.client.messages.find((m) => m.type === 'mode')).toBeUndefined();
+
+      liveBot.client.clearMessages();
+      // Now add the user with +v — reconcile should voice them immediately.
+      liveBot.permissions.addUser('blueangel', '*!blue@blue.host', 'v', 'test');
+      await tick();
+      expect(
+        liveBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '+v' && m.args?.includes('BlueAngel'),
+        ),
+      ).toBeDefined();
+    } finally {
+      liveBot.cleanup();
+    }
+  });
+
+  it('should op an already-joined user when flags change from +v to +o', async () => {
+    const liveBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(liveBot, '#test');
+    try {
+      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      liveBot.permissions.addUser('upgrade', '*!up@up.host', 'v', 'test');
+      simulateJoin(liveBot, 'Upgrade', 'up', 'up.host', '#test');
+      await tick();
+      // They got voiced on join.
+      liveBot.client.clearMessages();
+
+      // Now bump flags to +o — should op them without a rejoin.
+      liveBot.permissions.setGlobalFlags('upgrade', 'o', 'test');
+      await tick();
+      expect(
+        liveBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Upgrade'),
+        ),
+      ).toBeDefined();
+    } finally {
+      liveBot.cleanup();
+    }
+  });
+
+  it('should devoice an already-joined user when +v flag is removed', async () => {
+    const liveBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(liveBot, '#test');
+    try {
+      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      liveBot.permissions.addUser('fader', '*!fader@fader.host', 'v', 'test');
+      simulateJoin(liveBot, 'Fader', 'fader', 'fader.host', '#test');
+      await tick();
+      // Simulate the +v landing so channel-state knows they're voiced.
+      simulateMode(liveBot, 'hexbot', '#test', '+v', 'Fader');
+      liveBot.client.clearMessages();
+
+      // Strip the +v flag — reconcile should devoice them.
+      liveBot.permissions.setGlobalFlags('fader', '', 'test');
+      await tick();
+      expect(
+        liveBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '-v' && m.args?.includes('Fader'),
+        ),
+      ).toBeDefined();
+    } finally {
+      liveBot.cleanup();
+    }
+  });
+
+  it('should deop an already-joined user when +o flag is removed', async () => {
+    const liveBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(liveBot, '#test');
+    try {
+      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      liveBot.permissions.addUser('chief', '*!chief@chief.host', 'o', 'test');
+      simulateJoin(liveBot, 'Chief', 'chief', 'chief.host', '#test');
+      await tick();
+      simulateMode(liveBot, 'hexbot', '#test', '+o', 'Chief');
+      liveBot.client.clearMessages();
+
+      liveBot.permissions.setGlobalFlags('chief', '', 'test');
+      await tick();
+      expect(
+        liveBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '-o' && m.args?.includes('Chief'),
+        ),
+      ).toBeDefined();
+    } finally {
+      liveBot.cleanup();
+    }
+  });
+
+  it('should dehalfop an already-joined user when halfop flag is removed', async () => {
+    const liveBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(liveBot, '#test');
+    try {
+      await liveBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: { enabled: true, config: { halfop_flags: ['v'] } },
+      });
+      liveBot.permissions.addUser('hchief', '*!hchief@h.host', 'v', 'test');
+      simulateJoin(liveBot, 'HChief', 'hchief', 'h.host', '#test');
+      await tick();
+      simulateMode(liveBot, 'hexbot', '#test', '+h', 'HChief');
+      liveBot.client.clearMessages();
+
+      liveBot.permissions.setGlobalFlags('hchief', '', 'test');
+      await tick();
+      expect(
+        liveBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '-h' && m.args?.includes('HChief'),
+        ),
+      ).toBeDefined();
+    } finally {
+      liveBot.cleanup();
+    }
+  });
+
+  it('should no-op modesReady reconcile when auto_op is disabled for the channel', async () => {
+    const offBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(offBot, '#test');
+    try {
+      await offBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: { enabled: true, config: { auto_op: false } },
+      });
+      offBot.permissions.addUser('vuser', '*!vuser@vuser.host', 'v', 'test');
+      simulateJoin(offBot, 'VUser', 'vuser', 'vuser.host', '#test');
+      await tick();
+      offBot.client.clearMessages();
+
+      simulateChannelInfo(offBot, '#test', '+nt');
+      await tick();
+      expect(offBot.client.messages.find((m) => m.type === 'mode')).toBeUndefined();
+    } finally {
+      offBot.cleanup();
+    }
+  });
+
+  it('should tolerate modesReady for an untracked channel', async () => {
+    const ghostBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(ghostBot, '#test');
+    try {
+      await ghostBot.pluginLoader.load(PLUGIN_PATH);
+      // Emit modesReady for a channel the bot was never in — reconciler must
+      // gracefully bail instead of crashing on undefined channel state.
+      ghostBot.eventBus.emit('channel:modesReady', '#never-joined');
+      await tick();
+      // No messages produced, no exceptions.
+      expect(ghostBot.client.messages.find((m) => m.type === 'mode')).toBeUndefined();
+    } finally {
+      ghostBot.cleanup();
+    }
+  });
+
+  it('should skip unknown users during modesReady reconcile', async () => {
+    const skipBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(skipBot, '#test');
+    try {
+      await skipBot.pluginLoader.load(PLUGIN_PATH);
+      // Bot is opped but there's no permissions record for the user in channel.
+      simulateJoin(skipBot, 'Randal', 'randal', 'randal.host', '#test');
+      await tick();
+      skipBot.client.clearMessages();
+
+      simulateChannelInfo(skipBot, '#test', '+nt');
+      await tick();
+      // Randal has no matching record → no mode is applied to them.
+      expect(
+        skipBot.client.messages.find((m) => m.type === 'mode' && m.args?.includes('Randal')),
+      ).toBeUndefined();
+    } finally {
+      skipBot.cleanup();
+    }
+  });
+
+  it('should swallow errors raised inside the reconcile paths', async () => {
+    const errBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(errBot, '#test');
+    try {
+      await errBot.pluginLoader.load(PLUGIN_PATH);
+      errBot.permissions.addUser('bomb', '*!bomb@bomb.host', 'v', 'test');
+      simulateJoin(errBot, 'Bomb', 'bomb', 'bomb.host', '#test');
+      await tick();
+      errBot.client.clearMessages();
+
+      // Force the next two findByHostmask calls from the reconcile paths to throw.
+      const spy = vi.spyOn(errBot.permissions, 'findByHostmask').mockImplementation(() => {
+        throw new Error('boom');
+      });
+
+      // onPermissionsChanged reconcile path — must not crash.
+      errBot.permissions.setGlobalFlags('bomb', 'o', 'test');
+      await tick();
+
+      // onModesReady reconcile path — must not crash either.
+      simulateChannelInfo(errBot, '#test', '+nt');
+      await tick();
+
+      spy.mockRestore();
+      expect(errBot.client.messages).toBeDefined();
+    } finally {
+      errBot.cleanup();
+    }
+  });
+
+  it('should voice an already-joined user when a matching hostmask is added', async () => {
+    const liveBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(liveBot, '#test');
+    try {
+      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      // Add user with +v but a hostmask that doesn't match anyone in the channel yet.
+      liveBot.permissions.addUser('mover', '*!mover@old.host', 'v', 'test');
+      simulateJoin(liveBot, 'Mover', 'mover', 'new.host', '#test');
+      await tick();
+      // No match yet — nothing happens.
+      expect(liveBot.client.messages.find((m) => m.type === 'mode')).toBeUndefined();
+
+      // Add the matching hostmask — reconcile should voice them now.
+      liveBot.permissions.addHostmask('mover', '*!mover@new.host', 'test');
+      await tick();
+      expect(
+        liveBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '+v' && m.args?.includes('Mover'),
+        ),
+      ).toBeDefined();
+    } finally {
+      liveBot.cleanup();
+    }
+  });
+
+  it('should voice a user synced from botlink (leaf-side) without rejoin', async () => {
+    const leafBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(leafBot, '#test');
+    try {
+      await leafBot.pluginLoader.load(PLUGIN_PATH);
+      // User is already in the channel on the leaf — no permissions record yet.
+      simulateJoin(leafBot, 'BlueAngel', 'blue', 'blue.host', '#test');
+      await tick();
+      expect(leafBot.client.messages.find((m) => m.type === 'mode')).toBeUndefined();
+
+      leafBot.client.clearMessages();
+      // Simulate a botlink ADDUSER/SETFLAGS frame landing on the leaf:
+      // PermissionSyncer.applyFrame calls permissions.syncUser under the hood.
+      leafBot.permissions.syncUser('blueangel', ['*!blue@blue.host'], 'v', {}, 'botlink-sync');
+      await tick();
+      expect(
+        leafBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '+v' && m.args?.includes('BlueAngel'),
+        ),
+      ).toBeDefined();
+    } finally {
+      leafBot.cleanup();
+    }
+  });
+
+  it('should voice users already in a channel when the bot joins it', async () => {
+    const joiningBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      await joiningBot.pluginLoader.load(PLUGIN_PATH);
+
+      // Seed the user record before anyone joins — mirrors the real case
+      // where permissions persist across bot restarts.
+      joiningBot.permissions.addUser('blueangel', '*!blue@blue.host', 'v', 'test');
+
+      // BlueAngel is already in #test before the bot arrives. Bot isn't
+      // present yet so auto-op bails out in the join handler (no ops to give).
+      simulateJoin(joiningBot, 'BlueAngel', 'blue', 'blue.host', '#test');
+      await tick();
+      expect(joiningBot.client.messages.find((m) => m.type === 'mode')).toBeUndefined();
+
+      // Bot joins and gets opped.
+      giveBotOps(joiningBot, '#test');
+      joiningBot.client.clearMessages();
+
+      // Server responds to the bot's requestChannelModes with RPL_CHANNELMODEIS,
+      // which fires channel:modesReady and triggers the reconciler.
+      simulateChannelInfo(joiningBot, '#test', '+nt');
+      await tick();
+
+      expect(
+        joiningBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '+v' && m.args?.includes('BlueAngel'),
+        ),
+      ).toBeDefined();
+    } finally {
+      joiningBot.cleanup();
+    }
+  });
+
+  it("should leave unknown users alone when another user's flags change", async () => {
+    const liveBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(liveBot, '#test');
+    try {
+      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      simulateJoin(liveBot, 'Stranger', 'stranger', 'stranger.host', '#test');
+      await tick();
+      liveBot.client.clearMessages();
+
+      liveBot.permissions.addUser('someone', '*!someone@someone.host', 'v', 'test');
+      await tick();
+      // Stranger must not be touched — they don't match any bot-user record.
+      expect(
+        liveBot.client.messages.find((m) => m.type === 'mode' && m.args?.includes('Stranger')),
+      ).toBeUndefined();
+    } finally {
+      liveBot.cleanup();
+    }
+  });
+
   it('should not suppress auto-op in channels without +d', async () => {
     // User has +d only in #test, should still get opped in #other
     const multiBot = createMockBot({ botNick: 'hexbot' });

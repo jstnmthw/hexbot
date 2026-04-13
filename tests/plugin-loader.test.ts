@@ -318,6 +318,30 @@ describe('PluginLoader', () => {
       expect(binds).toHaveLength(0);
     });
 
+    it('should clean up onPermissionsChanged listeners when init() throws', async () => {
+      const pluginPath = writePlugin(
+        tempDir,
+        'partial-perms',
+        `
+        export const name = 'partial-perms';
+        export const version = '1.0.0';
+        export const description = '';
+        export function init(api) {
+          api.onPermissionsChanged(() => {});
+          throw new Error('mid-init error');
+        }
+      `,
+      );
+
+      const { loader, permissions } = createLoader(tempDir);
+      await loader.load(pluginPath);
+
+      // Adding a user should not trigger the partial-init listener since
+      // it was torn down. If the cleanup path were broken, the dangling
+      // listener would still observe the event (and might crash later).
+      expect(() => permissions.addUser('someone', '*!*@host', 'o', 'test')).not.toThrow();
+    });
+
     it('should reject loading the same plugin twice', async () => {
       const pluginPath = writePlugin(
         tempDir,
