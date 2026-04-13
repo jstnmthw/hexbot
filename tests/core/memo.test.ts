@@ -145,6 +145,30 @@ describe('MemoManager', () => {
       expect(notices[0].target).toBe('master');
     });
 
+    it('skips admins who have a DCC console via botnet relay', () => {
+      const relayHandles = new Set<string>(['admin']);
+      memo = new MemoManager({
+        dispatcher: bot.dispatcher,
+        commandHandler: bot.commandHandler,
+        permissions: bot.permissions,
+        channelState: bot.channelState,
+        client: bot.client,
+        logger: bot.logger,
+        hasRelayConsole: (handle) => relayHandles.has(handle),
+      });
+      memo.attach();
+      joinChannel(bot, 'admin', '#test');
+      joinChannel(bot, 'master', '#test');
+      bot.client.messages.length = 0;
+
+      sendNotice(bot, 'MemoServ', 'You have 1 new memo.');
+
+      // admin has a relay console → skipped. master is IRC-only → notified.
+      const notices = bot.client.messages.filter((m) => m.type === 'notice');
+      expect(notices).toHaveLength(1);
+      expect(notices[0].target).toBe('master');
+    });
+
     it('ignores notices from non-MemoServ nicks', () => {
       memo = setupMemo(bot);
       joinChannel(bot, 'admin', '#test');

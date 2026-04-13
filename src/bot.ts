@@ -186,6 +186,7 @@ export class Bot {
       channelState: this.channelState,
       client: this.client,
       logger: this.logger,
+      hasRelayConsole: (handle) => this._relayVirtualSessions.has(handle),
     });
 
     // Wire verification provider: gates privileged dispatch on NickServ identity.
@@ -349,6 +350,16 @@ export class Bot {
         }),
       });
       this._dccManager.attach();
+      // Fan mirrored service lines (NickServ/ChanServ/MemoServ/etc.) out to
+      // every user currently relayed IN to this bot, so their remote DCC
+      // console sees the same output local sessions get. Without this,
+      // relayed users miss asynchronous service replies that arrive after
+      // the command returns.
+      this._dccManager.onMirror = (line) => {
+        for (const vs of this._relayVirtualSessions.values()) {
+          vs.sendOutput(line);
+        }
+      };
       registerDccConsoleCommands(this.commandHandler, this._dccManager, this.db);
       this.eventBus.on('user:removed', (handle: string) => {
         this.db.del('dcc', `console_flags:${handle}`);

@@ -69,6 +69,7 @@ function fakeSession(
     isRelaying: false,
     relayTarget: null,
     handleFlags,
+    isClosed: false,
     received,
     writes,
     writeLine(line: string) {

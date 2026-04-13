@@ -54,6 +54,13 @@ export interface MemoDeps {
   client: MemoIRCClient;
   logger?: Logger | null;
   dccManager?: MemoDCCManager | null;
+  /**
+   * Predicate: does this handle have an active DCC console via a botnet
+   * relay into another bot? When true, `relayToOnlineAdmins` skips the
+   * user — the DCC mirror fanout has already delivered the raw service
+   * line through the relay, so a duplicate IRC notice would be noise.
+   */
+  hasRelayConsole?: (handle: string) => boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,6 +91,7 @@ export class MemoManager {
   private client: MemoIRCClient;
   private logger: Logger | null;
   private dccManager: MemoDCCManager | null;
+  private hasRelayConsole: (handle: string) => boolean;
   private casemapping: Casemapping = 'rfc1459';
 
   /** Number of unread memos reported by MemoServ. */
@@ -101,6 +109,7 @@ export class MemoManager {
     this.client = deps.client;
     this.logger = deps.logger?.child('memo') ?? null;
     this.dccManager = deps.dccManager ?? null;
+    this.hasRelayConsole = deps.hasRelayConsole ?? (() => false);
   }
 
   /** Update casemapping when the server announces it. */
@@ -188,9 +197,10 @@ export class MemoManager {
 
   /**
    * NOTICE every online +n/+m admin who is *not* currently on the DCC
-   * console. DCC-connected admins see the raw `-MemoServ- …` line via the
-   * generic mirror, so relaying would duplicate. Returns the number of
-   * admins actually notified.
+   * console. DCC-connected admins (locally, or via a botnet relay into
+   * another bot) see the raw `-MemoServ- …` line via the generic mirror,
+   * so relaying would duplicate. Returns the number of admins actually
+   * notified.
    */
   private relayToOnlineAdmins(message: string): number {
     const seen = new Set<string>();
@@ -205,6 +215,7 @@ export class MemoManager {
         seen.add(key);
         const nick = user.hostmask.split('!')[0];
         if (this.dccManager?.getSession(nick)) continue;
+        if (this.hasRelayConsole(record.handle)) continue;
         this.client.notice(nick, message);
         notified++;
       }

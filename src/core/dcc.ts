@@ -139,6 +139,8 @@ export interface DCCSessionEntry {
   readonly relayTarget: string | null;
   /** The authenticated user's permission flag string (e.g. `"nm"`). */
   readonly handleFlags: string;
+  /** True if the session has been closed (socket destroyed, cleanup called). */
+  readonly isClosed: boolean;
   writeLine(line: string): void;
   close(reason?: string): void;
   enterRelay(
@@ -559,6 +561,11 @@ export class DCCSession implements DCCSessionEntry {
   /** Read-only view of the session phase — used by tests. */
   get currentPhase(): 'awaiting_password' | 'active' {
     return this.phase;
+  }
+
+  /** True if the session has been closed. */
+  get isClosed(): boolean {
+    return this.closed;
   }
 
   /**
@@ -1173,6 +1180,13 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   onPartyJoin: ((handle: string, nick: string) => void) | null = null;
   /** Callback: local DCC session closed. */
   onPartyPart: ((handle: string, nick: string) => void) | null = null;
+  /**
+   * Callback: mirrored service notice/privmsg line (after local fanout).
+   * Wired by bot.ts to forward the same line through any active virtual
+   * relay sessions so hub→leaf relayed users see service replies in their
+   * remote DCC console. Local sessions are already handled by announce().
+   */
+  onMirror: ((line: string) => void) | null = null;
 
   /**
    * Forward a raw IRC notice to all DCC sessions, skipping channel notices
@@ -1187,7 +1201,9 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     const message = String(e.message ?? '');
     if (/^[#&]/.test(target)) return;
     if (this.services.isNickServVerificationReply(nick, message)) return;
-    this.announce(`-${sanitize(nick)}- ${sanitize(message)}`);
+    const line = `-${sanitize(nick)}- ${sanitize(message)}`;
+    this.announce(line);
+    this.onMirror?.(line);
   }
 
   /** Forward a raw IRC PRIVMSG to all DCC sessions, skipping channel messages. */
@@ -1197,7 +1213,9 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     const target = String(e.target ?? '');
     const message = String(e.message ?? '');
     if (/^[#&]/.test(target)) return;
-    this.announce(`<${sanitize(nick)}> ${sanitize(message)}`);
+    const line = `<${sanitize(nick)}> ${sanitize(message)}`;
+    this.announce(line);
+    this.onMirror?.(line);
   }
 
   /** Send a message to all sessions except the one with the given handle. */
@@ -1335,12 +1353,19 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
   /** Reject if the user already has an active session or a pending connection. */
   private checkNotAlreadyConnected(nick: string): boolean {
-    if (this.sessions.has(ircLower(nick, this.casemapping))) {
-      this.client.notice(nick, 'DCC CHAT: you already have an active session.');
-      return false;
+    const lowerNick = ircLower(nick, this.casemapping);
+    const session = this.sessions.get(lowerNick);
+    if (session) {
+      // Clean up stale (closed) sessions before rejecting.
+      if (session.isClosed) {
+        this.sessions.delete(lowerNick);
+      } else {
+        this.client.notice(nick, 'DCC CHAT: you already have an active session.');
+        return false;
+      }
     }
     for (const p of this.pending.values()) {
-      if (ircLower(p.nick, this.casemapping) === ircLower(nick, this.casemapping)) {
+      if (ircLower(p.nick, this.casemapping) === lowerNick) {
         this.client.notice(nick, 'DCC CHAT: a connection is already pending.');
         return false;
       }

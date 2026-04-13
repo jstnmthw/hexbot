@@ -197,6 +197,7 @@ function mockSession(
     isRelaying: false,
     relayTarget: null,
     handleFlags: 'nm',
+    isClosed: false,
     writeLine: vi.fn(),
     close: vi.fn(),
     enterRelay: vi.fn(),
@@ -735,6 +736,46 @@ describe('DCCManager', () => {
       const { m, write } = makeMirrorManager();
       m.mirrorPrivmsg({});
       expect(write).toHaveBeenCalledWith('<> ');
+    });
+
+    it('invokes onMirror with each notice line (for botlink relay fanout)', () => {
+      const { m, write } = makeMirrorManager();
+      const mirrored: string[] = [];
+      m.onMirror = (line) => mirrored.push(line);
+      m.mirrorNotice({ nick: 'MemoServ', target: 'hexbot', message: 'You have 1 new memo.' });
+      expect(write).toHaveBeenCalledWith('-MemoServ- You have 1 new memo.');
+      expect(mirrored).toEqual(['-MemoServ- You have 1 new memo.']);
+    });
+
+    it('invokes onMirror with each privmsg line (for botlink relay fanout)', () => {
+      const { m, write } = makeMirrorManager();
+      const mirrored: string[] = [];
+      m.onMirror = (line) => mirrored.push(line);
+      m.mirrorPrivmsg({ nick: 'LimitServ', target: 'hexbot', message: 'limit updated' });
+      expect(write).toHaveBeenCalledWith('<LimitServ> limit updated');
+      expect(mirrored).toEqual(['<LimitServ> limit updated']);
+    });
+
+    it('does not invoke onMirror for suppressed channel notices', () => {
+      const { m } = makeMirrorManager();
+      const mirrored: string[] = [];
+      m.onMirror = (line) => mirrored.push(line);
+      m.mirrorNotice({ nick: 'someone', target: '#foo', message: 'hi channel' });
+      m.mirrorPrivmsg({ nick: 'alice', target: '#foo', message: 'hi' });
+      expect(mirrored).toEqual([]);
+    });
+
+    it('does not invoke onMirror for suppressed NickServ verification replies', () => {
+      const services = makeServices();
+      (services.isNickServVerificationReply as ReturnType<typeof vi.fn>).mockImplementation(
+        (nick: string, msg: string) =>
+          nick.toLowerCase() === 'nickserv' && /^STATUS\s+\S+\s+\d+/i.test(msg),
+      );
+      const { m } = makeMirrorManager(services);
+      const mirrored: string[] = [];
+      m.onMirror = (line) => mirrored.push(line);
+      m.mirrorNotice({ nick: 'NickServ', target: 'hexbot', message: 'STATUS alice 3' });
+      expect(mirrored).toEqual([]);
     });
   });
 });
