@@ -459,7 +459,7 @@ export class DCCSession implements DCCSessionEntry {
 
     // Password prompt — DCC CHAT clients are line-buffered, so the prompt
     // must end in CRLF or it never renders before the user types.
-    this.socket.write('Password:\r\n');
+    this.socket.write('Enter your password:\r\n');
     this.phase = 'awaiting_password';
     this.resetPromptIdle();
 

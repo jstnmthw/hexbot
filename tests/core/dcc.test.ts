@@ -1162,7 +1162,7 @@ describe('DCCSession password prompt', () => {
     const { session, written } = buildPromptSession({ passwordHash: TEST_PASSWORD_HASH });
     session.start('1.0.0', 'hexbot');
     const output = written.join('');
-    expect(output).toContain('Password:');
+    expect(output).toContain('Enter your password:');
     expect(output).not.toContain('HexBot'); // banner art should be suppressed
     expect(session.currentPhase).toBe('awaiting_password');
     session.close();
@@ -1284,7 +1284,7 @@ describe('DCCSession password prompt', () => {
     // Banner should contain the bot name and handle but NOT the password prompt.
     expect(output).toContain('hexbot');
     expect(output).toContain('alice');
-    expect(output).not.toContain('Password:');
+    expect(output).not.toContain('Enter your password:');
     expect(session.currentPhase).toBe('active');
   });
 });
@@ -1449,7 +1449,7 @@ describe('DCCManager.openSession prompt integration', () => {
     mgr.openSession(pending, socket);
 
     expect(duplex.destroyed).toBe(false);
-    expect(written.join('')).toContain('Password:');
+    expect(written.join('')).toContain('Enter your password:');
     expect(written.join('')).not.toContain('no password set');
     // Clean up — session is still awaiting input
     duplex.destroy();
