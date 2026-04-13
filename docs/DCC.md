@@ -188,10 +188,7 @@ On connect you will see a banner like:
 ```
   (HexBot ASCII art logo)
 
-Hey yourhandle! My name is hexbot and I am running HexBot v0.2.3,
-on Node.js v24.x.x on linux.
-
-Local time is now 4/12/2026, 12:00:00 AM
+Hi yourhandle, I am hexbot. The local time is 12:00:00 AM (UTC) on April 12th, 2026.
 
 Logged in as: yourhandle (yournick!~ident@your.host)
 Your flags: +nm

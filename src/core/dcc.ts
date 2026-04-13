@@ -544,7 +544,17 @@ export class DCCSession implements DCCSessionEntry {
     const d = new Date();
     const time = d.toLocaleTimeString();
     const tz = d.toLocaleTimeString('en-US', { timeZoneName: 'short' }).split(' ').pop();
-    const date = d.toLocaleDateString();
+    const day = d.getDate();
+    const ordinals: Record<Intl.LDMLPluralRule, string> = {
+      zero: 'th',
+      one: 'st',
+      two: 'nd',
+      few: 'rd',
+      many: 'th',
+      other: 'th',
+    };
+    const ordinal = ordinals[new Intl.PluralRules('en-US', { type: 'ordinal' }).select(day)];
+    const date = `${d.toLocaleDateString('en-US', { month: 'long' })} ${day}${ordinal}, ${d.getFullYear()}`;
     const stats = this.manager.getStats();
     const others = this.manager
       .getSessionList()
@@ -564,7 +574,7 @@ export class DCCSession implements DCCSessionEntry {
     // Greeting
     this.writeLine('');
     this.writeLine(
-      `Hey ${B}${this.handle}${B}! My name is ${B}${botNick}${B} and the local time is ${time} (${tz}) on ${date}.`,
+      `Hi ${B}${this.handle}${B}, I am ${B}${botNick}${B}. The local time is ${time} (${tz}) on ${date}.`,
     );
 
     // Owner-only notice
