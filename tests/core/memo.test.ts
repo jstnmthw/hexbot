@@ -126,6 +126,25 @@ describe('MemoManager', () => {
       expect(announced).toHaveLength(0);
     });
 
+    it('skips admins who are currently on the DCC console', () => {
+      memo = setupMemo(bot);
+      joinChannel(bot, 'admin', '#test');
+      joinChannel(bot, 'master', '#test');
+      memo.setDCCManager({
+        announce: () => {},
+        getSessionList: () => [],
+        // admin is on DCC; master is IRC-only.
+        getSession: (nick) => (nick === 'admin' ? { writeLine: () => {} } : undefined),
+      });
+      bot.client.messages.length = 0;
+
+      sendNotice(bot, 'MemoServ', 'You have 1 new memo.');
+
+      const notices = bot.client.messages.filter((m) => m.type === 'notice');
+      expect(notices).toHaveLength(1);
+      expect(notices[0].target).toBe('master');
+    });
+
     it('ignores notices from non-MemoServ nicks', () => {
       memo = setupMemo(bot);
       joinChannel(bot, 'admin', '#test');

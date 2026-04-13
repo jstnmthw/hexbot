@@ -1074,6 +1074,7 @@ describe('DCCSession', () => {
         source: 'plugin:chanmod',
         formatted: '[plugin:chanmod] voiced alice',
         plain: '[plugin:chanmod] voiced alice',
+        dccFormatted: '[plugin:chanmod] voiced alice',
       });
       expect(written.join('')).not.toContain('voiced alice');
     });
@@ -1089,6 +1090,7 @@ describe('DCCSession', () => {
         source: 'plugin:chanmod',
         formatted: '[plugin:chanmod] voiced alice',
         plain: '[plugin:chanmod] voiced alice',
+        dccFormatted: '[plugin:chanmod] voiced alice',
       });
       expect(written.join('')).toContain('voiced alice');
     });
@@ -1104,6 +1106,7 @@ describe('DCCSession', () => {
         source: 'plugin:chanmod',
         formatted: '[plugin:chanmod] voiced alice',
         plain: '[plugin:chanmod] voiced alice',
+        dccFormatted: '[plugin:chanmod] voiced alice',
       });
       expect(written.join('')).not.toContain('voiced alice');
     });
@@ -1119,6 +1122,7 @@ describe('DCCSession', () => {
         source: 'plugin:chanmod',
         formatted: '[plugin:chanmod] post-close',
         plain: '[plugin:chanmod] post-close',
+        dccFormatted: '[plugin:chanmod] post-close',
       });
       expect(written.join('')).not.toContain('post-close');
     });

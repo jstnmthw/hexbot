@@ -2,8 +2,12 @@
 //
 // Two layers:
 // 1. MemoServ relay — NOTICE online owners/masters so IRC-only admins get a
-//    heads-up on new memos. DCC/REPL sessions see MemoServ notices via the
-//    generic notice mirrors in dcc.ts / repl.ts, so we don't duplicate here.
+//    heads-up on new memos. Admins who currently have a DCC session are
+//    skipped: they already see the raw `-MemoServ- …` line via the generic
+//    notice mirror in dcc.ts, and notifying them again would produce a
+//    duplicate on their IRC client. We also never info-log the notice text
+//    itself — the mirror already surfaces it to DCC consoles, and logging
+//    the text would double every line in the DCC log sink.
 // 2. MemoServ proxy — .memo command that forwards subcommands to MemoServ and
 //    lets the generic mirrors display MemoServ's raw reply. Only users with n
 //    (owner) or m (master) flags can use .memo.
@@ -138,7 +142,10 @@ export class MemoManager {
   /**
    * Route a MemoServ notice: parse the unread count and NOTICE IRC-only
    * admins. DCC/REPL sessions already see the raw notice via the generic
-   * mirrors, so we don't announce to DCC here.
+   * mirrors, so we don't announce to DCC here and we don't info-log the
+   * text (the log sink would then deliver a second copy alongside the
+   * mirror). A debug-level decision line is emitted when the count changes
+   * so file logs still have a trace.
    */
   handleMemoServNotice(text: string): void {
     const countMatch = MEMO_COUNT_RE.exec(text);
@@ -146,8 +153,12 @@ export class MemoManager {
       this.pendingMemoCount = parseInt(countMatch[1], 10);
     }
 
-    this.logger?.info(`MemoServ relay: ${text}`);
-    this.relayToOnlineAdmins(`[MemoServ] ${text}`);
+    const notified = this.relayToOnlineAdmins(`[MemoServ] ${text}`);
+    if (countMatch) {
+      this.logger?.debug(
+        `MemoServ: ${this.pendingMemoCount} unread, notified ${notified} IRC-only admin(s)`,
+      );
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -175,9 +186,15 @@ export class MemoManager {
     );
   }
 
-  /** Send a NOTICE to all online users with n/m flags. */
-  private relayToOnlineAdmins(message: string): void {
+  /**
+   * NOTICE every online +n/+m admin who is *not* currently on the DCC
+   * console. DCC-connected admins see the raw `-MemoServ- …` line via the
+   * generic mirror, so relaying would duplicate. Returns the number of
+   * admins actually notified.
+   */
+  private relayToOnlineAdmins(message: string): number {
     const seen = new Set<string>();
+    let notified = 0;
     for (const ch of this.channelState.getAllChannels()) {
       for (const user of ch.users.values()) {
         const record = this.permissions.findByHostmask(user.hostmask);
@@ -186,9 +203,13 @@ export class MemoManager {
         const key = record.handle.toLowerCase();
         if (seen.has(key)) continue;
         seen.add(key);
-        this.client.notice(user.hostmask.split('!')[0], message);
+        const nick = user.hostmask.split('!')[0];
+        if (this.dccManager?.getSession(nick)) continue;
+        this.client.notice(nick, message);
+        notified++;
       }
     }
+    return notified;
   }
 
   // -------------------------------------------------------------------------

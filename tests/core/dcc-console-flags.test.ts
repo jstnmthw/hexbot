@@ -21,6 +21,7 @@ function makeRecord(overrides: Partial<LogRecord> = {}): LogRecord {
     source: null,
     formatted: '',
     plain: '',
+    dccFormatted: '',
     ...overrides,
   };
 }

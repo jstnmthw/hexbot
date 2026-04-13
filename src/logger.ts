@@ -40,9 +40,12 @@ const LEVEL_COLORS: Record<LogLevel, (s: string) => string> = {
 /**
  * A structured log record delivered to each sink. `formatted` is the
  * colorized, console-ready string; `plain` is the same output with no ANSI
- * codes for sinks that don't want color. `source` carries the child
- * logger's prefix plus an optional `#<category>` suffix for callers that
- * declared an explicit category override.
+ * codes for sinks that don't want color. `dccFormatted` is the colorized
+ * line with the leading `HH:MM:SS` time stamp omitted — DCC clients
+ * timestamp inbound lines themselves, so the server-side time is just
+ * noise on the partyline. `source` carries the child logger's prefix plus
+ * an optional `#<category>` suffix for callers that declared an explicit
+ * category override.
  */
 export interface LogRecord {
   level: LogLevel;
@@ -53,6 +56,8 @@ export interface LogRecord {
   formatted: string;
   /** Raw message text with no ANSI, for sinks that don't want color. */
   plain: string;
+  /** Colorized line without the leading `HH:MM:SS` time stamp, for DCC consoles. */
+  dccFormatted: string;
 }
 
 export type LogSink = (record: LogRecord) => void;
@@ -206,13 +211,16 @@ export class Logger {
 
     const coloredParts: string[] = [chalk.gray(time), LEVEL_COLORS[level](labelPlain)];
     const plainParts: string[] = [time, labelPlain];
+    const dccParts: string[] = [LEVEL_COLORS[level](labelPlain)];
     if (prefixPlain) {
       coloredParts.push(chalk.cyan(prefixPlain));
       plainParts.push(prefixPlain);
+      dccParts.push(chalk.cyan(prefixPlain));
     }
 
     const formatted = format(...coloredParts, ...args);
     const plain = format(...plainParts, ...args);
+    const dccFormatted = format(...dccParts, ...args);
 
     const source = this.prefix
       ? this.category
@@ -226,6 +234,7 @@ export class Logger {
       source,
       formatted,
       plain,
+      dccFormatted,
     };
 
     for (const sink of Logger.sinks) {

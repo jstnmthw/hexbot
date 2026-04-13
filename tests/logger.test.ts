@@ -379,6 +379,39 @@ describe('Logger', () => {
       expect(sink.mock.calls[0][0].source).toBe('plugin:chanmod#k');
     });
 
+    it('dccFormatted omits the time stamp but keeps the level label and prefix', () => {
+      const sink = vi.fn<LogSink>();
+      Logger.addSink(sink);
+
+      const root = createLogger('debug');
+      root.child('plugin:chanmod').info('voiced bob');
+
+      const record = sink.mock.calls[0][0];
+      // No HH:MM:SS at the start of the line (strip ANSI first).
+      // eslint-disable-next-line no-control-regex
+      const dccPlain = record.dccFormatted.replace(/\u001b\[[0-9;]*m/g, '');
+      expect(dccPlain).not.toMatch(/^\d{2}:\d{2}:\d{2}/);
+      expect(dccPlain).toContain('INF');
+      expect(dccPlain).toContain('[plugin:chanmod]');
+      expect(dccPlain).toContain('voiced bob');
+    });
+
+    it('dccFormatted still labels debug/warn/error lines', () => {
+      const sink = vi.fn<LogSink>();
+      Logger.addSink(sink);
+
+      const root = createLogger('debug');
+      root.child('dispatcher').debug('inside handler');
+      root.child('plugin:chanmod').warn('heads up');
+      root.child('plugin:chanmod').error('broke');
+
+      // eslint-disable-next-line no-control-regex
+      const strip = (s: string) => s.replace(/\u001b\[[0-9;]*m/g, '');
+      expect(strip(sink.mock.calls[0][0].dccFormatted)).toContain('DBG');
+      expect(strip(sink.mock.calls[1][0].dccFormatted)).toContain('WRN');
+      expect(strip(sink.mock.calls[2][0].dccFormatted)).toContain('ERR');
+    });
+
     it('delivers each record to every registered sink', () => {
       const a = vi.fn<LogSink>();
       const b = vi.fn<LogSink>();

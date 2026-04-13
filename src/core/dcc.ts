@@ -703,7 +703,7 @@ export class DCCSession implements DCCSessionEntry {
     if (this.closed) return;
     if (this.phase !== 'active') return;
     if (!shouldDeliverToSession(record, this.consoleFlags)) return;
-    this.writeLine(record.formatted);
+    this.writeLine(record.dccFormatted);
   }
 
   private write(data: string): void {
