@@ -126,8 +126,11 @@ export function registerChannelCommands(
         const value = channelSettings.get(channel, key);
         const isSet = channelSettings.isSet(channel, key);
         const display = def.type === 'flag' ? (value ? 'ON' : 'OFF') : String(value) || '(not set)';
+        // mIRC formatting: \x02 bold, \x034 red, \x0F reset (same convention as src/core/dcc.ts)
+        const bold = (s: string) => `\x02${s}\x02`;
+        const redBold = (s: string) => `\x02\x034${s}\x0F`;
         ctx.reply(
-          `${channel} ${key} (${def.type}): ${display}${isSet ? '' : ' (default)'} — ${def.description}`,
+          `${channel} ${redBold(key)} (${def.type}) = ${bold(display)}${isSet ? '' : ' (default)'} — ${def.description}`,
         );
         return;
       }
