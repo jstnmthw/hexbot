@@ -103,7 +103,10 @@ export function handleRelayFrame(
   if (frame.type === 'RELAY_ACCEPT' && deps.dccManager) {
     // This bot is the origin — the target bot accepted the relay request.
     const toBot = String(frame.toBot ?? '');
-    log?.info(`RELAY_ACCEPT received: relay to "${toBot}" for handle "${handle}"`);
+    // Demoted to debug: the initiating DCC session already sees
+    // "*** Requesting relay..." and "*** Now relaying to..." banners, so
+    // an info-level line here would double-announce in the log sink.
+    log?.debug(`RELAY_ACCEPT received: relay to "${toBot}" for handle "${handle}"`);
     for (const s of deps.dccManager.getSessionList()) {
       if (s.handle === handle) {
         deps.dccManager.getSession(s.nick)?.confirmRelay?.();
