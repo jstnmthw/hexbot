@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto';
 import Parser from 'rss-parser';
 
-import type { PluginAPI } from '../../src/types';
+import type { ChannelHandlerContext, PluginAPI } from '../../src/types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -90,20 +90,22 @@ export async function init(api: PluginAPI): Promise<void> {
   api.bind('pub', 'm', '!rss', async (ctx) => {
     const parts = ctx.args.trim().split(/\s+/);
     const sub = parts[0]?.toLowerCase() ?? '';
+    logCmd(api, ctx, sub || '(empty)', 'attempt');
 
     if (sub === 'list') {
-      handleList(api, ctx.nick);
+      handleList(api, ctx);
     } else if (sub === 'add') {
-      await handleAdd(api, ctx.nick, parts.slice(1), cfg);
+      await handleAdd(api, ctx, parts.slice(1), cfg);
     } else if (sub === 'remove') {
-      handleRemove(api, ctx.nick, parts[1]);
+      handleRemove(api, ctx, parts[1]);
     } else if (sub === 'check') {
       // check only requires 'o' — but the bind requires 'm', so we also
       // allow it through. Operators who don't have 'm' can't reach the bind
       // at all, but we keep the distinction documented for future loosening.
-      await handleCheck(api, ctx.nick, parts[1], cfg);
+      await handleCheck(api, ctx, parts[1], cfg);
     } else {
       api.notice(ctx.nick, 'Usage: !rss <list|add|remove|check>');
+      logCmd(api, ctx, sub || '(empty)', 'rejected', 'unknown subcommand');
     }
   });
 
@@ -259,6 +261,8 @@ async function announceItems(
     }
     if (i < items.length - 1) await delay(500);
   }
+
+  api.log(`Announced ${items.length} item(s) from "${feed.id}" to ${feed.channels.join(', ')}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -312,29 +316,53 @@ function isRuntimeFeed(api: PluginAPI, id: string): boolean {
 // Admin command handlers (all respond via notice to invoking user)
 // ---------------------------------------------------------------------------
 
-function handleList(api: PluginAPI, nick: string): void {
+type CmdOutcome = 'attempt' | 'rejected' | 'ok';
+
+// Successes log at info, attempts and rejections at debug. Debug keeps
+// per-invocation noise out of the default log stream but preserves the full
+// audit trail when the operator flips the level during an incident.
+function logCmd(
+  api: PluginAPI,
+  ctx: ChannelHandlerContext,
+  sub: string,
+  outcome: CmdOutcome,
+  detail?: string,
+): void {
+  const who = `${ctx.nick}!${ctx.ident}@${ctx.hostname}`;
+  const msg = `!rss ${sub} by ${who} in ${ctx.channel} — ${outcome}${detail ? `: ${detail}` : ''}`;
+  if (outcome === 'ok') api.log(msg);
+  else api.debug(msg);
+}
+
+function handleList(api: PluginAPI, ctx: ChannelHandlerContext): void {
   if (activeFeeds.size === 0) {
-    api.notice(nick, 'No feeds configured.');
+    api.notice(ctx.nick, 'No feeds configured.');
+    logCmd(api, ctx, 'list', 'ok', '0 feeds');
     return;
   }
-  api.notice(nick, `Active feeds (${activeFeeds.size}):`);
+  api.notice(ctx.nick, `Active feeds (${activeFeeds.size}):`);
   for (const feed of activeFeeds.values()) {
     const interval = feed.interval ?? 3600;
     const channels = feed.channels.join(', ');
     const source = isRuntimeFeed(api, feed.id) ? 'runtime' : 'config';
-    api.notice(nick, `  ${feed.id} — ${feed.url} → ${channels} (every ${interval}s) [${source}]`);
+    api.notice(
+      ctx.nick,
+      `  ${feed.id} — ${feed.url} → ${channels} (every ${interval}s) [${source}]`,
+    );
   }
+  logCmd(api, ctx, 'list', 'ok', `${activeFeeds.size} feeds`);
 }
 
 async function handleAdd(
   api: PluginAPI,
-  nick: string,
+  ctx: ChannelHandlerContext,
   args: string[],
   cfg: PluginConfig,
 ): Promise<void> {
   // args: [id, url, #channel, interval?]
   if (args.length < 3) {
-    api.notice(nick, 'Usage: !rss add <id> <url> <#channel> [interval]');
+    api.notice(ctx.nick, 'Usage: !rss add <id> <url> <#channel> [interval]');
+    logCmd(api, ctx, 'add', 'rejected', 'bad usage');
     return;
   }
 
@@ -342,17 +370,20 @@ async function handleAdd(
   const interval = args[3] ? parseInt(args[3], 10) : 3600;
 
   if (activeFeeds.has(id)) {
-    api.notice(nick, `Feed "${id}" already exists.`);
+    api.notice(ctx.nick, `Feed "${id}" already exists.`);
+    logCmd(api, ctx, 'add', 'rejected', `id collision: ${id}`);
     return;
   }
 
   if (!channel.startsWith('#')) {
-    api.notice(nick, `Channel must start with #.`);
+    api.notice(ctx.nick, `Channel must start with #.`);
+    logCmd(api, ctx, 'add', 'rejected', 'channel missing #');
     return;
   }
 
   if (Number.isNaN(interval) || interval < 60) {
-    api.notice(nick, 'Interval must be a number >= 60 seconds.');
+    api.notice(ctx.nick, 'Interval must be a number >= 60 seconds.');
+    logCmd(api, ctx, 'add', 'rejected', 'bad interval');
     return;
   }
 
@@ -363,36 +394,46 @@ async function handleAdd(
   // Silent seed
   try {
     await pollFeed(api, feed, cfg, false);
-    api.notice(nick, `Feed "${id}" added and seeded. Will announce new items to ${channel}.`);
+    api.notice(ctx.nick, `Feed "${id}" added and seeded. Will announce new items to ${channel}.`);
+    logCmd(api, ctx, 'add', 'ok', `id=${id} url=${url} chan=${channel} interval=${interval}s`);
   } catch (err) {
-    api.notice(nick, `Feed "${id}" added but initial fetch failed: ${(err as Error).message}`);
+    const errMsg = (err as Error).message;
+    api.notice(ctx.nick, `Feed "${id}" added but initial fetch failed: ${errMsg}`);
+    logCmd(api, ctx, 'add', 'ok', `id=${id} (seed failed: ${errMsg})`);
   }
 }
 
-function handleRemove(api: PluginAPI, nick: string, id: string | undefined): void {
+function handleRemove(api: PluginAPI, ctx: ChannelHandlerContext, id: string | undefined): void {
   if (!id) {
-    api.notice(nick, 'Usage: !rss remove <id>');
+    api.notice(ctx.nick, 'Usage: !rss remove <id>');
+    logCmd(api, ctx, 'remove', 'rejected', 'bad usage');
     return;
   }
 
   if (!activeFeeds.has(id)) {
-    api.notice(nick, `Feed "${id}" not found.`);
+    api.notice(ctx.nick, `Feed "${id}" not found.`);
+    logCmd(api, ctx, 'remove', 'rejected', `unknown id: ${id}`);
     return;
   }
 
   if (!isRuntimeFeed(api, id)) {
-    api.notice(nick, `Feed "${id}" is defined in config — remove it from plugins.json instead.`);
+    api.notice(
+      ctx.nick,
+      `Feed "${id}" is defined in config — remove it from plugins.json instead.`,
+    );
+    logCmd(api, ctx, 'remove', 'rejected', `config-defined: ${id}`);
     return;
   }
 
   deleteRuntimeFeed(api, id);
   activeFeeds.delete(id);
-  api.notice(nick, `Feed "${id}" removed.`);
+  api.notice(ctx.nick, `Feed "${id}" removed.`);
+  logCmd(api, ctx, 'remove', 'ok', `id=${id}`);
 }
 
 async function handleCheck(
   api: PluginAPI,
-  nick: string,
+  ctx: ChannelHandlerContext,
   id: string | undefined,
   cfg: PluginConfig,
 ): Promise<void> {
@@ -401,7 +442,8 @@ async function handleCheck(
     : [...activeFeeds.values()];
 
   if (targets.length === 0) {
-    api.notice(nick, id ? `Feed "${id}" not found.` : 'No feeds configured.');
+    api.notice(ctx.nick, id ? `Feed "${id}" not found.` : 'No feeds configured.');
+    logCmd(api, ctx, 'check', 'rejected', id ? `unknown id: ${id}` : 'no feeds');
     return;
   }
 
@@ -414,9 +456,14 @@ async function handleCheck(
         totalNew += items.length;
       }
     } catch (err) {
-      api.notice(nick, `Error checking "${feed.id}": ${(err as Error).message}`);
+      api.notice(ctx.nick, `Error checking "${feed.id}": ${(err as Error).message}`);
+      api.error(`Error checking feed "${feed.id}":`, (err as Error).message);
     }
   }
 
-  api.notice(nick, `Check complete — ${totalNew} new item(s) across ${targets.length} feed(s).`);
+  api.notice(
+    ctx.nick,
+    `Check complete — ${totalNew} new item(s) across ${targets.length} feed(s).`,
+  );
+  logCmd(api, ctx, 'check', 'ok', `${targets.length} feed(s), ${totalNew} new item(s)`);
 }

@@ -295,7 +295,12 @@ export class EventDispatcher {
     for (const entry of this.binds) {
       if (entry.type !== type) continue;
       if (!this.matchesMask(type, entry.mask, ctx)) continue;
-      if (!this.checkFlags(entry.flags, ctx)) continue;
+      if (!this.checkFlags(entry.flags, ctx)) {
+        this.logger?.debug(
+          `flag denied: ${ctx.nick}!${ctx.ident}@${ctx.hostname} → ${type}:${entry.mask} (requires ${entry.flags}, plugin=${entry.pluginId})`,
+        );
+        continue;
+      }
 
       // ACC verification gate — enforces require_acc_for without plugin authors needing
       // to remember to call verifyUser() themselves.
