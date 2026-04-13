@@ -346,6 +346,50 @@ describe('chanmod plugin — auto-op', () => {
     }
   });
 
+  it('should op an already-joined user when +o flag is added (no rejoin)', async () => {
+    const liveBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(liveBot, '#test');
+    try {
+      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      simulateJoin(liveBot, 'Chief', 'chief', 'chief.host', '#test');
+      await tick();
+      liveBot.client.clearMessages();
+
+      liveBot.permissions.addUser('chief', '*!chief@chief.host', 'o', 'test');
+      await tick();
+      expect(
+        liveBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Chief'),
+        ),
+      ).toBeDefined();
+    } finally {
+      liveBot.cleanup();
+    }
+  });
+
+  it('should halfop an already-joined user when a halfop flag is added (no rejoin)', async () => {
+    const liveBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(liveBot, '#test');
+    try {
+      await liveBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: { enabled: true, config: { halfop_flags: ['v'] } },
+      });
+      simulateJoin(liveBot, 'HUser', 'huser', 'huser.host', '#test');
+      await tick();
+      liveBot.client.clearMessages();
+
+      liveBot.permissions.addUser('huser', '*!huser@huser.host', 'v', 'test');
+      await tick();
+      expect(
+        liveBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '+h' && m.args?.includes('HUser'),
+        ),
+      ).toBeDefined();
+    } finally {
+      liveBot.cleanup();
+    }
+  });
+
   it('should op an already-joined user when flags change from +v to +o', async () => {
     const liveBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(liveBot, '#test');
@@ -580,6 +624,50 @@ describe('chanmod plugin — auto-op', () => {
     }
   });
 
+  it('should op a user synced from botlink (leaf-side) without rejoin', async () => {
+    const leafBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(leafBot, '#test');
+    try {
+      await leafBot.pluginLoader.load(PLUGIN_PATH);
+      simulateJoin(leafBot, 'HubOp', 'hubop', 'hubop.host', '#test');
+      await tick();
+      leafBot.client.clearMessages();
+
+      leafBot.permissions.syncUser('hubop', ['*!hubop@hubop.host'], 'o', {}, 'botlink-sync');
+      await tick();
+      expect(
+        leafBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('HubOp'),
+        ),
+      ).toBeDefined();
+    } finally {
+      leafBot.cleanup();
+    }
+  });
+
+  it('should halfop a user synced from botlink (leaf-side) without rejoin', async () => {
+    const leafBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(leafBot, '#test');
+    try {
+      await leafBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: { enabled: true, config: { halfop_flags: ['v'] } },
+      });
+      simulateJoin(leafBot, 'HubHalf', 'hh', 'hh.host', '#test');
+      await tick();
+      leafBot.client.clearMessages();
+
+      leafBot.permissions.syncUser('hubhalf', ['*!hh@hh.host'], 'v', {}, 'botlink-sync');
+      await tick();
+      expect(
+        leafBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '+h' && m.args?.includes('HubHalf'),
+        ),
+      ).toBeDefined();
+    } finally {
+      leafBot.cleanup();
+    }
+  });
+
   it('should voice users already in a channel when the bot joins it', async () => {
     const joiningBot = createMockBot({ botNick: 'hexbot' });
     try {
@@ -607,6 +695,56 @@ describe('chanmod plugin — auto-op', () => {
       expect(
         joiningBot.client.messages.find(
           (m) => m.type === 'mode' && m.message === '+v' && m.args?.includes('BlueAngel'),
+        ),
+      ).toBeDefined();
+    } finally {
+      joiningBot.cleanup();
+    }
+  });
+
+  it('should op users already in a channel when the bot joins it', async () => {
+    const joiningBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      await joiningBot.pluginLoader.load(PLUGIN_PATH);
+      joiningBot.permissions.addUser('chief', '*!chief@chief.host', 'o', 'test');
+      simulateJoin(joiningBot, 'Chief', 'chief', 'chief.host', '#test');
+      await tick();
+      expect(joiningBot.client.messages.find((m) => m.type === 'mode')).toBeUndefined();
+
+      giveBotOps(joiningBot, '#test');
+      joiningBot.client.clearMessages();
+
+      simulateChannelInfo(joiningBot, '#test', '+nt');
+      await tick();
+      expect(
+        joiningBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Chief'),
+        ),
+      ).toBeDefined();
+    } finally {
+      joiningBot.cleanup();
+    }
+  });
+
+  it('should halfop users already in a channel when the bot joins it', async () => {
+    const joiningBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      await joiningBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: { enabled: true, config: { halfop_flags: ['v'] } },
+      });
+      joiningBot.permissions.addUser('huser', '*!huser@h.host', 'v', 'test');
+      simulateJoin(joiningBot, 'HUser', 'huser', 'h.host', '#test');
+      await tick();
+      expect(joiningBot.client.messages.find((m) => m.type === 'mode')).toBeUndefined();
+
+      giveBotOps(joiningBot, '#test');
+      joiningBot.client.clearMessages();
+
+      simulateChannelInfo(joiningBot, '#test', '+nt');
+      await tick();
+      expect(
+        joiningBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '+h' && m.args?.includes('HUser'),
         ),
       ).toBeDefined();
     } finally {
