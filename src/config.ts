@@ -61,6 +61,7 @@ const IrcConfigOnDiskSchema = z.strictObject({
 const OwnerConfigSchema = z.strictObject({
   handle: z.string(),
   hostmask: z.string(),
+  password_env: z.string().optional(),
 });
 
 const IdentityConfigSchema = z.strictObject({

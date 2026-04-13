@@ -29,6 +29,26 @@ Key properties:
 
 A DCC session requires three things: a matching hostmask, the required flags, and a password set by an admin. Step through these once.
 
+### Owner bootstrap (headless / Docker)
+
+If you're running in a container without REPL access, seed the owner's password from an env var instead. Add `password_env` to the owner block in `config/bot.json` and set the variable in `config/bot.env`:
+
+```json
+"owner": {
+  "handle": "admin",
+  "hostmask": "*!yourident@your.host.here",
+  "password_env": "HEX_OWNER_PASSWORD"
+}
+```
+
+```
+HEX_OWNER_PASSWORD=choose-a-strong-password
+```
+
+On first boot the bot reads the env var, hashes it with scrypt, and stores it. Subsequent boots leave the stored hash alone, so rotations via `.chpass` persist across restarts (same lifecycle as `MYSQL_ROOT_PASSWORD`). If DCC is enabled and the owner has no password set — either from the env var or a previous `.chpass` — the bot logs a loud warning at startup so operators don't silently hit a DCC rejection later.
+
+To force a re-seed from the env var (for example, after losing the password), clear the owner's `password_hash` row in the database and restart the bot.
+
 ### Step 1: Find your hostmask
 
 Join a channel the bot is in and run:

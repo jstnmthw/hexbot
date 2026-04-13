@@ -547,10 +547,28 @@ export interface IrcConfig {
   tls_key?: string;
 }
 
-/** Owner settings from config/bot.json. */
+/** Owner settings from config/bot.json (runtime shape). */
 export interface OwnerConfig {
   handle: string;
   hostmask: string;
+  /**
+   * Seed password, resolved from `password_env` in the on-disk config. Used
+   * by `Bot.ensureOwner()` to seed the owner's password hash on first boot
+   * when the DB has none. After the hash exists it is DB-of-record — further
+   * boots ignore this field, exactly like MySQL's `MYSQL_ROOT_PASSWORD`.
+   */
+  password?: string;
+}
+
+/**
+ * On-disk owner settings (before secret resolution). Mirrors {@link OwnerConfig}
+ * but accepts `password_env` instead of a resolved `password`. The config
+ * loader's `resolveSecrets()` rewrites the `_env` suffix into its sibling.
+ */
+export interface OwnerConfigOnDisk {
+  handle: string;
+  hostmask: string;
+  password_env?: string;
 }
 
 /** Identity verification settings. */
@@ -762,9 +780,10 @@ export interface ChanmodBotConfigOnDisk {
 /** On-disk bot config — the raw JSON schema before secret resolution. */
 export interface BotConfigOnDisk extends Omit<
   BotConfig,
-  'irc' | 'services' | 'proxy' | 'botlink' | 'chanmod'
+  'irc' | 'owner' | 'services' | 'proxy' | 'botlink' | 'chanmod'
 > {
   irc: IrcConfigOnDisk;
+  owner: OwnerConfigOnDisk;
   services: ServicesConfigOnDisk;
   proxy?: ProxyConfigOnDisk;
   botlink?: BotlinkConfigOnDisk;

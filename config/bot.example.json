@@ -10,7 +10,8 @@
   },
   "owner": {
     "handle": "admin",
-    "hostmask": "*!yourident@your.host.here"
+    "hostmask": "*!yourident@your.host.here",
+    "password_env": "HEX_OWNER_PASSWORD"
   },
   "identity": {
     "method": "hostmask",

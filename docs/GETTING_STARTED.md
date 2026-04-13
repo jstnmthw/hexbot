@@ -40,10 +40,19 @@ Edit `config/bot.json` with your IRC server details and owner hostmask. Secrets 
   },
   "owner": {
     "handle": "admin",
-    "hostmask": "*!yourident@your.host.here"
+    "hostmask": "*!yourident@your.host.here",
+    "password_env": "HEX_OWNER_PASSWORD"
   }
 }
 ```
+
+Then put the owner's DCC password in `config/bot.env`:
+
+```
+HEX_OWNER_PASSWORD=choose-a-strong-password
+```
+
+The first time the bot starts it will read `HEX_OWNER_PASSWORD`, hash it with scrypt, and store it in the database. Subsequent restarts leave the stored hash alone, so if you later rotate via `.chpass` those changes persist across reboots. The env var behaves like MySQL's `MYSQL_ROOT_PASSWORD` — leave it set in your env file; it only seeds when the DB has no hash on file.
 
 **Finding your hostmask:** Connect to the IRC network with your client and run `/whois yournick`. Use the `user@host` portion to build a hostmask pattern. Common formats:
 
@@ -131,7 +140,7 @@ Flags can also be scoped to a specific channel:
 
 ## Setting a DCC password
 
-DCC CHAT sessions require a **per-user password** in addition to a hostmask match and the right flags. Set one with `.chpass` from the REPL before a user can connect via DCC:
+DCC CHAT sessions require a **per-user password** in addition to a hostmask match and the right flags. The owner's password is seeded automatically from `HEX_OWNER_PASSWORD` on first boot (see [Configure](#configure) above). For every additional user, set one with `.chpass` from the REPL or from an already-authenticated DCC session:
 
 ```
 .chpass alice <newpassword>

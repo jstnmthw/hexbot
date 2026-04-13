@@ -85,6 +85,21 @@ describe('parseBotConfigOnDisk — valid shapes', () => {
   });
 });
 
+describe('parseBotConfigOnDisk — owner.password_env', () => {
+  it('accepts owner with password_env', () => {
+    const config = baseValidConfig();
+    (config.owner as Record<string, unknown>).password_env = 'HEX_OWNER_PASSWORD';
+    const parsed = parseBotConfigOnDisk(config);
+    expect(parsed.owner.password_env).toBe('HEX_OWNER_PASSWORD');
+  });
+
+  it('rejects unknown keys on the owner block', () => {
+    const config = baseValidConfig();
+    (config.owner as Record<string, unknown>).password = 'plaintext-forbidden';
+    expect(() => parseBotConfigOnDisk(config)).toThrow(/owner: Unrecognized key: "password"/);
+  });
+});
+
 describe('parseBotConfigOnDisk — unknown keys', () => {
   it('rejects unknown keys at the root (typo guard)', () => {
     expect(() => parseBotConfigOnDisk({ ...baseValidConfig(), extra: 'x' })).toThrow(

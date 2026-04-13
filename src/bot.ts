@@ -41,6 +41,7 @@ import { HelpRegistry } from './core/help-registry';
 import { IRCCommands } from './core/irc-commands';
 import { MemoManager } from './core/memo';
 import { MessageQueue } from './core/message-queue';
+import { ensureOwner } from './core/owner-bootstrap';
 import { Permissions } from './core/permissions';
 import { Services } from './core/services';
 import { STSStore, enforceSTS } from './core/sts';
@@ -245,8 +246,12 @@ export class Bot {
     // 2. Load permissions from DB
     this.permissions.loadFromDb();
 
-    // 3. Ensure the configured owner exists
-    this.ensureOwner();
+    // 3. Ensure the configured owner exists (and seed owner password if needed)
+    await ensureOwner({
+      config: this.config,
+      permissions: this.permissions,
+      logger: this.botLogger,
+    });
 
     // 4. Register commands
     registerPermissionCommands(this.commandHandler, this.permissions);
@@ -861,23 +866,5 @@ export class Bot {
         link.unregisterRelay(handle);
       }
     };
-  }
-
-  /** Ensure the configured owner exists in the permissions system. */
-  private ensureOwner(): void {
-    const ownerCfg = this.config.owner;
-    if (!ownerCfg?.handle || !ownerCfg?.hostmask) return;
-
-    const existing = this.permissions.getUser(ownerCfg.handle);
-    if (!existing) {
-      this.permissions.addUser(ownerCfg.handle, ownerCfg.hostmask, 'n', 'config');
-      this.botLogger.info(`Owner "${ownerCfg.handle}" added from config`);
-    } else if (!existing.hostmasks.includes(ownerCfg.hostmask)) {
-      // Config hostmask not present — add it without removing existing ones
-      this.permissions.addHostmask(ownerCfg.handle, ownerCfg.hostmask, 'config');
-      this.botLogger.info(
-        `Owner "${ownerCfg.handle}" hostmask updated from config: ${ownerCfg.hostmask}`,
-      );
-    }
   }
 }

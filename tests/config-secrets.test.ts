@@ -17,6 +17,7 @@ describe('resolveSecrets', () => {
     'TEST_NESTED',
     'TEST_ARRAY_1',
     'TEST_ARRAY_2',
+    'TEST_OWNER_PW',
   ];
 
   beforeEach(() => {
@@ -34,6 +35,16 @@ describe('resolveSecrets', () => {
     process.env.TEST_VAR_A = 'hunter2';
     const resolved = resolveSecrets({ password_env: 'TEST_VAR_A' } as Record<string, unknown>);
     expect(resolved).toEqual({ password: 'hunter2' });
+  });
+
+  it('resolves owner.password_env into owner.password', () => {
+    process.env.TEST_OWNER_PW = 'seed-me';
+    const resolved = resolveSecrets({
+      owner: { handle: 'admin', hostmask: '*!*@*', password_env: 'TEST_OWNER_PW' },
+    } as Record<string, unknown>);
+    expect(resolved).toEqual({
+      owner: { handle: 'admin', hostmask: '*!*@*', password: 'seed-me' },
+    });
   });
 
   it('resolves nested _env fields', () => {
