@@ -103,8 +103,12 @@ export function parseISupport(client: SupportsProvider): ServerCapabilities {
   const prefixToSymbol: Record<string, string> = {};
   const symbolToPrefix: Record<string, string> = {};
   if (Array.isArray(prefixRaw) && prefixRaw.length > 0) {
-    for (const entry of prefixRaw as Array<{ symbol: string; mode: string }>) {
-      if (typeof entry?.mode !== 'string' || typeof entry?.symbol !== 'string') continue;
+    for (const raw of prefixRaw) {
+      /* v8 ignore next */
+      if (typeof raw !== 'object' || raw === null) continue;
+      const entry = raw as { symbol?: unknown; mode?: unknown };
+      /* v8 ignore next */
+      if (typeof entry.mode !== 'string' || typeof entry.symbol !== 'string') continue;
       prefixModes.push(entry.mode);
       prefixToSymbol[entry.mode] = entry.symbol;
       symbolToPrefix[entry.symbol] = entry.mode;
@@ -128,9 +132,9 @@ export function parseISupport(client: SupportsProvider): ServerCapabilities {
 
   // CHANMODES — irc-framework splits `beI,k,l,imnpstr` into `['beI','k','l','imnpstr']`.
   const cmRaw = supports('CHANMODES');
-  const cmArr =
-    Array.isArray(cmRaw) && cmRaw.every((x) => typeof x === 'string')
-      ? (cmRaw as string[])
+  const cmArr: string[] =
+    Array.isArray(cmRaw) && cmRaw.every((x): x is string => typeof x === 'string')
+      ? cmRaw
       : ['beI', 'k', 'l', 'imnpstr'];
   const chanmodesA = new Set(cmArr[0] ?? 'beI');
   const chanmodesB = new Set(cmArr[1] ?? 'k');
@@ -150,7 +154,7 @@ export function parseISupport(client: SupportsProvider): ServerCapabilities {
   const ctRaw = supports('CHANTYPES');
   const chantypes =
     Array.isArray(ctRaw) && ctRaw.length > 0
-      ? (ctRaw as unknown[]).map(String).join('')
+      ? ctRaw.map(String).join('')
       : typeof ctRaw === 'string' && ctRaw.length > 0
         ? ctRaw
         : '#&';

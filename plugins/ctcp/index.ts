@@ -13,11 +13,14 @@ export const description = 'Replies to CTCP VERSION, PING, and TIME requests.';
 export function init(api: PluginAPI): void {
   let versionString: string;
   try {
-    const pkg = JSON.parse(readFileSync(resolve('package.json'), 'utf-8')) as {
-      name?: string;
-      version?: string;
-    };
-    versionString = `${pkg.name ?? 'HexBot'} v${pkg.version ?? '0.0.0'}`;
+    const parsed: unknown = JSON.parse(readFileSync(resolve('package.json'), 'utf-8'));
+    const pkg =
+      typeof parsed === 'object' && parsed !== null
+        ? (parsed as { name?: unknown; version?: unknown })
+        : /* v8 ignore next */ {};
+    const pkgName = typeof pkg.name === 'string' ? pkg.name : /* v8 ignore next */ 'HexBot';
+    const pkgVersion = typeof pkg.version === 'string' ? pkg.version : /* v8 ignore next */ '0.0.0';
+    versionString = `${pkgName} v${pkgVersion}`;
   } catch {
     versionString = 'HexBot';
   }

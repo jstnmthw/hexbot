@@ -148,7 +148,7 @@ export function registerConnectionEvents(
   registerJoinErrorListeners(client, logger, listeners);
   bindCoreInviteHandler(deps);
 
-  const onConnecting = () => {
+  const onConnecting = (): void => {
     // Connecting event fires when client.connect() is called, even if the
     // socket fails to open or registration times out. Start a 30s registration
     // timeout that will fire even if socket-level events don't arrive.
@@ -164,7 +164,7 @@ export function registerConnectionEvents(
     }, 30_000);
   };
 
-  const onRegistered = () => {
+  const onRegistered = (): void => {
     lastCloseReason = null;
     // Registration succeeded, cancel the stall timeout.
     if (registrationTimer !== null) {
@@ -199,7 +199,7 @@ export function registerConnectionEvents(
   // Capture the server's IRC ERROR message (e.g. "Closing Link: ... (Throttled)")
   // which fires just before the socket closes. irc-framework emits this as 'irc error'
   // with error === 'irc' and reason containing the server message.
-  const onIrcError = (event: unknown) => {
+  const onIrcError = (event: unknown): void => {
     const e = toEventObject(event);
     if (String(e.error ?? '') === 'irc') {
       const reason = String(e.reason ?? '');
@@ -208,7 +208,7 @@ export function registerConnectionEvents(
     }
   };
 
-  const onClose = () => {
+  const onClose = (): void => {
     const reason = lastCloseReason ?? 'connection closed';
     const policy = classifyCloseReason(lastCloseReason);
     lastCloseReason = null;
@@ -232,7 +232,7 @@ export function registerConnectionEvents(
     reconnectDriver.onDisconnect(policy);
   };
 
-  const onSocketError = (err: unknown) => {
+  const onSocketError = (err: unknown): void => {
     const error = err instanceof Error ? err : new Error(String(err));
     lastCloseReason = error.message;
     logger.error('Socket error:', error.message);
@@ -247,13 +247,13 @@ export function registerConnectionEvents(
   listen('socket error', onSocketError);
 
   return {
-    stopPresenceCheck() {
+    stopPresenceCheck(): void {
       if (presenceTimer !== null) {
         clearInterval(presenceTimer);
         presenceTimer = null;
       }
     },
-    removeListeners() {
+    removeListeners(): void {
       for (const { event, fn } of listeners) {
         client.removeListener(event, fn);
       }
@@ -264,7 +264,7 @@ export function registerConnectionEvents(
         registrationTimer = null;
       }
     },
-    cancelReconnect() {
+    cancelReconnect(): void {
       reconnectDriver.cancel();
     },
   };
@@ -464,7 +464,7 @@ function registerJoinErrorListeners(
     banned_from_channel: 'banned from channel (+b)',
     bad_channel_key: 'bad channel key (+k)',
   };
-  const onJoinIrcError = (event: unknown) => {
+  const onJoinIrcError = (event: unknown): void => {
     const e = toEventObject(event);
     const reason = JOIN_ERROR_NAMES[String(e.error ?? '')];
     if (reason) {
@@ -475,7 +475,7 @@ function registerJoinErrorListeners(
   listeners.push({ event: 'irc error', fn: onJoinIrcError });
 
   // 477 (need to register nick) is unknown to irc-framework — catch it via raw numeric.
-  const onUnknownCommand = (event: unknown) => {
+  const onUnknownCommand = (event: unknown): void => {
     const e = toEventObject(event);
     if (String(e.command ?? '') === '477') {
       const params = Array.isArray(e.params) ? (e.params as unknown[]) : [];

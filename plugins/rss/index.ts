@@ -17,7 +17,7 @@ interface FeedConfig {
   interval?: number; // seconds, default 3600
 }
 
-interface PluginConfig {
+interface RssPluginConfig {
   feeds: FeedConfig[];
   dedup_window_days: number;
   max_title_length: number;
@@ -25,10 +25,26 @@ interface PluginConfig {
   max_per_poll: number;
 }
 
-interface FeedItem {
-  guid?: string;
-  title?: string;
-  link?: string;
+/** Minimal shape of a feed entry consumed by this plugin. */
+type FeedItem = Pick<Parser.Item, 'guid' | 'title' | 'link'>;
+
+/** Narrow an unknown value to `Error` so we can read `.message` safely. */
+function errorMessage(err: unknown): string {
+  /* v8 ignore next -- defensive: tests always throw Error instances */
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Type guard for a runtime-stored FeedConfig record. */
+function isFeedConfig(value: unknown): value is FeedConfig {
+  /* v8 ignore next -- defensive: JSON.parse on stored feeds returns object */
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.id === 'string' &&
+    typeof v.url === 'string' &&
+    Array.isArray(v.channels) &&
+    v.channels.every((c): c is string => typeof c === 'string')
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -59,7 +75,7 @@ export async function init(api: PluginAPI): Promise<void> {
     try {
       await pollFeed(api, feed, cfg, 'silent');
     } catch (err) {
-      api.error(`Error seeding feed "${feed.id}":`, (err as Error).message);
+      api.error(`Error seeding feed "${feed.id}":`, errorMessage(err));
     }
   }
 
@@ -76,7 +92,7 @@ export async function init(api: PluginAPI): Promise<void> {
           await announceItems(api, feed, items, cfg);
         }
       } catch (err) {
-        api.error(`Error polling feed "${feed.id}" (${feed.url}):`, (err as Error).message);
+        api.error(`Error polling feed "${feed.id}" (${feed.url}):`, errorMessage(err));
       }
     }
   });
@@ -137,14 +153,20 @@ export function teardown(): void {
 // Config
 // ---------------------------------------------------------------------------
 
-function loadConfig(api: PluginAPI): PluginConfig {
-  const c = api.config as Partial<PluginConfig>;
+function loadConfig(api: PluginAPI): RssPluginConfig {
+  const c = api.config;
+  const rawFeeds = c.feeds;
+  const feeds: FeedConfig[] = Array.isArray(rawFeeds) ? rawFeeds.filter(isFeedConfig) : [];
+  const numOrDefault = (key: string, fallback: number): number => {
+    const v = c[key];
+    return typeof v === 'number' ? v : fallback;
+  };
   return {
-    feeds: Array.isArray(c.feeds) ? c.feeds : [],
-    dedup_window_days: c.dedup_window_days ?? 30,
-    max_title_length: c.max_title_length ?? 300,
-    request_timeout_ms: c.request_timeout_ms ?? 10000,
-    max_per_poll: c.max_per_poll ?? 5,
+    feeds,
+    dedup_window_days: numOrDefault('dedup_window_days', 30),
+    max_title_length: numOrDefault('max_title_length', 300),
+    request_timeout_ms: numOrDefault('request_timeout_ms', 10000),
+    max_per_poll: numOrDefault('max_per_poll', 5),
   };
 }
 
@@ -195,7 +217,7 @@ type PollMode = 'silent' | 'announce' | 'seedPreview';
 async function pollFeed(
   api: PluginAPI,
   feed: FeedConfig,
-  config: PluginConfig,
+  config: RssPluginConfig,
   mode: PollMode,
 ): Promise<FeedItem[]> {
   const result = await parser.parseURL(feed.url);
@@ -247,7 +269,7 @@ export function stripHtmlTags(input: string): string {
   return curr;
 }
 
-export function formatItem(feed: FeedConfig, item: FeedItem, config: PluginConfig): string {
+export function formatItem(feed: FeedConfig, item: FeedItem, config: RssPluginConfig): string {
   const feedName = feed.name ?? feed.id;
   let title = stripHtmlTags(item.title ?? '').trim();
   if (title.length > config.max_title_length) {
@@ -265,7 +287,7 @@ async function announceItems(
   api: PluginAPI,
   feed: FeedConfig,
   items: FeedItem[],
-  config: PluginConfig,
+  config: RssPluginConfig,
 ): Promise<void> {
   if (feed.channels.length === 0) {
     api.warn(`Feed "${feed.id}" has no channels configured — skipping announcement`);
@@ -287,7 +309,7 @@ async function announceItems(
 // Stale entry cleanup
 // ---------------------------------------------------------------------------
 
-function cleanupSeen(api: PluginAPI, config: PluginConfig): void {
+function cleanupSeen(api: PluginAPI, config: RssPluginConfig): void {
   const maxAgeMs = config.dedup_window_days * 24 * 60 * 60 * 1000;
   const now = Date.now();
   const entries = api.db.list('rss:seen:');
@@ -309,7 +331,14 @@ function loadRuntimeFeeds(api: PluginAPI): FeedConfig[] {
   const feeds: FeedConfig[] = [];
   for (const entry of entries) {
     try {
-      feeds.push(JSON.parse(entry.value) as FeedConfig);
+      const parsed: unknown = JSON.parse(entry.value);
+      /* v8 ignore next 5 */
+      if (!isFeedConfig(parsed)) {
+        api.warn(`Corrupt runtime feed entry: ${entry.key}`);
+        api.db.del(entry.key);
+        continue;
+      }
+      feeds.push(parsed);
     } catch {
       api.warn(`Corrupt runtime feed entry: ${entry.key}`);
       api.db.del(entry.key);
@@ -375,7 +404,7 @@ async function handleAdd(
   api: PluginAPI,
   ctx: ChannelHandlerContext,
   args: string[],
-  cfg: PluginConfig,
+  cfg: RssPluginConfig,
 ): Promise<void> {
   // Grammar: !rss add <id> <url> [#channel] [interval]
   // Both trailing args are optional and distinguished by prefix:
@@ -443,7 +472,7 @@ async function handleAdd(
     }
     logCmd(api, ctx, 'add', 'ok', `id=${id} url=${url} chan=${channel} interval=${interval}s`);
   } catch (err) {
-    const errMsg = (err as Error).message;
+    const errMsg = errorMessage(err);
     api.notice(ctx.nick, `Feed "${id}" added but initial fetch failed: ${errMsg}`);
     logCmd(api, ctx, 'add', 'ok', `id=${id} (seed failed: ${errMsg})`);
   }
@@ -482,10 +511,13 @@ async function handleCheck(
   api: PluginAPI,
   ctx: ChannelHandlerContext,
   id: string | undefined,
-  cfg: PluginConfig,
+  cfg: RssPluginConfig,
 ): Promise<void> {
-  const targets = id
-    ? ([activeFeeds.get(id)].filter(Boolean) as FeedConfig[])
+  const targets: FeedConfig[] = id
+    ? (() => {
+        const f = activeFeeds.get(id);
+        return f ? [f] : [];
+      })()
     : [...activeFeeds.values()];
 
   if (targets.length === 0) {
@@ -503,8 +535,8 @@ async function handleCheck(
         totalNew += items.length;
       }
     } catch (err) {
-      api.notice(ctx.nick, `Error checking "${feed.id}": ${(err as Error).message}`);
-      api.error(`Error checking feed "${feed.id}":`, (err as Error).message);
+      api.notice(ctx.nick, `Error checking "${feed.id}": ${errorMessage(err)}`);
+      api.error(`Error checking feed "${feed.id}":`, errorMessage(err));
     }
   }
 

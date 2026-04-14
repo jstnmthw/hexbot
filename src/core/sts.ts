@@ -99,19 +99,29 @@ export class STSStore {
     const key = host.toLowerCase();
     const raw = this.db.get(STS_DB_NAMESPACE, key);
     if (!raw) return null;
-    let parsed: STSRecord;
+    let parsed: unknown;
     try {
-      parsed = JSON.parse(raw) as STSRecord;
+      parsed = JSON.parse(raw);
     } catch {
       return null;
     }
-    if (!parsed || typeof parsed.expiresAt !== 'number') return null;
-    if (parsed.expiresAt <= now) {
+    /* v8 ignore next */
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const record = parsed as Partial<STSRecord>;
+    /* v8 ignore next */
+    if (typeof record.expiresAt !== 'number' || typeof record.duration !== 'number') return null;
+    if (record.expiresAt <= now) {
       // Expired — prune lazily so we stop returning it.
       this.db.del(STS_DB_NAMESPACE, key);
       return null;
     }
-    return { ...parsed, host: key };
+    const result: STSRecord = {
+      host: key,
+      duration: record.duration,
+      expiresAt: record.expiresAt,
+    };
+    if (typeof record.port === 'number') result.port = record.port;
+    return result;
   }
 
   /**

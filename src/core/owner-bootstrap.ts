@@ -47,10 +47,10 @@ export async function ensureOwner(deps: EnsureOwnerDeps): Promise<void> {
       const hash = await hashPassword(ownerCfg.password);
       permissions.setPasswordHash(ownerCfg.handle, hash, 'config');
       logger.info(`Seeded owner password for "${ownerCfg.handle}" from owner.password_env`);
+      /* v8 ignore next 4 -- defensive catch for unexpected scrypt failure */
     } catch (err) {
-      logger.error(
-        `Failed to seed owner password for "${ownerCfg.handle}": ${(err as Error).message}`,
-      );
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(`Failed to seed owner password for "${ownerCfg.handle}": ${message}`);
     }
   }
 

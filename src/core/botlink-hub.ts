@@ -171,8 +171,13 @@ export class BotLinkHub {
     this.cmdHandler = commandHandler;
     this.cmdPermissions = permissions;
 
-    // Subscribe to permission mutation events — broadcast to all leaves
-    const broadcastUserSync = (handle: string) => {
+    // Subscribe to permission mutation events — broadcast to all leaves.
+    // Handlers accept unknown[] and narrow at runtime so they can be stored
+    // in a single heterogeneous listener array without casts.
+    const broadcastUserSync = (...args: unknown[]): void => {
+      const handle = args[0];
+      /* v8 ignore next -- defensive narrow: eventBus always emits string handle */
+      if (typeof handle !== 'string') return;
       const user = permissions.getUser(handle);
       if (user) {
         const frame = PermissionSyncer.buildSyncFrames(permissions).find(
@@ -182,15 +187,26 @@ export class BotLinkHub {
       }
     };
 
-    const onRemoved = (handle: string) => {
+    const onRemoved = (...args: unknown[]): void => {
+      const handle = args[0];
+      /* v8 ignore next -- defensive narrow: eventBus always emits string handle */
+      if (typeof handle !== 'string') return;
       this.broadcast({ type: 'DELUSER', handle });
     };
 
-    const onFlagsChanged = (
-      handle: string,
-      globalFlags: string,
-      channelFlags: Record<string, string>,
-    ) => {
+    const onFlagsChanged = (...args: unknown[]): void => {
+      const handle = args[0];
+      const globalFlags = args[1];
+      const channelFlagsIn = args[2];
+      /* v8 ignore start -- defensive narrows: eventBus always emits well-typed args */
+      if (typeof handle !== 'string' || typeof globalFlags !== 'string') return;
+      if (!channelFlagsIn || typeof channelFlagsIn !== 'object') return;
+      /* v8 ignore stop */
+      const channelFlags: Record<string, string> = {};
+      for (const [ch, flags] of Object.entries(channelFlagsIn as Record<string, unknown>)) {
+        /* v8 ignore next -- defensive filter: flag values are always strings */
+        if (typeof flags === 'string') channelFlags[ch] = flags;
+      }
       const user = permissions.getUser(handle);
       if (user) {
         this.broadcast({
@@ -198,7 +214,7 @@ export class BotLinkHub {
           handle,
           hostmasks: [...user.hostmasks],
           globalFlags,
-          channelFlags: { ...channelFlags },
+          channelFlags,
         });
       }
     };
@@ -210,16 +226,21 @@ export class BotLinkHub {
     eventBus.on('user:hostmaskRemoved', broadcastUserSync);
 
     this.eventBusListeners = [
-      { event: 'user:added', fn: broadcastUserSync as (...args: unknown[]) => void },
-      { event: 'user:removed', fn: onRemoved as (...args: unknown[]) => void },
-      { event: 'user:flagsChanged', fn: onFlagsChanged as (...args: unknown[]) => void },
-      { event: 'user:hostmaskAdded', fn: broadcastUserSync as (...args: unknown[]) => void },
-      { event: 'user:hostmaskRemoved', fn: broadcastUserSync as (...args: unknown[]) => void },
+      { event: 'user:added', fn: broadcastUserSync },
+      { event: 'user:removed', fn: onRemoved },
+      { event: 'user:flagsChanged', fn: onFlagsChanged },
+      { event: 'user:hostmaskAdded', fn: broadcastUserSync },
+      { event: 'user:hostmaskRemoved', fn: broadcastUserSync },
     ];
   }
 
   /** Handle an incoming CMD frame from a leaf. */
   private handleCmdRelay(fromBot: string, frame: LinkFrame): void {
+    const cmdHandler = this.cmdHandler;
+    const cmdPermissions = this.cmdPermissions;
+    /* v8 ignore next -- defensive: handleCmdRelay is only called after setHandler */
+    if (!cmdHandler || !cmdPermissions) return;
+
     const handle = String(frame.fromHandle ?? '');
     const ref = String(frame.ref ?? '');
 
@@ -251,7 +272,7 @@ export class BotLinkHub {
       return;
     }
 
-    executeCmdFrame(frame, this.cmdHandler!, this.cmdPermissions!, (cmdRef, output) => {
+    executeCmdFrame(frame, cmdHandler, cmdPermissions, (cmdRef, output) => {
       this.send(fromBot, { type: 'CMD_RESULT', ref: cmdRef, output });
     });
   }

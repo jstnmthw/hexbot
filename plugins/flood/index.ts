@@ -252,10 +252,35 @@ function storeFloodBan(channel: string, mask: string, durationMinutes: number): 
   api.db.set(banDbKey(channel, mask), JSON.stringify(record));
 }
 
+function isBanRecord(value: unknown): value is BanRecord {
+  /* v8 ignore next -- defensive: JSON.parse on stored bans returns object */
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.mask === 'string' &&
+    typeof v.channel === 'string' &&
+    typeof v.ts === 'number' &&
+    typeof v.expires === 'number'
+  );
+}
+
 function liftExpiredFloodBans(): void {
   const now = Date.now();
   for (const { key, value } of api.db.list('ban:')) {
-    const record = JSON.parse(value) as BanRecord;
+    let record: BanRecord;
+    try {
+      const parsed: unknown = JSON.parse(value);
+      /* v8 ignore next 4 */
+      if (!isBanRecord(parsed)) {
+        api.db.del(key);
+        continue;
+      }
+      record = parsed;
+      /* v8 ignore next 4 */
+    } catch {
+      api.db.del(key);
+      continue;
+    }
     if (record.expires > 0 && record.expires <= now) {
       if (botHasOps(record.channel)) {
         api.mode(record.channel, '-b', record.mask);
@@ -470,7 +495,16 @@ export function init(pluginApi: PluginAPI): void {
     nickWindowMs: nickWindowSecs * 1000,
     banDurationMinutes: cfgNum('ban_duration_minutes', 10),
     ignoreOps: cfgBool('ignore_ops', true),
-    actions: (api.config.actions as string[] | undefined) ?? ['warn', 'kick', 'tempban'],
+    actions: (() => {
+      const a = api.config.actions;
+      return Array.isArray(a) && a.every((x): x is string => typeof x === 'string')
+        ? a
+        : /* v8 ignore next -- defensive fallback, tests always pass valid actions */ [
+            'warn',
+            'kick',
+            'tempban',
+          ];
+    })(),
     offenceWindowMs: cfgNum('offence_window_ms', 300_000),
     lockCount: cfgNum('flood_lock_count', 3),
     lockWindowMs: lockWindowSecs * 1000,

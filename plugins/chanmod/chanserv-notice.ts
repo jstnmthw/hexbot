@@ -63,10 +63,13 @@ export interface ChanServNoticeOptions {
  * Bind a notice handler that routes ChanServ responses to the backend.
  * Returns a teardown function.
  */
+function isAthemeBackend(b: AthemeBackend | AnopeBackend): b is AthemeBackend {
+  return b.name === 'atheme';
+}
+
 export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
   const { api, config, backend, probeState } = opts;
   const csNick = config.chanserv_nick;
-  const isAtheme = backend.name === 'atheme';
 
   api.bind('notice', '-', '*', (ctx) => {
     // Only process notices from ChanServ (PM — channel is null)
@@ -75,10 +78,10 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
 
     const text = ctx.text;
 
-    if (isAtheme) {
-      handleAthemeNotice(api, backend as AthemeBackend, probeState, text);
+    if (isAthemeBackend(backend)) {
+      handleAthemeNotice(api, backend, probeState, text);
     } else {
-      handleAnopeNotice(api, backend as AnopeBackend, probeState, text);
+      handleAnopeNotice(api, backend, probeState, text);
     }
   });
 

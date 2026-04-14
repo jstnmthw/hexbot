@@ -1,5 +1,5 @@
 // greeter — Configurable join greeting plugin with user-settable custom greets
-import type { PluginAPI, UserRecord } from '../../src/types';
+import type { PluginAPI, PublicUserRecord } from '../../src/types';
 
 export const name = 'greeter';
 export const version = '3.0.0';
@@ -9,11 +9,21 @@ export const description = 'Greets users when they join; lets registered users s
 const FLAG_ORDER = 'nmov';
 const MAX_GREET_LEN = 200;
 
+/** Read a string-typed config entry, returning `fallback` when absent or wrong-typed. */
+function cfgString(config: Record<string, unknown>, key: string, fallback: string): string {
+  const v = config[key];
+  return typeof v === 'string' ? v : fallback;
+}
+
 /**
  * Returns true if the user record has at least the privilege level of minFlag,
  * using the n > m > o > v hierarchy.
  */
-export function meetsMinFlag(record: UserRecord, minFlag: string, channel: string | null): boolean {
+export function meetsMinFlag(
+  record: PublicUserRecord,
+  minFlag: string,
+  channel: string | null,
+): boolean {
   const minLevel = FLAG_ORDER.indexOf(minFlag);
   if (minLevel === -1) return false;
 
@@ -44,7 +54,7 @@ export function init(api: PluginAPI): void {
       description: 'View, set, or delete your custom join greeting',
       detail: [
         'Use {nick} and {channel} in your message for substitution.',
-        `Requires +${(api.config.min_flag as string) ?? 'v'} to set or delete.`,
+        `Requires +${cfgString(api.config, 'min_flag', 'v')} to set or delete.`,
       ],
       category: 'general',
     },
@@ -64,16 +74,16 @@ export function init(api: PluginAPI): void {
     },
   ]);
 
-  const minFlag = (api.config.min_flag as string) ?? 'v';
-  const delivery = (api.config.delivery as string) ?? 'say';
-  const joinNotice = (api.config.join_notice as string) ?? '';
+  const minFlag = cfgString(api.config, 'min_flag', 'v');
+  const delivery = cfgString(api.config, 'delivery', 'say');
+  const joinNotice = cfgString(api.config, 'join_notice', '');
 
   // Register per-channel greeting setting; default reflects the global config value
   api.channelSettings.register([
     {
       key: 'greet_msg',
       type: 'string',
-      default: (api.config.message as string) ?? 'Welcome to {channel}, {nick}!',
+      default: cfgString(api.config, 'message', 'Welcome to {channel}, {nick}!'),
       description: 'Per-channel join greeting ({channel} and {nick} substituted)',
     },
   ]);

@@ -26,7 +26,7 @@ import type { Permissions } from '../permissions';
 export const PAGE_SIZE = 10;
 export const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
-const VALID_SOURCES: ReadonlySet<ModLogSource> = new Set([
+const VALID_SOURCES: ReadonlySet<string> = new Set<ModLogSource>([
   'repl',
   'irc',
   'dcc',
@@ -155,7 +155,7 @@ export function parseModlogFilter(args: string): ParsedFilter {
         filter.by = value;
         break;
       case 'source':
-        if (!VALID_SOURCES.has(value as ModLogSource)) {
+        if (!VALID_SOURCES.has(value)) {
           return {
             filter,
             error: `invalid source "${value}" — one of: ${[...VALID_SOURCES].join('|')}`,

@@ -278,7 +278,11 @@ export function registerBotlinkCommands(
         const leaves = hub.getLeaves();
         const lines = [`${config.botname} (hub, this bot)`];
         for (const name of leaves) {
-          const info = hub.getLeafInfo(name)!;
+          const info = hub.getLeafInfo(name);
+          if (!info) {
+            lines.push(`${name} (leaf, disconnecting)`);
+            continue;
+          }
           const ago = Math.floor((Date.now() - info.connectedAt) / 1000);
           lines.push(`${name} (leaf, connected ${ago}s ago)`);
         }

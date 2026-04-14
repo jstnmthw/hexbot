@@ -24,6 +24,31 @@ import type { BotConfig, Casemapping, PluginAPI, PluginsConfig } from './types';
 export type { IRCClientForPlugins };
 
 // ---------------------------------------------------------------------------
+// Plugin module shape
+// ---------------------------------------------------------------------------
+
+/** The subset of a plugin module we need for validation + lifecycle calls. */
+interface PluginModule {
+  name: string;
+  version?: unknown;
+  description?: unknown;
+  init: (api: PluginAPI) => void | Promise<void>;
+  teardown?: () => void | Promise<void>;
+}
+
+/** Type-guard: does an imported module conform to the required export shape? */
+function isValidPluginModule(
+  mod: Record<string, unknown>,
+): mod is Record<string, unknown> & PluginModule {
+  /* v8 ignore next -- name already validated by caller, this is a redundant guard */
+  if (typeof mod.name !== 'string' || mod.name.length === 0) return false;
+  if (typeof mod.init !== 'function') return false;
+  /* v8 ignore next -- defensive: tests never supply a non-function teardown */
+  if (mod.teardown !== undefined && typeof mod.teardown !== 'function') return false;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -227,7 +252,7 @@ export class PluginLoader {
       const name = this.inferPluginName(absPath);
       return { name, status: 'error', error: 'Plugin must export a "name" string' };
     }
-    if (typeof mod.init !== 'function') {
+    if (!isValidPluginModule(mod)) {
       return {
         name: mod.name,
         status: 'error',
@@ -262,16 +287,16 @@ export class PluginLoader {
 
     // Call init()
     try {
-      const result = (mod.init as (api: PluginAPI) => void | Promise<void>)(api);
+      const result = mod.init(api);
       if (result instanceof Promise) {
         await result;
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       // Clean up partial init: drain any teardown the plugin registered
-      if (typeof mod.teardown === 'function') {
+      if (mod.teardown) {
         try {
-          (mod.teardown as () => void)();
+          mod.teardown();
         } catch {
           /* swallow teardown errors */
         }
@@ -308,10 +333,7 @@ export class PluginLoader {
       version: typeof mod.version === 'string' ? mod.version : '0.0.0',
       description: typeof mod.description === 'string' ? mod.description : '',
       filePath: absPath,
-      teardown:
-        typeof mod.teardown === 'function'
-          ? (mod.teardown as () => void | Promise<void>)
-          : undefined,
+      teardown: mod.teardown,
     };
     this.loaded.set(pluginName, plugin);
 
@@ -579,7 +601,9 @@ export class PluginLoader {
     let entryTmpPath = '';
     for (const [origPath, source] of allFiles) {
       const base = basename(origPath, '.ts');
-      const tmpPath = join(dir, `${nameRemap.get(base)!}.ts`);
+      const remappedBase = nameRemap.get(base);
+      if (remappedBase === undefined) continue;
+      const tmpPath = join(dir, `${remappedBase}.ts`);
 
       // Rewrite same-directory imports to point to their corresponding temp files
       const rewritten = source.replace(

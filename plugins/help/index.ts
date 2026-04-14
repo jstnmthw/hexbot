@@ -16,12 +16,21 @@ function boldTrigger(usage: string): string {
   return `\x02${usage.slice(0, spaceIdx)}\x02${usage.slice(spaceIdx)}`;
 }
 
+/** Valid `reply_type` config values. */
+type ReplyType = 'notice' | 'privmsg' | 'channel_notice';
+
 export function init(api: PluginAPI): void {
-  const cooldownMs = (api.config.cooldown_ms as number | undefined) ?? 30000;
-  const replyType = (api.config.reply_type as string | undefined) ?? 'notice';
-  const compactIndex = (api.config.compact_index as boolean | undefined) ?? true;
-  const header = (api.config.header as string | undefined) ?? 'HexBot Commands';
-  const footer = (api.config.footer as string | undefined) ?? '*** End of Help ***';
+  const rawCooldown = api.config.cooldown_ms;
+  const cooldownMs = typeof rawCooldown === 'number' ? rawCooldown : 30000;
+  const rawReplyType = api.config.reply_type;
+  const replyType: ReplyType =
+    rawReplyType === 'privmsg' || rawReplyType === 'channel_notice' ? rawReplyType : 'notice';
+  const rawCompact = api.config.compact_index;
+  const compactIndex = typeof rawCompact === 'boolean' ? rawCompact : true;
+  const rawHeader = api.config.header;
+  const header = typeof rawHeader === 'string' ? rawHeader : 'HexBot Commands';
+  const rawFooter = api.config.footer;
+  const footer = typeof rawFooter === 'string' ? rawFooter : '*** End of Help ***';
 
   /**
    * Send a message to the appropriate target based on reply_type.
@@ -75,12 +84,12 @@ export function init(api: PluginAPI): void {
         (e) => e.flags === '-' || api.permissions.checkFlags(e.flags, ctx),
       );
       const categoryEntries = visible.filter(
-        (e) => (e.category ?? e.pluginId!).toLowerCase() === normalized.toLowerCase(),
+        (e) => (e.category ?? e.pluginId ?? '').toLowerCase() === normalized.toLowerCase(),
       );
 
       if (categoryEntries.length > 0) {
         // Category view — always private to nick
-        const actualCategory = categoryEntries[0].category ?? categoryEntries[0].pluginId!;
+        const actualCategory = categoryEntries[0].category ?? categoryEntries[0].pluginId ?? '';
         api.notice(ctx.nick, `\x02[${actualCategory}]\x02`);
         for (const e of categoryEntries) {
           api.notice(ctx.nick, `  ${boldTrigger(e.usage)} — ${e.description}`);
@@ -123,7 +132,7 @@ export function init(api: PluginAPI): void {
     // Group by category
     const groups = new Map<string, HelpEntry[]>();
     for (const entry of visible) {
-      const cat = entry.category ?? entry.pluginId!;
+      const cat = entry.category ?? entry.pluginId ?? '';
       const list = groups.get(cat) ?? [];
       list.push(entry);
       groups.set(cat, list);

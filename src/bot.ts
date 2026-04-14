@@ -367,6 +367,7 @@ export class Bot {
 
     // 7. Start bot link (if configured)
     if (this.config.botlink?.enabled) {
+      const botlinkConfig = this.config.botlink;
       // Register the 'shared' per-channel setting for ban sync
       this.channelSettings.register('core:botlink', [
         {
@@ -380,9 +381,9 @@ export class Bot {
       const isShared = (ch: string) => this.channelSettings.get(ch, 'shared') === true;
 
       const version = this.readPackageVersion();
-      if (this.config.botlink.role === 'hub') {
+      if (botlinkConfig.role === 'hub') {
         this._botLinkHub = new BotLinkHub(
-          this.config.botlink,
+          botlinkConfig,
           version,
           this.logger,
           this.eventBus,
@@ -411,7 +412,7 @@ export class Bot {
           return this._dccManager.getSessionList().map((s) => ({
             handle: s.handle,
             nick: s.nick,
-            botname: this.config.botlink!.botname,
+            botname: botlinkConfig.botname,
             connectedAt: s.connectedAt,
             idle: 0,
           }));
@@ -421,7 +422,7 @@ export class Bot {
         await this._botLinkHub.listen();
         this.botLogger.info('Bot link hub started');
       } else {
-        this._botLinkLeaf = new BotLinkLeaf(this.config.botlink, version, this.logger);
+        this._botLinkLeaf = new BotLinkLeaf(botlinkConfig, version, this.logger);
         this._botLinkLeaf.setCommandRelay(this.commandHandler, this.permissions);
         this._botLinkLeaf.onFrame = (frame) => {
           // Leaf applies state sync (hub is authoritative, so hub doesn't need this)
@@ -429,7 +430,7 @@ export class Bot {
           PermissionSyncer.applyFrame(frame, this.permissions);
           // Sync complete notification
           if (frame.type === 'SYNC_END') {
-            this.eventBus.emit('botlink:syncComplete', this.config.botlink!.botname);
+            this.eventBus.emit('botlink:syncComplete', botlinkConfig.botname);
           }
           // BSAY: hub asks this leaf to send an IRC message
           if (frame.type === 'BSAY') {
@@ -602,7 +603,7 @@ export class Bot {
     // lifecycle. The driver's connect callback re-opens the socket using
     // the latest options (STS upgrades mutate this.config between retries).
     const reconnectLogger = this.logger.child('reconnect');
-    this._reconnectDriver = createReconnectDriver({
+    const reconnectDriver = createReconnectDriver({
       connect: () => {
         reconnectLogger.info(
           `Reconnect attempt to ${this.config.irc.host}:${this.config.irc.port}`,
@@ -620,6 +621,7 @@ export class Bot {
       },
       exit: (code) => process.exit(code),
     });
+    this._reconnectDriver = reconnectDriver;
     return new Promise<void>((resolve, reject) => {
       this._lifecycleHandle = registerConnectionEvents(
         {
@@ -627,7 +629,7 @@ export class Bot {
           config: this.config,
           configuredChannels: this.configuredChannels,
           eventBus: this.eventBus,
-          reconnectDriver: this._reconnectDriver!,
+          reconnectDriver,
           applyCasemapping: (cm) => {
             this._casemapping = cm;
             this.channelState.setCasemapping(cm);
@@ -885,11 +887,15 @@ export class Bot {
   private _relayDeps(): import('./core/botlink-relay-handler').RelayHandlerDeps {
     const hub = this._botLinkHub;
     const leaf = this._botLinkLeaf;
+    // Only called when a botlink link is live, so botlink config must be set.
+    if (!this.config.botlink) {
+      throw new Error('[bot] _relayDeps() called without botlink configured');
+    }
     return {
       permissions: this.permissions,
       commandHandler: this.commandHandler,
       dccManager: this._dccManager,
-      botname: this.config.botlink!.botname,
+      botname: this.config.botlink.botname,
       sender: {
         sendTo: (botname, frame) => {
           if (hub) return hub.send(botname, frame);
@@ -1007,7 +1013,8 @@ export class Bot {
   /** Wire local DCC party line events to a botlink hub or leaf. */
   private wirePartyLine(link: BotLinkHub | BotLinkLeaf): void {
     if (!this._dccManager) return;
-    const botname = this.config.botlink!.botname;
+    if (!this.config.botlink) return;
+    const botname = this.config.botlink.botname;
     const sendFrame = (frame: LinkFrame) => {
       if (link instanceof BotLinkHub) {
         link.broadcast(frame);

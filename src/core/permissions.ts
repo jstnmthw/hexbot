@@ -372,8 +372,18 @@ export class Permissions {
     const rows = this.db.list(DB_NAMESPACE);
     for (const row of rows) {
       try {
-        const record = JSON.parse(row.value) as UserRecord;
-        this.users.set(record.handle.toLowerCase(), record);
+        const parsed: unknown = JSON.parse(row.value);
+        if (
+          typeof parsed === 'object' &&
+          parsed !== null &&
+          typeof (parsed as { handle?: unknown }).handle === 'string'
+        ) {
+          const record = parsed as UserRecord;
+          this.users.set(record.handle.toLowerCase(), record);
+          /* v8 ignore next 3 */
+        } else {
+          this.logger?.error(`Invalid user record shape: ${row.key}`);
+        }
       } catch {
         this.logger?.error(`Failed to parse user record: ${row.key}`);
       }

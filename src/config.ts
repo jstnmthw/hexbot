@@ -258,12 +258,16 @@ export function resolveSecrets(obj: unknown): unknown {
   return resolveValue(obj);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function resolveValue(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map((v) => resolveValue(v));
   }
-  if (value !== null && typeof value === 'object') {
-    return resolveObject(value as Record<string, unknown>);
+  if (isRecord(value)) {
+    return resolveObject(value);
   }
   return value;
 }
@@ -381,10 +385,9 @@ export function collectChannelsWithKeyEnv(
 ): Array<{ name: string; envVarName: string }> {
   const out: Array<{ name: string; envVarName: string }> = [];
   for (const entry of channels) {
-    if (typeof entry !== 'object' || entry === null) continue;
-    const e = entry as Record<string, unknown>;
-    if (typeof e.key_env === 'string' && typeof e.name === 'string') {
-      out.push({ name: e.name, envVarName: e.key_env });
+    if (!isRecord(entry)) continue;
+    if (typeof entry.key_env === 'string' && typeof entry.name === 'string') {
+      out.push({ name: entry.name, envVarName: entry.key_env });
     }
   }
   return out;
@@ -403,9 +406,10 @@ export function validateChannelKeys(
   const required = collectChannelsWithKeyEnv(onDiskChannels);
   for (const { name, envVarName } of required) {
     const resolved = resolvedChannels.find(
-      (c) => typeof c === 'object' && c !== null && (c as { name?: unknown }).name === name,
-    ) as { key?: string } | undefined;
-    if (!resolved?.key) {
+      (c): c is Record<string, unknown> => isRecord(c) && c.name === name,
+    );
+    const key = resolved?.key;
+    if (typeof key !== 'string' || key.length === 0) {
       throw new Error(`[config] Channel key env var ${envVarName} for ${name} is unset.`);
     }
   }

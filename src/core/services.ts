@@ -288,8 +288,8 @@ export class Services {
     clearTimeout(pending.timer);
     this.pending.delete(lower);
 
-    if (verified) {
-      this.eventBus.emit('user:identified', nick, account!);
+    if (verified && account !== null) {
+      this.eventBus.emit('user:identified', nick, account);
     }
 
     pending.resolve({ verified, account });

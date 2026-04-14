@@ -197,6 +197,7 @@ function mockSession(
     isRelaying: false,
     relayTarget: null,
     handleFlags: 'nm',
+    rateLimitKey: `${overrides.nick}!ident@host`,
     isClosed: false,
     writeLine: vi.fn(),
     close: vi.fn(),

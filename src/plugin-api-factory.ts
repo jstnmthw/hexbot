@@ -501,16 +501,21 @@ function createPluginChannelStateApi(
 > {
   return {
     onModesReady(callback: (channel: string) => void): void {
-      const wrappedListener = (...args: unknown[]) => callback(args[0] as string);
+      const wrappedListener = (channel: string): void => {
+        callback(channel);
+      };
       eventBus.on('channel:modesReady', wrappedListener);
       const list = modesReadyListeners.get(pluginId) ?? [];
       list.push(wrappedListener);
       modesReadyListeners.set(pluginId, list);
     },
     onPermissionsChanged(callback: (handle: string) => void): void {
-      // One wrapper fans three events into the plugin callback. All three
-      // carry `handle` as arg 0, which is the only field we surface.
-      const wrappedListener = (...args: unknown[]) => callback(args[0] as string);
+      // One wrapper fans three events into the plugin callback. The three
+      // events carry different tail params (global flags, hostmask, ...);
+      // we only surface `handle` (arg 0) and discard the rest.
+      const wrappedListener = (handle: string, ..._rest: unknown[]): void => {
+        callback(handle);
+      };
       for (const ev of PERMISSIONS_CHANGE_EVENTS) {
         eventBus.on(ev, wrappedListener);
       }

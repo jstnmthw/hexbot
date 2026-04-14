@@ -218,8 +218,12 @@ export class CommandHandler {
     const byCategory = new Map<string, CommandEntry[]>();
     for (const entry of this.commands.values()) {
       const cat = entry.options.category;
-      if (!byCategory.has(cat)) byCategory.set(cat, []);
-      byCategory.get(cat)!.push(entry);
+      let bucket = byCategory.get(cat);
+      if (!bucket) {
+        bucket = [];
+        byCategory.set(cat, bucket);
+      }
+      bucket.push(entry);
     }
 
     const lines: string[] = ['Available commands:'];

@@ -221,7 +221,9 @@ export class MessageQueue {
       return this.popNext();
     }
 
-    const fn = queue.shift()!;
+    const fn = queue.shift();
+    /* v8 ignore next -- guarded by the length check above */
+    if (!fn) return undefined;
     this.totalPending--;
 
     if (queue.length === 0) {

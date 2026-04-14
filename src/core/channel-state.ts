@@ -360,9 +360,10 @@ export class ChannelState {
 
     // Carry account info forward to the new nick
     if (this.networkAccounts.has(oldLower)) {
-      const account = this.networkAccounts.get(oldLower);
+      /* v8 ignore next -- has() just checked, `?? null` is unreachable */
+      const account = this.networkAccounts.get(oldLower) ?? null;
       this.networkAccounts.delete(oldLower);
-      this.networkAccounts.set(newLower, account!);
+      this.networkAccounts.set(newLower, account);
     }
 
     for (const ch of this.channels.values()) {
@@ -458,8 +459,10 @@ export class ChannelState {
       const modes = this.parseUserlistModes(u.modes);
 
       // Only add if not already present (join event may have fired first)
-      if (!ch.users.has(ircLower(nick, this.casemapping))) {
-        ch.users.set(ircLower(nick, this.casemapping), {
+      const lowerNick = ircLower(nick, this.casemapping);
+      const existing = ch.users.get(lowerNick);
+      if (!existing) {
+        ch.users.set(lowerNick, {
           nick,
           ident,
           hostname,
@@ -469,7 +472,6 @@ export class ChannelState {
         });
       } else {
         // Update ident/hostname/modes from NAMES if we have them
-        const existing = ch.users.get(ircLower(nick, this.casemapping))!;
         if (ident) existing.ident = ident;
         if (hostname) existing.hostname = hostname;
         if (ident || hostname) {

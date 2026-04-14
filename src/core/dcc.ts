@@ -139,6 +139,8 @@ export interface DCCSessionEntry {
   readonly relayTarget: string | null;
   /** The authenticated user's permission flag string (e.g. `"nm"`). */
   readonly handleFlags: string;
+  /** Key used for rate-limit tracking — `nick!ident@host`. */
+  readonly rateLimitKey: string;
   /** True if the session has been closed (socket destroyed, cleanup called). */
   readonly isClosed: boolean;
   writeLine(line: string): void;
@@ -822,7 +824,9 @@ export class DCCSession implements DCCSessionEntry {
         const target = this._relayTarget;
         this.exitRelay();
         this.writeLine(`*** Relay ended. Back on ${this.manager.getBotName()}.`);
-        this.manager.onRelayEnd?.(this.handle, target!);
+        if (target !== null) {
+          this.manager.onRelayEnd?.(this.handle, target);
+        }
         return;
       }
       this._relayCallback(trimmed);
@@ -1036,7 +1040,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
   /** Called by DCCSession when the password prompt succeeds. */
   onAuthSuccess(session: DCCSessionEntry): void {
-    const key = (session as DCCSession).rateLimitKey;
+    const key = session.rateLimitKey;
     this.authTracker.recordSuccess(key);
     // Emit the info log before registering the session so the DCC fanout
     // sink does not echo "session active" back to the joining user's own

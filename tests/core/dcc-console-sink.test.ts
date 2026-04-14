@@ -69,6 +69,7 @@ function fakeSession(
     isRelaying: false,
     relayTarget: null,
     handleFlags,
+    rateLimitKey: `${handle}!ident@host`,
     isClosed: false,
     received,
     writes,

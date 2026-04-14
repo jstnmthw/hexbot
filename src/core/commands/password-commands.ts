@@ -131,7 +131,8 @@ export function registerPasswordCommands(deps: PasswordCommandDeps): void {
       try {
         hash = await hashPassword(newpass);
       } catch (err) {
-        const message = (err as Error).message;
+        const message =
+          err instanceof Error ? err.message : /* v8 ignore next -- defensive */ String(err);
         ctx.reply(`chpass: ${message}`);
         failure(ctx, `rejected: ${message}`, targetHandle);
         return;
