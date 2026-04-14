@@ -8,7 +8,7 @@ import type { CommandContext, CommandHandler } from '../../command-handler';
 import type { BotDatabase } from '../../database';
 import { tryAudit } from '../audit';
 import { hashPassword } from '../password';
-import type { Permissions } from '../permissions';
+import { OWNER_FLAG, type Permissions } from '../permissions';
 
 export interface PasswordCommandDeps {
   handler: CommandHandler;
@@ -93,7 +93,7 @@ export function registerPasswordCommands(deps: PasswordCommandDeps): void {
           failure(ctx, 'denied: caller hostmask unmatched', targetHandle);
           return;
         }
-        const callerIsOwner = caller.global.includes('n');
+        const callerIsOwner = caller.global.includes(OWNER_FLAG);
         if (!isSelfRotation && !callerIsOwner) {
           ctx.reply('chpass: only owners (+n) can rotate another user\u2019s password.');
           failure(ctx, 'denied: non-owner cross-handle rotation', targetHandle);

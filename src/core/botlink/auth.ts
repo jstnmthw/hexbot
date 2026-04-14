@@ -5,13 +5,13 @@
 // pending-handshake counting, manual CIDR bans, and the persisted link-ban
 // store. Extracted from BotLinkHub so the escalation math and ban-state
 // management can be unit-tested without standing up a full hub.
-import type { BotDatabase } from '../database';
-import type { BotEventBus } from '../event-bus';
-import type { Logger } from '../logger';
-import type { BotlinkConfig } from '../types';
-import { AdminListStore } from '../utils/admin-list-store';
-import { tryLogModAction } from './audit';
-import { hashPassword } from './botlink-protocol';
+import type { BotDatabase } from '../../database';
+import type { BotEventBus } from '../../event-bus';
+import type { Logger } from '../../logger';
+import type { BotlinkConfig } from '../../types';
+import { AdminListStore } from '../../utils/admin-list-store';
+import { tryLogModAction } from '../audit';
+import { hashPassword } from './protocol';
 
 // ---------------------------------------------------------------------------
 // Types

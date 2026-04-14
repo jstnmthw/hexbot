@@ -10,7 +10,7 @@ import {
   getUserFlags,
 } from '../../plugins/chanmod/helpers';
 import { createState } from '../../plugins/chanmod/state';
-import { BanStore } from '../../src/core/ban-store.js';
+import { BanStore } from '../../src/core/ban-store';
 import { BotDatabase } from '../../src/database';
 import { createLogger } from '../../src/logger';
 import type { PluginAPI, PluginBanStore, PluginDB } from '../../src/types';

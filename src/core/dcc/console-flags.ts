@@ -10,7 +10,7 @@
 //   value     = canonical flag string, e.g. "mojw"
 //
 // Default flags for a new session: see `DEFAULT_CONSOLE_FLAGS` below.
-import type { LogLevel, LogRecord } from '../logger';
+import type { LogLevel, LogRecord } from '../../logger';
 
 // ---------------------------------------------------------------------------
 // Flag letters

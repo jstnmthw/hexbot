@@ -4,16 +4,14 @@ import { CommandHandler } from '../../src/command-handler';
 import type { CommandPermissionsProvider } from '../../src/command-handler';
 import { registerDccConsoleCommands } from '../../src/core/commands/dcc-console-commands';
 import {
+  type ConsoleFlagStore,
   DCCManager,
   type DCCSessionEntry,
   createInMemoryConsoleFlagStore,
-} from '../../src/core/dcc';
-import {
-  type ConsoleFlagStore,
   formatFlags,
   parseCanonicalFlags,
   shouldDeliverToSession,
-} from '../../src/core/dcc-console-flags';
+} from '../../src/core/dcc';
 import { BotDatabase } from '../../src/database';
 import { type LogRecord, Logger, createLogger } from '../../src/logger';
 import type { DccConfig, PluginServices } from '../../src/types';

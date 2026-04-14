@@ -1,6 +1,6 @@
 // HexBot — Channel-specific sharing for bot-link
 // Tracks shared ban/exempt lists and produces/applies sync frames.
-import type { LinkFrame } from './botlink-protocol';
+import type { LinkFrame } from './protocol';
 
 // ---------------------------------------------------------------------------
 // Types

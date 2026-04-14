@@ -4,9 +4,10 @@
 import { connect } from 'node:net';
 import type { Socket } from 'node:net';
 
-import type { CommandContext } from '../command-handler';
-import type { Logger } from '../logger';
-import type { BotlinkConfig } from '../types';
+import type { CommandContext } from '../../command-handler';
+import type { Logger } from '../../logger';
+import type { BotlinkConfig } from '../../types';
+import { PendingRequestMap } from './pending';
 import {
   BotLinkProtocol,
   type CommandRelay,
@@ -16,7 +17,7 @@ import {
   type SocketFactory,
   executeCmdFrame,
   hashPassword,
-} from './botlink-protocol';
+} from './protocol';
 
 // ---------------------------------------------------------------------------
 // BotLinkLeaf
@@ -41,9 +42,9 @@ export class BotLinkLeaf {
   private linkTimeoutMs: number;
   private reconnectDelayMs: number;
   private reconnectMaxDelayMs: number;
-  private pendingCmds: Map<string, { resolve: (output: string[]) => void }> = new Map();
-  private pendingWhom: Map<string, { resolve: (users: PartyLineUser[]) => void }> = new Map();
-  private pendingProtect: Map<string, { resolve: (success: boolean) => void }> = new Map();
+  private pendingCmds = new PendingRequestMap<string[]>();
+  private pendingWhom = new PendingRequestMap<PartyLineUser[]>();
+  private pendingProtect = new PendingRequestMap<boolean>();
   private cmdRefCounter = 0;
   private cmdHandler: CommandRelay | null = null;
   private cmdPermissions: LinkPermissions | null = null;
@@ -149,19 +150,7 @@ export class BotLinkLeaf {
       ref,
     });
 
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        this.pendingProtect.delete(ref);
-        resolve(false);
-      }, timeoutMs);
-
-      this.pendingProtect.set(ref, {
-        resolve: (success: boolean) => {
-          clearTimeout(timer);
-          resolve(success);
-        },
-      });
-    });
+    return this.pendingProtect.create(ref, timeoutMs, false);
   }
 
   // -----------------------------------------------------------------------
@@ -203,19 +192,7 @@ export class BotLinkLeaf {
     });
 
     const CMD_TIMEOUT_MS = 10_000;
-    const output = await new Promise<string[]>((resolve) => {
-      const timer = setTimeout(() => {
-        this.pendingCmds.delete(ref);
-        resolve(['Command relay timed out.']);
-      }, CMD_TIMEOUT_MS);
-
-      this.pendingCmds.set(ref, {
-        resolve: (lines: string[]) => {
-          clearTimeout(timer);
-          resolve(lines);
-        },
-      });
-    });
+    const output = await this.pendingCmds.create(ref, CMD_TIMEOUT_MS, ['Command relay timed out.']);
 
     for (const line of output) {
       ctx.reply(line);
@@ -230,35 +207,14 @@ export class BotLinkLeaf {
     this.send({ type: 'PARTY_WHOM', ref });
 
     const WHOM_TIMEOUT_MS = 10_000;
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        this.pendingWhom.delete(ref);
-        resolve([]);
-      }, WHOM_TIMEOUT_MS);
-
-      this.pendingWhom.set(ref, {
-        resolve: (users) => {
-          clearTimeout(timer);
-          resolve(users);
-        },
-      });
-    });
+    return this.pendingWhom.create(ref, WHOM_TIMEOUT_MS, []);
   }
 
   /** Resolve and clear all pending request maps. */
   private flushPendingRequests(): void {
-    for (const pending of this.pendingCmds.values()) {
-      pending.resolve(['Disconnected from hub.']);
-    }
-    this.pendingCmds.clear();
-    for (const pending of this.pendingWhom.values()) {
-      pending.resolve([]);
-    }
-    this.pendingWhom.clear();
-    for (const pending of this.pendingProtect.values()) {
-      pending.resolve(false);
-    }
-    this.pendingProtect.clear();
+    this.pendingCmds.drain(['Disconnected from hub.']);
+    this.pendingWhom.drain([]);
+    this.pendingProtect.drain(false);
   }
 
   /** Disconnect from the hub and stop reconnecting. */
@@ -378,49 +334,29 @@ export class BotLinkLeaf {
 
     // Resolve pending command relays
     if (frame.type === 'CMD_RESULT') {
-      const ref = String(frame.ref ?? '');
-      const pending = this.pendingCmds.get(ref);
-      if (pending) {
-        this.pendingCmds.delete(ref);
-        pending.resolve(
-          Array.isArray(frame.output)
-            ? frame.output.filter((s): s is string => typeof s === 'string')
-            : [],
-        );
-        return;
-      }
+      const output = Array.isArray(frame.output)
+        ? frame.output.filter((s): s is string => typeof s === 'string')
+        : [];
+      if (this.pendingCmds.resolve(String(frame.ref ?? ''), output)) return;
     }
 
     // Resolve pending PARTY_WHOM requests
     if (frame.type === 'PARTY_WHOM_REPLY') {
-      const ref = String(frame.ref ?? '');
-      const pending = this.pendingWhom.get(ref);
-      if (pending) {
-        this.pendingWhom.delete(ref);
-        pending.resolve(
-          Array.isArray(frame.users)
-            ? frame.users.filter(
-                (u): u is PartyLineUser =>
-                  typeof u === 'object' &&
-                  u !== null &&
-                  typeof (u as PartyLineUser).handle === 'string' &&
-                  typeof (u as PartyLineUser).botname === 'string',
-              )
-            : [],
-        );
-        return;
-      }
+      const users = Array.isArray(frame.users)
+        ? frame.users.filter(
+            (u): u is PartyLineUser =>
+              typeof u === 'object' &&
+              u !== null &&
+              typeof (u as PartyLineUser).handle === 'string' &&
+              typeof (u as PartyLineUser).botname === 'string',
+          )
+        : [];
+      if (this.pendingWhom.resolve(String(frame.ref ?? ''), users)) return;
     }
 
     // Resolve pending PROTECT_ACK
     if (frame.type === 'PROTECT_ACK') {
-      const ref = String(frame.ref ?? '');
-      const pending = this.pendingProtect.get(ref);
-      if (pending) {
-        this.pendingProtect.delete(ref);
-        pending.resolve(frame.success === true);
-        return;
-      }
+      if (this.pendingProtect.resolve(String(frame.ref ?? ''), frame.success === true)) return;
     }
 
     // Execute incoming CMD frames locally (from .bot command routed via hub)

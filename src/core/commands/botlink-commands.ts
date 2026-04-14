@@ -6,9 +6,13 @@ import type { BotlinkConfig } from '../../types';
 import { formatDuration, parseDuration } from '../../utils/duration';
 import { sanitize } from '../../utils/sanitize';
 import { tryAudit } from '../audit';
-import { type BotLinkHub, isValidIP } from '../botlink-hub';
-import type { BotLinkLeaf } from '../botlink-leaf';
-import type { LinkFrame, PartyLineUser } from '../botlink-protocol';
+import {
+  type BotLinkHub,
+  type BotLinkLeaf,
+  type LinkFrame,
+  type PartyLineUser,
+  isValidIP,
+} from '../botlink';
 import type { BotlinkDCCView } from '../dcc';
 
 // ---------------------------------------------------------------------------

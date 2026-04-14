@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type {
-  RelayDCCView,
-  RelayHandlerDeps,
-  RelaySessionMap,
-} from '../../src/core/botlink-relay-handler';
-import { handleRelayFrame } from '../../src/core/botlink-relay-handler';
+import {
+  type RelayDCCView,
+  type RelayHandlerDeps,
+  type RelaySessionMap,
+  handleRelayFrame,
+} from '../../src/core/botlink';
 
 // ---------------------------------------------------------------------------
 // Test helpers

@@ -6,7 +6,7 @@
 import type { PluginAPI } from '../../src/types';
 import type { AthemeBackend } from './atheme-backend';
 import type { ProbeState } from './chanserv-notice';
-import { consumeFirstPendingProbe, syncAccessToSettings } from './chanserv-notice';
+import { resolveProbeForBot, syncAccessToSettings } from './chanserv-notice';
 import { getBotNick } from './helpers';
 
 /** Match: "<num> <nick> <flags>" — e.g. "2 hexbot +AOehiortv" */
@@ -31,61 +31,44 @@ export function handleAthemeNotice(
   text: string,
 ): void {
   const botNick = getBotNick(api);
+  const probes = probeState.pendingAthemeProbes;
 
-  // Try "2 hexbot +flags" format
+  const applyFlags = (channel: string, flags: string, sync: boolean): void => {
+    api.debug(`ChanServ FLAGS response for ${channel}: ${flags}`);
+    backend.handleFlagsResponse(channel, flags);
+    if (sync) syncAccessToSettings(api, backend, channel);
+  };
+
+  // "2 hexbot +flags" — numeric access list entry
   let m = ATHEME_FLAGS_RE.exec(text);
   if (m) {
-    const nick = m[2];
-    const flags = m[3];
-    if (api.ircLower(nick) === api.ircLower(botNick)) {
-      const channel = consumeFirstPendingProbe(probeState.pendingAthemeProbes);
-      if (channel) {
-        api.debug(`ChanServ FLAGS response for ${channel}: ${nick} ${flags}`);
-        backend.handleFlagsResponse(channel, flags);
-        syncAccessToSettings(api, backend, channel);
-      }
-    }
+    const channel = resolveProbeForBot(api, botNick, m[2], probes);
+    if (channel) applyFlags(channel, m[3], true);
     return;
   }
 
-  // Try "Flags for <nick> in <channel> are <flags>." format
+  // "Flags for <nick> in <channel> are <flags>." — channel-named response
   m = ATHEME_FLAGS_ALT_RE.exec(text);
   if (m) {
-    const nick = m[1];
-    const channel = m[2];
-    const flags = m[3];
-    if (api.ircLower(nick) === api.ircLower(botNick)) {
-      const key = api.ircLower(channel);
-      probeState.pendingAthemeProbes.delete(key);
-      api.debug(`ChanServ FLAGS response for ${channel}: ${nick} ${flags}`);
-      backend.handleFlagsResponse(channel, flags);
-      syncAccessToSettings(api, backend, channel);
-    }
+    const channel = resolveProbeForBot(api, botNick, m[1], probes, m[2]);
+    if (channel) applyFlags(channel, m[3], true);
     return;
   }
 
-  // Try no-access error: "<nick> was not found on the access list of <channel>."
+  // "<nick> was not found on the access list of <channel>." — no-access error
   m = ATHEME_NOT_FOUND_RE.exec(text);
   if (m) {
-    const nick = m[1];
-    const channel = m[2];
-    if (api.ircLower(nick) === api.ircLower(botNick)) {
-      const key = api.ircLower(channel);
-      probeState.pendingAthemeProbes.delete(key);
-      api.debug(`ChanServ FLAGS response for ${channel}: not on access list`);
-      backend.handleFlagsResponse(channel, '(none)');
-    }
+    const channel = resolveProbeForBot(api, botNick, m[1], probes, m[2]);
+    if (channel) applyFlags(channel, '(none)', false);
     return;
   }
 
-  // Unregistered-channel error: "The channel #xxx is not registered."
+  // "The channel #xxx is not registered." — unregistered error
   m = ATHEME_NOT_REGISTERED_RE.exec(text);
   if (m) {
-    const channel = m[1];
-    const key = api.ircLower(channel);
-    if (probeState.pendingAthemeProbes.delete(key)) {
-      api.debug(`ChanServ FLAGS response for ${channel}: channel not registered`);
-      backend.handleFlagsResponse(channel, '(none)');
+    const key = api.ircLower(m[1]);
+    if (probes.delete(key)) {
+      applyFlags(m[1], '(none)', false);
     }
   }
 }

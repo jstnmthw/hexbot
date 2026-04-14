@@ -1,12 +1,12 @@
 // Tests for BotLinkHub link ban management: getAuthBans, manualBan, unban, persistence, CIDR, events.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { BotLinkHub, type LinkBan } from '../../src/core/botlink-hub.js';
-import { BotDatabase } from '../../src/database.js';
-import { BotEventBus } from '../../src/event-bus.js';
-import { createLogger } from '../../src/logger.js';
-import type { BotlinkConfig } from '../../src/types.js';
-import { createMockSocket } from '../helpers/mock-socket.js';
+import { BotLinkHub, type LinkBan } from '../../src/core/botlink';
+import { BotDatabase } from '../../src/database';
+import { BotEventBus } from '../../src/event-bus';
+import { createLogger } from '../../src/logger';
+import type { BotlinkConfig } from '../../src/types';
+import { createMockSocket } from '../helpers/mock-socket';
 
 function makeConfig(overrides: Partial<BotlinkConfig> = {}): BotlinkConfig {
   return {

@@ -1,21 +1,24 @@
 // rss — RSS/Atom feed announcer plugin
 // Polls configured feeds and announces new items to IRC channels.
-import { createHash } from 'node:crypto';
 import Parser from 'rss-parser';
 
 import type { ChannelHandlerContext, PluginAPI } from '../../src/types';
+import { pollFeed } from './feed-fetcher';
+import { announceItems } from './feed-formatter';
+import {
+  type FeedConfig,
+  cleanupSeen,
+  deleteRuntimeFeed,
+  getLastPoll,
+  isFeedConfig,
+  isRuntimeFeed,
+  loadRuntimeFeeds,
+  saveRuntimeFeed,
+} from './feed-store';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface FeedConfig {
-  id: string;
-  url: string;
-  name?: string;
-  channels: string[];
-  interval?: number; // seconds, default 3600
-}
+// Re-export for tests that still import from the plugin root.
+export { hashItem } from './feed-store';
+export { stripHtmlTags, formatItem } from './feed-formatter';
 
 interface RssPluginConfig {
   feeds: FeedConfig[];
@@ -25,26 +28,10 @@ interface RssPluginConfig {
   max_per_poll: number;
 }
 
-/** Minimal shape of a feed entry consumed by this plugin. */
-type FeedItem = Pick<Parser.Item, 'guid' | 'title' | 'link'>;
-
 /** Narrow an unknown value to `Error` so we can read `.message` safely. */
 function errorMessage(err: unknown): string {
   /* v8 ignore next -- defensive: tests always throw Error instances */
   return err instanceof Error ? err.message : String(err);
-}
-
-/** Type guard for a runtime-stored FeedConfig record. */
-function isFeedConfig(value: unknown): value is FeedConfig {
-  /* v8 ignore next -- defensive: JSON.parse on stored feeds returns object */
-  if (typeof value !== 'object' || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return (
-    typeof v.id === 'string' &&
-    typeof v.url === 'string' &&
-    Array.isArray(v.channels) &&
-    v.channels.every((c): c is string => typeof c === 'string')
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -73,7 +60,7 @@ export async function init(api: PluginAPI): Promise<void> {
   // Silent first-run seeding: mark all existing items as seen without announcing
   for (const feed of activeFeeds.values()) {
     try {
-      await pollFeed(api, feed, cfg, 'silent');
+      await pollFeed(api, parser, feed, 'silent', cfg.max_per_poll);
     } catch (err) {
       api.error(`Error seeding feed "${feed.id}":`, errorMessage(err));
     }
@@ -87,9 +74,9 @@ export async function init(api: PluginAPI): Promise<void> {
       if (Date.now() - lastPoll < interval) continue;
 
       try {
-        const items = await pollFeed(api, feed, cfg, 'announce');
+        const items = await pollFeed(api, parser, feed, 'announce', cfg.max_per_poll);
         if (items.length > 0) {
-          await announceItems(api, feed, items, cfg);
+          await announceItems(api, feed, items, cfg.max_title_length);
         }
       } catch (err) {
         api.error(`Error polling feed "${feed.id}" (${feed.url}):`, errorMessage(err));
@@ -99,7 +86,7 @@ export async function init(api: PluginAPI): Promise<void> {
 
   // Daily cleanup of stale dedup entries
   api.bind('time', '-', '86400', () => {
-    cleanupSeen(api, cfg);
+    cleanupSeen(api, cfg.dedup_window_days);
   });
 
   // Admin commands
@@ -168,195 +155,6 @@ function loadConfig(api: PluginAPI): RssPluginConfig {
     request_timeout_ms: numOrDefault('request_timeout_ms', 10000),
     max_per_poll: numOrDefault('max_per_poll', 5),
   };
-}
-
-// ---------------------------------------------------------------------------
-// Hashing and deduplication
-// ---------------------------------------------------------------------------
-
-export function hashItem(item: FeedItem): string {
-  const input = item.guid || `${item.title ?? ''}${item.link ?? ''}`;
-  return createHash('sha1').update(input).digest('hex').substring(0, 16);
-}
-
-function hasSeen(api: PluginAPI, feedId: string, hash: string): boolean {
-  return api.db.get(`rss:seen:${feedId}:${hash}`) !== undefined;
-}
-
-function markSeen(api: PluginAPI, feedId: string, hash: string): void {
-  api.db.set(`rss:seen:${feedId}:${hash}`, new Date().toISOString());
-}
-
-function getLastPoll(api: PluginAPI, feedId: string): number {
-  const raw = api.db.get(`rss:last_poll:${feedId}`);
-  if (!raw) return 0;
-  const ts = Date.parse(raw);
-  return Number.isNaN(ts) ? 0 : ts;
-}
-
-function setLastPoll(api: PluginAPI, feedId: string): void {
-  api.db.set(`rss:last_poll:${feedId}`, new Date().toISOString());
-}
-
-// ---------------------------------------------------------------------------
-// Polling
-// ---------------------------------------------------------------------------
-
-/**
- * Poll modes:
- * - 'silent'      — mark every current item seen, announce nothing. Used on
- *                   bot startup so config-file feeds don't replay on reboot.
- * - 'announce'    — return up to max_per_poll unseen items. Used by the
- *                   regular timer tick and by `!rss check`.
- * - 'seedPreview' — mark every current item seen (like 'silent'), but return
- *                   only the newest one so `!rss add` can post a single
- *                   instant-feedback preview.
- */
-type PollMode = 'silent' | 'announce' | 'seedPreview';
-
-async function pollFeed(
-  api: PluginAPI,
-  feed: FeedConfig,
-  config: RssPluginConfig,
-  mode: PollMode,
-): Promise<FeedItem[]> {
-  const result = await parser.parseURL(feed.url);
-  const newItems: FeedItem[] = [];
-  let previewCaptured = false;
-
-  for (const item of result.items) {
-    const hash = hashItem(item);
-    if (hasSeen(api, feed.id, hash)) continue;
-    markSeen(api, feed.id, hash);
-    if (mode === 'announce') {
-      newItems.push(item);
-      if (newItems.length >= config.max_per_poll) break;
-    } else if (mode === 'seedPreview' && !previewCaptured) {
-      newItems.push(item);
-      previewCaptured = true;
-      // Don't break — keep marking the rest of the feed seen so they don't
-      // announce on the next tick. Only the first item goes to the channel.
-    }
-  }
-
-  setLastPoll(api, feed.id);
-  return newItems;
-}
-
-// ---------------------------------------------------------------------------
-// Formatting and announcing
-// ---------------------------------------------------------------------------
-
-/**
- * Strip HTML tags from a string by running the tag regex to a fixed point.
- *
- * A single-pass `replace(/<[^>]*>/g, '')` is flagged by CodeQL as
- * "incomplete multi-character sanitization" because cleverly-nested input
- * can leave tag-like fragments behind that would have been caught by a
- * second pass. The output here goes to IRC (which doesn't render HTML) so
- * the practical XSS risk is nil, but we still want clean-looking titles
- * and we don't want this pattern to appear in future audits. Looping until
- * the string stabilises is the canonical fix; it terminates because every
- * non-terminal iteration strictly shortens the string.
- */
-export function stripHtmlTags(input: string): string {
-  let prev: string;
-  let curr = input;
-  do {
-    prev = curr;
-    curr = curr.replace(/<[^>]*>/g, '');
-  } while (curr !== prev);
-  return curr;
-}
-
-export function formatItem(feed: FeedConfig, item: FeedItem, config: RssPluginConfig): string {
-  const feedName = feed.name ?? feed.id;
-  let title = stripHtmlTags(item.title ?? '').trim();
-  if (title.length > config.max_title_length) {
-    title = title.substring(0, config.max_title_length) + '\u2026';
-  }
-  const link = item.link ?? '';
-  return `\x02[${feedName}]\x02 ${title}${link ? ` \u2014 ${link}` : ''}`;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function announceItems(
-  api: PluginAPI,
-  feed: FeedConfig,
-  items: FeedItem[],
-  config: RssPluginConfig,
-): Promise<void> {
-  if (feed.channels.length === 0) {
-    api.warn(`Feed "${feed.id}" has no channels configured — skipping announcement`);
-    return;
-  }
-
-  for (let i = 0; i < items.length; i++) {
-    const line = formatItem(feed, items[i], config);
-    for (const channel of feed.channels) {
-      api.say(channel, line);
-    }
-    if (i < items.length - 1) await delay(500);
-  }
-
-  api.log(`Announced ${items.length} item(s) from "${feed.id}" to ${feed.channels.join(', ')}`);
-}
-
-// ---------------------------------------------------------------------------
-// Stale entry cleanup
-// ---------------------------------------------------------------------------
-
-function cleanupSeen(api: PluginAPI, config: RssPluginConfig): void {
-  const maxAgeMs = config.dedup_window_days * 24 * 60 * 60 * 1000;
-  const now = Date.now();
-  const entries = api.db.list('rss:seen:');
-
-  for (const entry of entries) {
-    const ts = Date.parse(entry.value);
-    if (Number.isNaN(ts) || now - ts > maxAgeMs) {
-      api.db.del(entry.key);
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Runtime feed persistence
-// ---------------------------------------------------------------------------
-
-function loadRuntimeFeeds(api: PluginAPI): FeedConfig[] {
-  const entries = api.db.list('rss:feed:');
-  const feeds: FeedConfig[] = [];
-  for (const entry of entries) {
-    try {
-      const parsed: unknown = JSON.parse(entry.value);
-      /* v8 ignore next 5 */
-      if (!isFeedConfig(parsed)) {
-        api.warn(`Corrupt runtime feed entry: ${entry.key}`);
-        api.db.del(entry.key);
-        continue;
-      }
-      feeds.push(parsed);
-    } catch {
-      api.warn(`Corrupt runtime feed entry: ${entry.key}`);
-      api.db.del(entry.key);
-    }
-  }
-  return feeds;
-}
-
-function saveRuntimeFeed(api: PluginAPI, feed: FeedConfig): void {
-  api.db.set(`rss:feed:${feed.id}`, JSON.stringify(feed));
-}
-
-function deleteRuntimeFeed(api: PluginAPI, id: string): void {
-  api.db.del(`rss:feed:${id}`);
-}
-
-function isRuntimeFeed(api: PluginAPI, id: string): boolean {
-  return api.db.get(`rss:feed:${id}`) !== undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -457,9 +255,9 @@ async function handleAdd(
   // Seed every current item as seen, and return the newest as a one-shot
   // preview so the admin gets instant confirmation the feed is working.
   try {
-    const preview = await pollFeed(api, feed, cfg, 'seedPreview');
+    const preview = await pollFeed(api, parser, feed, 'seedPreview', cfg.max_per_poll);
     if (preview.length > 0) {
-      await announceItems(api, feed, preview, cfg);
+      await announceItems(api, feed, preview, cfg.max_title_length);
       api.notice(
         ctx.nick,
         `Feed "${id}" added. Posted latest article to ${channel} as preview; future items will announce automatically.`,
@@ -529,9 +327,9 @@ async function handleCheck(
   let totalNew = 0;
   for (const feed of targets) {
     try {
-      const items = await pollFeed(api, feed, cfg, 'announce');
+      const items = await pollFeed(api, parser, feed, 'announce', cfg.max_per_poll);
       if (items.length > 0) {
-        await announceItems(api, feed, items, cfg);
+        await announceItems(api, feed, items, cfg.max_title_length);
         totalNew += items.length;
       }
     } catch (err) {

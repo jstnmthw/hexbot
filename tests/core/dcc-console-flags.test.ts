@@ -11,7 +11,7 @@ import {
   parseCanonicalFlags,
   parseFlagsMutation,
   shouldDeliverToSession,
-} from '../../src/core/dcc-console-flags';
+} from '../../src/core/dcc';
 import type { LogRecord } from '../../src/logger';
 
 function makeRecord(overrides: Partial<LogRecord> = {}): LogRecord {

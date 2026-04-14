@@ -5,8 +5,7 @@ import type { BotDatabase } from '../../database';
 import { formatDuration, parseDuration } from '../../utils/duration';
 import { tryAudit } from '../audit';
 import type { BanStore } from '../ban-store';
-import type { BotLinkHub } from '../botlink-hub';
-import type { SharedBanList } from '../botlink-sharing';
+import type { BotLinkHub, SharedBanList } from '../botlink';
 import type { IRCCommands } from '../irc-commands';
 
 export interface BanCommandsDeps {

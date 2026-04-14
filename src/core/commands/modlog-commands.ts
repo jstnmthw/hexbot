@@ -17,7 +17,7 @@
 import type { CommandContext, CommandHandler } from '../../command-handler';
 import type { BotDatabase, ModLogEntry, ModLogFilter, ModLogSource } from '../../database';
 import type { BotEventBus } from '../../event-bus';
-import type { Permissions } from '../permissions';
+import { MASTER_FLAG, OWNER_FLAG, type Permissions } from '../permissions';
 
 // ---------------------------------------------------------------------------
 // Tunables
@@ -243,8 +243,8 @@ export function checkModlogPermission(
   const user = permissions.findByHostmask(fullHostmask);
   if (!user) return { allowed: false, reason: 'permission denied' };
 
-  if (user.global.includes('n')) return { allowed: true };
-  if (!user.global.includes('m')) {
+  if (user.global.includes(OWNER_FLAG)) return { allowed: true };
+  if (!user.global.includes(MASTER_FLAG)) {
     return { allowed: false, reason: 'requires +m or higher' };
   }
 

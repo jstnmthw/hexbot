@@ -4,7 +4,7 @@
 import type { Socket } from 'node:net';
 import { Duplex } from 'node:stream';
 
-import type { LinkFrame } from '../../src/core/botlink-protocol';
+import type { LinkFrame } from '../../src/core/botlink';
 
 export interface MockSocketResult {
   /** Typed as Socket for passing to production code that expects net.Socket. */

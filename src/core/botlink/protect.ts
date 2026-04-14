@@ -8,12 +8,12 @@
 // attacker could adopt an op's nick from a different host and become
 // immune to DEOP/KICK (or, worse, be auto-opped). See the §7 finding in
 // docs/audits/irc-logic-2026-04-11.md.
-import type { Casemapping } from '../utils/wildcard';
-import { ircLower } from '../utils/wildcard';
-import type { LinkFrame } from './botlink-protocol';
-import type { ChannelState } from './channel-state';
-import type { IRCCommands } from './irc-commands';
-import type { Permissions } from './permissions';
+import type { Casemapping } from '../../utils/wildcard';
+import { ircLower } from '../../utils/wildcard';
+import type { ChannelState } from '../channel-state';
+import type { IRCCommands } from '../irc-commands';
+import type { Permissions } from '../permissions';
+import type { LinkFrame } from './protocol';
 
 export interface ProtectHandlerDeps {
   channelState: ChannelState;

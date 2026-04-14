@@ -1636,7 +1636,7 @@ describe('PluginLoader', () => {
         tempDir,
         'bad-import',
         `
-        import { helper } from './does-not-exist.js';
+        import { helper } from './does-not-exist';
         export const name = 'bad-import';
         export const version = '1.0.0';
         export function init() {}
@@ -1656,7 +1656,7 @@ describe('PluginLoader', () => {
         tempDir,
         'unreadable-import',
         `
-        import { helper } from './secret.js';
+        import { helper } from './secret';
         export const name = 'unreadable-import';
         export const version = '1.0.0';
         export function init() {}

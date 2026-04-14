@@ -1,10 +1,10 @@
 // Core ban store — first-class channel ban persistence in the _bans namespace.
 // Wraps AdminListStore<BanRecord> with IRC-aware key formatting and expiry logic.
-import type { BotDatabase } from '../database.js';
-import type { BanRecord, PluginDB } from '../types.js';
-import { AdminListStore } from '../utils/admin-list-store.js';
+import type { BotDatabase } from '../database';
+import type { BanRecord, PluginDB } from '../types';
+import { AdminListStore } from '../utils/admin-list-store';
 
-export type { BanRecord } from '../types.js';
+export type { BanRecord } from '../types';
 
 // ---------------------------------------------------------------------------
 // BanStore

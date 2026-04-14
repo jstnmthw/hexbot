@@ -2,16 +2,17 @@ import { Duplex } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CommandHandler } from '../../src/command-handler';
-import { BotLinkHub } from '../../src/core/botlink-hub';
-import { BotLinkLeaf } from '../../src/core/botlink-leaf';
 import {
+  BotLinkHub,
+  BotLinkLeaf,
   BotLinkProtocol,
+  type LinkFrame,
   MAX_FRAME_SIZE,
   RateCounter,
+  type SocketFactory,
   hashPassword,
   sanitizeFrame,
-} from '../../src/core/botlink-protocol';
-import type { LinkFrame, SocketFactory } from '../../src/core/botlink-protocol';
+} from '../../src/core/botlink';
 import { Permissions } from '../../src/core/permissions';
 import { BotEventBus } from '../../src/event-bus';
 import type { BotlinkConfig } from '../../src/types';
@@ -3730,8 +3731,11 @@ describe('BotLinkHub sweepStaleRoutes — relay & party TTL', () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
     const now = Date.now();
 
-    // Reach into the private state to seed both kinds of stale entries.
-    type HubInternals = {
+    // Reach into the router's private state to seed both kinds of stale
+    // entries. The hub owns a BotLinkRelayRouter that holds the four maps
+    // directly; we cast through `unknown` to poke at them without widening
+    // the public API.
+    type RouterInternals = {
       activeRelays: Map<string, { originBot: string; targetBot: string; createdAt: number }>;
       remotePartyUsers: Map<
         string,
@@ -3741,35 +3745,35 @@ describe('BotLinkHub sweepStaleRoutes — relay & party TTL', () => {
       cmdRoutes: Map<string, { botname: string; createdAt: number }>;
       sweepStaleRoutes: () => void;
     };
-    const internals = hub as unknown as HubInternals;
+    const routes = (hub as unknown as { routes: RouterInternals }).routes;
 
     // Stale + fresh protect request and cmd route — covers the SHORT_TTL branches.
-    internals.protectRequests.set('stale-protect', { botname: 'leaf1', createdAt: now - 60_000 });
-    internals.protectRequests.set('fresh-protect', { botname: 'leaf1', createdAt: now });
-    internals.cmdRoutes.set('stale-route', { botname: 'leaf1', createdAt: now - 60_000 });
-    internals.cmdRoutes.set('fresh-route', { botname: 'leaf1', createdAt: now });
+    routes.protectRequests.set('stale-protect', { botname: 'leaf1', createdAt: now - 60_000 });
+    routes.protectRequests.set('fresh-protect', { botname: 'leaf1', createdAt: now });
+    routes.cmdRoutes.set('stale-route', { botname: 'leaf1', createdAt: now - 60_000 });
+    routes.cmdRoutes.set('fresh-route', { botname: 'leaf1', createdAt: now });
 
     // Stale + fresh relay session
-    internals.activeRelays.set('stale-relay', {
+    routes.activeRelays.set('stale-relay', {
       originBot: 'leaf1',
       targetBot: 'leaf2',
       createdAt: now - 2 * 60 * 60_000, // 2h ago — past 1h TTL
     });
-    internals.activeRelays.set('fresh-relay', {
+    routes.activeRelays.set('fresh-relay', {
       originBot: 'leaf1',
       targetBot: 'leaf2',
       createdAt: now - 60_000, // 1min ago — well under 1h
     });
 
     // Stale + fresh remote party user
-    internals.remotePartyUsers.set('stale@leaf1', {
+    routes.remotePartyUsers.set('stale@leaf1', {
       handle: 'stale',
       nick: 'stale',
       botname: 'leaf1',
       connectedAt: now - 8 * 86_400_000, // 8 days ago — past 7d TTL
       idle: 0,
     });
-    internals.remotePartyUsers.set('fresh@leaf1', {
+    routes.remotePartyUsers.set('fresh@leaf1', {
       handle: 'fresh',
       nick: 'fresh',
       botname: 'leaf1',
@@ -3777,16 +3781,16 @@ describe('BotLinkHub sweepStaleRoutes — relay & party TTL', () => {
       idle: 0,
     });
 
-    internals.sweepStaleRoutes();
+    routes.sweepStaleRoutes();
 
-    expect(internals.protectRequests.has('stale-protect')).toBe(false);
-    expect(internals.protectRequests.has('fresh-protect')).toBe(true);
-    expect(internals.cmdRoutes.has('stale-route')).toBe(false);
-    expect(internals.cmdRoutes.has('fresh-route')).toBe(true);
-    expect(internals.activeRelays.has('stale-relay')).toBe(false);
-    expect(internals.activeRelays.has('fresh-relay')).toBe(true);
-    expect(internals.remotePartyUsers.has('stale@leaf1')).toBe(false);
-    expect(internals.remotePartyUsers.has('fresh@leaf1')).toBe(true);
+    expect(routes.protectRequests.has('stale-protect')).toBe(false);
+    expect(routes.protectRequests.has('fresh-protect')).toBe(true);
+    expect(routes.cmdRoutes.has('stale-route')).toBe(false);
+    expect(routes.cmdRoutes.has('fresh-route')).toBe(true);
+    expect(routes.activeRelays.has('stale-relay')).toBe(false);
+    expect(routes.activeRelays.has('fresh-relay')).toBe(true);
+    expect(routes.remotePartyUsers.has('stale@leaf1')).toBe(false);
+    expect(routes.remotePartyUsers.has('fresh@leaf1')).toBe(true);
 
     hub.close();
   });

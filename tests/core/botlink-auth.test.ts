@@ -2,8 +2,7 @@
 // Separate file to avoid test contamination from botlink.test.ts timer interactions.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { BotLinkHub, isWhitelisted } from '../../src/core/botlink-hub';
-import { hashPassword } from '../../src/core/botlink-protocol';
+import { BotLinkHub, hashPassword, isWhitelisted } from '../../src/core/botlink';
 import { BotEventBus } from '../../src/event-bus';
 import type { BotlinkConfig } from '../../src/types';
 import { createMockSocket, parseWritten, pushFrame } from '../helpers/mock-socket';
@@ -522,7 +521,7 @@ describe('auth brute-force protection', () => {
 describe('botlink auto-ban audit', () => {
   it('writes a botlink-autoban row when noteFailure escalates to a ban', async () => {
     const { BotDatabase } = await import('../../src/database');
-    const { BotLinkAuthManager } = await import('../../src/core/botlink-auth');
+    const { BotLinkAuthManager } = await import('../../src/core/botlink');
     const db = new BotDatabase(':memory:');
     db.open();
 
@@ -550,7 +549,7 @@ describe('botlink auto-ban audit', () => {
 
   it('escalates the tier on repeat auto-bans', async () => {
     const { BotDatabase } = await import('../../src/database');
-    const { BotLinkAuthManager } = await import('../../src/core/botlink-auth');
+    const { BotLinkAuthManager } = await import('../../src/core/botlink');
     vi.useFakeTimers();
     const db = new BotDatabase(':memory:');
     db.open();

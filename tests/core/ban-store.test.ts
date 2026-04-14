@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { type BanRecord, BanStore } from '../../src/core/ban-store.js';
-import { BotDatabase } from '../../src/database.js';
+import { type BanRecord, BanStore } from '../../src/core/ban-store';
+import { BotDatabase } from '../../src/database';
 
 describe('BanStore', () => {
   let db: BotDatabase;

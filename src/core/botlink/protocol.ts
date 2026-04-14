@@ -5,10 +5,10 @@ import { scryptSync } from 'node:crypto';
 import type { Socket } from 'node:net';
 import { createInterface as createReadline } from 'node:readline';
 
-import type { CommandContext, CommandEntry, PreExecuteHook } from '../command-handler';
-import type { Logger } from '../logger';
-import type { UserRecord } from '../types';
-import { sanitize } from '../utils/sanitize';
+import type { CommandContext, CommandEntry, PreExecuteHook } from '../../command-handler';
+import type { Logger } from '../../logger';
+import type { UserRecord } from '../../types';
+import { sanitize } from '../../utils/sanitize';
 
 // ---------------------------------------------------------------------------
 // Constants

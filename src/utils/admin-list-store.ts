@@ -1,6 +1,6 @@
 // AdminListStore — typed CRUD persistence wrapper over the BotDatabase KV namespace.
 // Provides get/set/del/list/has for a single namespace with typed serialization.
-import type { BotDatabase } from '../database.js';
+import type { BotDatabase } from '../database';
 
 export interface AdminListStoreOptions<T> {
   /** DB namespace (e.g. '_bans', '_linkbans'). */

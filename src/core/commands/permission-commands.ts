@@ -2,7 +2,7 @@
 // Registers .adduser, .deluser, .flags, .users with the command handler.
 import type { CommandHandler } from '../../command-handler';
 import { formatTable } from '../../utils/table';
-import type { Permissions } from '../permissions';
+import { OWNER_FLAG, type Permissions } from '../permissions';
 
 /**
  * Register permission management commands on the given command handler.
@@ -100,8 +100,8 @@ export function registerPermissionCommands(
       if (ctx.source !== 'repl' && ctx.source !== 'botlink') {
         const callerHostmask = `${ctx.nick}!${ctx.ident ?? ''}@${ctx.hostname ?? ''}`;
         const caller = permissions.findByHostmask(callerHostmask);
-        if (!caller || !caller.global.includes('n')) {
-          if (flagsArg.includes('n')) {
+        if (!caller || !caller.global.includes(OWNER_FLAG)) {
+          if (flagsArg.includes(OWNER_FLAG)) {
             ctx.reply('Only owners (+n) can grant the owner flag.');
             return;
           }

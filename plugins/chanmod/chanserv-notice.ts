@@ -164,3 +164,25 @@ export function consumeFirstPendingProbe(probes: Map<string, string>): string | 
   probes.delete(first.value[0]);
   return first.value[1];
 }
+
+/**
+ * Common "bot nick matched → consume a pending probe → apply" sequence used
+ * by both Atheme and Anope parsers. When `channel` is provided, the probe is
+ * consumed by exact channel key; otherwise the oldest pending probe is
+ * popped. Returns the resolved channel name (for logging) or undefined when
+ * the match was for a different nick or no probe was pending.
+ */
+export function resolveProbeForBot(
+  api: PluginAPI,
+  botNick: string,
+  nick: string,
+  probes: Map<string, string>,
+  channel?: string,
+): string | undefined {
+  if (api.ircLower(nick) !== api.ircLower(botNick)) return undefined;
+  if (channel) {
+    const key = api.ircLower(channel);
+    return probes.delete(key) ? channel : undefined;
+  }
+  return consumeFirstPendingProbe(probes);
+}

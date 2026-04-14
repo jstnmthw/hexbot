@@ -15,13 +15,18 @@ import {
   validateResolvedSecrets,
 } from './config';
 import { BanStore } from './core/ban-store';
-import { BotLinkHub } from './core/botlink-hub';
-import { BotLinkLeaf } from './core/botlink-leaf';
-import { handleProtectFrame } from './core/botlink-protect';
-import type { LinkFrame } from './core/botlink-protocol';
-import { type RelaySessionMap, handleRelayFrame } from './core/botlink-relay-handler';
-import { BanListSyncer, SharedBanList } from './core/botlink-sharing';
-import { ChannelStateSyncer, PermissionSyncer } from './core/botlink-sync';
+import {
+  BanListSyncer,
+  BotLinkHub,
+  BotLinkLeaf,
+  ChannelStateSyncer,
+  type LinkFrame,
+  PermissionSyncer,
+  type RelaySessionMap,
+  SharedBanList,
+  handleProtectFrame,
+  handleRelayFrame,
+} from './core/botlink';
 import { ChannelSettings } from './core/channel-settings';
 import { ChannelState } from './core/channel-state';
 import { registerBanCommands } from './core/commands/ban-commands';
@@ -884,7 +889,7 @@ export class Bot {
   // -------------------------------------------------------------------------
 
   /** Build the relay sender and deps, then delegate to the extracted handler. */
-  private _relayDeps(): import('./core/botlink-relay-handler').RelayHandlerDeps {
+  private _relayDeps(): import('./core/botlink').RelayHandlerDeps {
     const hub = this._botLinkHub;
     const leaf = this._botLinkLeaf;
     // Only called when a botlink link is live, so botlink config must be set.

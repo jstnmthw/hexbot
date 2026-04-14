@@ -4,10 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CommandHandler } from '../../../src/command-handler';
 import type { CommandContext } from '../../../src/command-handler';
-import { BotLinkHub } from '../../../src/core/botlink-hub';
-import { BotLinkLeaf } from '../../../src/core/botlink-leaf';
-import { hashPassword } from '../../../src/core/botlink-protocol';
-import type { LinkFrame } from '../../../src/core/botlink-protocol';
+import { BotLinkHub, BotLinkLeaf, type LinkFrame, hashPassword } from '../../../src/core/botlink';
 import { registerBotlinkCommands } from '../../../src/core/commands/botlink-commands';
 import type { BotlinkDCCView } from '../../../src/core/dcc';
 import { BotDatabase } from '../../../src/database';

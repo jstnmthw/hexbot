@@ -192,7 +192,13 @@ export function init(api: PluginAPI): void {
         api.notice(ctx.nick, `Preview cooldown active — try again in ${secsLeft}s.`);
         return;
       }
-      previewCooldown.set(cooldownKey, Date.now() + PREVIEW_COOLDOWN_MS);
+      const nowMs = Date.now();
+      if (previewCooldown.size > 1000) {
+        for (const [k, expires] of previewCooldown) {
+          if (expires <= nowMs) previewCooldown.delete(k);
+        }
+      }
+      previewCooldown.set(cooldownKey, nowMs + PREVIEW_COOLDOWN_MS);
 
       const sampleText = parts.length > 1 ? parts.slice(1).join(' ') : 'Sample Topic Text';
       api.notice(ctx.nick, `Theme previews using: "${sampleText}"`);

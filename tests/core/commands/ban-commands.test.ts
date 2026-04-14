@@ -1,14 +1,14 @@
 // Tests for .bans, .ban, .unban, .stick, .unstick admin commands.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { CommandHandler } from '../../../src/command-handler.js';
-import type { CommandContext } from '../../../src/command-handler.js';
-import { BanStore } from '../../../src/core/ban-store.js';
-import { registerBanCommands } from '../../../src/core/commands/ban-commands.js';
-import { IRCCommands } from '../../../src/core/irc-commands.js';
-import { Permissions } from '../../../src/core/permissions.js';
-import { BotDatabase } from '../../../src/database.js';
-import { createLogger } from '../../../src/logger.js';
+import { CommandHandler } from '../../../src/command-handler';
+import type { CommandContext } from '../../../src/command-handler';
+import { BanStore } from '../../../src/core/ban-store';
+import { registerBanCommands } from '../../../src/core/commands/ban-commands';
+import { IRCCommands } from '../../../src/core/irc-commands';
+import { Permissions } from '../../../src/core/permissions';
+import { BotDatabase } from '../../../src/database';
+import { createLogger } from '../../../src/logger';
 
 function makeReply(): { reply: ReturnType<typeof vi.fn>; ctx: CommandContext } {
   const reply = vi.fn();

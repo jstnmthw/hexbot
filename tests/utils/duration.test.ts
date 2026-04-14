@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatDuration, parseDuration } from '../../src/utils/duration.js';
+import { formatDuration, parseDuration } from '../../src/utils/duration';
 
 describe('parseDuration', () => {
   it('parses minutes suffix', () => {

@@ -16,6 +16,7 @@ import type { EventDispatcher } from '../dispatcher';
 import type { Logger } from '../logger';
 import type { Casemapping, HandlerContext, MemoConfig } from '../types';
 import { ircLower } from '../utils/wildcard';
+import { hasOwnerOrMaster } from './permissions';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -209,7 +210,7 @@ export class MemoManager {
       for (const user of ch.users.values()) {
         const record = this.permissions.findByHostmask(user.hostmask);
         if (!record) continue;
-        if (!(record.global.includes('n') || record.global.includes('m'))) continue;
+        if (!hasOwnerOrMaster(record)) continue;
         const key = record.handle.toLowerCase();
         if (seen.has(key)) continue;
         seen.add(key);
@@ -328,7 +329,7 @@ export class MemoManager {
         const hostmask = `${ctx.nick}!${ctx.ident}@${ctx.hostname}`;
         const record = this.permissions.findByHostmask(hostmask);
         if (!record) return;
-        if (!(record.global.includes('n') || record.global.includes('m'))) return;
+        if (!hasOwnerOrMaster(record)) return;
 
         const handleKey = record.handle.toLowerCase();
         const now = Date.now();

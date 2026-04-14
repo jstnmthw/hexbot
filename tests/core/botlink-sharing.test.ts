@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { BanListSyncer, SharedBanList } from '../../src/core/botlink-sharing';
+import { BanListSyncer, SharedBanList } from '../../src/core/botlink';
 
 // ---------------------------------------------------------------------------
 // SharedBanList

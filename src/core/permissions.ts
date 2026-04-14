@@ -15,10 +15,23 @@ import { tryLogModAction } from './audit';
 const DB_NAMESPACE = '_permissions';
 
 /** All valid flag characters, in descending privilege order, plus modifiers. */
-const VALID_FLAGS = 'nmovd';
+export const VALID_FLAGS = 'nmovd';
 
 /** Owner flag implies all other flags. */
-const OWNER_FLAG = 'n';
+export const OWNER_FLAG = 'n';
+
+/** Master flag — one step below owner, granted most administrative commands. */
+export const MASTER_FLAG = 'm';
+
+/**
+ * Return true if the record has owner (`n`) or master (`m`) globally. This is
+ * the canonical "is-admin" check — owner implies master, so the two are
+ * collapsed here. Use this instead of `record.global.includes('n') || ...`
+ * at external call sites so the precedence rule stays in one place.
+ */
+export function hasOwnerOrMaster(record: { global: string }): boolean {
+  return record.global.includes(OWNER_FLAG) || record.global.includes(MASTER_FLAG);
+}
 
 /**
  * Prefix for account-based identity patterns stored in `UserRecord.hostmasks`.

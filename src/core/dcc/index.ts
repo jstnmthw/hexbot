@@ -12,16 +12,19 @@ import { createServer } from 'node:net';
 import type { Server as NetServer, Socket } from 'node:net';
 import { createInterface as createReadline } from 'node:readline';
 
-import type { CommandExecutor } from '../command-handler';
-import type { BotDatabase } from '../database';
-import type { BindRegistrar } from '../dispatcher';
-import type { LogRecord, LogSink, Logger } from '../logger';
-import { Logger as LoggerClass } from '../logger';
-import type { DccConfig, HandlerContext, PluginServices, UserRecord } from '../types';
-import { toEventObject } from '../utils/irc-event';
-import { sanitize } from '../utils/sanitize';
-import { type Casemapping, ircLower } from '../utils/wildcard';
-import { tryLogModAction } from './audit';
+import type { CommandExecutor } from '../../command-handler';
+import type { BotDatabase } from '../../database';
+import type { BindRegistrar } from '../../dispatcher';
+import type { LogRecord, LogSink, Logger } from '../../logger';
+import { Logger as LoggerClass } from '../../logger';
+import type { DccConfig, HandlerContext, PluginServices, UserRecord } from '../../types';
+import { toEventObject } from '../../utils/irc-event';
+import { sanitize } from '../../utils/sanitize';
+import { type Casemapping, ircLower } from '../../utils/wildcard';
+import { tryLogModAction } from '../audit';
+import { verifyPassword } from '../password';
+import { DCCAuthTracker } from './auth-tracker';
+import { type BannerStats, renderBanner } from './banner';
 import {
   type ConsoleFlagLetter,
   type ConsoleFlagStore,
@@ -29,8 +32,41 @@ import {
   formatFlags,
   parseCanonicalFlags,
   shouldDeliverToSession,
-} from './dcc-console-flags';
-import { verifyPassword } from './password';
+} from './console-flags';
+import {
+  DCC_PROMPT_TIMEOUT_MS,
+  type DccChatPayload,
+  ipToDecimal,
+  isPassiveDcc,
+  parseDccChatPayload,
+} from './protocol';
+
+// Barrel re-exports — external consumers import from `'./dcc'` instead of
+// reaching into individual files.
+export { DCCAuthTracker, type DCCAuthLockStatus } from './auth-tracker';
+export { type BannerStats } from './banner';
+export {
+  CONSOLE_FLAG_DESCRIPTIONS,
+  CONSOLE_FLAG_LETTERS,
+  type ConsoleFlagLetter,
+  type ConsoleFlagStore,
+  DEFAULT_CONSOLE_FLAGS,
+  categorize,
+  consoleFlagKey,
+  extractExplicitCategory,
+  formatFlags,
+  isConsoleFlagLetter,
+  parseCanonicalFlags,
+  parseFlagsMutation,
+  shouldDeliverToSession,
+} from './console-flags';
+export {
+  DCC_PROMPT_TIMEOUT_MS,
+  type DccChatPayload,
+  ipToDecimal,
+  isPassiveDcc,
+  parseDccChatPayload,
+} from './protocol';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -87,15 +123,6 @@ export class RangePortAllocator implements PortAllocator {
   release(port: number): void {
     this.used.delete(port);
   }
-}
-
-/** Live stats surfaced in the DCC session banner. */
-export interface BannerStats {
-  channels: string[];
-  pluginCount: number;
-  bindCount: number;
-  userCount: number;
-  uptime: number; // milliseconds
 }
 
 /** The subset of DCCManager that DCCSession depends on. */
@@ -243,228 +270,8 @@ export function createInMemoryConsoleFlagStore(): ConsoleFlagStore {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers (exported for unit tests)
-// ---------------------------------------------------------------------------
-
-/**
- * Convert a dotted IPv4 string to a 32-bit unsigned decimal integer,
- * as required by the DCC CTCP protocol.
- *
- * @example ipToDecimal('1.2.3.4') === 16909060
- */
-export function ipToDecimal(ip: string): number {
-  const parts = ip.split('.');
-  if (parts.length !== 4) return 0;
-  let result = 0;
-  for (const part of parts) {
-    const byte = parseInt(part, 10);
-    if (!Number.isFinite(byte) || byte < 0 || byte > 255) return 0;
-    result = (result << 8) | byte;
-  }
-  // Treat as unsigned 32-bit
-  return result >>> 0;
-}
-
-export interface DccChatPayload {
-  subtype: string; // e.g. 'CHAT'
-  ip: number;
-  port: number;
-  token: number; // 0 if not present (active DCC)
-}
-
-/**
- * Parse a DCC CTCP payload string into its components.
- * Returns null on parse failure or if subtype is not 'CHAT'.
- *
- * Active DCC:  "CHAT chat <ip> <port>"
- * Passive DCC: "CHAT chat 0 0 <token>"
- */
-export function parseDccChatPayload(args: string): DccChatPayload | null {
-  const parts = args.trim().split(/\s+/);
-  // Minimum: "CHAT chat <ip> <port>" = 4 tokens
-  if (parts.length < 4) return null;
-
-  const subtype = parts[0].toUpperCase();
-  if (subtype !== 'CHAT') return null;
-
-  const ip = parseInt(parts[2], 10);
-  const port = parseInt(parts[3], 10);
-  const token = parts[4] !== undefined ? parseInt(parts[4], 10) : 0;
-
-  if (!Number.isFinite(ip) || !Number.isFinite(port)) return null;
-
-  return { subtype, ip, port, token };
-}
-
-/** Returns true if the DCC request is passive (port=0 with a token).
- *  Some clients (e.g. mIRC) send their real IP with port=0; others send ip=0.
- *  Port=0 is the universal passive-DCC indicator. */
-export function isPassiveDcc(_ip: number, port: number): boolean {
-  return port === 0;
-}
-
-// ---------------------------------------------------------------------------
 // DCCSession
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// IRC formatting helpers (mIRC color codes)
-// ---------------------------------------------------------------------------
-
-const B = '\x02'; // bold toggle
-const C = (n: number) => `\x03${String(n).padStart(2, '0')}`; // set color
-const RC = '\x0F'; // reset all — avoids bare \x03 eating a following digit as a color code
-
-const red = (s: string) => `${C(4)}${s}${RC}`;
-const grey = (s: string) => `${C(14)}${s}${RC}`;
-const lbl = (s: string, w = 10) => `${C(4)}${B}${s.padEnd(w)}${B}${RC}`; // teal bold, fixed-width
-
-// ---------------------------------------------------------------------------
-// Banner art — braille hex icon with colored "HEXBOT" text art
-// ---------------------------------------------------------------------------
-
-function bannerLogo(version: string): string[] {
-  return [
-    `⠀⠀⠀⠀⣠⣤⣶⣶⣶⣤⣄⡀⠀    `,
-    `⠀⠀⣴⣾⣿⣿⣿⣿⣿⣧⡀⠈⠢⠀⠀ `,
-    `⠀⣼⣿⣿⣿⣿⣿⣿⣿⡿⠁ ⠀⠀⠀  `,
-    `⢰⡿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀  `,
-    `⠘⣽⡿⠿⠿⣿⣿⣿⣿⣿⣦⣤⡀⠀⠀ `,
-    `⠀⣟⠀⠀⠀⣸⣿⡏⠀⠀⠀⢹⠗⠀⠀  `,
-    `⠀⣿⣷⣶⣾⡿⠁⠙⣄⣀⣀⣠⡀ ⠀   ${B}${red(`HexBot`)} v${version}${B}`,
-    `⠀⠙⠙⢿⡿⣷⣶⣤⣿⣿⡿⠿⠃⠀⠀   ${grey('Hell is empty and all the bots are here.')}`,
-    `⠀⠀⠀⠺⡏⡏⡏⡏⡏⠉⠁⠀⠀⠀⠀⠀`,
-    `⠀⠀⠀⠀⠀⠀⠁⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀`,
-  ];
-}
-
-function formatUptime(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = seconds % 60;
-  const parts: string[] = [];
-  if (days > 0) parts.push(`${days}d`);
-  if (hours > 0) parts.push(`${hours}h`);
-  if (minutes > 0) parts.push(`${minutes}m`);
-  parts.push(`${secs}s`);
-  return parts.join(' ');
-}
-
-/**
- * Shorter idle timeout used while the session is awaiting a password. Keeps
- * stalled prompts from squatting on a DCC port.
- */
-export const DCC_PROMPT_TIMEOUT_MS = 30_000;
-
-// ---------------------------------------------------------------------------
-// DCCAuthTracker — per-hostmask failure counter with exponential backoff
-// ---------------------------------------------------------------------------
-
-export interface DCCAuthLockStatus {
-  locked: boolean;
-  lockedUntil: number;
-  failures: number;
-}
-
-/**
- * Tracks password-prompt failures per identity (hostmask). Mirrors the
- * backoff strategy in `BotLinkAuthManager` but against DCC keys. Used by
- * `DCCManager` to short-circuit the prompt path for abusive clients.
- *
- * Exported so tests can construct one in isolation. The class owns no
- * timers — the sweep is driven by the enclosing DCCManager to match how
- * the botlink tracker is driven by its enclosing hub.
- */
-export class DCCAuthTracker {
-  private readonly trackers: Map<
-    string,
-    { failures: number; firstFailure: number; bannedUntil: number; banCount: number }
-  > = new Map();
-
-  /** Max failures per window before a lockout. */
-  readonly maxFailures: number;
-  /** Sliding window over which failures accumulate. */
-  readonly windowMs: number;
-  /** Base lockout duration. Doubles on each re-ban up to {@link maxLockMs}. */
-  readonly baseLockMs: number;
-  /** Upper bound on the exponential lockout duration. */
-  readonly maxLockMs: number;
-
-  constructor(
-    options: {
-      maxFailures?: number;
-      windowMs?: number;
-      baseLockMs?: number;
-      maxLockMs?: number;
-    } = {},
-  ) {
-    this.maxFailures = options.maxFailures ?? 5;
-    this.windowMs = options.windowMs ?? 60_000;
-    this.baseLockMs = options.baseLockMs ?? 300_000;
-    this.maxLockMs = options.maxLockMs ?? 86_400_000;
-  }
-
-  /** Is this key currently locked out? */
-  check(key: string, now: number = Date.now()): DCCAuthLockStatus {
-    const tracker = this.trackers.get(key);
-    if (!tracker) return { locked: false, lockedUntil: 0, failures: 0 };
-    if (tracker.bannedUntil > now) {
-      return { locked: true, lockedUntil: tracker.bannedUntil, failures: tracker.failures };
-    }
-    return { locked: false, lockedUntil: 0, failures: tracker.failures };
-  }
-
-  /** Record a failed attempt. May escalate to a lockout. */
-  recordFailure(key: string, now: number = Date.now()): DCCAuthLockStatus {
-    let tracker = this.trackers.get(key);
-    if (!tracker) {
-      tracker = { failures: 0, firstFailure: now, bannedUntil: 0, banCount: 0 };
-      this.trackers.set(key, tracker);
-    }
-    if (now - tracker.firstFailure > this.windowMs) {
-      tracker.failures = 0;
-      tracker.firstFailure = now;
-    }
-    tracker.failures++;
-    if (tracker.failures >= this.maxFailures) {
-      const lockDuration = Math.min(this.baseLockMs * 2 ** tracker.banCount, this.maxLockMs);
-      tracker.bannedUntil = now + lockDuration;
-      tracker.banCount++;
-      tracker.failures = 0;
-    }
-    return {
-      locked: tracker.bannedUntil > now,
-      lockedUntil: tracker.bannedUntil,
-      failures: tracker.failures,
-    };
-  }
-
-  /** Record a successful attempt — zeroes the failure counter but preserves banCount. */
-  recordSuccess(key: string): void {
-    const tracker = this.trackers.get(key);
-    if (tracker) {
-      tracker.failures = 0;
-    }
-  }
-
-  /** Prune expired trackers — called from DCCManager sweep. */
-  sweep(now: number = Date.now()): void {
-    const STALE_MS = 86_400_000;
-    for (const [key, tracker] of this.trackers) {
-      const banExpired = tracker.bannedUntil < now;
-      const failureWindowExpired = now - tracker.firstFailure > this.windowMs;
-      if (banExpired && failureWindowExpired) {
-        if (tracker.banCount === 0) {
-          this.trackers.delete(key);
-        } else if (now - tracker.bannedUntil > STALE_MS) {
-          this.trackers.delete(key);
-        }
-      }
-    }
-  }
-}
 
 export class DCCSession implements DCCSessionEntry {
   readonly handle: string;
@@ -626,84 +433,24 @@ export class DCCSession implements DCCSessionEntry {
 
   /** Send the welcome banner + stats. Called after the password prompt succeeds. */
   private showBanner(): void {
-    const version = this.versionForBanner;
-    const botNick = this.botNickForBanner;
-
-    const d = new Date();
-    const time = d.toLocaleTimeString();
-    const tz = d.toLocaleTimeString('en-US', { timeZoneName: 'short' }).split(' ').pop();
-    const day = d.getDate();
-    const ordinals: Record<Intl.LDMLPluralRule, string> = {
-      zero: 'th',
-      one: 'st',
-      two: 'nd',
-      few: 'rd',
-      many: 'th',
-      other: 'th',
-    };
-    const ordinal = ordinals[new Intl.PluralRules('en-US', { type: 'ordinal' }).select(day)];
-    const date = `${d.toLocaleDateString('en-US', { month: 'long' })} ${day}${ordinal}, ${d.getFullYear()}`;
-    const stats = this.manager.getStats();
-    const others = this.manager
-      .getSessionList()
-      .filter((s) => s.handle !== this.handle)
-      .map((s) => s.handle);
-    const consoleLine =
-      others.length > 0
-        ? `${others.length} other(s) here: ${others.join(', ')}`
-        : 'you are the only one here';
-
-    // Logo
-    this.writeLine('');
-    for (const line of bannerLogo(version)) {
-      this.writeLine(line);
-    }
-
-    // Greeting
-    this.writeLine('');
-    this.writeLine(
-      `Hi ${B}${this.handle}${B}, I am ${B}${botNick}${B}. The local time is ${time} (${tz}) on ${date}.`,
+    renderBanner(
+      {
+        handle: this.handle,
+        flags: this.flags,
+        nick: this.nick,
+        ident: this.ident,
+        hostname: this.hostname,
+        consoleFlags: this.consoleFlags,
+        version: this.versionForBanner,
+        botNick: this.botNickForBanner,
+        stats: this.manager.getStats(),
+        otherSessions: this.manager
+          .getSessionList()
+          .filter((s) => s.handle !== this.handle)
+          .map((s) => s.handle),
+      },
+      (line) => this.writeLine(line),
     );
-
-    // Owner-only notice
-    if (this.flags.includes('n')) {
-      this.writeLine('');
-      this.writeLine(`${red(`${B}⛧${B}`)} You are an owner of this bot.`);
-    }
-
-    // Stats table
-    this.writeLine('');
-    const flagDisplay = this.flags ? `+${this.flags}` : '+-';
-    const consoleDisplay = (() => {
-      const f = formatFlags(this.consoleFlags);
-      return f.length > 0 ? `+${f}` : '+-';
-    })();
-    this.writeLine(
-      `  ${lbl('Session')}${B}${this.handle}${B} (${this.nick}!${this.ident}@${this.hostname})`,
-    );
-    this.writeLine(`  ${lbl('Flags')}${flagDisplay}`);
-    this.writeLine(`  ${lbl('Console')}${consoleDisplay}`);
-    if (stats) {
-      const chanList = stats.channels.length > 0 ? stats.channels.join(', ') : grey('none');
-      this.writeLine(
-        `  ${lbl('Channels')}${B}${stats.channels.length}${B} joined ${grey('│')} ${chanList}`,
-      );
-      this.writeLine(
-        `  ${lbl('Plugins')}${B}${stats.pluginCount}${B} loaded ${grey('│')} ${B}${stats.bindCount}${B} binds`,
-      );
-      this.writeLine(`  ${lbl('Users')}${B}${stats.userCount}${B} registered`);
-      this.writeLine(`  ${lbl('Uptime')}${formatUptime(stats.uptime)}`);
-    }
-    this.writeLine(`  ${lbl('Online')}${consoleLine}`);
-
-    // Quick-start commands
-    this.writeLine('');
-    this.writeLine(`Use ${B}.help${B} for basic help.`);
-    this.writeLine(`Use ${B}.help${B} <command> for help on a specific command.`);
-    this.writeLine(`Use ${B}.console${B} to see who is on the console.`);
-    this.writeLine('');
-    this.writeLine(`Commands start with '.' — everything else is console chat.`);
-    this.writeLine('');
   }
 
   /** Write a line followed by \r\n. No-op if socket is destroyed. */
@@ -792,7 +539,7 @@ export class DCCSession implements DCCSessionEntry {
       clearTimeout(this._relayTimer);
       this._relayTimer = null;
     }
-    this.writeLine(`*** Now relaying to ${this._relayTarget}. Type ${B}.relay end${B} to return.`);
+    this.writeLine(`*** Now relaying to ${this._relayTarget}. Type \x02.relay end\x02 to return.`);
   }
 
   /** Exit relay mode. */
@@ -957,15 +704,32 @@ export class DCCSession implements DCCSessionEntry {
     this.resetIdle();
   }
 
+  /**
+   * Clear every timer owned by this session. A single choke-point so neither
+   * `close()` nor `onClose()` can miss the idle-, prompt-, or relay-timer
+   * when the socket drops mid-flight.
+   */
+  private clearAllTimers(): void {
+    if (this.idleTimer !== null) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+    // Defensive: close() may arrive while a pending relay is still awaiting
+    // confirmation. The happy-path exitRelay() clears this timer first, so
+    // the branch only fires if the socket dies mid-handshake.
+    /* v8 ignore next 4 */
+    if (this._relayTimer !== null) {
+      clearTimeout(this._relayTimer);
+      this._relayTimer = null;
+    }
+  }
+
   /** Close the session gracefully. */
   close(reason?: string): void {
     if (this.closed) return;
     this.closed = true;
 
-    if (this.idleTimer !== null) {
-      clearTimeout(this.idleTimer);
-      this.idleTimer = null;
-    }
+    this.clearAllTimers();
 
     this.rl?.close();
 
@@ -984,8 +748,7 @@ export class DCCSession implements DCCSessionEntry {
     if (this.closed) return;
     this.closed = true;
 
-    if (this.idleTimer !== null) clearTimeout(this.idleTimer);
-    this.idleTimer = null;
+    this.clearAllTimers();
     this.rl?.close();
 
     // Remove from manager and announce departure

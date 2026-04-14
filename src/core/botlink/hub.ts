@@ -5,11 +5,13 @@
 import { createServer } from 'node:net';
 import type { Server as NetServer, Socket } from 'node:net';
 
-import type { BotDatabase } from '../database';
-import type { BotEventBus } from '../event-bus';
-import type { Logger } from '../logger';
-import type { BotlinkConfig } from '../types';
-import { type AuthBanEntry, BotLinkAuthManager } from './botlink-auth';
+import type { BotDatabase } from '../../database';
+import type { BotEventBus } from '../../event-bus';
+import type { Logger } from '../../logger';
+import type { BotlinkConfig } from '../../types';
+import type { Permissions } from '../permissions';
+import { type AuthBanEntry, BotLinkAuthManager } from './auth';
+import { PendingRequestMap } from './pending';
 import {
   BotLinkProtocol,
   type CommandRelay,
@@ -19,13 +21,13 @@ import {
   type PartyLineUser,
   RateCounter,
   executeCmdFrame,
-} from './botlink-protocol';
-import { PermissionSyncer } from './botlink-sync';
-import type { Permissions } from './permissions';
+} from './protocol';
+import { BotLinkRelayRouter } from './relay-router';
+import { PermissionSyncer } from './sync';
 
-// Re-export auth helpers/types so existing imports from './botlink-hub' keep working.
-export { isValidIP, isWhitelisted } from './botlink-auth';
-export type { AuthBanEntry, LinkBan } from './botlink-auth';
+// Re-export auth helpers/types so existing imports from './hub' keep working.
+export { isValidIP, isWhitelisted } from './auth';
+export type { AuthBanEntry, LinkBan } from './auth';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,17 +52,9 @@ interface LeafConnection {
 export class BotLinkHub {
   private server: NetServer | null = null;
   private leaves: Map<string, LeafConnection> = new Map();
-  /** Remote party line users tracked from PARTY_JOIN/PARTY_PART frames. Key: `handle@botname`. */
-  private remotePartyUsers: Map<string, PartyLineUser> = new Map();
-  /** Active relay sessions. Key: handle. Value: { originBot, targetBot, createdAt }. */
-  private activeRelays: Map<string, { originBot: string; targetBot: string; createdAt: number }> =
-    new Map();
-  /** Pending protect requests. Key: ref. Value: { botname, createdAt }. */
-  private protectRequests: Map<string, { botname: string; createdAt: number }> = new Map();
-  /** CMD routing table — tracks toBot-routed commands for CMD_RESULT forwarding. Key: ref. Value: { botname, createdAt }. */
-  private cmdRoutes: Map<string, { botname: string; createdAt: number }> = new Map();
+  private routes: BotLinkRelayRouter;
   /** Pending commands sent by the hub itself (from .bot). Key: ref. */
-  private pendingCmds: Map<string, { resolve: (output: string[]) => void }> = new Map();
+  private pendingCmds = new PendingRequestMap<string[]>();
   private eventBusListeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
   private cmdRefCounter = 0;
   private config: BotlinkConfig;
@@ -96,6 +90,14 @@ export class BotLinkHub {
     this.pingIntervalMs = config.ping_interval_ms;
     this.linkTimeoutMs = config.link_timeout_ms;
     this.auth = new BotLinkAuthManager(config, this.logger, this.eventBus, db ?? null);
+    this.routes = new BotLinkRelayRouter({
+      botname: config.botname,
+      logger: this.logger,
+      send: (botname, frame) => this.send(botname, frame),
+      sendOrDeliver: (botname, frame) => this.sendOrDeliver(botname, frame),
+      hasLeaf: (botname) => this.leaves.has(botname),
+      getLocalPartyUsers: () => this.getLocalPartyUsers?.() ?? [],
+    });
   }
 
   /** Start listening for leaf connections. Uses config values when port/host not specified. */
@@ -255,15 +257,14 @@ export class BotLinkHub {
         });
         return;
       }
-      this.cmdRoutes.set(ref, { botname: fromBot, createdAt: Date.now() });
+      this.routes.trackCmdRoute(ref, fromBot);
       this.send(toBot, frame);
       return;
     }
 
     // Verify the handle has an active DCC session on the sending leaf.
     // This prevents a compromised leaf from forging commands as arbitrary handles.
-    const sessionKey = `${handle}@${fromBot}`;
-    if (!this.remotePartyUsers.has(sessionKey)) {
+    if (!this.routes.hasRemoteSession(handle, fromBot)) {
       this.send(fromBot, {
         type: 'CMD_RESULT',
         ref,
@@ -299,18 +300,7 @@ export class BotLinkHub {
     });
 
     const CMD_TIMEOUT_MS = 10_000;
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        this.pendingCmds.delete(ref);
-        resolve(['Command relay timed out.']);
-      }, CMD_TIMEOUT_MS);
-      this.pendingCmds.set(ref, {
-        resolve: (output) => {
-          clearTimeout(timer);
-          resolve(output);
-        },
-      });
-    });
+    return this.pendingCmds.create(ref, CMD_TIMEOUT_MS, ['Command relay timed out.']);
   }
 
   // -----------------------------------------------------------------------
@@ -342,98 +332,25 @@ export class BotLinkHub {
 
   /** Get all remote party users tracked by the hub. */
   getRemotePartyUsers(): PartyLineUser[] {
-    return Array.from(this.remotePartyUsers.values());
+    return this.routes.getRemotePartyUsers();
   }
-
-  /** Handle PARTY_WHOM request: respond with all known users. */
-  private handlePartyWhom(fromBot: string, ref: string): void {
-    const local = this.getLocalPartyUsers?.() ?? [];
-    const remote = this.getRemotePartyUsers();
-    this.send(fromBot, {
-      type: 'PARTY_WHOM_REPLY',
-      ref,
-      users: [...local, ...remote],
-    });
-  }
-
-  /** Track a PARTY_JOIN: add user to remote party list. */
-  private handlePartyJoin(botname: string, frame: LinkFrame): void {
-    const key = `${frame.handle}@${frame.fromBot}`;
-    this.remotePartyUsers.set(key, {
-      handle: String(frame.handle ?? ''),
-      nick: String(frame.nick ?? frame.handle ?? ''),
-      botname: String(frame.fromBot ?? botname),
-      connectedAt: Date.now(),
-      idle: 0,
-    });
-  }
-
-  /** Track a PARTY_PART: remove user from remote party list. */
-  private handlePartyPart(frame: LinkFrame): void {
-    this.remotePartyUsers.delete(`${frame.handle}@${frame.fromBot}`);
-  }
-
-  // -----------------------------------------------------------------------
-  // Session relay routing (Phase 9)
-  // -----------------------------------------------------------------------
 
   /**
    * Register a relay that the hub itself originated (e.g. from a DCC .relay
-   * command on this bot).  The hub's routeRelayFrame only sees frames that
+   * command on this bot). The hub's routeRelayFrame only sees frames that
    * arrive from leaves, so hub-originated relays must be registered explicitly.
    */
   registerRelay(handle: string, targetBot: string): void {
-    this.activeRelays.set(handle, {
-      originBot: this.config.botname,
-      targetBot,
-      createdAt: Date.now(),
-    });
+    this.routes.registerHubRelay(handle, targetBot);
   }
 
   /** Remove a hub-originated relay (e.g. when the DCC user types .relay end). */
   unregisterRelay(handle: string): void {
-    this.activeRelays.delete(handle);
-  }
-
-  /** Route RELAY_* frames between origin and target bots. */
-  private routeRelayFrame(fromBot: string, frame: LinkFrame): void {
-    const handle = String(frame.handle ?? '');
-
-    if (frame.type === 'RELAY_REQUEST') {
-      // Origin bot wants to relay to target bot
-      const targetBot = String(frame.toBot ?? '');
-      if (!this.leaves.has(targetBot)) {
-        this.sendOrDeliver(fromBot, {
-          type: 'RELAY_END',
-          handle,
-          reason: `Bot "${targetBot}" not connected`,
-        });
-        return;
-      }
-      this.activeRelays.set(handle, { originBot: fromBot, targetBot, createdAt: Date.now() });
-      this.send(targetBot, frame);
-    } else if (frame.type === 'RELAY_ACCEPT') {
-      const relay = this.activeRelays.get(handle);
-      if (relay) this.sendOrDeliver(relay.originBot, frame);
-    } else if (frame.type === 'RELAY_INPUT') {
-      const relay = this.activeRelays.get(handle);
-      if (relay) this.send(relay.targetBot, frame);
-    } else if (frame.type === 'RELAY_OUTPUT') {
-      const relay = this.activeRelays.get(handle);
-      if (relay) this.sendOrDeliver(relay.originBot, frame);
-    } else if (frame.type === 'RELAY_END') {
-      const relay = this.activeRelays.get(handle);
-      if (relay) {
-        // Forward to the other side
-        const otherBot = fromBot === relay.originBot ? relay.targetBot : relay.originBot;
-        this.sendOrDeliver(otherBot, frame);
-        this.activeRelays.delete(handle);
-      }
-    }
+    this.routes.unregisterHubRelay(handle);
   }
 
   /**
-   * Send a frame to a bot.  If the target is the hub itself, deliver the frame
+   * Send a frame to a bot. If the target is the hub itself, deliver the frame
    * locally via onLeafFrame instead of trying to look it up in the leaves map.
    */
   private sendOrDeliver(botname: string, frame: LinkFrame): boolean {
@@ -442,23 +359,6 @@ export class BotLinkHub {
       return true;
     }
     return this.send(botname, frame);
-  }
-
-  /** Track a PROTECT_* request so the ACK can be routed back. */
-  private handleProtectRequest(botname: string, frame: LinkFrame): void {
-    if (frame.ref) {
-      this.protectRequests.set(String(frame.ref), { botname, createdAt: Date.now() });
-    }
-  }
-
-  /** Route a PROTECT_ACK back to the requesting leaf. */
-  private handleProtectAck(frame: LinkFrame): void {
-    if (!frame.ref) return;
-    const entry = this.protectRequests.get(String(frame.ref));
-    if (entry) {
-      this.send(entry.botname, frame);
-      this.protectRequests.delete(String(frame.ref));
-    }
   }
 
   /** Forcibly disconnect a single leaf by botname. Returns true if the leaf was found and disconnected. */
@@ -511,14 +411,8 @@ export class BotLinkHub {
     this.leaves.clear();
 
     // Resolve pending commands with error before clearing
-    for (const pending of this.pendingCmds.values()) {
-      pending.resolve(['Hub shutting down.']);
-    }
-    this.pendingCmds.clear();
-    this.remotePartyUsers.clear();
-    this.activeRelays.clear();
-    this.protectRequests.clear();
-    this.cmdRoutes.clear();
+    this.pendingCmds.drain(['Hub shutting down.']);
+    this.routes.clear();
 
     // Remove eventBus listeners
     if (this.eventBus) {
@@ -744,20 +638,13 @@ export class BotLinkHub {
     switch (frame.type) {
       case 'CMD_RESULT': {
         const ref = String(frame.ref ?? '');
-        const pending = this.pendingCmds.get(ref);
-        if (pending) {
-          this.pendingCmds.delete(ref);
-          pending.resolve(
-            Array.isArray(frame.output)
-              ? frame.output.filter((s): s is string => typeof s === 'string')
-              : [],
-          );
-          return;
-        }
-        const origin = this.cmdRoutes.get(ref);
-        if (origin) {
-          this.cmdRoutes.delete(ref);
-          this.send(origin.botname, frame);
+        const output = Array.isArray(frame.output)
+          ? frame.output.filter((s): s is string => typeof s === 'string')
+          : [];
+        if (this.pendingCmds.resolve(ref, output)) return;
+        const originBot = this.routes.popCmdRoute(ref);
+        if (originBot) {
+          this.send(originBot, frame);
           return;
         }
         break;
@@ -772,25 +659,25 @@ export class BotLinkHub {
         break;
 
       case 'PARTY_JOIN':
-        this.handlePartyJoin(botname, frame);
+        this.routes.trackPartyJoin(botname, frame);
         break;
 
       case 'PARTY_PART':
-        this.handlePartyPart(frame);
+        this.routes.trackPartyPart(frame);
         break;
 
       case 'PARTY_WHOM':
-        this.handlePartyWhom(botname, String(frame.ref ?? ''));
+        this.routes.handlePartyWhom(botname, String(frame.ref ?? ''));
         break;
 
       case 'PROTECT_ACK':
-        this.handleProtectAck(frame);
+        this.routes.handleProtectAck(frame);
         break;
 
       default:
         // PROTECT_* requests (not ACK)
         if (frame.type.startsWith('PROTECT_')) {
-          this.handleProtectRequest(botname, frame);
+          if (frame.ref) this.routes.trackProtectRequest(String(frame.ref), botname);
         }
         break;
     }
@@ -800,7 +687,7 @@ export class BotLinkHub {
     // the hub itself is the relay origin/target, so skip the generic
     // notification below to avoid double-dispatching the same frame.
     if (frame.type.startsWith('RELAY_')) {
-      this.routeRelayFrame(botname, frame);
+      this.routes.routeRelayFrame(botname, frame);
       return;
     }
 
@@ -810,26 +697,7 @@ export class BotLinkHub {
 
   /** Clean up all hub-side state associated with a leaf (relays, routes, etc.). */
   private cleanupLeafState(botname: string): void {
-    // Clean up remote party users from this leaf
-    for (const key of this.remotePartyUsers.keys()) {
-      if (key.endsWith(`@${botname}`)) this.remotePartyUsers.delete(key);
-    }
-    // Clean up active relays involving this leaf
-    for (const [handle, relay] of this.activeRelays) {
-      if (relay.originBot === botname || relay.targetBot === botname) {
-        const otherBot = relay.originBot === botname ? relay.targetBot : relay.originBot;
-        this.send(otherBot, { type: 'RELAY_END', handle, reason: `${botname} disconnected` });
-        this.activeRelays.delete(handle);
-      }
-    }
-    // Clean up pending CMD routes from this leaf
-    for (const [ref, entry] of this.cmdRoutes) {
-      if (entry.botname === botname) this.cmdRoutes.delete(ref);
-    }
-    // Clean up pending protect requests from this leaf
-    for (const [ref, entry] of this.protectRequests) {
-      if (entry.botname === botname) this.protectRequests.delete(ref);
-    }
+    this.routes.cleanupLeafState(botname);
   }
 
   private onLeafClose(botname: string): void {
@@ -869,29 +737,7 @@ export class BotLinkHub {
 
       conn.pingSeq++;
       conn.protocol.send({ type: 'PING', seq: conn.pingSeq });
-      this.sweepStaleRoutes();
+      this.routes.sweepStaleRoutes();
     }, this.pingIntervalMs);
-  }
-
-  /** Remove stale entries from protectRequests, cmdRoutes, activeRelays, and
-   *  remotePartyUsers. Covers the case where the matching END/PART frame is
-   *  lost in transit so the Map never gets cleaned via its normal path. */
-  private sweepStaleRoutes(): void {
-    const now = Date.now();
-    const SHORT_TTL = 30_000; // 30 seconds — request/reply cycles
-    const RELAY_TTL = 60 * 60_000; // 1 hour — live relay sessions
-    const PARTY_TTL = 7 * 86_400_000; // 7 days — remote DCC party members
-    for (const [ref, entry] of this.protectRequests) {
-      if (now - entry.createdAt > SHORT_TTL) this.protectRequests.delete(ref);
-    }
-    for (const [ref, entry] of this.cmdRoutes) {
-      if (now - entry.createdAt > SHORT_TTL) this.cmdRoutes.delete(ref);
-    }
-    for (const [handle, entry] of this.activeRelays) {
-      if (now - entry.createdAt > RELAY_TTL) this.activeRelays.delete(handle);
-    }
-    for (const [key, user] of this.remotePartyUsers) {
-      if (now - user.connectedAt > PARTY_TTL) this.remotePartyUsers.delete(key);
-    }
   }
 }

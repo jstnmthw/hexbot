@@ -5,15 +5,16 @@
 import type { CommandContext, CommandHandler } from '../../command-handler';
 import type { BotDatabase } from '../../database';
 import { tryAudit } from '../audit';
-import type { DCCManager, DCCSessionEntry } from '../dcc';
 import {
   CONSOLE_FLAG_DESCRIPTIONS,
   CONSOLE_FLAG_LETTERS,
+  type DCCManager,
+  type DCCSessionEntry,
   DEFAULT_CONSOLE_FLAGS,
   formatFlags,
   parseCanonicalFlags,
   parseFlagsMutation,
-} from '../dcc-console-flags';
+} from '../dcc';
 
 /**
  * Register the `.console` command on the given command handler. The

@@ -1,10 +1,10 @@
 // HexBot — Bot Link State Synchronization
 // Converts ChannelState and Permissions into link frames for sync,
 // and applies incoming sync frames to local state.
-import { isObjectArray } from '../utils/irc-event';
-import type { LinkFrame } from './botlink-protocol';
-import type { ChannelState } from './channel-state';
-import type { Permissions } from './permissions';
+import { isObjectArray } from '../../utils/irc-event';
+import type { ChannelState } from '../channel-state';
+import type { Permissions } from '../permissions';
+import type { LinkFrame } from './protocol';
 
 // ---------------------------------------------------------------------------
 // ChannelStateSyncer

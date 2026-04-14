@@ -1,11 +1,11 @@
 // HexBot — Bot link relay frame handler
 // Extracted from bot.ts for testability. Handles incoming RELAY_* frames
 // that create and manage virtual relay sessions between linked bots.
-import type { CommandContext } from '../command-handler';
-import type { Logger } from '../logger';
-import type { stripFormatting as StripFormattingFn } from '../utils/strip-formatting';
-import type { LinkFrame } from './botlink-protocol';
-import type { DCCSessionEntry } from './dcc';
+import type { CommandContext } from '../../command-handler';
+import type { Logger } from '../../logger';
+import type { stripFormatting as StripFormattingFn } from '../../utils/strip-formatting';
+import type { DCCSessionEntry } from '../dcc';
+import type { LinkFrame } from './protocol';
 
 /** Minimal command executor — just the .execute() method. */
 export interface RelayCommandExecutor {

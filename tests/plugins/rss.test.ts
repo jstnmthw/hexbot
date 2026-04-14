@@ -229,7 +229,7 @@ describe('rss plugin — formatItem', () => {
     const result = formatItem(
       feed,
       { title: 'Hello World', link: 'https://example.com/1' },
-      baseCfg,
+      baseCfg.max_title_length,
     );
     expect(result).toBe('\x02[Test Feed]\x02 Hello World \u2014 https://example.com/1');
   });
@@ -238,7 +238,7 @@ describe('rss plugin — formatItem', () => {
     const result = formatItem(
       feed,
       { title: '<b>Bold</b> and <i>italic</i>', link: 'https://x.com' },
-      baseCfg,
+      baseCfg.max_title_length,
     );
     expect(result).toContain('Bold and italic');
     expect(result).not.toContain('<b>');
@@ -251,7 +251,11 @@ describe('rss plugin — formatItem', () => {
     // on how the replacement unfolds. The fixed-point loop must leave no
     // `<...>` substrings in the output.
     const nasty = '<scr<script>ipt>alert(1)</scr</script>ipt> <<scrip<scrip<script>t>t>ipt>t> hi';
-    const result = formatItem(feed, { title: nasty, link: 'https://x.com' }, baseCfg);
+    const result = formatItem(
+      feed,
+      { title: nasty, link: 'https://x.com' },
+      baseCfg.max_title_length,
+    );
     // No angle-bracketed tag survives.
     expect(result).not.toMatch(/<[^>]*>/);
     // The plain-text tail is still visible.
@@ -260,24 +264,32 @@ describe('rss plugin — formatItem', () => {
 
   it('truncates long titles with ellipsis', () => {
     const longTitle = 'A'.repeat(350);
-    const result = formatItem(feed, { title: longTitle, link: 'https://x.com' }, baseCfg);
+    const result = formatItem(
+      feed,
+      { title: longTitle, link: 'https://x.com' },
+      baseCfg.max_title_length,
+    );
     expect(result).toContain('A'.repeat(300) + '\u2026');
   });
 
   it('uses feed id as name when name is not set', () => {
     const noNameFeed = { id: 'myid', url: 'https://x.com/rss', channels: ['#test'] };
-    const result = formatItem(noNameFeed, { title: 'Post', link: 'https://x.com' }, baseCfg);
+    const result = formatItem(
+      noNameFeed,
+      { title: 'Post', link: 'https://x.com' },
+      baseCfg.max_title_length,
+    );
     expect(result).toContain('[myid]');
   });
 
   it('handles missing link gracefully', () => {
-    const result = formatItem(feed, { title: 'No Link' }, baseCfg);
+    const result = formatItem(feed, { title: 'No Link' }, baseCfg.max_title_length);
     expect(result).toBe('\x02[Test Feed]\x02 No Link');
     expect(result).not.toContain('\u2014');
   });
 
   it('handles missing title gracefully', () => {
-    const result = formatItem(feed, { link: 'https://x.com' }, baseCfg);
+    const result = formatItem(feed, { link: 'https://x.com' }, baseCfg.max_title_length);
     expect(result).toBe('\x02[Test Feed]\x02  \u2014 https://x.com');
   });
 });
