@@ -19,6 +19,27 @@ export interface AdminIRCClient {
   user?: { nick: string };
 }
 
+/**
+ * Stability/observability metrics surfaced via `.status`. Every field
+ * is optional because the getter is best-effort — a transient tracker
+ * that hasn't been wired yet returns `undefined` rather than erroring.
+ * See stability audit 2026-04-14.
+ */
+export interface StabilityMetrics {
+  /** NickServ verify timeouts since startup (services provider degradation signal). */
+  servicesTimeoutCount?: number;
+  /** Pending verify count right now. */
+  pendingVerifyCount?: number;
+  /** Verify requests rejected because the pending cap was reached. */
+  pendingCapRejections?: number;
+  /** Number of loaded plugins. */
+  loadedPluginCount?: number;
+  /** Number of plugins that failed to load at startup. */
+  failedPluginCount?: number;
+  /** Names of plugins that failed to load — used by the startup banner. */
+  failedPluginNames?: string[];
+}
+
 /** Minimal bot interface for status reporting. */
 export interface AdminBotInfo {
   getUptime(): number;
@@ -27,6 +48,8 @@ export interface AdminBotInfo {
   getUserCount(): number;
   /** Current reconnect-driver state, or null if the bot hasn't connected yet. */
   getReconnectState(): ReconnectState | null;
+  /** Optional stability metrics surfaced via `.status`. */
+  getStabilityMetrics?(): StabilityMetrics;
 }
 
 /**
@@ -208,6 +231,32 @@ export function registerIRCAdminCommands(
       ];
       if (reconnectState) {
         lines.push(`Connection: ${formatReconnectState(reconnectState)}`);
+      }
+      // Stability metrics — emitted only when the bot has wired a
+      // `getStabilityMetrics` provider (tests pass a minimal info
+      // object that can omit it). One-line summary so `.status`
+      // stays operator-readable. See stability audit 2026-04-14.
+      if (botInfo.getStabilityMetrics) {
+        const m = botInfo.getStabilityMetrics();
+        const parts: string[] = [];
+        if (m.servicesTimeoutCount !== undefined) {
+          parts.push(`services-timeouts=${m.servicesTimeoutCount}`);
+        }
+        if (m.pendingVerifyCount !== undefined) {
+          parts.push(`pending-verifies=${m.pendingVerifyCount}`);
+        }
+        if (m.pendingCapRejections !== undefined && m.pendingCapRejections > 0) {
+          parts.push(`verify-cap-rejected=${m.pendingCapRejections}`);
+        }
+        if (m.loadedPluginCount !== undefined) {
+          parts.push(`plugins=${m.loadedPluginCount}`);
+        }
+        if (m.failedPluginCount !== undefined && m.failedPluginCount > 0) {
+          parts.push(`failed-plugins=${m.failedPluginCount}`);
+        }
+        if (parts.length > 0) {
+          lines.push(`Stability: ${parts.join(' | ')}`);
+        }
       }
       ctx.reply(lines.join('\n'));
     },

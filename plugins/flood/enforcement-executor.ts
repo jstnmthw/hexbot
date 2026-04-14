@@ -31,8 +31,27 @@ export interface EnforcementConfig {
 // entries get evicted. See audit finding C2 (2026-04-14).
 const MAX_OFFENCE_ENTRIES = 2000;
 
+/**
+ * Per-channel enforcement action cap. A burst of 100+ kicks in ~1s
+ * would otherwise hit the server rate limit and risk a collateral
+ * K-line. Anything past this cap within the rolling window is
+ * dropped with a warn log. See stability audit 2026-04-14.
+ */
+const MAX_ACTIONS_PER_CHANNEL_WINDOW = 10;
+/** Rolling window over which {@link MAX_ACTIONS_PER_CHANNEL_WINDOW} applies. */
+const CHANNEL_WINDOW_MS = 5_000;
+
 export class EnforcementExecutor {
   private offenceTracker = new Map<string, OffenceEntry>();
+  /**
+   * Per-channel action-rate state: `{ windowStart, count }`. A single
+   * burst of 100+ kicks would otherwise be dispatched in ~1s and
+   * trigger server-side rate-limiting or a collateral K-line for the
+   * bot. Cap at `MAX_ACTIONS_PER_CHANNEL_WINDOW` within
+   * `CHANNEL_WINDOW_MS`; additional actions are dropped with a log
+   * line. See stability audit 2026-04-14.
+   */
+  private readonly channelActionRate = new Map<string, { windowStart: number; count: number }>();
   /**
    * Fire-and-forget enforcement actions currently awaiting completion.
    * `teardown()` awaits all of them before the plugin unloads so a
@@ -51,6 +70,27 @@ export class EnforcementExecutor {
   /** Reset offence state (called from plugin teardown). */
   clear(): void {
     this.offenceTracker.clear();
+    this.channelActionRate.clear();
+  }
+
+  /**
+   * Consume a per-channel action slot. Returns false if the cap has
+   * been hit within the current rolling window; caller must drop the
+   * action. See stability audit 2026-04-14.
+   */
+  private reserveChannelSlot(channel: string): boolean {
+    const now = Date.now();
+    const key = this.api.ircLower(channel);
+    let state = this.channelActionRate.get(key);
+    if (!state || now - state.windowStart > CHANNEL_WINDOW_MS) {
+      state = { windowStart: now, count: 0 };
+      this.channelActionRate.set(key, state);
+    }
+    if (state.count >= MAX_ACTIONS_PER_CHANNEL_WINDOW) {
+      return false;
+    }
+    state.count++;
+    return true;
   }
 
   /** Prune offence entries past their window. */
@@ -93,6 +133,17 @@ export class EnforcementExecutor {
   /** Apply the named action (warn/kick/tempban). Fire-and-forget errors are logged. */
   apply(action: string, channel: string, nick: string, reason: string): void {
     if (!this.botHasOps(channel)) return;
+    // Per-channel rate cap. Drop excess actions (don't buffer) — the
+    // offence tracker ensures repeat offenders are still escalated
+    // on their next flood event, and dropping the tail is safer than
+    // queueing 100 kicks that would get us K-lined. See stability
+    // audit 2026-04-14.
+    if (!this.reserveChannelSlot(channel)) {
+      this.api.warn(
+        `Flood enforcement rate cap hit on ${channel} — dropping "${action}" for ${nick}`,
+      );
+      return;
+    }
     const p = this.applyInner(action, channel, nick, reason).catch(this.logError);
     this.inFlight.add(p);
     // The `finally` keeps the Set bounded: each promise removes itself on

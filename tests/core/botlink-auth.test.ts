@@ -198,13 +198,23 @@ describe('auth brute-force protection', () => {
     await sendBadAuth(hub, ip, fakeTick);
     expect(bans).toEqual([1000, 2000, 4000]);
 
-    // Verify cap at 24h
-    const MAX_BAN = 86_400_000;
-    for (let i = 0; i < 30; i++) {
-      vi.advanceTimersByTime(MAX_BAN + 1);
+    // Stability audit 2026-04-14: `banCount` is now hard-capped at
+    // 8 (and decays by one half-step per hour since last failure).
+    // With the test's baseBanMs=1000, the effective ceiling is
+    // 1000 * 2^8 = 256_000 ms — NOT the absolute 24h ceiling from
+    // the MAX_BAN_MS safety rail. Both caps coexist: banCount
+    // limits escalation; MAX_BAN_MS limits absolute duration for
+    // production baseBanMs values. Advance time just past each
+    // ban's expiry but well under 1h so decay doesn't reset us.
+    let expectedBan = 4000;
+    for (let i = 0; i < 12; i++) {
+      const advance = Math.min(expectedBan + 500, 3_500_000);
+      vi.advanceTimersByTime(advance);
       await sendBadAuth(hub, ip, fakeTick);
+      expectedBan = Math.min(expectedBan * 2, 256_000);
     }
-    expect(bans[bans.length - 1]).toBe(MAX_BAN);
+    // Plateau at the banCount=8 ceiling.
+    expect(bans[bans.length - 1]).toBe(256_000);
   });
 
   it('whitelisted IPs are never tracked or banned', async () => {
@@ -437,6 +447,7 @@ describe('auth brute-force protection', () => {
         firstFailure: now,
         bannedUntil: 0,
         banCount: 0,
+        lastFailure: now,
       });
     }
     const oldestKey = auth.authTracker.keys().next().value!;

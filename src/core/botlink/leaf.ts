@@ -271,9 +271,34 @@ export class BotLinkLeaf {
       version: this.version,
     });
 
+    // Handshake deadline — if no WELCOME/ERROR arrives within this
+    // window, tear down the half-open socket and reconnect. Without
+    // this, a hub that crashes between accepting the TCP connection
+    // and sending WELCOME leaves the leaf waiting for the kernel TCP
+    // timeout (~2.5 min). See stability audit 2026-04-14.
+    const handshakeTimeoutMs = 15_000;
+    let handshakeTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      handshakeTimer = null;
+      if (this.connected) return; // WELCOME already arrived — no-op
+      this.logger?.warn(
+        `Handshake timeout — no WELCOME within ${handshakeTimeoutMs}ms, closing socket and reconnecting`,
+      );
+      this.protocol?.close();
+      this.protocol = null;
+      this.onDisconnected?.('handshake timeout');
+      this.scheduleReconnect();
+    }, handshakeTimeoutMs);
+    const clearHandshakeTimer = (): void => {
+      if (handshakeTimer !== null) {
+        clearTimeout(handshakeTimer);
+        handshakeTimer = null;
+      }
+    };
+
     // Handshake phase — wait for WELCOME or ERROR
     this.protocol.onFrame = (frame) => {
       if (frame.type === 'WELCOME') {
+        clearHandshakeTimer();
         this.hubBotname = String(frame.botname ?? '');
         this.connected = true;
         this.reconnectDelay = this.reconnectDelayMs; // Reset backoff
@@ -286,9 +311,14 @@ export class BotLinkLeaf {
         this.logger?.info(`Connected to hub "${this.hubBotname}"`);
         this.onConnected?.(this.hubBotname);
       } else if (frame.type === 'ERROR') {
+        clearHandshakeTimer();
         this.logger?.error(`Hub rejected: [${frame.code}] ${frame.message}`);
         this.protocol?.close();
         this.protocol = null;
+        // Always notify disconnect watchers — watchdogs and DCC sync
+        // tracking depend on seeing this transition even on AUTH_FAILED.
+        // See stability audit 2026-04-14.
+        this.onDisconnected?.(`handshake rejected: ${String(frame.code ?? 'unknown')}`);
         // Don't auto-reconnect on auth failure
         if (frame.code === 'AUTH_FAILED') return;
         this.scheduleReconnect();
@@ -296,6 +326,7 @@ export class BotLinkLeaf {
     };
 
     this.protocol.onClose = () => {
+      clearHandshakeTimer();
       const wasConnected = this.connected;
       this.connected = false;
       this.stopHeartbeat();
@@ -374,13 +405,24 @@ export class BotLinkLeaf {
   private scheduleReconnect(): void {
     if (this.disconnecting || this.reconnectTimer || this.connecting) return;
 
-    this.logger?.info(`Reconnecting in ${this.reconnectDelay}ms`);
+    // Full jitter (0.5–1.0 × delay) to avoid thundering-herd reconnects
+    // when many leaves disconnect simultaneously (e.g. hub restart).
+    // Without jitter, 20 leaves all fire a reconnect at exactly the same
+    // base delay and the hub's own max_pending_handshakes guard auth-bans
+    // them. See stability audit 2026-04-14.
+    const jitteredDelay = Math.max(
+      1,
+      Math.floor(this.reconnectDelay * (0.5 + 0.5 * Math.random())),
+    );
+
+    this.logger?.info(`Reconnecting in ${jitteredDelay}ms`);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
-    }, this.reconnectDelay);
+    }, jitteredDelay);
 
-    // Exponential backoff
+    // Exponential backoff — based on the un-jittered delay so every leaf
+    // converges toward the cap at the same rate.
     this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.reconnectMaxDelayMs);
   }
 

@@ -23,7 +23,17 @@ export interface BindEntry {
   handler: BindHandler;
   pluginId: string;
   hits: number;
+  /**
+   * Consecutive timer-handler errors. Only used on `time` binds.
+   * After {@link TIMER_FAILURE_THRESHOLD} consecutive throws, the
+   * dispatcher auto-disables the interval so a broken plugin can't
+   * produce unbounded log spam. See stability audit 2026-04-14.
+   */
+  consecutiveFailures?: number;
 }
+
+/** Auto-disable a `time` bind after this many consecutive errors. */
+const TIMER_FAILURE_THRESHOLD = 10;
 
 /** Minimal bind management interface for consumers that only register/remove binds. */
 export interface BindRegistrar {
@@ -133,6 +143,18 @@ export class EventDispatcher {
   /** Wire in the flood notice provider (injected by Bot to avoid a direct IRC client dep). */
   setFloodNotice(provider: FloodNoticeProvider): void {
     this.floodNotice = provider;
+  }
+
+  /**
+   * Drop all per-key rate-limit state. Called on `bot:disconnected` so a
+   * user whose old-session key was flagged isn't instantly rate-limited
+   * on their first message after reconnect. See stability audit
+   * 2026-04-14.
+   */
+  clearFloodState(): void {
+    this.pubFlood.reset();
+    this.msgFlood.reset();
+    this.floodWarned.clear();
   }
 
   /**
@@ -250,6 +272,22 @@ export class EventDispatcher {
       if (rawMs < MIN_TIMER_MS) {
         this.logger?.warn(`Timer interval "${mask}s" raised to 10s minimum`);
       }
+      const onTimerFailure = (err: unknown): void => {
+        entry.consecutiveFailures = (entry.consecutiveFailures ?? 0) + 1;
+        this.logger?.error(
+          `Timer handler error (${pluginId}, ${entry.consecutiveFailures}/${TIMER_FAILURE_THRESHOLD}):`,
+          err,
+        );
+        if (entry.consecutiveFailures >= TIMER_FAILURE_THRESHOLD) {
+          this.logger?.error(
+            `Timer bind "${mask}s" for ${pluginId} auto-disabled after ${TIMER_FAILURE_THRESHOLD} consecutive failures. Reload the plugin to reset.`,
+          );
+          this.clearTimer(entry);
+        }
+      };
+      const onTimerSuccess = (): void => {
+        entry.consecutiveFailures = 0;
+      };
       const timer = setInterval(() => {
         entry.hits++;
         const timerCtx: HandlerContext = {
@@ -266,12 +304,12 @@ export class EventDispatcher {
         try {
           const result = handler(timerCtx);
           if (result instanceof Promise) {
-            result.catch((err) => {
-              this.logger?.error(`Timer handler error (${pluginId}):`, err);
-            });
+            result.then(onTimerSuccess, onTimerFailure);
+          } else {
+            onTimerSuccess();
           }
         } catch (err) {
-          this.logger?.error(`Timer handler error (${pluginId}):`, err);
+          onTimerFailure(err);
         }
       }, intervalMs);
       this.timers.set(entry, timer);

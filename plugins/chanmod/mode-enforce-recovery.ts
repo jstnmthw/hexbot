@@ -72,11 +72,19 @@ export function handleBotSelfDeop(
         const isInviteOnly = ch?.modes.includes('i');
         if (!isInviteOnly) {
           api.log(`Cycling ${channel} to regain ops`);
+          // Release the cycle lock as soon as the PART is scheduled,
+          // not after the nested rejoin callback. Holding the lock
+          // across the rejoin window leaves the bot permanently
+          // deopped if anything in the inner callback throws or the
+          // rejoin fails — and it's not needed for dedup: the
+          // scheduleWithLock call above already suppressed duplicate
+          // cycles during its setup window. See stability audit
+          // 2026-04-14.
           state.cycles.scheduleWithLock(cycleLockKey, config.cycle_delay_ms, () => {
             api.part(channel, 'Cycling to regain ops');
+            state.cycles.unlock(cycleLockKey);
             state.cycles.schedule(2000, () => {
               api.join(channel);
-              state.cycles.unlock(cycleLockKey);
               state.enforcementCooldown.delete(cooldownKey);
             });
           });

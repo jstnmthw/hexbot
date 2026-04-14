@@ -34,13 +34,23 @@ export class ListenerGroup {
     this.entries.push({ event, fn });
   }
 
-  /** Detach every recorded listener and clear the internal record. */
+  /**
+   * Detach every recorded listener and clear the internal record.
+   *
+   * Per-entry try/catch — a single throw on `off()` would otherwise leave
+   * every remaining listener attached, racing with fresh listeners on the
+   * next reconnect. See stability audit 2026-04-14.
+   */
   removeAll(): void {
     for (const { event, fn } of this.entries) {
-      if (this.target.removeListener) {
-        this.target.removeListener(event, fn);
-      } else if (this.target.off) {
-        this.target.off(event, fn);
+      try {
+        if (this.target.removeListener) {
+          this.target.removeListener(event, fn);
+        } else if (this.target.off) {
+          this.target.off(event, fn);
+        }
+      } catch (err) {
+        console.error(`[listener-group] removeListener(${event}) threw:`, err);
       }
     }
     this.entries.length = 0;

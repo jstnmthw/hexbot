@@ -25,7 +25,20 @@ interface AuthTracker {
   bannedUntil: number;
   /** Number of times this IP has been banned — drives escalation doubling. */
   banCount: number;
+  /** Wall-clock ms of the most recent failure — drives `banCount` decay. */
+  lastFailure: number;
 }
+
+/**
+ * `banCount` halves once per hour since the last failure. Without
+ * decay, a shared-NAT IP that occasionally fumbles auth eventually
+ * accumulates a permanently escalating ban duration even when the
+ * underlying offenders have long since moved on. See stability audit
+ * 2026-04-14.
+ */
+const BAN_COUNT_DECAY_MS = 3_600_000; // 1 hour
+/** Hard cap on `banCount` so the exponential doesn't run away. */
+const BAN_COUNT_MAX = 8;
 
 export interface AuthBanEntry {
   ip: string;
@@ -276,12 +289,29 @@ export class BotLinkAuthManager {
         if (oldest === undefined) break;
         this.authTracker.delete(oldest);
       }
-      tracker = { failures: 0, firstFailure: now, bannedUntil: 0, banCount: 0 };
+      tracker = {
+        failures: 0,
+        firstFailure: now,
+        bannedUntil: 0,
+        banCount: 0,
+        lastFailure: now,
+      };
       this.authTracker.set(ip, tracker);
     } else {
       // Promote to most-recently-touched in the insertion-order map.
       this.authTracker.delete(ip);
       this.authTracker.set(ip, tracker);
+    }
+
+    // Decay `banCount` by one half-step per hour since last failure.
+    // A one-off typo on a shared NAT IP shouldn't compound forever.
+    // See stability audit 2026-04-14.
+    if (tracker.banCount > 0) {
+      const elapsed = now - tracker.lastFailure;
+      if (elapsed >= BAN_COUNT_DECAY_MS) {
+        const halves = Math.floor(elapsed / BAN_COUNT_DECAY_MS);
+        tracker.banCount = Math.max(0, tracker.banCount - halves);
+      }
     }
 
     // Reset failure window if expired (but never reset banCount)
@@ -291,11 +321,12 @@ export class BotLinkAuthManager {
     }
 
     tracker.failures++;
+    tracker.lastFailure = now;
 
     if (tracker.failures >= maxFailures) {
       const banDuration = Math.min(baseBanMs * 2 ** tracker.banCount, MAX_BAN_MS);
       tracker.bannedUntil = now + banDuration;
-      tracker.banCount++;
+      tracker.banCount = Math.min(tracker.banCount + 1, BAN_COUNT_MAX);
       tracker.failures = 0;
       this.logger?.warn(`IP ${ip} banned for ${banDuration}ms after ${maxFailures} auth failures`);
       this.eventBus?.emit('auth:ban', ip, maxFailures, banDuration);
@@ -318,12 +349,20 @@ export class BotLinkAuthManager {
     }
   }
 
-  /** Record a successful auth — clears the failure count but preserves banCount for escalation. */
+  /**
+   * Record a successful auth — clears the failure count and decays
+   * `banCount` by one step. Legitimate users who finally auth
+   * correctly shouldn't carry the escalation weight of every previous
+   * typo. The tracker entry stays so repeat offenders returning
+   * hours later still land on an escalated tier. See stability audit
+   * 2026-04-14.
+   */
   noteSuccess(ip: string, whitelisted: boolean): void {
     if (whitelisted || ip === 'unknown') return;
     const tracker = this.authTracker.get(ip);
     if (tracker) {
       tracker.failures = 0;
+      if (tracker.banCount > 0) tracker.banCount--;
     }
   }
 
@@ -432,6 +471,7 @@ export class BotLinkAuthManager {
         firstFailure: now,
         bannedUntil: 0,
         banCount: 0,
+        lastFailure: now,
       };
       // For permanent bans, use a far-future timestamp
       tracker.bannedUntil = bannedUntil === 0 ? Number.MAX_SAFE_INTEGER : bannedUntil;
@@ -484,6 +524,7 @@ export class BotLinkAuthManager {
           firstFailure: ban.setAt,
           bannedUntil: 0,
           banCount: 0,
+          lastFailure: ban.setAt,
         };
         tracker.bannedUntil = ban.bannedUntil === 0 ? Number.MAX_SAFE_INTEGER : ban.bannedUntil;
         this.authTracker.set(ban.ip, tracker);

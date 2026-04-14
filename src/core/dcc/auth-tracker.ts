@@ -17,7 +17,20 @@ interface TrackerEntry {
   firstFailure: number;
   bannedUntil: number;
   banCount: number;
+  /** Wall-clock ms of the most recent failure — drives `banCount` decay. */
+  lastFailure: number;
 }
+
+/**
+ * After this long without a failure, `banCount` halves on the next
+ * read. A legitimate user who occasionally typos their password
+ * should not end up with a permanently escalating lockout duration.
+ * See stability audit 2026-04-14.
+ */
+const BAN_COUNT_DECAY_MS = 3_600_000; // 1 hour
+
+/** Hard cap on `banCount` so the backoff doesn't blow past practical lockouts. */
+const BAN_COUNT_MAX = 8;
 
 export class DCCAuthTracker {
   private readonly trackers: Map<string, TrackerEntry> = new Map();
@@ -84,9 +97,20 @@ export class DCCAuthTracker {
         }
         if (oldestKey !== null) this.trackers.delete(oldestKey);
       }
-      tracker = { failures: 0, firstFailure: now, bannedUntil: 0, banCount: 0 };
+      tracker = {
+        failures: 0,
+        firstFailure: now,
+        bannedUntil: 0,
+        banCount: 0,
+        lastFailure: now,
+      };
       this.trackers.set(key, tracker);
     }
+    // Decay `banCount` before using it: halve once per hour since the
+    // last failure. A legitimate operator who typos once every few
+    // weeks should see the base lockout, not an escalating one.
+    // See stability audit 2026-04-14.
+    this.decayBanCount(tracker, now);
     // Sliding-window reset semantics: we only reset on *new* failures that
     // arrive after the window has elapsed, rather than sweeping windows on a
     // timer. The effect is that `failures` can sit stale at a non-zero value
@@ -99,10 +123,11 @@ export class DCCAuthTracker {
       tracker.firstFailure = now;
     }
     tracker.failures++;
+    tracker.lastFailure = now;
     if (tracker.failures >= this.maxFailures) {
       const lockDuration = Math.min(this.baseLockMs * 2 ** tracker.banCount, this.maxLockMs);
       tracker.bannedUntil = now + lockDuration;
-      tracker.banCount++;
+      tracker.banCount = Math.min(tracker.banCount + 1, BAN_COUNT_MAX);
       tracker.failures = 0;
     }
     return {
@@ -112,12 +137,33 @@ export class DCCAuthTracker {
     };
   }
 
-  /** Record a successful attempt — zeroes the failure counter but preserves banCount. */
+  /**
+   * Record a successful attempt — zeroes the failure counter and
+   * decays `banCount` by one step. A legitimate user who finally
+   * gets their password right shouldn't carry the escalation weight
+   * of every previous typo indefinitely. See stability audit
+   * 2026-04-14.
+   */
   recordSuccess(key: string): void {
     const tracker = this.trackers.get(key);
     if (tracker) {
       tracker.failures = 0;
+      if (tracker.banCount > 0) tracker.banCount--;
     }
+  }
+
+  /**
+   * Halve `banCount` for each hour elapsed since the last failure.
+   * Kept as a private helper so both recordFailure (which consults
+   * banCount to compute the next lockout) and check() apply the
+   * same decay curve.
+   */
+  private decayBanCount(tracker: TrackerEntry, now: number): void {
+    if (tracker.banCount === 0) return;
+    const elapsed = now - tracker.lastFailure;
+    if (elapsed < BAN_COUNT_DECAY_MS) return;
+    const halves = Math.floor(elapsed / BAN_COUNT_DECAY_MS);
+    tracker.banCount = Math.max(0, tracker.banCount - halves);
   }
 
   /** Prune expired trackers — called from DCCManager sweep. */

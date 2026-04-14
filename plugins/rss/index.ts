@@ -60,6 +60,17 @@ let activeFeeds = new Map<string, FeedConfig>();
 // narrow — the default generic widens custom fields to `any`, contaminating
 // every downstream `result.items` read.
 type RssCustomFields = Record<string, never>;
+/**
+ * Parser instances are cheap — construct a fresh one per fetch so
+ * the active `request_timeout_ms` is always the live config value
+ * rather than a frozen load-time snapshot. The rss-parser instance
+ * caches the timeout in its constructor, so sharing one across
+ * polls meant a mid-session `.set timeout ...` would be ignored.
+ * See stability audit 2026-04-14.
+ */
+function makeParser(timeoutMs: number): Parser<RssCustomFields, RssCustomFields> {
+  return new Parser<RssCustomFields, RssCustomFields>({ timeout: timeoutMs });
+}
 let parser: Parser<RssCustomFields, RssCustomFields>;
 /**
  * Module-level abort signal. Aborted in {@link teardown} so any in-flight
@@ -69,10 +80,65 @@ let parser: Parser<RssCustomFields, RssCustomFields>;
  */
 let abortController: AbortController | null = null;
 
+/**
+ * Per-feed poll-in-progress guard. Without this, a feed that takes
+ * longer than the 60s tick (slow upstream, large body, stuck DNS)
+ * gets a second concurrent invocation on the next tick, racing on
+ * setLastPoll and potentially double-announcing items. Keyed by
+ * feed id. See stability audit 2026-04-14.
+ */
+const activePolls = new Set<string>();
+
+/**
+ * Consecutive poll-failure count per feed. Once a feed crosses the
+ * {@link CIRCUIT_BREAK_THRESHOLD}, the next poll attempt is deferred
+ * until the break window elapses. The delay doubles on every
+ * subsequent failure, capped at {@link CIRCUIT_BREAK_MAX_MS}.
+ * See stability audit 2026-04-14.
+ */
+const feedFailureCount = new Map<string, number>();
+
+/** Wall-clock ms at which a broken feed becomes eligible to retry. */
+const feedBackoffUntil = new Map<string, number>();
+
+/** Feeds for which we already warned the operator about the break. */
+const feedBrokenNotified = new Set<string>();
+
+const CIRCUIT_BREAK_THRESHOLD = 5;
+const CIRCUIT_BREAK_BASE_MS = 60_000; // 1 min initial wait after threshold
+const CIRCUIT_BREAK_MAX_MS = 3_600_000; // 1 h cap
+
+function isCircuitOpen(feedId: string, now: number): boolean {
+  const until = feedBackoffUntil.get(feedId) ?? 0;
+  return until > now;
+}
+
+function recordPollFailure(api: PluginAPI, feedId: string): void {
+  const count = (feedFailureCount.get(feedId) ?? 0) + 1;
+  feedFailureCount.set(feedId, count);
+  if (count >= CIRCUIT_BREAK_THRESHOLD) {
+    const over = count - CIRCUIT_BREAK_THRESHOLD;
+    const delay = Math.min(CIRCUIT_BREAK_BASE_MS * 2 ** over, CIRCUIT_BREAK_MAX_MS);
+    feedBackoffUntil.set(feedId, Date.now() + delay);
+    if (!feedBrokenNotified.has(feedId)) {
+      feedBrokenNotified.add(feedId);
+      api.warn(
+        `RSS feed "${feedId}" has failed ${count} times in a row — circuit broken, next retry in ${Math.round(delay / 1000)}s. Check the feed URL.`,
+      );
+    }
+  }
+}
+
+function recordPollSuccess(feedId: string): void {
+  feedFailureCount.delete(feedId);
+  feedBackoffUntil.delete(feedId);
+  feedBrokenNotified.delete(feedId);
+}
+
 export async function init(api: PluginAPI): Promise<void> {
   const cfg = loadConfig(api);
   abortController = new AbortController();
-  parser = new Parser<RssCustomFields, RssCustomFields>({ timeout: cfg.request_timeout_ms });
+  parser = makeParser(cfg.request_timeout_ms);
 
   // Merge config-file feeds with runtime-added feeds from KV
   activeFeeds = new Map<string, FeedConfig>();
@@ -92,20 +158,39 @@ export async function init(api: PluginAPI): Promise<void> {
     }
   }
 
-  // Single 60s time bind — checks which feeds are due on each tick
+  // Single 60s time bind — checks which feeds are due on each tick.
+  //
+  // Guards:
+  //  1. Per-feed in-progress lock so a slow feed cannot be polled twice
+  //     concurrently. Races on setLastPoll and duplicate announces.
+  //  2. Per-feed circuit breaker so a chronically failing feed (bad DNS,
+  //     500 for a week) doesn't flood the log stream. After N
+  //     consecutive failures, the next attempt is deferred with
+  //     exponential backoff. See stability audit 2026-04-14.
   api.bind('time', '-', '60', async () => {
+    const now = Date.now();
     for (const feed of activeFeeds.values()) {
       const lastPoll = getLastPoll(api, feed.id);
       const interval = (feed.interval ?? 3600) * 1000;
-      if (Date.now() - lastPoll < interval) continue;
+      if (now - lastPoll < interval) continue;
+      if (activePolls.has(feed.id)) {
+        api.debug(`Skipping tick for "${feed.id}" — previous poll still in flight`);
+        continue;
+      }
+      if (isCircuitOpen(feed.id, now)) continue;
 
+      activePolls.add(feed.id);
       try {
         const items = await pollFeed(api, parser, feed, 'announce', cfg.max_per_poll, fetchOpts);
+        recordPollSuccess(feed.id);
         if (items.length > 0) {
           await announceItems(api, feed, items, cfg.max_title_length, abortController?.signal);
         }
       } catch (err) {
         api.error(`Error polling feed "${feed.id}" (${feed.url}):`, errorMessage(err));
+        recordPollFailure(api, feed.id);
+      } finally {
+        activePolls.delete(feed.id);
       }
     }
   });
@@ -163,6 +248,10 @@ export function teardown(): void {
   abortController?.abort(new Error('rss plugin torn down'));
   abortController = null;
   activeFeeds.clear();
+  activePolls.clear();
+  feedFailureCount.clear();
+  feedBackoffUntil.clear();
+  feedBrokenNotified.clear();
 }
 
 // ---------------------------------------------------------------------------

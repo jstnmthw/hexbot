@@ -24,6 +24,14 @@ export interface ServicesClient {
 
 interface PendingVerify {
   nick: string;
+  /**
+   * Share one underlying promise across every concurrent caller asking
+   * about the same nick. Each `verifyUser()` call returns this promise
+   * directly instead of issuing its own ACC/STATUS round-trip. See
+   * stability audit 2026-04-14 (duplicate-verify leak + timer reset).
+   */
+  promise: Promise<VerifyResult>;
+  /** The single `resolve` for the shared promise. */
   resolve: (result: VerifyResult) => void;
   /**
    * Cancels the timeout timer and signals the pending verification to
@@ -35,6 +43,15 @@ interface PendingVerify {
   controller: AbortController;
   method: 'acc' | 'status';
 }
+
+/**
+ * Cap on the number of concurrent pending NickServ verifications. A
+ * lagged services provider would otherwise let these pile up without
+ * bound when every privileged dispatch triggers a new round-trip. Once
+ * at the cap, new calls fail closed (verified:false) with a warning.
+ * See stability audit 2026-04-14.
+ */
+const MAX_PENDING_VERIFIES = 128;
 
 export interface ServicesDeps {
   client: ServicesClient;
@@ -62,6 +79,16 @@ export class Services {
   private pending: Map<string, PendingVerify> = new Map();
   private listeners: ListenerGroup;
   private casemapping: Casemapping = 'rfc1459';
+  /**
+   * Running count of NickServ verifications that failed due to timeout
+   * (as opposed to a real "not identified" response). Surfaced via
+   * {@link getServicesTimeoutCount} so `.status` can show an operator
+   * that the services provider is lagging. See stability audit
+   * 2026-04-14.
+   */
+  private servicesTimeoutCount = 0;
+  /** Count of pending verifies rejected because the cap was hit. */
+  private pendingCapRejectionCount = 0;
 
   constructor(deps: ServicesDeps) {
     this.client = deps.client;
@@ -129,7 +156,17 @@ export class Services {
 
   /**
    * Verify a user's identity via NickServ ACC/STATUS.
-   * Returns a promise that resolves with the verification result.
+   *
+   * Concurrent callers asking about the same nick share a single
+   * in-flight promise — the old behaviour cancelled the existing
+   * pending verification and started a fresh one on every duplicate,
+   * restarting the timeout and piling up abandoned promises under
+   * dispatch pressure. See stability audit 2026-04-14.
+   *
+   * Fail-closed behaviour: on timeout the promise resolves
+   * `{verified:false, account:null}` and {@link servicesTimeoutCount}
+   * is incremented so `.status` can report services degradation.
+   *
    * @param nick - The nick to verify
    * @param timeoutMs - Timeout in milliseconds (default 5000)
    */
@@ -142,22 +179,38 @@ export class Services {
     const target = this.getNickServTarget();
     const lowerNick = ircLower(nick, this.casemapping);
 
-    // Cancel any existing pending verification for this nick — the old
-    // promise will resolve to `{verified:false, account:null}` via the
-    // abort handler below.
+    // Dedupe: return the existing in-flight promise rather than
+    // cancelling it. Every concurrent caller for the same nick waits
+    // on the same ACC/STATUS round-trip and sees the same result.
     const existing = this.pending.get(lowerNick);
     if (existing) {
-      this.pending.delete(lowerNick);
-      existing.controller.abort();
+      return existing.promise;
+    }
+
+    // Enforce the concurrent-verify cap. A frozen services provider
+    // would otherwise let these accumulate without bound under
+    // dispatch pressure (every privileged command creates a new
+    // promise). Fail closed above the cap — callers see verified:false
+    // and the dispatcher denies the command with a clean reason.
+    if (this.pending.size >= MAX_PENDING_VERIFIES) {
+      this.pendingCapRejectionCount++;
+      this.logger?.warn(
+        `Pending verify cap reached (${MAX_PENDING_VERIFIES}) — failing closed for ${nick}. ` +
+          `Services provider is likely overloaded or unreachable.`,
+      );
+      return { verified: false, account: null };
     }
 
     const controller = new AbortController();
-    return new Promise<VerifyResult>((resolve) => {
+    let resolveOuter!: (v: VerifyResult) => void;
+    const promise = new Promise<VerifyResult>((resolve) => {
+      resolveOuter = resolve;
       const timer = setTimeout(() => {
         // Natural timeout path — audit and resolve as a timeout-failure.
         if (this.pending.get(lowerNick)?.controller === controller) {
           this.pending.delete(lowerNick);
         }
+        this.servicesTimeoutCount++;
         this.logger?.warn(`Verification timeout for ${nick}`);
         // Audit the silent failure mode — operators reviewing a denied
         // privileged action need to distinguish "user not identified" from
@@ -169,7 +222,7 @@ export class Services {
             source: 'system',
             target: nick,
             outcome: 'failure',
-            metadata: { timeoutMs },
+            metadata: { timeoutMs, servicesTimeoutCount: this.servicesTimeoutCount },
           },
           this.logger,
         );
@@ -177,9 +230,8 @@ export class Services {
       }, timeoutMs);
 
       // `abort()` is the single cancellation idiom for every teardown path
-      // (detach, re-issue for the same nick, resolveVerification success).
-      // Clearing the timer here ensures a cancelled verify never fires the
-      // timeout-audit above.
+      // (detach, resolveVerification success). Clearing the timer here
+      // ensures a cancelled verify never fires the timeout-audit above.
       controller.signal.addEventListener(
         'abort',
         () => {
@@ -188,17 +240,44 @@ export class Services {
         },
         { once: true },
       );
-
-      // Send the verification command
-      const method = this.servicesConfig.type === 'anope' ? 'status' : 'acc';
-      this.pending.set(lowerNick, { nick, resolve, controller, method });
-
-      if (method === 'status') {
-        this.client.say(target, `STATUS ${nick}`);
-      } else {
-        this.client.say(target, `ACC ${nick}`);
-      }
     });
+
+    // Send the verification command
+    const method = this.servicesConfig.type === 'anope' ? 'status' : 'acc';
+    this.pending.set(lowerNick, {
+      nick,
+      promise,
+      resolve: resolveOuter,
+      controller,
+      method,
+    });
+
+    if (method === 'status') {
+      this.client.say(target, `STATUS ${nick}`);
+    } else {
+      this.client.say(target, `ACC ${nick}`);
+    }
+
+    return promise;
+  }
+
+  /**
+   * Return the running counter of verification timeouts since bot
+   * start. Surfaced via `.status` so operators can see at a glance
+   * whether services are degrading even without a user report.
+   */
+  getServicesTimeoutCount(): number {
+    return this.servicesTimeoutCount;
+  }
+
+  /** Current pending verify map size — exposed for observability. */
+  getPendingVerifyCount(): number {
+    return this.pending.size;
+  }
+
+  /** Running count of verifies rejected because the cap was hit. */
+  getPendingCapRejectionCount(): number {
+    return this.pendingCapRejectionCount;
   }
 
   /** Return the configured services type. */

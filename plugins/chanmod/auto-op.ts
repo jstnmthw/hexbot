@@ -231,7 +231,16 @@ export function setupAutoOp(
     const desired = computeDesiredMode(allFlags, config);
     if (!desired) return;
 
-    await grantMode(api, config, channel, nick, desired, ctx.account);
+    // Wrap grantMode: a NickServ outage (verifyUser rejection, ACC timeout)
+    // must not leak out of this join handler as an unhandled rejection —
+    // the dispatcher catches it, but then every other join on the same
+    // tick loses its auto-op. Fail quietly per-user instead. See stability
+    // audit 2026-04-14.
+    try {
+      await grantMode(api, config, channel, nick, desired, ctx.account);
+    } catch (err) {
+      api.error(`auto-op grantMode threw for ${nick} in ${channel}:`, err);
+    }
   });
 
   // React to .adduser / .flags / .addhostmask so mode changes take effect

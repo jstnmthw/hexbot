@@ -101,7 +101,20 @@ export async function validateFeedUrl(
   } else {
     let records: LookupAddress[];
     try {
-      records = await dns.lookup(hostname, { all: true });
+      // Race DNS lookup against a 5s deadline — a slow resolver would
+      // otherwise hang `!rss add` indefinitely, since Node's
+      // dns.lookup has no configurable timeout. See stability audit
+      // 2026-04-14.
+      const DNS_TIMEOUT_MS = 5_000;
+      records = await Promise.race([
+        dns.lookup(hostname, { all: true }),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`DNS lookup timed out after ${DNS_TIMEOUT_MS}ms`)),
+            DNS_TIMEOUT_MS,
+          ).unref(),
+        ),
+      ]);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new Error(`DNS lookup failed for ${hostname}: ${message}`, {

@@ -367,18 +367,25 @@ describe('.modlog command', () => {
       expect(ctx.replies[0]).toContain('end of results');
     });
 
-    it('shows fresh-row hint when new rows land mid-browse', async () => {
+    it('footer total is cached from the first query (does not re-count on nav)', async () => {
+      // Stability audit 2026-04-14: `.modlog next/prev` no longer
+      // re-runs `SELECT COUNT(*)` against the filter on every nav —
+      // the total is snapshotted at first-query time and stays
+      // stable until the user runs `.modlog top`. On a 10M-row
+      // table, repeated counts were the dominant nav cost.
       seed(db, 12);
       const ctx = makeCtx();
       await handler.execute('.modlog', ctx);
-      // Add 3 rows after the snapshot
+      // New rows land mid-browse — the footer total stays at 12.
       seed(db, 3, { action: 'op' });
       ctx.replies.length = 0;
       await handler.execute('.modlog next', ctx);
-      expect(ctx.replies[ctx.replies.length - 1]).toContain('+3 new');
+      const footer = ctx.replies[ctx.replies.length - 1];
+      expect(footer).toContain('of 12');
+      expect(footer).not.toContain('+3 new');
     });
 
-    it('top re-snapshots so the new-rows hint disappears', async () => {
+    it('top re-snapshots so the total reflects newly-landed rows', async () => {
       seed(db, 12);
       const ctx = makeCtx();
       await handler.execute('.modlog', ctx);
@@ -386,7 +393,6 @@ describe('.modlog command', () => {
       ctx.replies.length = 0;
       await handler.execute('.modlog top', ctx);
       const footer = ctx.replies[ctx.replies.length - 1];
-      expect(footer).not.toContain('+');
       expect(footer).toContain('of 15');
     });
 

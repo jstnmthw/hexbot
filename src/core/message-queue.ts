@@ -152,6 +152,32 @@ export class MessageQueue {
     }
   }
 
+  /**
+   * Attempt to flush the queue synchronously, capped by a wall-clock
+   * deadline. Used by the disconnect path so kick/mode commands the
+   * operator queued before a netsplit still get pushed into the
+   * irc-framework send buffer (where they may or may not reach the
+   * server) — instead of being silently discarded by {@link clear}.
+   * See stability audit 2026-04-14.
+   *
+   * @returns number of messages drained from the queue.
+   */
+  flushWithDeadline(maxMs: number): number {
+    const deadline = Date.now() + maxMs;
+    let drained = 0;
+    while (this.totalPending > 0 && Date.now() < deadline) {
+      const fn = this.popNext();
+      if (!fn) break;
+      try {
+        fn();
+      } catch {
+        /* Per-message isolation — one bad send must not abort the flush loop. */
+      }
+      drained++;
+    }
+    return drained;
+  }
+
   /** Discard all queued messages (for reconnect). */
   clear(): void {
     const dropped = this.totalPending;

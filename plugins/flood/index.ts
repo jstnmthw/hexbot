@@ -321,6 +321,15 @@ export async function teardown(): Promise<void> {
   // `enforcement.apply()`'s fire-and-forget surface; usually empty.
   // See audit finding W-FL5 (2026-04-14).
   await enforcement.drainPending();
+  // Lift any tempbans that have already expired — otherwise the 60s
+  // time-bind we just cancelled was the only thing that would have
+  // unbanned them, and the bans become effectively permanent until the
+  // plugin is reloaded. See stability audit 2026-04-14.
+  try {
+    enforcement.liftExpiredBans();
+  } catch (err) {
+    api?.error?.('flood teardown: liftExpiredBans threw:', err);
+  }
   rateLimits.reset();
   enforcement.clear();
   lockdown.clear();

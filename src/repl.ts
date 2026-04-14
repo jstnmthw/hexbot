@@ -83,9 +83,18 @@ export class BotREPL {
     this.logger?.info('Interactive mode. Type .help for commands, .quit to exit.');
 
     this.rl.on('line', (line: string) => {
-      this.handleLine(line).finally(() => {
-        this.rl?.prompt();
-      });
+      // Both `.catch()` and `.finally()` are wired: `catch` swallows
+      // unexpected rejections from deep within `handleLine` (which
+      // would otherwise become unhandled-rejection fatal exits),
+      // and `finally` re-prompts regardless of outcome so the REPL
+      // never hangs with no prompt. See stability audit 2026-04-14.
+      this.handleLine(line)
+        .catch((err) => {
+          this.logger?.error('REPL handleLine rejected:', err);
+        })
+        .finally(() => {
+          this.rl?.prompt();
+        });
     });
 
     this.rl.on('close', () => {

@@ -341,12 +341,19 @@ export class PluginLoader {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // Clean up partial init: drain any teardown the plugin registered
+      // Clean up partial init: drain any teardown the plugin registered.
+      // A teardown throw during init-failure recovery is itself significant
+      // (the plugin may leave listeners or resources dangling) — log it
+      // loudly rather than swallowing silently. See stability audit
+      // 2026-04-14.
       if (mod.teardown) {
         try {
           mod.teardown();
-        } catch {
-          /* swallow teardown errors */
+        } catch (tdErr) {
+          this.logger?.warn(
+            `Plugin "${pluginName}" teardown threw during init-failure cleanup — listeners or timers may remain attached:`,
+            tdErr,
+          );
         }
       }
       this.cleanupPluginResources(pluginName, disposeApi);
@@ -370,7 +377,15 @@ export class PluginLoader {
     return { name: pluginName, status: 'ok' };
   }
 
-  /** Unload a plugin by name. */
+  /**
+   * Unload a plugin by name.
+   *
+   * @throws when `teardown()` itself throws — the plugin stays in the
+   *   loaded map so operators can retry teardown or restart the bot.
+   *   Silently dropping a plugin whose teardown failed leaves ghost
+   *   state (listeners, timers, DB cursors) that the next reload would
+   *   then duplicate. See stability audit 2026-04-14.
+   */
   async unload(pluginName: string): Promise<void> {
     const plugin = this.loaded.get(pluginName);
     if (!plugin) {
@@ -387,9 +402,14 @@ export class PluginLoader {
       } catch (err) {
         plugin.teardownFailed = true;
         this.logger?.error(
-          `[plugin-loader] WARNING: teardown() for ${pluginName} threw — some resources may not have been released. Recommend restarting the bot if behavior is unstable.`,
+          `[plugin-loader] WARNING: teardown() for ${pluginName} threw — resources may not have been released cleanly. Plugin stays marked loaded; fix the teardown path or restart the bot.`,
           err,
         );
+        // Hard stop the unload: do NOT call cleanupPluginResources, do
+        // NOT delete from the loaded map. The previous behaviour deleted
+        // regardless, which papered over the problem and caused the
+        // next reload to double-register listeners against ghost state.
+        throw err;
       }
     }
 
@@ -402,7 +422,17 @@ export class PluginLoader {
     this.logger?.info(`Unloaded: ${pluginName}`);
   }
 
-  /** Reload a plugin (unload + load from same path). */
+  /**
+   * Reload a plugin (unload + load from same path).
+   *
+   * Fail-loud on reload failure: when `load()` fails after `unload()`
+   * has already run, the plugin is left in the unloaded state with a
+   * prominent error log and a `plugin:reload_failed` event emit.
+   * Silently resurrecting the old instance would mask the breakage
+   * and leave operators running stale code without realising it.
+   * Operator must fix the code and re-run `.load`. See stability
+   * audit 2026-04-14.
+   */
   async reload(pluginName: string): Promise<LoadResult> {
     const plugin = this.loaded.get(pluginName);
     if (!plugin) {
@@ -416,6 +446,12 @@ export class PluginLoader {
 
     if (result.status === 'ok') {
       this.eventBus.emit('plugin:reloaded', pluginName);
+    } else {
+      this.logger?.error(
+        `[plugin-loader] RELOAD FAILED for "${pluginName}" — plugin is now UNLOADED. ` +
+          `Fix the code and run \`.load ${pluginName}\` to recover. Error: ${result.error}`,
+      );
+      this.eventBus.emit('plugin:reload_failed', pluginName, result.error ?? 'unknown error');
     }
 
     return result;
@@ -469,20 +505,48 @@ export class PluginLoader {
     // Drain the per-plugin `onModesReady` listeners registered via the
     // plugin API. These live in a parallel map (not trackListener) so the
     // off* methods can look them up by callback identity. See W-PS2.
+    //
+    // Per-entry try/catch: a single throw from `off()` must not leave the
+    // remaining listeners attached. See stability audit 2026-04-14.
     const modesListeners = this.modesReadyListeners.get(pluginName);
     if (modesListeners) {
-      for (const fn of modesListeners) this.eventBus.off('channel:modesReady', fn);
+      for (const fn of modesListeners) {
+        try {
+          this.eventBus.off('channel:modesReady', fn);
+        } catch (err) {
+          this.logger?.error(
+            `[plugin-loader] channel:modesReady off() for ${pluginName} threw:`,
+            err,
+          );
+        }
+      }
       this.modesReadyListeners.delete(pluginName);
     }
 
     // Drain the per-plugin `onPermissionsChanged` listeners. One wrapper
-    // per callback is fanned across three events.
+    // per callback is fanned across three events. Per-entry try/catch
+    // per event so a single off() throw doesn't leave siblings attached.
+    // See stability audit 2026-04-14.
     const permsListeners = this.permissionsChangedListeners.get(pluginName);
     if (permsListeners) {
+      const tryOff = (ev: string, fn: (handle: string) => void): void => {
+        try {
+          // Each of these three events carries a different payload tuple,
+          // but we store one wrapper-per-callback typed on the narrowest
+          // signature (`handle`) — cast once here so grep'ing for unsafe
+          // listener casts lands on a single site.
+          const loose = this.eventBus as unknown as {
+            off: (ev: string, fn: (...args: unknown[]) => void) => void;
+          };
+          loose.off(ev, fn as unknown as (...args: unknown[]) => void);
+        } catch (err) {
+          this.logger?.error(`[plugin-loader] ${ev} off() for ${pluginName} threw:`, err);
+        }
+      };
       for (const fn of permsListeners) {
-        this.eventBus.off('user:added', fn);
-        this.eventBus.off('user:flagsChanged', fn);
-        this.eventBus.off('user:hostmaskAdded', fn);
+        tryOff('user:added', fn);
+        tryOff('user:flagsChanged', fn);
+        tryOff('user:hostmaskAdded', fn);
       }
       this.permissionsChangedListeners.delete(pluginName);
     }

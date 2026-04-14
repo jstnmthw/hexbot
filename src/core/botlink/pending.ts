@@ -11,15 +11,45 @@ interface PendingEntry<T> {
   resolve: (value: T) => void;
 }
 
+/**
+ * Hard cap on the number of concurrent pending relay requests. Under
+ * sustained botlink load with a laggy hub, entries can accumulate
+ * faster than their individual timeouts reclaim them. Above the cap,
+ * `create()` rejects immediately with the timeout value so callers see
+ * a predictable degradation instead of an unbounded memory footprint.
+ * See stability audit 2026-04-14.
+ */
+const DEFAULT_MAX_PENDING = 4096;
+
 export class PendingRequestMap<T> {
   private map = new Map<string, PendingEntry<T>>();
+  private readonly maxPending: number;
+  private droppedAtCap = 0;
+
+  constructor(maxPending: number = DEFAULT_MAX_PENDING) {
+    this.maxPending = maxPending;
+  }
 
   /**
    * Register a pending request keyed by `ref` and return a promise that
    * resolves either via `resolve(ref, value)` or after `timeoutMs` with the
    * caller-supplied `timeoutValue`.
+   *
+   * Rejects at cap with the timeout value so callers see the same
+   * "this relay failed, move on" signal as a real network timeout.
    */
   create(ref: string, timeoutMs: number, timeoutValue: T): Promise<T> {
+    // Guard against unbounded growth when the remote peer stops
+    // responding and every caller still schedules a new entry. After
+    // the cap, resolve immediately — callers treat it the same as a
+    // natural timeout. See stability audit 2026-04-14.
+    if (this.map.size >= this.maxPending) {
+      this.droppedAtCap++;
+      return Promise.resolve(timeoutValue);
+    }
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return Promise.resolve(timeoutValue);
+    }
     return new Promise<T>((resolvePromise) => {
       const timer = setTimeout(() => {
         this.map.delete(ref);
@@ -27,6 +57,11 @@ export class PendingRequestMap<T> {
       }, timeoutMs);
       this.map.set(ref, { timer, resolve: resolvePromise });
     });
+  }
+
+  /** Count of `create()` calls that hit the cap since startup. */
+  get droppedCount(): number {
+    return this.droppedAtCap;
   }
 
   /**

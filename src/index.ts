@@ -75,11 +75,22 @@ const configPath = parseConfigArg(args);
 // Set process.title so htop/ps shows e.g. "hexbot (v0.2.3) - blueangel"
 // instead of the full `tsx … --config=…` line. Read package.json relative
 // to this file so it resolves under both `tsx src/index.ts` and `node dist/index.js`.
-const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')) as {
-  version: string;
-};
+//
+// Guard the parse: a malformed package.json during development (merge
+// conflict marker, truncated write) should produce a clear error
+// message, not a cryptic SyntaxError with no context. See stability
+// audit 2026-04-14.
+let pkgVersion = '0.0.0';
+try {
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')) as {
+    version: string;
+  };
+  pkgVersion = pkg.version ?? '0.0.0';
+} catch (err) {
+  console.error('[bot] Failed to parse package.json for process title:', err);
+}
 const instanceName = configPath ? basename(configPath, '.json') : 'default';
-process.title = `hexbot (v${pkg.version}) - ${instanceName}`;
+process.title = `hexbot (v${pkgVersion}) - ${instanceName}`;
 
 // ---------------------------------------------------------------------------
 // Boot

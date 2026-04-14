@@ -111,12 +111,15 @@ export function assessThreat(
     target,
     timestamp: Date.now(),
   });
-  // Cap the per-channel event ring so a sustained takeover attempt can't
-  // grow `threat.events` indefinitely. 200 entries is enough to render an
-  // operator-readable history and small enough to keep memory bounded
-  // across long uptimes.
-  if (threat.events.length > 200) {
-    threat.events.splice(0, threat.events.length - 200);
+  // Cap the per-channel event ring so a sustained takeover attempt
+  // can't grow `threat.events` indefinitely. 1000 entries is enough
+  // for attack forensics over a multi-hour siege without making the
+  // in-memory history of a single channel unreasonable. See
+  // stability audit 2026-04-14 — the previous cap of 200 truncated
+  // early events mid-attack.
+  const RING_CAP = 1000;
+  if (threat.events.length > RING_CAP) {
+    threat.events.splice(0, threat.events.length - RING_CAP);
   }
 
   const newLevel = scoreToLevel(config, threat.score);

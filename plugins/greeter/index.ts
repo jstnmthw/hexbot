@@ -88,6 +88,47 @@ export function init(api: PluginAPI): void {
   const delivery = cfgString(api.config, 'delivery', 'say');
   const joinNotice = cfgString(api.config, 'join_notice', '');
 
+  // Per-channel join-rate tracking to debounce netsplit rejoin
+  // floods. Without this, a heal with 50+ simultaneous rejoins
+  // pushes 50 greet lines in a few seconds — which the bot's
+  // message queue will rate-limit, but still looks like spam in
+  // the channel. Above `MASSJOIN_THRESHOLD` joins within
+  // `MASSJOIN_WINDOW_MS`, greetings are suppressed until the rate
+  // falls below the threshold. See stability audit 2026-04-14.
+  const MASSJOIN_WINDOW_MS = 10_000;
+  const MASSJOIN_THRESHOLD = 5;
+  const MASSJOIN_COOLDOWN_MS = 30_000;
+  interface JoinRateEntry {
+    windowStart: number;
+    count: number;
+    suppressUntil: number;
+  }
+  const joinRates = new Map<string, JoinRateEntry>();
+  const isMassJoinInProgress = (channel: string, now: number): boolean => {
+    const key = api.ircLower(channel);
+    let state = joinRates.get(key);
+    if (!state) {
+      state = { windowStart: now, count: 0, suppressUntil: 0 };
+      joinRates.set(key, state);
+    }
+    if (now < state.suppressUntil) {
+      return true;
+    }
+    if (now - state.windowStart > MASSJOIN_WINDOW_MS) {
+      state.windowStart = now;
+      state.count = 0;
+    }
+    state.count++;
+    if (state.count > MASSJOIN_THRESHOLD) {
+      state.suppressUntil = now + MASSJOIN_COOLDOWN_MS;
+      api.warn(
+        `Massjoin detected on ${channel} (${state.count} joins in ${MASSJOIN_WINDOW_MS / 1000}s) — suppressing greetings for ${MASSJOIN_COOLDOWN_MS / 1000}s`,
+      );
+      return true;
+    }
+    return false;
+  };
+
   // Register per-channel greeting setting; default reflects the global config value
   api.channelSettings.register([
     {
@@ -103,6 +144,9 @@ export function init(api: PluginAPI): void {
     if (api.isBotNick(ctx.nick)) return;
 
     const { channel } = ctx;
+
+    // Massjoin debounce — see init-scope helper above.
+    if (isMassJoinInProgress(channel, Date.now())) return;
 
     // Precedence: user custom greet > channel greet_msg setting > global default
     let greeting = api.channelSettings.getString(channel, 'greet_msg');

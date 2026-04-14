@@ -609,11 +609,23 @@ function createPluginChannelStateApi(
     (handle: string, ...rest: unknown[]) => void
   >();
 
+  // Error-boundary wrapper — mirrors the dispatcher's handler try/catch.
+  // Without this, one plugin's throw from a mode-ready callback would
+  // propagate through EventEmitter and abort `emit()` for every sibling
+  // subscriber. See stability audit 2026-04-14.
+  const safeInvoke = (ev: string, plugin: string, fn: () => void): void => {
+    try {
+      fn();
+    } catch (err) {
+      console.error(`[plugin:${plugin}] ${ev} listener threw:`, err);
+    }
+  };
+
   return {
     onModesReady(callback: (channel: string) => void): void {
       if (modesReadyByCallback.has(callback)) return; // idempotent
       const wrappedListener = (channel: string): void => {
-        callback(channel);
+        safeInvoke('channel:modesReady', pluginId, () => callback(channel));
       };
       eventBus.on('channel:modesReady', wrappedListener);
       modesReadyByCallback.set(callback, wrappedListener);
@@ -638,7 +650,7 @@ function createPluginChannelStateApi(
       // events carry different tail params (global flags, hostmask, ...);
       // we only surface `handle` (arg 0) and discard the rest.
       const wrappedListener = (handle: string, ..._rest: unknown[]): void => {
-        callback(handle);
+        safeInvoke('permissions-changed', pluginId, () => callback(handle));
       };
       for (const ev of PERMISSIONS_CHANGE_EVENTS) {
         eventBus.on(ev, wrappedListener);

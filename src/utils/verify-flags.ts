@@ -1,9 +1,39 @@
 // HexBot — Flag-level verification utility
 // Determines whether a bind's required flags meet the NickServ ACC threshold.
+import type { LoggerLike } from '../logger';
 import type { IdentityConfig } from '../types';
 
 /** Flag hierarchy for require_acc_for checking. */
 export const FLAG_LEVEL: Record<string, number> = { n: 4, m: 3, o: 2, v: 1 };
+
+/**
+ * Validate `identity.require_acc_for` at config load and warn on any entry
+ * whose flag isn't in {@link FLAG_LEVEL}. An unknown flag silently defaults
+ * to level 0, which disables the verification gate — exactly the thing an
+ * operator was trying to enable. See stability audit 2026-04-14.
+ *
+ * Returns the filtered list of recognised entries (unknown ones are
+ * dropped) so callers can surface the real intent rather than the typo.
+ */
+export function validateRequireAccFor(
+  requireAccFor: IdentityConfig['require_acc_for'] | undefined,
+  logger: LoggerLike | null,
+): string[] {
+  if (!requireAccFor || requireAccFor.length === 0) return [];
+  const result: string[] = [];
+  for (const entry of requireAccFor) {
+    const raw = entry.replace('+', '');
+    if (FLAG_LEVEL[raw] === undefined) {
+      logger?.warn(
+        `identity.require_acc_for entry "${entry}" references unknown flag "${raw}"; ` +
+          `known flags: ${Object.keys(FLAG_LEVEL).join(', ')}. Entry ignored — ACC gate NOT active for this flag.`,
+      );
+      continue;
+    }
+    result.push(entry);
+  }
+  return result;
+}
 
 /**
  * Determine whether the bind's required flags are at or above any threshold

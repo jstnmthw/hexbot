@@ -90,7 +90,7 @@ export interface ConnectionLifecycleDeps {
    * so the caller can tell plaintext ingestion from TLS refresh.
    */
   onSTSDirective?: (directive: STSDirective, currentTls: boolean) => void;
-  messageQueue: { clear(): void };
+  messageQueue: { clear(): void; flushWithDeadline?(maxMs: number): number };
   dispatcher: {
     bind(type: BindType, flags: string, mask: string, handler: BindHandler, owner?: string): void;
   };
@@ -145,9 +145,15 @@ export function registerConnectionEvents(
 
   const listeners = new ListenerGroup(client);
 
+  // Channels that have failed JOIN with a permanent-error numeric
+  // (+i/+b/+k/+r). The presence-check timer consults this set so it
+  // doesn't re-issue a JOIN at every tick. Cleared implicitly on the
+  // next reconnect because this whole closure is re-created.
+  const permanentFailureChannels = new Set<string>();
+
   // One-time listeners — registered before any connection events fire so they
   // are never stacked by reconnects.
-  registerJoinErrorListeners(logger, listeners);
+  registerJoinErrorListeners(logger, listeners, permanentFailureChannels);
   bindCoreInviteHandler(deps);
 
   const onConnecting = (): void => {
@@ -163,6 +169,27 @@ export function registerConnectionEvents(
       logger.warn('IRC registration timeout — no greeting received within 30s');
       // Close the socket so 'close' event fires and reconnect logic runs.
       client.quit('Registration timeout');
+      // `client.quit()` just queues a QUIT line — if the socket is
+      // already half-open (SYN-ACK received but RST never arrives) the
+      // 'close' event never fires and the process hangs for ~2.5 min
+      // waiting for the kernel TCP timeout. Force a destroy after 5s.
+      // See stability audit 2026-04-14.
+      setTimeout(() => {
+        // The client hasn't transitioned to 'close' by now — destroy
+        // the underlying socket so our 'close' listener runs and the
+        // reconnect driver picks up.
+        const socket = getInternalTlsSocket(client);
+        if (socket && typeof (socket as { destroy?: unknown }).destroy === 'function') {
+          try {
+            (socket as { destroy: (err?: Error) => void }).destroy(
+              new Error('registration timeout: forcing socket destroy'),
+            );
+            logger.warn('Forced socket destroy after registration-timeout QUIT');
+          } catch (err) {
+            logger.error('Failed to destroy stalled socket:', err);
+          }
+        }
+      }, 5_000).unref();
     }, 30_000);
   };
 
@@ -189,8 +216,11 @@ export function registerConnectionEvents(
 
     // (Re)start the periodic channel presence check.
     // Cleared and restarted on each registration so reconnects get a fresh timer.
+    // Reset the permanent-failure set on registration — a freshly
+    // reconnected session might have different K-lines / +i state.
+    permanentFailureChannels.clear();
     if (presenceTimer !== null) clearInterval(presenceTimer);
-    presenceTimer = startChannelPresenceCheck(deps);
+    presenceTimer = startChannelPresenceCheck(deps, permanentFailureChannels);
 
     if (firstConnect) {
       firstConnect = false;
@@ -235,6 +265,18 @@ export function registerConnectionEvents(
     // Drop per-session identity caches and the outgoing message queue on
     // every disconnect. The hook was previously tied to 'reconnecting',
     // but with auto_reconnect:false that event is never emitted.
+    //
+    // Attempt a bounded flush before clearing — the socket is already
+    // dropping but any queued mode/kick commands still land in the
+    // irc-framework send buffer. Most will evaporate with the socket,
+    // but the operator's intent is at least expressed rather than
+    // silently lost. See stability audit 2026-04-14.
+    if (deps.messageQueue.flushWithDeadline) {
+      const drained = deps.messageQueue.flushWithDeadline(100);
+      if (drained > 0) {
+        logger.debug(`Flushed ${drained} queued message(s) during disconnect`);
+      }
+    }
     deps.messageQueue.clear();
     deps.onReconnecting?.();
 
@@ -385,28 +427,63 @@ function hasGetCipher(value: unknown): value is { getCipher(): unknown } {
   );
 }
 
-/** Register listeners for IRC join-error numerics (irc error + unknown command). */
-function registerJoinErrorListeners(logger: LoggerLike, listeners: ListenerGroup): void {
+/**
+ * Register listeners for IRC join-error numerics (irc error + unknown command).
+ *
+ * When a JOIN fails with a permanent-failure numeric, the channel is
+ * added to `permanentFailureChannels` so the periodic presence check
+ * stops retrying it until the next reconnect (when state resets).
+ * Without this, a K-lined or invite-only channel floods the server
+ * with JOINs every 30s and risks a collateral K-line for the bot
+ * itself. See stability audit 2026-04-14.
+ */
+function registerJoinErrorListeners(
+  logger: LoggerLike,
+  listeners: ListenerGroup,
+  permanentFailureChannels: Set<string>,
+): void {
   const JOIN_ERROR_NAMES: Record<string, string> = {
     channel_is_full: 'channel is full (+l)',
     invite_only_channel: 'invite only (+i)',
     banned_from_channel: 'banned from channel (+b)',
     bad_channel_key: 'bad channel key (+k)',
   };
+  // Of the above, only `channel_is_full` (471) is transient-ish — the
+  // +l limit can drop. The rest require operator action (unban, invite,
+  // correct key) and should not be retried automatically.
+  const PERMANENT_FAILURE_NAMES: ReadonlySet<string> = new Set([
+    'invite_only_channel',
+    'banned_from_channel',
+    'bad_channel_key',
+  ]);
   listeners.on('irc error', (...args: unknown[]) => {
     const e = toEventObject(args[0]);
-    const reason = JOIN_ERROR_NAMES[String(e.error ?? '')];
+    const errName = String(e.error ?? '');
+    const reason = JOIN_ERROR_NAMES[errName];
+    const channel = String(e.channel ?? '');
     if (reason) {
-      logger.warn(`Cannot join ${String(e.channel ?? '')}: ${reason}`);
+      logger.warn(`Cannot join ${channel}: ${reason}`);
+      if (channel && PERMANENT_FAILURE_NAMES.has(errName)) {
+        permanentFailureChannels.add(ircLower(channel, 'rfc1459'));
+        logger.warn(
+          `${channel} marked as permanent-failure — presence check will stop retrying until reconnect. ` +
+            `Fix the underlying cause and use .join ${channel} to retry.`,
+        );
+      }
     }
   });
 
-  // 477 (need to register nick) is unknown to irc-framework — catch it via raw numeric.
+  // 477 (need to register nick) is unknown to irc-framework — catch it
+  // via raw numeric. Permanent until the bot identifies with services.
   listeners.on('unknown command', (...args: unknown[]) => {
     const e = toEventObject(args[0]);
     if (String(e.command ?? '') === '477') {
       const params = Array.isArray(e.params) ? (e.params as unknown[]) : [];
-      logger.warn(`Cannot join ${String(params[1] ?? '')}: need to register nick (+r)`);
+      const channel = String(params[1] ?? '');
+      logger.warn(`Cannot join ${channel}: need to register nick (+r)`);
+      if (channel) {
+        permanentFailureChannels.add(ircLower(channel, 'rfc1459'));
+      }
     }
   });
 }
@@ -448,11 +525,15 @@ function joinConfiguredChannels(deps: ConnectionLifecycleDeps): void {
 /**
  * Periodically check that the bot is in all configured channels.
  * If missing from any, attempt to rejoin (with key if configured).
+ * Channels in `permanentFailureChannels` are skipped so the bot
+ * doesn't hammer a server with JOINs that can never succeed
+ * (+b/+i/+k/+r). See stability audit 2026-04-14.
  *
  * Returns the interval handle, or null if disabled (interval = 0 or no channelState).
  */
 function startChannelPresenceCheck(
   deps: ConnectionLifecycleDeps,
+  permanentFailureChannels: Set<string>,
 ): ReturnType<typeof setInterval> | null {
   const intervalMs = deps.config.channel_rejoin_interval_ms ?? 30_000;
   if (intervalMs <= 0 || !deps.channelState) return null;
@@ -465,6 +546,11 @@ function startChannelPresenceCheck(
       const inChannel = channelState.getChannel(ch.name) !== undefined;
       if (inChannel) {
         warnedChannels.delete(ch.name);
+        continue;
+      }
+      // Stop retrying channels we already know are permanently failing
+      // until the next reconnect reshuffles server state.
+      if (permanentFailureChannels.has(ircLower(ch.name, 'rfc1459'))) {
         continue;
       }
       if (!warnedChannels.has(ch.name)) {

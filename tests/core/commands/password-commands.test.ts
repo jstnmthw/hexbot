@@ -224,6 +224,10 @@ describe('.chpass', () => {
         list: () => [],
         del: () => {},
         set: () => {},
+        // Permissions.saveToDb now wraps the delete+upsert in a
+        // transaction — pass-through for the mock. See stability audit
+        // 2026-04-14.
+        transaction: <T>(fn: () => T): T => fn(),
       } as unknown as BotDatabase;
       const warns: unknown[][] = [];
       const logger: import('../../../src/logger').LoggerLike = {

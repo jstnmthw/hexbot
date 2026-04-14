@@ -346,7 +346,7 @@ function renderRow(row: ModLogEntry): string {
   return COLUMNS.map((c) => truncate(c.get(row), c.width).padEnd(c.width)).join(' ');
 }
 
-function renderPage(state: PagerState, db: BotDatabase): string[] {
+function renderPage(state: PagerState, _db: BotDatabase): string[] {
   const lines: string[] = [];
   if (state.rows.length === 0) {
     lines.push('(no matching rows)');
@@ -355,12 +355,14 @@ function renderPage(state: PagerState, db: BotDatabase): string[] {
   lines.push(renderHeader());
   for (const row of state.rows) lines.push(renderRow(row));
 
-  // Footer with stable total snapshot; flag fresh rows since the snapshot.
-  const liveTotal = db.countModLog(state.filter);
-  const newSinceSnapshot = liveTotal - state.totalAtFirstQuery;
-  const newHint = newSinceSnapshot > 0 ? ` (+${newSinceSnapshot} new)` : '';
+  // Use the snapshot total captured by `beginQuery` — do NOT re-run
+  // countModLog on every page nav. On a 10M-row mod_log, each
+  // SELECT COUNT(*) with the current filter grows linearly with
+  // page count and makes deep pagination painful. The snapshot is
+  // refreshed only when the user runs `.modlog top`, which starts
+  // a fresh query. See stability audit 2026-04-14.
   lines.push(
-    `-- ${state.pageStart}-${state.pageEnd} of ${state.totalAtFirstQuery}${newHint} — .modlog next | prev | top | show <id> --`,
+    `-- ${state.pageStart}-${state.pageEnd} of ${state.totalAtFirstQuery} — .modlog next | prev | top | show <id> --`,
   );
   return lines;
 }

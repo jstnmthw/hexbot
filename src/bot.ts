@@ -69,7 +69,7 @@ import { toEventObject } from './utils/irc-event';
 import { sanitize } from './utils/sanitize';
 import { buildSocksOptions } from './utils/socks';
 import { stripFormatting } from './utils/strip-formatting';
-import { requiresVerificationForFlags } from './utils/verify-flags';
+import { requiresVerificationForFlags, validateRequireAccFor } from './utils/verify-flags';
 import { ircLower } from './utils/wildcard';
 
 // ---------------------------------------------------------------------------
@@ -132,6 +132,12 @@ export class Bot {
   }
   private startTime: number = Date.now();
   private configuredChannels: ChannelEntry[] = [];
+  /**
+   * Plugin names that failed to load at startup. Surfaced via
+   * `.status` so operators can see degraded plugin state without
+   * grepping logs. See stability audit 2026-04-14.
+   */
+  private failedPlugins: string[] = [];
 
   constructor(configPath?: string) {
     const cfgPath = resolve(configPath ?? './config/bot.json');
@@ -272,6 +278,17 @@ export class Bot {
    * callbacks that close over the class instance.
    */
   private wireDispatcher(): void {
+    // Validate `identity.require_acc_for` against the known flag set. A
+    // typo like `["+O"]` silently defaults to level 0 (== disabled) —
+    // exactly the footgun operators try to avoid. Warn and use the
+    // filtered list so the dispatcher sees a consistent view of what was
+    // actually recognised. See stability audit 2026-04-14.
+    const validatedRequireAccFor = validateRequireAccFor(
+      this.config.identity.require_acc_for,
+      this.botLogger,
+    );
+    this.config.identity.require_acc_for = validatedRequireAccFor;
+
     // Wire verification provider: gates privileged dispatch on NickServ identity.
     // Uses the live account map from account-notify/extended-join (fast path),
     // falling back to NickServ ACC queries when account state is unknown.
@@ -292,6 +309,13 @@ export class Bot {
       sendNotice: (nick: string, msg: string) => {
         this.messageQueue.enqueue(nick, () => this.client.notice(nick, msg));
       },
+    });
+
+    // Reset per-user rate-limit buckets on disconnect so a stale old-
+    // session flag doesn't leak into the first message after reconnect.
+    // See stability audit 2026-04-14.
+    this.eventBus.on('bot:disconnected', () => {
+      this.dispatcher.clearFloodState();
     });
   }
 
@@ -370,9 +394,19 @@ export class Bot {
 
     // Load plugins (sets up binds before connection so all handlers are
     // ready when the server starts sending JOIN/MODE/etc responses)
-    await this.pluginLoader.loadAll(
+    const pluginResults = await this.pluginLoader.loadAll(
       this.config.pluginsConfig ? resolve(this.config.pluginsConfig) : undefined,
     );
+    // Track plugin-load failures for the startup banner and `.status`
+    // observability surface. A silent "one plugin failed" was the
+    // dominant reason operators didn't notice degraded functionality
+    // until a user report landed. See stability audit 2026-04-14.
+    this.failedPlugins = pluginResults.filter((r) => r.status === 'error').map((r) => r.name);
+    if (this.failedPlugins.length > 0) {
+      this.botLogger.error(
+        `===== STARTUP BANNER: ${this.failedPlugins.length} plugin(s) FAILED to load: ${this.failedPlugins.join(', ')} — the bot is running with degraded functionality. Check the error lines above for details. =====`,
+      );
+    }
 
     // Connect to IRC (all handlers are registered — safe to receive events)
     await this.connect();
@@ -401,6 +435,18 @@ export class Bot {
         getBindCount: () => this.dispatcher.listBinds().length,
         getUserCount: () => this.permissions.listUsers().length,
         getReconnectState: () => this.getReconnectState(),
+        // Stability metrics — see stability audit 2026-04-14. These
+        // give operators a .status-visible signal about services
+        // degradation and plugin-load failures without trawling
+        // logs.
+        getStabilityMetrics: () => ({
+          servicesTimeoutCount: this.services.getServicesTimeoutCount(),
+          pendingVerifyCount: this.services.getPendingVerifyCount(),
+          pendingCapRejections: this.services.getPendingCapRejectionCount(),
+          loadedPluginCount: this.pluginLoader.list().length,
+          failedPluginCount: this.failedPlugins.length,
+          failedPluginNames: this.failedPlugins,
+        }),
       },
       this.db,
     );
@@ -726,7 +772,21 @@ export class Bot {
     // the policy upgrades us, mutate the in-memory config so downstream
     // code (message-queue cost calcs, logging, Services) sees a
     // TLS-consistent view for the rest of the session.
-    this.applySTSPolicyToConfig();
+    //
+    // STS refusal is a fatal configuration condition — we must exit with
+    // code 2 (permanent-failure tier) so supervisors do not restart-loop
+    // on an unreachable/misconfigured host. A default `throw` would
+    // propagate as code 1 (transient), spinning forever. See stability
+    // audit 2026-04-14.
+    try {
+      this.applySTSPolicyToConfig();
+    } catch (err) {
+      this.botLogger.error(
+        `FATAL: STS enforcement refused connection — exiting with code 2 so the supervisor does not restart-loop: ${(err as Error).message}`,
+      );
+      this.eventBus.emit('bot:disconnected', `fatal: sts-refused`);
+      process.exit(2);
+    }
 
     // Defensive idempotency: if connect() is ever called twice (future STS
     // path, manual .reconnect command), tear down the prior driver and

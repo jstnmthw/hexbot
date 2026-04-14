@@ -292,23 +292,45 @@ describe('Services', () => {
   });
 
   describe('duplicate pending verification', () => {
-    it('should cancel existing pending verification when same nick is verified again', async () => {
+    it('should share one in-flight promise across concurrent callers for the same nick', async () => {
+      // Stability audit 2026-04-14: the old behaviour cancelled the
+      // existing pending verify on every duplicate, restarting the
+      // timeout and piling up abandoned promises under dispatch
+      // pressure. The new behaviour deduplicates — both callers share
+      // one ACC/STATUS round-trip and see the same result.
       const { services, client } = createServices({ type: 'atheme' });
 
-      // Start first verification with long timeout
-      const promise1 = services.verifyUser('Alice', 10000);
-      // Start second verification for same nick — should cancel first (lines 122-125)
-      const promise2 = services.verifyUser('Alice', 2000);
+      const promise1 = services.verifyUser('Alice', 5000);
+      const promise2 = services.verifyUser('Alice', 5000);
 
-      // First promise should resolve with verified=false (it was cancelled)
-      const result1 = await promise1;
-      expect(result1.verified).toBe(false);
-      expect(result1.account).toBeNull();
+      // Only ONE ACC command should be on the wire for both callers.
+      expect(client.sent.filter((m) => m.message === 'ACC Alice')).toHaveLength(1);
 
-      // Resolve the second one normally
       client.simulateNotice('NickServ', 'Alice ACC 3');
-      const result2 = await promise2;
+      const [result1, result2] = await Promise.all([promise1, promise2]);
+
+      expect(result1.verified).toBe(true);
       expect(result2.verified).toBe(true);
+      expect(result1).toEqual(result2);
+    });
+
+    it('rejects new verifies above MAX_PENDING_VERIFIES fail-closed', async () => {
+      const { services } = createServices({ type: 'atheme' });
+
+      // Burn the cap with 128 distinct-nick verifies. None resolve —
+      // the promises stay pending for the entire test. The 129th call
+      // must return {verified:false} immediately.
+      const pending: Array<Promise<unknown>> = [];
+      for (let i = 0; i < 128; i++) {
+        pending.push(services.verifyUser(`nick${i}`, 60_000));
+      }
+
+      const rejected = await services.verifyUser('overflow', 60_000);
+      expect(rejected.verified).toBe(false);
+      expect(services.getPendingCapRejectionCount()).toBe(1);
+
+      services.detach();
+      await Promise.all(pending);
     });
   });
 

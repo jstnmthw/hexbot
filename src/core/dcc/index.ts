@@ -832,7 +832,17 @@ export class DCCSession implements DCCSessionEntry {
     this.rl?.close();
 
     if (!this.socket.destroyed) {
-      if (reason) this.socket.write(`*** ${reason}\r\n`);
+      // Wrap the farewell write — a concurrent `close` event between the
+      // destroyed-check and the write can still throw EPIPE. We must
+      // always proceed to destroy() regardless. See stability audit
+      // 2026-04-14.
+      if (reason) {
+        try {
+          this.socket.write(`*** ${reason}\r\n`);
+        } catch (err) {
+          this.logger?.debug(`DCC farewell write failed (${this.handle}):`, err);
+        }
+      }
       this.socket.destroy();
     }
 
@@ -1051,12 +1061,21 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     // a compromised session that was authenticated under the old password
     // keeps running until idle timeout — rotating the password has no
     // effect on whatever the attacker is already doing.
+    //
+    // Also drop the per-handle console-flag row from the store on
+    // deletion — otherwise every removed user leaves a stale kv entry
+    // that accumulates forever. See stability audit 2026-04-14.
     if (this.eventBus) {
       const onPasswordChanged = (handle: string): void => {
         this.closeSessionsForHandle(handle, 'password rotated');
       };
       const onUserRemoved = (handle: string): void => {
         this.closeSessionsForHandle(handle, 'user removed');
+        try {
+          this.consoleFlagStore.delete(handle);
+        } catch (err) {
+          this.logger?.warn(`Failed to drop console-flag row for ${handle}:`, err);
+        }
       };
       this.eventBus.on('user:passwordChanged', onPasswordChanged);
       this.eventBus.on('user:removed', onUserRemoved);
@@ -1163,20 +1182,50 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     this.announce(`<${sanitize(nick)}> ${sanitize(message)}`);
   }
 
-  /** Send a message to all sessions except the one with the given handle. */
+  /**
+   * Send a message to all sessions except the one with the given handle.
+   *
+   * Per-session error boundary: if a session's socket is half-open
+   * (or its writeLine throws for any other reason), mark the session
+   * stale and close it, but always continue the loop so one broken
+   * session doesn't silence party-line chat for everyone. See
+   * stability audit 2026-04-14.
+   */
   broadcast(fromHandle: string, message: string): void {
     for (const session of this.sessions.values()) {
-      if (session.handle !== fromHandle) {
+      if (session.handle === fromHandle) continue;
+      try {
         session.writeLine(`<${fromHandle}> ${message}`);
+      } catch (err) {
+        this.logger?.warn(`DCC broadcast to ${session.handle} threw — closing stale session:`, err);
+        try {
+          session.close('write error during broadcast');
+        } catch {
+          /* best-effort: session may already be tearing down */
+        }
       }
     }
     this.onPartyChat?.(fromHandle, message);
   }
 
-  /** Send a message to all connected sessions. */
+  /**
+   * Send a message to all connected sessions.
+   *
+   * Per-session isolation as in {@link broadcast} — see stability
+   * audit 2026-04-14.
+   */
   announce(message: string): void {
     for (const session of this.sessions.values()) {
-      session.writeLine(message);
+      try {
+        session.writeLine(message);
+      } catch (err) {
+        this.logger?.warn(`DCC announce to ${session.handle} threw — closing stale session:`, err);
+        try {
+          session.close('write error during announce');
+        } catch {
+          /* best-effort: session may already be tearing down */
+        }
+      }
     }
   }
 
@@ -1247,8 +1296,13 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     const user = this.lookupUserOrReject(nick, ctx.ident, ctx.hostname);
     if (!user) return null;
     if (!this.checkUserFlags(nick, ctx, user)) return null;
-    if (!this.checkSessionLimit(nick)) return null;
+    // Duplicate-eviction runs BEFORE the session-limit check: if the user
+    // already has a zombie session occupying a slot, we need to evict it
+    // first so the session-limit check sees the freed slot. Otherwise a
+    // stuck socket permanently locks the user out at max_sessions=N.
+    // See stability audit 2026-04-14.
     if (!this.checkNotAlreadyConnected(nick)) return null;
+    if (!this.checkSessionLimit(nick)) return null;
     // `nickserv_verify` is no longer consulted — authentication now runs
     // through the password prompt inside DCCSession. The config knob is
     // kept as a no-op for 0.3.0 with a startup deprecation warning.
@@ -1411,6 +1465,14 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     server.on('error', (err) => {
       this.logger?.error(`DCC server error on port ${port}:`, err);
       clearTimeout(pending.timer);
+      // Close the listener so its file descriptor is actually released —
+      // without this the `server` object (and its FD) leaks on listen
+      // errors. See stability audit 2026-04-14.
+      try {
+        server.close();
+      } catch {
+        /* ignore — server may already be closed */
+      }
       this.portAllocator.release(port);
       this.pending.delete(port);
     });

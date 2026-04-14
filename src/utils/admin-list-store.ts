@@ -46,10 +46,25 @@ export class AdminListStore<T> {
     this.db.del(this.namespace, key);
   }
 
-  /** List all items, optionally filtered by key prefix. */
+  /**
+   * List all items, optionally filtered by key prefix. Rows whose
+   * serialized value fails to deserialize (corrupted write, manual edit,
+   * malformed legacy row) are skipped with a warning rather than taking
+   * down the whole listing — see stability audit 2026-04-14.
+   */
   list(prefix?: string): T[] {
     const rows = this.db.list(this.namespace, prefix);
-    return rows.map((row) => this.deserialize(row.value));
+    const result: T[] = [];
+    for (const row of rows) {
+      try {
+        result.push(this.deserialize(row.value));
+      } catch (err) {
+        console.warn(
+          `[admin-list-store:${this.namespace}] Skipping corrupt row "${row.key}": ${(err as Error).message}`,
+        );
+      }
+    }
+    return result;
   }
 
   /** Check if a key exists. */

@@ -149,11 +149,29 @@ export class BotLinkHub {
     return leaf.protocol.send(frame);
   }
 
-  /** Broadcast a frame to all leaves, optionally excluding one. */
+  /**
+   * Broadcast a frame to all leaves, optionally excluding one.
+   *
+   * Per-leaf error containment: a `send()` that returns false (write
+   * buffer full, socket half-open) or throws is logged and the
+   * remaining leaves still receive the frame. A subsequent bootstrap
+   * or heartbeat round-trip will detect the divergence and either
+   * resync or disconnect the stuck leaf. See stability audit
+   * 2026-04-14.
+   */
   broadcast(frame: LinkFrame, excludeBot?: string): void {
     for (const [name, leaf] of this.leaves) {
-      if (name !== excludeBot) {
-        leaf.protocol.send(frame);
+      if (name === excludeBot) continue;
+      let delivered = false;
+      try {
+        delivered = leaf.protocol.send(frame);
+      } catch (err) {
+        this.logger?.warn(`Broadcast ${frame.type} to "${name}" threw:`, err);
+      }
+      if (!delivered) {
+        this.logger?.warn(
+          `Broadcast ${frame.type} to "${name}" failed (write buffer full or socket half-open); state may diverge until next heartbeat/resync`,
+        );
       }
     }
   }
@@ -524,13 +542,19 @@ export class BotLinkHub {
         return;
       }
 
-      // HELLO arrived — release the pending slot and either accept or reject.
-      // We mark the handshake "done" _before_ verify/accept so any callback
-      // firing re-entrantly (e.g. protocol.close() inside rejectHandshake
-      // triggering onClose) sees `done === true` and skips.
+      // HELLO arrived — mark the handshake "done" so re-entrant
+      // onClose from a rejectHandshake sees `done === true` and skips.
+      // We run `acceptHandshake` BEFORE releasing the pending slot —
+      // if accept synchronously rejects (auth failure, duplicate
+      // botname) the slot is still held, preventing the same IP from
+      // immediately opening a second handshake before the first
+      // rejection propagates. See stability audit 2026-04-14.
       finish('ok');
-      this.auth.releasePending(ip, whitelisted);
-      this.acceptHandshake(protocol, frame, ip, whitelisted);
+      try {
+        this.acceptHandshake(protocol, frame, ip, whitelisted);
+      } finally {
+        this.auth.releasePending(ip, whitelisted);
+      }
     };
 
     protocol.onClose = () => finish('closed');
@@ -611,9 +635,26 @@ export class BotLinkHub {
     };
     this.leaves.set(botname, conn);
 
-    // State sync (Phase 4 populates this via onSyncRequest)
+    // State sync (Phase 4 populates this via onSyncRequest).
+    //
+    // Always send SYNC_END even if the sync-request callback throws —
+    // without this guarantee, a single permissions-undefined error
+    // would leave the leaf stuck in sync phase while the hub has
+    // moved on to steady state (asymmetric state is worse than no
+    // state). On throw, we additionally send an ERROR frame with
+    // code=SYNC_FAILED so the leaf's sync-complete listener sees a
+    // deterministic signal. See stability audit 2026-04-14.
     protocol.send({ type: 'SYNC_START' });
-    this.onSyncRequest?.(botname, (f) => protocol.send(f));
+    try {
+      this.onSyncRequest?.(botname, (f) => protocol.send(f));
+    } catch (err) {
+      this.logger?.error(`onSyncRequest threw while syncing "${botname}":`, err);
+      protocol.send({
+        type: 'ERROR',
+        code: 'SYNC_FAILED',
+        message: 'Sync request failed — hub will proceed to steady state anyway',
+      });
+    }
     protocol.send({ type: 'SYNC_END' });
 
     // Switch to steady-state frame handling
