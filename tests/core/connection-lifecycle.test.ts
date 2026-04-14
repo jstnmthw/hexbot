@@ -594,15 +594,15 @@ describe('registerConnectionEvents', () => {
       vi.useRealTimers();
     });
 
-    it('aborts registration if no IRC greeting arrives within 30s of socket connect', () => {
+    it('aborts registration if no IRC greeting arrives within 30s of connection attempt', () => {
       const { client, deps, reconnectDriver } = makeContext();
       registerConnectionEvents(
         deps,
         () => {},
         () => {},
       );
-      // Raw socket connected but no 'registered' event yet
-      client.emit('raw socket connected');
+      // Connecting event fires when client.connect() is called
+      client.emit('connecting');
       expect(reconnectDriver.onDisconnect).not.toHaveBeenCalled();
 
       // Advance to 30s — registration timeout should fire
@@ -620,7 +620,7 @@ describe('registerConnectionEvents', () => {
         () => {},
         () => {},
       );
-      client.emit('raw socket connected');
+      client.emit('connecting');
       vi.advanceTimersByTime(10_000);
       client.emit('registered');
       vi.advanceTimersByTime(20_000);

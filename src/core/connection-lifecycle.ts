@@ -148,6 +148,22 @@ export function registerConnectionEvents(
   registerJoinErrorListeners(client, logger, listeners);
   bindCoreInviteHandler(deps);
 
+  const onConnecting = () => {
+    // Connecting event fires when client.connect() is called, even if the
+    // socket fails to open or registration times out. Start a 30s registration
+    // timeout that will fire even if socket-level events don't arrive.
+    if (registrationTimer !== null) {
+      clearTimeout(registrationTimer);
+    }
+    registrationTimer = setTimeout(() => {
+      registrationTimer = null;
+      lastCloseReason = 'registration timeout';
+      logger.warn('IRC registration timeout — no greeting received within 30s');
+      // Close the socket so 'close' event fires and reconnect logic runs.
+      client.quit('Registration timeout');
+    }, 30_000);
+  };
+
   const onRegistered = () => {
     lastCloseReason = null;
     // Registration succeeded, cancel the stall timeout.
@@ -178,22 +194,6 @@ export function registerConnectionEvents(
       firstConnect = false;
       resolve();
     }
-  };
-
-  // When the raw socket is opened (TCP connected), start a timer that aborts
-  // registration if it doesn't complete within 30s. This catches stalled
-  // connections where the server accepts the socket but never sends the
-  // greeting (common after a crash when the server has temporarily blocked
-  // the connection). Without this, irc-framework waits for the TCP timeout
-  // (~2.5 min) before aborting.
-  const onRawSocketConnected = () => {
-    registrationTimer = setTimeout(() => {
-      registrationTimer = null;
-      lastCloseReason = 'registration timeout';
-      logger.warn('IRC registration timeout — no greeting received within 30s');
-      // Close the socket so 'close' event fires and reconnect logic runs.
-      client.quit('Registration timeout');
-    }, 30_000);
   };
 
   // Capture the server's IRC ERROR message (e.g. "Closing Link: ... (Throttled)")
@@ -241,7 +241,7 @@ export function registerConnectionEvents(
   };
 
   listen('registered', onRegistered);
-  listen('raw socket connected', onRawSocketConnected);
+  listen('connecting', onConnecting);
   listen('irc error', onIrcError);
   listen('close', onClose);
   listen('socket error', onSocketError);
