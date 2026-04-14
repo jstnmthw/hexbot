@@ -149,7 +149,7 @@ Replace `203.0.113.42` with the bot's **public** IPv4 address. This is what gets
 
 ## Connecting
 
-After the DCC CHAT handshake completes, the bot sends a single `Password: ` prompt on the socket. Type your password and press enter. On success the banner and console are shown; on failure the bot sends `DCC CHAT: bad password.` and closes the connection. Repeated failures from the same hostmask escalate into a temporary lockout (exponential backoff, matching the bot-link auth policy).
+After the DCC CHAT handshake completes, the bot sends a single `Enter your password:` prompt on the socket. Type your password and press enter. On success the banner and console are shown; on failure the bot sends `DCC CHAT: bad password.` and closes the connection. Repeated failures from the same hostmask escalate into a temporary lockout (exponential backoff, matching the bot-link auth policy).
 
 Sessions that have never had a password set are rejected with a one-line notice pointing at `.chpass`. Ask an admin to run `.chpass <handle> <newpassword>` from the REPL and try again.
 
@@ -237,7 +237,7 @@ These work only inside a DCC session:
 The DCC console is a **filtered live view of the bot's log**. Every log
 line the bot writes to stdout is also offered to every DCC session. Each
 session decides which categories it wants to see via its `.console`
-flags, modelled after Eggdrop's partyline `+mojkpbsdw` mode letters.
+flags (`+mojkpbsdw`).
 
 #### Flag letters
 
