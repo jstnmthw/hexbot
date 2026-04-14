@@ -35,6 +35,10 @@ export function createMockSocket(): MockSocketResult {
       cb();
     },
   });
+  // Stub Socket-only methods that Duplex lacks — production code calls
+  // setKeepAlive() on accepted DCC sockets; the mock just needs a no-op.
+  (duplex as unknown as { setKeepAlive: (enable?: boolean, delay?: number) => void }).setKeepAlive =
+    () => {};
   // Test double: Duplex implements the stream methods our protocol code uses on Socket
   return { socket: duplex as unknown as Socket, written, duplex };
 }

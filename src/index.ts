@@ -5,6 +5,7 @@ import net from 'node:net';
 import { basename } from 'node:path';
 
 import { Bot } from './bot';
+import { isRecoverableSocketError, shutdownWithTimeout } from './process-handlers';
 import { BotREPL } from './repl';
 
 // Disable Happy Eyeballs (RFC 8305) connection racing. Node.js tries multiple
@@ -106,13 +107,36 @@ async function main(): Promise<void> {
 // Signal / error handlers
 // ---------------------------------------------------------------------------
 
+// Hard cap on any shutdown path — prevents the process hanging indefinitely
+// when a subsystem's cleanup stalls (stuck socket drain, blocked flush, etc).
+const SHUTDOWN_TIMEOUT_MS = 10_000;
+
+async function runBotShutdown(): Promise<void> {
+  if (!bot) return;
+  const currentBot = bot;
+  const result = await shutdownWithTimeout(() => currentBot.shutdown(), SHUTDOWN_TIMEOUT_MS);
+  if (result === 'timeout') {
+    console.error(`[bot] Shutdown timed out after ${SHUTDOWN_TIMEOUT_MS}ms — forcing exit`);
+  }
+}
+
 async function gracefulShutdown(signal: string): Promise<void> {
   bot?.logger.child('bot').info(`Received ${signal}, shutting down...`);
   stopHeartbeat();
-  if (bot) {
-    await bot.shutdown();
-  }
+  await runBotShutdown();
   process.exit(0);
+}
+
+// Re-entrancy guard: once we've committed to a fatal exit, subsequent
+// uncaught errors from shutdown itself should not restart the chain.
+let fatalInProgress = false;
+
+function fatalExit(label: string, value: unknown): void {
+  if (fatalInProgress) return;
+  fatalInProgress = true;
+  console.error(`[bot] ${label}:`, value);
+  stopHeartbeat();
+  runBotShutdown().finally(() => process.exit(1));
 }
 
 process.on('SIGINT', () => {
@@ -123,16 +147,19 @@ process.on('SIGTERM', () => {
 });
 
 process.on('uncaughtException', (err) => {
-  console.error('[bot] Uncaught exception:', err);
-  if (bot) {
-    bot.shutdown().finally(() => process.exit(1));
-  } else {
-    process.exit(1);
+  if (isRecoverableSocketError(err)) {
+    console.warn('[bot] Recovered socket read error (continuing):', err);
+    return;
   }
+  fatalExit('Uncaught exception', err);
 });
 
 process.on('unhandledRejection', (reason) => {
-  console.error('[bot] Unhandled rejection:', reason);
+  if (isRecoverableSocketError(reason)) {
+    console.warn('[bot] Recovered socket read error (continuing):', reason);
+    return;
+  }
+  fatalExit('Unhandled rejection', reason);
 });
 
 // ---------------------------------------------------------------------------

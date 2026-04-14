@@ -199,6 +199,7 @@ function mockSession(
     handleFlags: 'nm',
     rateLimitKey: `${overrides.nick}!ident@host`,
     isClosed: false,
+    isStale: false,
     writeLine: vi.fn(),
     close: vi.fn(),
     enterRelay: vi.fn(),
@@ -484,6 +485,91 @@ describe('DCCManager', () => {
 
     await handler(makeCtx('testnick'));
     expect(client.notices.some((n) => n.message.includes('active session'))).toBe(true);
+  });
+
+  it('evicts a stale session and lets a reconnect through', async () => {
+    // Zombie scenario: the old socket is dead (NAT/firewall dropped state)
+    // but the 'close' event hasn't fired yet, so isClosed is false. The
+    // reconnect must evict it instead of reporting "already connected".
+    const dispatcher = makeDispatcher();
+    let handler!: (ctx: HandlerContext) => Promise<void>;
+    (dispatcher.bind as ReturnType<typeof vi.fn>).mockImplementation(
+      (_t: string, _f: string, _m: string, fn: (ctx: HandlerContext) => Promise<void>) => {
+        handler = fn;
+      },
+    );
+    const localSessions = new Map<string, DCCSessionEntry>();
+    const m = new DCCManager({
+      client,
+      dispatcher,
+      permissions: makePermissions(makeUser()),
+      services: makeServices(),
+      commandHandler: makeCommandHandler(),
+      config: makeConfig(),
+      version: '1.0.0',
+      botNick: 'hexbot',
+      sessions: localSessions,
+    });
+    m.attach();
+
+    const staleSession = mockSession({
+      handle: 'testuser',
+      nick: 'testnick',
+      isClosed: false,
+      isStale: true,
+    });
+    localSessions.set('testnick', staleSession);
+
+    await handler(makeCtx('testnick'));
+    // The old session was closed for replacement, and the reconnect was
+    // NOT rejected with "already have an active session".
+    expect(staleSession.close).toHaveBeenCalledWith('Stale session replaced.');
+    expect(client.notices.some((n) => n.message.includes('already have an active session'))).toBe(
+      false,
+    );
+  });
+
+  it('clears an already-closed session entry so the reconnect passes through', async () => {
+    // Covers the branch where onClose already fired (isClosed=true) but the
+    // manager map still has the stale entry — checkNotAlreadyConnected
+    // should delete it and let the new offer proceed.
+    const dispatcher = makeDispatcher();
+    let handler!: (ctx: HandlerContext) => Promise<void>;
+    (dispatcher.bind as ReturnType<typeof vi.fn>).mockImplementation(
+      (_t: string, _f: string, _m: string, fn: (ctx: HandlerContext) => Promise<void>) => {
+        handler = fn;
+      },
+    );
+    const localSessions = new Map<string, DCCSessionEntry>();
+    const m = new DCCManager({
+      client,
+      dispatcher,
+      permissions: makePermissions(makeUser()),
+      services: makeServices(),
+      commandHandler: makeCommandHandler(),
+      config: makeConfig(),
+      version: '1.0.0',
+      botNick: 'hexbot',
+      sessions: localSessions,
+    });
+    m.attach();
+
+    const closedSession = mockSession({
+      handle: 'testuser',
+      nick: 'testnick',
+      isClosed: true,
+      isStale: true,
+    });
+    localSessions.set('testnick', closedSession);
+
+    await handler(makeCtx('testnick'));
+    // Closed sessions are cleaned up in-place (not re-closed) and the
+    // reconnect is not rejected.
+    expect(closedSession.close).not.toHaveBeenCalled();
+    expect(localSessions.has('testnick')).toBe(false);
+    expect(client.notices.some((n) => n.message.includes('already have an active session'))).toBe(
+      false,
+    );
   });
 
   it('rejects nick with a pending connection', async () => {
@@ -807,6 +893,27 @@ describe('DCCSession', () => {
     const session = buildSession(socket);
     session.writeLine('hello');
     expect(written.join('')).toContain('hello\r\n');
+  });
+
+  it('isStale is false for a fresh session', () => {
+    const { socket } = makeMockSocket();
+    const session = buildSession(socket);
+    expect(session.isStale).toBe(false);
+  });
+
+  it('isStale becomes true when the socket is destroyed', () => {
+    const { socket, duplex } = makeMockSocket();
+    const session = buildSession(socket);
+    duplex.destroy();
+    expect(session.isStale).toBe(true);
+  });
+
+  it('isStale becomes true when the session is closed', () => {
+    const { socket } = makeMockSocket();
+    const session = buildSession(socket);
+    session.close();
+    expect(session.isStale).toBe(true);
+    expect(session.isClosed).toBe(true);
   });
 
   it('writeLine is a no-op after socket is destroyed', () => {
@@ -1730,6 +1837,44 @@ describe('DCCManager.openSession prompt integration', () => {
     expect(written.join('')).not.toContain('no password set');
     // Clean up — session is still awaiting input
     duplex.destroy();
+    clearTimeout(pending.timer);
+  });
+
+  it('early error handler catches socket errors before DCCSession starts', () => {
+    // Guarantees the guard between accept and DCCSession.start() — an error
+    // fired on the reject path (no password_hash) must hit the early handler,
+    // not surface as uncaught. Uses the no-password rejection so the flow
+    // exits openSession without creating a session whose own handlers would
+    // mask the early one.
+    const logger = createMockLogger();
+    const mgr = new DCCManager({
+      client: new MockIRCClient(),
+      dispatcher: makeDispatcher(),
+      permissions: makePermissions(null),
+      services: makeServices(),
+      commandHandler: makeCommandHandler(),
+      config: makeConfig(),
+      version: '1.0.0',
+      botNick: 'hexbot',
+      logger,
+    });
+    const user: UserRecord = {
+      handle: 'alice',
+      hostmasks: ['*!alice@alice.host'],
+      global: 'nm',
+      channels: {},
+      // no password_hash — triggers early reject path
+    };
+    const pending = buildPending(user);
+    const { socket, duplex } = createMockSocket();
+
+    mgr.openSession(pending, socket);
+
+    // The socket is destroyed on the reject path, but the early error
+    // listener remains attached — emitting an error must not throw and
+    // must route to the debug logger.
+    expect(() => duplex.emit('error', new Error('boom'))).not.toThrow();
+    expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining('boom'));
     clearTimeout(pending.timer);
   });
 

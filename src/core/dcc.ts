@@ -143,6 +143,8 @@ export interface DCCSessionEntry {
   readonly rateLimitKey: string;
   /** True if the session has been closed (socket destroyed, cleanup called). */
   readonly isClosed: boolean;
+  /** True if the session is no longer usable (closed, destroyed, or unwritable). */
+  readonly isStale: boolean;
   writeLine(line: string): void;
   close(reason?: string): void;
   enterRelay(
@@ -568,6 +570,17 @@ export class DCCSession implements DCCSessionEntry {
   /** True if the session has been closed. */
   get isClosed(): boolean {
     return this.closed;
+  }
+
+  /**
+   * True if the session is no longer usable — either our state machine
+   * marked it closed, or the underlying socket is dead. Used by the
+   * duplicate-session check so reconnects can evict zombies whose 'close'
+   * event hasn't fired yet (e.g. NAT dropped the TCP state without RST
+   * and the kernel hasn't surfaced ETIMEDOUT yet).
+   */
+  get isStale(): boolean {
+    return this.closed || this.socket.destroyed || !this.socket.writable;
   }
 
   /**
@@ -1349,9 +1362,15 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     const lowerNick = ircLower(nick, this.casemapping);
     const session = this.sessions.get(lowerNick);
     if (session) {
-      // Clean up stale (closed) sessions before rejecting.
-      if (session.isClosed) {
-        this.sessions.delete(lowerNick);
+      if (session.isStale) {
+        // Either the session already closed itself, or the socket is dead
+        // but onClose hasn't fired yet. Evict and let the new offer through.
+        if (session.isClosed) {
+          this.sessions.delete(lowerNick);
+        } else {
+          this.logger?.info(`DCC: evicting stale session for ${nick}`);
+          session.close('Stale session replaced.');
+        }
       } else {
         this.client.notice(nick, 'DCC CHAT: you already have an active session.');
         return false;
@@ -1472,6 +1491,18 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
    * the flow with a mock socket and a `PendingDCC` built in-process.
    */
   openSession(pending: PendingDCC, socket: Socket): void {
+    // Kernel TCP keepalive: detect dead peers in ~minutes instead of waiting
+    // for a read to surface ETIMEDOUT. Without this, NAT/firewall state loss
+    // can leave the session looking alive for 15+ minutes.
+    socket.setKeepAlive(true, 60_000);
+
+    // Early error handler — guards the window before DCCSession.start()
+    // attaches its own. Once the session is started, its handler also fires
+    // (and is idempotent), so both coexist harmlessly.
+    socket.on('error', (err) => {
+      this.logger?.debug(`DCC socket error for ${pending.nick}: ${err.message}`);
+    });
+
     const key = `${pending.nick}!${pending.ident}@${pending.hostname}`;
 
     // Rate-limit gate — refuse new prompts for recently-abused identities.

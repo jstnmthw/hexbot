@@ -71,6 +71,7 @@ function fakeSession(
     handleFlags,
     rateLimitKey: `${handle}!ident@host`,
     isClosed: false,
+    isStale: false,
     received,
     writes,
     writeLine(line: string) {
