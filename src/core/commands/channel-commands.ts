@@ -155,8 +155,12 @@ export function registerChannelCommands(
 
       const rawValue = sanitize(parts.slice(2).join(' '));
       if (def.type === 'int') {
-        const n = parseInt(rawValue, 10);
-        if (isNaN(n)) {
+        // Strict int parsing: parseInt('42abc', 10) returns 42, which would
+        // silently accept garbage. Number(rawValue) + isInteger rejects any
+        // trailing non-digit characters.
+        const trimmed = rawValue.trim();
+        const n = Number(trimmed);
+        if (trimmed === '' || !Number.isInteger(n)) {
           ctx.reply(`"${rawValue}" is not a valid integer`);
           return;
         }

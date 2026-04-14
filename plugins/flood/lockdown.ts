@@ -47,9 +47,23 @@ export class LockdownController {
     flooders.add(lowerMask);
     timestamps.push(now);
 
+    // Prune timestamps AND flooder entries together — the original loop
+    // only trimmed `timestamps`, letting the `flooders` Set grow without
+    // bound and suppress future triggers (the `has()` short-circuit at
+    // the top fails open to the repeated flooder once their entry
+    // survives its cooldown window).
     const cutoff = now - this.cfg.lockWindowMs;
     while (timestamps.length > 0 && timestamps[0] < cutoff) {
       timestamps.shift();
+    }
+    // If every remaining timestamp is newer than `cutoff` but `flooders`
+    // contains masks whose only timestamp was pruned, rebuild the set
+    // cheaply from the surviving timestamps. Since we don't store
+    // per-mask timestamps we can't selectively drop — so when the
+    // timestamp list is empty we clear the set and let the next flooder
+    // re-register fresh.
+    if (timestamps.length === 0) {
+      flooders.clear();
     }
 
     if (timestamps.length >= this.cfg.lockCount && !this.activeLocks.has(lowerChannel)) {

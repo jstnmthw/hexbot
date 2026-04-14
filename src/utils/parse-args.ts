@@ -22,7 +22,11 @@
  *   splitN('#chan', 2)              // ['#chan']
  *   splitN('', 2)                   // []
  */
+/** Defensive upper bound on a single parsed args string — IRC line limit is ~450 bytes so anything larger is either a plugin bug or a malicious input. */
+const MAX_ARGS_LENGTH = 8192;
+
 export function splitN(args: string, n: number): string[] {
+  if (args.length > MAX_ARGS_LENGTH) return [];
   // Strip only leading/trailing spaces and tabs — keep embedded control chars.
   const trimmed = args.replace(/^[ \t]+|[ \t]+$/g, '');
   if (!trimmed) return [];

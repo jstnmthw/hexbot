@@ -6,6 +6,17 @@
 import chalk from 'chalk';
 import { format } from 'node:util';
 
+/**
+ * Strip control bytes that have no business in a non-terminal log sink.
+ * Drops `\r`, `\x00`, mIRC color codes (`\x02`/`\x03`/`\x0f`/`\x16`/`\x1d`/
+ * `\x1e`/`\x1f`), and the lone bell. Newlines and tab survive so
+ * multi-line stack traces still render correctly.
+ */
+function stripLogControls(input: string): string {
+  // eslint-disable-next-line no-control-regex -- IRC formatting + bell
+  return input.replace(/[\x00\x02\x03\x07\x0f\x16\x1d\x1e\x1f\r]/g, '');
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -239,7 +250,12 @@ export class Logger implements LoggerLike {
     }
 
     const formatted = format(...coloredParts, ...args);
-    const plain = format(...plainParts, ...args);
+    // Strip control bytes from sinks that lack ANSI rendering — the file
+    // sink and the DCC fanout both treat the line as literal text, so a
+    // log line carrying a sanitized but still-mIRC-colored message can
+    // poison downstream operator consoles. The colored stdout sink keeps
+    // its ANSI escapes; only `plain` / `dccFormatted` are scrubbed.
+    const plain = stripLogControls(format(...plainParts, ...args));
     const dccFormatted = format(...dccParts, ...args);
 
     const source = this.prefix

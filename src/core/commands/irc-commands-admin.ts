@@ -4,6 +4,7 @@ import type { CommandHandler } from '../../command-handler';
 import type { BotDatabase } from '../../database';
 import { isValidCommandTarget, parseTargetMessage } from '../../utils/parse-args';
 import { sanitize } from '../../utils/sanitize';
+import { stripFormatting } from '../../utils/strip-formatting';
 import { tryAudit } from '../audit';
 import type { ReconnectState } from '../reconnect-driver';
 
@@ -65,7 +66,7 @@ export function registerIRCAdminCommands(
       tryAudit(db, ctx, {
         action: 'say',
         target: parsed.target,
-        metadata: { message: parsed.message },
+        metadata: { message: stripFormatting(parsed.message) },
       });
     },
   );
@@ -136,7 +137,7 @@ export function registerIRCAdminCommands(
       tryAudit(db, ctx, {
         action: 'msg',
         target: parsed.target,
-        metadata: { message: parsed.message },
+        metadata: { message: stripFormatting(parsed.message) },
       });
     },
   );

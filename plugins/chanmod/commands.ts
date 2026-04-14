@@ -281,6 +281,14 @@ export function setupCommands(
     const target = hasDuration ? parts.slice(0, -1).join(' ') : parts.join(' ');
 
     if (target.includes('!') || target.includes('@')) {
+      // Validate the mask shape: `nick!ident@host` with no whitespace and
+      // each segment non-empty (wildcards allowed). A garbage string like
+      // `!@` would otherwise hit `mode +b` and let an attacker poison the
+      // ban list with unenforceable entries.
+      if (!/^[^\s!@]*![^\s@]*@\S+$/.test(target)) {
+        ctx.reply('Invalid ban mask. Expected nick!ident@host.');
+        return;
+      }
       api.ban(channel, target);
       api.banStore.storeBan(channel, target, ctx.nick, durationMs);
       const durStr = durationMinutes === 0 ? 'permanent' : `${durationMinutes}m`;

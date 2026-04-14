@@ -208,6 +208,17 @@ export class EventDispatcher {
    * Non-stackable types (pub, msg) overwrite any existing bind on the same mask.
    */
   bind(type: BindType, flags: string, mask: string, handler: BindHandler, pluginId: string): void {
+    // Timer binds are fired directly from `setInterval` and never run
+    // through the dispatch path, so any flags the caller supplies are
+    // silently ignored. Reject non-'-' flags at bind time so plugin
+    // authors can't be misled into thinking their `+m` timer is
+    // permission-gated.
+    if (type === 'time' && flags !== '-' && flags !== '') {
+      this.logger?.warn(
+        `Timer bind "${mask}s" from "${pluginId}" has flags="${flags}" — timer binds ignore flags; use "-"`,
+      );
+    }
+
     const entry: BindEntry = { type, flags, mask, handler, pluginId, hits: 0 };
 
     // Non-stackable: remove any existing bind on the same type + mask

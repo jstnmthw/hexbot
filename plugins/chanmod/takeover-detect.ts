@@ -100,6 +100,13 @@ export function assessThreat(
     target,
     timestamp: Date.now(),
   });
+  // Cap the per-channel event ring so a sustained takeover attempt can't
+  // grow `threat.events` indefinitely. 200 entries is enough to render an
+  // operator-readable history and small enough to keep memory bounded
+  // across long uptimes.
+  if (threat.events.length > 200) {
+    threat.events.splice(0, threat.events.length - 200);
+  }
 
   const newLevel = scoreToLevel(config, threat.score);
 

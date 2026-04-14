@@ -4,6 +4,7 @@
 import { type Interface as ReadlineInterface, createInterface } from 'node:readline';
 
 import type { Bot } from './bot';
+import { tryAudit } from './core/audit';
 import { Logger, type LoggerLike } from './logger';
 import { toEventObject } from './utils/irc-event';
 import { sanitize } from './utils/sanitize';
@@ -137,6 +138,16 @@ export class BotREPL {
       // Announce REPL activity to botnet so DCC-connected users see local admin work
       this.bot.dccManager?.announce(`*** REPL: ${trimmed}`);
 
+      // One audit row per REPL line, regardless of whether the command
+      // itself writes its own row. Without this, a REPL session that
+      // runs e.g. `.status` or any inspection command leaves no trace
+      // in mod_log — operators auditing for "what did the local console
+      // run" would have to guess from secondary logs.
+      tryAudit(this.bot.db, makeReplCtx(this.print.bind(this)), {
+        action: 'repl-command',
+        reason: trimmed.slice(0, 256),
+      });
+
       // Route through the command handler (REPL has implicit owner privileges)
       await this.bot.commandHandler.execute(trimmed, {
         source: 'repl',
@@ -150,4 +161,13 @@ export class BotREPL {
       this.busy = false;
     }
   }
+}
+
+function makeReplCtx(reply: (msg: string) => void) {
+  return {
+    source: 'repl' as const,
+    nick: 'REPL',
+    channel: null,
+    reply,
+  };
 }

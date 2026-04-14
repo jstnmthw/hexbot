@@ -315,6 +315,13 @@ export class BotLinkHub {
     const message = String(frame.message ?? '');
     const toBot = String(frame.toBot ?? '*');
 
+    // TODO (Phase 3 audit): when BSAY frames gain a `fromHandle` field,
+    // re-verify the sending handle has `+m` here before fanning out.
+    // Today the only check is on the originating leaf; a compromised
+    // leaf can craft a raw BSAY frame and bypass that gate. The fix is
+    // a protocol addition (carry handle, verify on hub) and lives with
+    // the broader botlink HELLO challenge-response migration in §11.
+
     if (toBot === '*') {
       this.broadcast(frame, fromBot);
       this.onBsay?.(target, message);

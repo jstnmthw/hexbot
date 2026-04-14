@@ -1,9 +1,25 @@
 // HexBot — Plugin management commands
 // .plugins, .load, .unload, .reload
-import type { CommandHandler } from '../../command-handler';
+import type { CommandContext, CommandHandler } from '../../command-handler';
 import type { BotDatabase } from '../../database';
 import type { PluginLoader } from '../../plugin-loader';
 import { tryAudit } from '../audit';
+
+const PLUGIN_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
+
+/**
+ * Validate a plugin name from a command argument and reply with a usage
+ * message on failure. Returns true if the name is safe to dispatch.
+ * Shared by `.load`, `.unload`, and `.reload` so all three apply the
+ * same SAFE_NAME_RE the loader enforces internally.
+ */
+function validatePluginName(ctx: CommandContext, name: string): boolean {
+  if (!PLUGIN_NAME_RE.test(name)) {
+    ctx.reply('Invalid plugin name. Use alphanumeric characters, hyphens, and underscores only.');
+    return false;
+  }
+  return true;
+}
 
 export function registerPluginCommands(
   handler: CommandHandler,
@@ -46,14 +62,7 @@ export function registerPluginCommands(
         ctx.reply('Usage: .load <plugin-name>');
         return;
       }
-
-      // Validate plugin name to prevent path traversal
-      if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(name)) {
-        ctx.reply(
-          'Invalid plugin name. Use alphanumeric characters, hyphens, and underscores only.',
-        );
-        return;
-      }
+      if (!validatePluginName(ctx, name)) return;
 
       const pluginPath = `${pluginDir}/${name}/index.ts`;
       const result = await pluginLoader.load(pluginPath);
@@ -87,6 +96,7 @@ export function registerPluginCommands(
         ctx.reply('Usage: .unload <plugin-name>');
         return;
       }
+      if (!validatePluginName(ctx, name)) return;
 
       try {
         await pluginLoader.unload(name);
@@ -119,6 +129,7 @@ export function registerPluginCommands(
         ctx.reply('Usage: .reload <plugin-name>');
         return;
       }
+      if (!validatePluginName(ctx, name)) return;
 
       try {
         const result = await pluginLoader.reload(name);

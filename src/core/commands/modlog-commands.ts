@@ -17,6 +17,7 @@
 import type { CommandContext, CommandHandler } from '../../command-handler';
 import type { BotDatabase, ModLogEntry, ModLogFilter, ModLogSource } from '../../database';
 import type { BotEventBus } from '../../event-bus';
+import { stripFormatting } from '../../utils/strip-formatting';
 import { MASTER_FLAG, OWNER_FLAG, type Permissions } from '../permissions';
 
 // ---------------------------------------------------------------------------
@@ -602,7 +603,10 @@ function runShow(
     `  reason:  ${row.reason ?? '—'}`,
   ];
   if (row.metadata) {
-    lines.push(`  metadata: ${JSON.stringify(row.metadata)}`);
+    // Strip formatting on the JSON dump — metadata values can contain
+    // arbitrary nick / message content that an attacker may have seeded
+    // with mIRC color codes hoping to spoof an operator console line.
+    lines.push(`  metadata: ${stripFormatting(JSON.stringify(row.metadata))}`);
   }
   reply(ctx, lines);
 }

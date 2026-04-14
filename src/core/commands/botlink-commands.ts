@@ -187,7 +187,12 @@ function handleBotlinkBans(ctx: CommandContext, hub: BotLinkHub | null): void {
   ctx.reply(lines.join('\n'));
 }
 
-function handleBotlinkBan(ctx: CommandContext, hub: BotLinkHub | null, rest: string[]): void {
+function handleBotlinkBan(
+  ctx: CommandContext,
+  hub: BotLinkHub | null,
+  rest: string[],
+  db: BotDatabase | null,
+): void {
   const h = requireHub(ctx, hub);
   if (!h) return;
   const banIp = rest[0];
@@ -212,12 +217,19 @@ function handleBotlinkBan(ctx: CommandContext, hub: BotLinkHub | null, rest: str
   h.manualBan(banIp, durationMs, reason, ctx.nick);
   const durStr = durationMs === 0 ? 'permanent' : formatDuration(durationMs);
   ctx.reply(`Banned ${banIp} (${durStr}): ${reason}`);
+  tryAudit(db, ctx, {
+    action: 'botlink-ban',
+    target: banIp,
+    reason,
+    metadata: { duration_ms: durationMs },
+  });
 }
 
 function handleBotlinkUnban(
   ctx: CommandContext,
   hub: BotLinkHub | null,
   unbanIp: string | undefined,
+  db: BotDatabase | null,
 ): void {
   const h = requireHub(ctx, hub);
   if (!h) return;
@@ -227,6 +239,7 @@ function handleBotlinkUnban(
   }
   h.unban(unbanIp, ctx.nick);
   ctx.reply(`Unbanned ${unbanIp}.`);
+  tryAudit(db, ctx, { action: 'botlink-unban', target: unbanIp });
 }
 
 // ---------------------------------------------------------------------------
@@ -269,9 +282,9 @@ export function registerBotlinkCommands(
         case 'bans':
           return handleBotlinkBans(ctx, hub);
         case 'ban':
-          return handleBotlinkBan(ctx, hub, rest);
+          return handleBotlinkBan(ctx, hub, rest, db);
         case 'unban':
-          return handleBotlinkUnban(ctx, hub, rest[0]);
+          return handleBotlinkUnban(ctx, hub, rest[0], db);
         default:
           ctx.reply('Usage: .botlink <status|disconnect|reconnect|bans|ban|unban>');
       }

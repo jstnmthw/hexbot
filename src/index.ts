@@ -146,8 +146,33 @@ process.on('SIGTERM', () => {
   gracefulShutdown('SIGTERM');
 });
 
+// Bounded rate limiter on recoverable socket-read swallowing. If the bot
+// ever ends up in a tight error loop (server is hanging up immediately
+// on every reconnect, for example) we'd otherwise spin forever printing
+// recovered errors. Past 100 in 60 seconds we escalate to fatalExit so
+// the supervisor restarts us cleanly.
+const RECOVERABLE_RATE_WINDOW_MS = 60_000;
+const RECOVERABLE_RATE_MAX = 100;
+const recoverableTimestamps: number[] = [];
+
+function noteRecoverable(): boolean {
+  const now = Date.now();
+  while (
+    recoverableTimestamps.length > 0 &&
+    now - recoverableTimestamps[0] > RECOVERABLE_RATE_WINDOW_MS
+  ) {
+    recoverableTimestamps.shift();
+  }
+  recoverableTimestamps.push(now);
+  return recoverableTimestamps.length > RECOVERABLE_RATE_MAX;
+}
+
 process.on('uncaughtException', (err) => {
   if (isRecoverableSocketError(err)) {
+    if (noteRecoverable()) {
+      fatalExit(`Recoverable socket errors exceeded ${RECOVERABLE_RATE_MAX}/min`, err);
+      return;
+    }
     console.warn('[bot] Recovered socket read error (continuing):', err);
     return;
   }
@@ -156,6 +181,10 @@ process.on('uncaughtException', (err) => {
 
 process.on('unhandledRejection', (reason) => {
   if (isRecoverableSocketError(reason)) {
+    if (noteRecoverable()) {
+      fatalExit(`Recoverable socket errors exceeded ${RECOVERABLE_RATE_MAX}/min`, reason);
+      return;
+    }
     console.warn('[bot] Recovered socket read error (continuing):', reason);
     return;
   }

@@ -39,6 +39,70 @@ export const HUB_ONLY_FRAMES = new Set([
   'DELUSER',
 ]);
 
+/**
+ * Every frame `type` the bot link protocol speaks. Inbound frames whose
+ * type is not in this set are dropped at decode time without dispatching
+ * — closes the "send a 60 KB junk type to walk hot paths" oracle and
+ * keeps `frame.type.startsWith('PROTECT_')` checks from running against
+ * arbitrarily long attacker-supplied strings.
+ */
+export const KNOWN_FRAME_TYPES = new Set([
+  // Handshake + heartbeat
+  'HELLO',
+  'WELCOME',
+  'AUTH_OK',
+  'AUTH_FAILED',
+  'ERROR',
+  'PING',
+  'PONG',
+  // Permission sync
+  'ADDUSER',
+  'SETFLAGS',
+  'DELUSER',
+  'SYNC_START',
+  'SYNC_END',
+  // Channel state sync
+  'BOTJOIN',
+  'BOTPART',
+  'CHAN',
+  // Ban / exempt list sync
+  'CHAN_BAN_ADD',
+  'CHAN_BAN_DEL',
+  'CHAN_BAN_SYNC',
+  'CHAN_EXEMPT_SYNC',
+  // Command / message relay
+  'CMD',
+  'CMD_RESULT',
+  'BSAY',
+  'ANNOUNCE',
+  // Party line
+  'PARTY_JOIN',
+  'PARTY_PART',
+  'PARTY_CHAT',
+  'PARTY_WHOM',
+  'PARTY_WHOM_REPLY',
+  // Protection requests
+  'PROTECT_OP',
+  'PROTECT_DEOP',
+  'PROTECT_KICK',
+  'PROTECT_UNBAN',
+  'PROTECT_INVITE',
+  'PROTECT_TAKEOVER',
+  'PROTECT_REGAIN',
+  'PROTECT_ACK',
+  // Console relay
+  'RELAY_REQUEST',
+  'RELAY_ACCEPT',
+  'RELAY_INPUT',
+  'RELAY_OUTPUT',
+  'RELAY_END',
+]);
+
+/** True if `type` is a known protocol frame name. */
+export function isKnownFrameType(type: unknown): type is string {
+  return typeof type === 'string' && type.length <= 64 && KNOWN_FRAME_TYPES.has(type);
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -50,8 +114,18 @@ export function hashPassword(password: string): string {
   return 'scrypt:' + key.toString('hex');
 }
 
+/**
+ * Maximum recursion depth for {@link sanitizeFrame}. Caps the cost of
+ * walking deeply nested JSON so a hostile leaf cannot trigger a stack
+ * overflow by sending a 64 KB frame whose payload is a 16 000-deep
+ * `{a:{a:{a:...}}}` chain. 16 levels is well above any legitimate
+ * frame shape — relay frames are 2-3 deep, party-line frames 1.
+ */
+const SANITIZE_FRAME_MAX_DEPTH = 16;
+
 /** Recursively sanitize all string values in a frame (strip \r\n\0). */
-export function sanitizeFrame(obj: Record<string, unknown>): void {
+export function sanitizeFrame(obj: Record<string, unknown>, depth = 0): void {
+  if (depth > SANITIZE_FRAME_MAX_DEPTH) return;
   for (const key of Object.keys(obj)) {
     const val = obj[key];
     if (typeof val === 'string') {
@@ -61,11 +135,11 @@ export function sanitizeFrame(obj: Record<string, unknown>): void {
         if (typeof val[i] === 'string') {
           (val as unknown[])[i] = sanitize(val[i] as string);
         } else if (val[i] !== null && typeof val[i] === 'object') {
-          sanitizeFrame(val[i] as Record<string, unknown>);
+          sanitizeFrame(val[i] as Record<string, unknown>, depth + 1);
         }
       }
     } else if (val !== null && typeof val === 'object') {
-      sanitizeFrame(val as Record<string, unknown>);
+      sanitizeFrame(val as Record<string, unknown>, depth + 1);
     }
   }
 }
@@ -175,6 +249,16 @@ export class BotLinkProtocol {
           this.logger?.warn('Frame missing type field');
           return;
         }
+        // Drop unknown frame types early — closes the
+        // `frame.type.startsWith('PROTECT_')` cycle-burning oracle and
+        // means downstream switch statements never branch on
+        // attacker-supplied strings. ERROR is the only frame type we
+        // accept implicitly because it's emitted by older peers and
+        // carries no behaviour.
+        if (frame.type !== 'ERROR' && !isKnownFrameType(frame.type)) {
+          this.logger?.warn(`Unknown frame type "${frame.type}" — dropping`);
+          return;
+        }
         sanitizeFrame(frame);
         this.onFrame?.(frame);
       } catch {
@@ -196,6 +280,13 @@ export class BotLinkProtocol {
   /** Send a frame. Returns false if the connection is closed or the frame is too large. */
   send(frame: LinkFrame): boolean {
     if (this.closed || this.socket.destroyed) return false;
+
+    // Symmetry with the inbound path: scrub control chars from every
+    // string field on the way out too. Without this an audit log line
+    // or plugin-emitted message that landed in our local state with
+    // formatting still in it could ride out across the link and
+    // poison a peer's audit log on the other side.
+    sanitizeFrame(frame as unknown as Record<string, unknown>);
 
     const json = JSON.stringify(frame);
     if (Buffer.byteLength(json, 'utf8') > MAX_FRAME_SIZE) {

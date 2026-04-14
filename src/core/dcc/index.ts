@@ -388,7 +388,14 @@ export class DCCSession implements DCCSessionEntry {
    * bytes without a newline to pin memory during the prompt window.
    */
   private static readonly MAX_LINE_BYTES = 4096;
+  /**
+   * Cap on blank lines accepted during the password prompt. Each blank
+   * resets the idle timer, so without this an attacker could keep a
+   * half-authenticated socket open indefinitely by dripping empty lines.
+   */
+  private static readonly MAX_BLANK_PROMPTS = 3;
   private pendingLineBytes = 0;
+  private blankPromptCount = 0;
 
   /**
    * Count bytes that arrive on the socket between newlines and destroy the
@@ -711,7 +718,16 @@ export class DCCSession implements DCCSessionEntry {
 
     // Treat the prompt itself as something that can be aborted with a blank
     // line — otherwise the session would silently count it as a failure.
+    // Cap the number of blank re-prompts per session so an attacker can't
+    // reset the idle timer indefinitely and pin the socket open without
+    // ever committing to a password attempt.
     if (candidate.length === 0) {
+      this.blankPromptCount++;
+      if (this.blankPromptCount > DCCSession.MAX_BLANK_PROMPTS) {
+        this.socket.write('DCC CHAT: too many blank prompts.\r\n');
+        this.close('Blank-prompt limit exceeded.');
+        return;
+      }
       this.socket.write('Enter your password:\r\n');
       this.resetPromptIdle();
       return;

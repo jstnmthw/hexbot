@@ -311,7 +311,18 @@ export class BotDatabase {
     const scrubbedChannel = scrubModLogField(channel);
     const scrubbedTarget = scrubModLogField(target);
     const scrubbedReason = scrubModLogField(reason);
-    const metadataJson = metadata == null ? null : JSON.stringify(metadata);
+    // Cap metadata at 8 KiB. Operators and plugin authors stuff debug
+    // payloads into metadata; without a cap a single misbehaving
+    // plugin can balloon the mod_log table. The truncated marker keeps
+    // queries that scan for `truncated:true` discoverable.
+    let metadataJson = metadata == null ? null : JSON.stringify(metadata);
+    if (metadataJson != null && metadataJson.length > 8192) {
+      metadataJson = JSON.stringify({
+        truncated: true,
+        original_bytes: metadataJson.length,
+        head: metadataJson.slice(0, 1024),
+      });
+    }
     const result = this.stmtLogMod.run(
       action,
       source,

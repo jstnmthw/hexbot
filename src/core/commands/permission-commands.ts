@@ -1,6 +1,7 @@
 // HexBot — Permission management commands
 // Registers .adduser, .deluser, .flags, .users with the command handler.
 import type { CommandHandler } from '../../command-handler';
+import { stripFormatting } from '../../utils/strip-formatting';
 import { formatTable } from '../../utils/table';
 import { OWNER_FLAG, type Permissions } from '../permissions';
 
@@ -123,10 +124,12 @@ export function registerPermissionCommands(
       // View mode: just show current flags
       if (parts.length === 1) {
         const channelInfo = Object.entries(user.channels)
-          .map(([ch, fl]) => `${ch}: ${fl}`)
+          .map(([ch, fl]) => `${stripFormatting(ch)}: ${stripFormatting(fl)}`)
           .join(', ');
         const channelStr = channelInfo ? ` | channels: ${channelInfo}` : '';
-        ctx.reply(`${user.handle}: global flags: ${user.global || '(none)'}${channelStr}`);
+        ctx.reply(
+          `${stripFormatting(user.handle)}: global flags: ${stripFormatting(user.global || '(none)')}${channelStr}`,
+        );
         return;
       }
 
@@ -185,9 +188,9 @@ export function registerPermissionCommands(
       }
 
       const rows = users.map((u) => [
-        u.handle,
-        `flags=${u.global || '(none)'}`,
-        `hostmasks=[${u.hostmasks.join(', ')}]`,
+        stripFormatting(u.handle),
+        `flags=${stripFormatting(u.global || '(none)')}`,
+        `hostmasks=[${u.hostmasks.map((h) => stripFormatting(h)).join(', ')}]`,
       ]);
       ctx.reply(`Users (${users.length}):\n${formatTable(rows)}`);
     },

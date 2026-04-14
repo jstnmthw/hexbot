@@ -211,8 +211,11 @@ describe('BotLinkProtocol', () => {
     const received: LinkFrame[] = [];
     protocol.onFrame = (frame) => received.push(frame);
 
-    // Push raw JSON with \r\n embedded in a string value (not in the frame delimiter)
-    const raw = JSON.stringify({ type: 'TEST', nick: 'evil\r\nPRIVMSG #hack :pwned' });
+    // Push raw JSON with \r\n embedded in a string value (not in the frame delimiter).
+    // Use a known frame type — the unknown-frame allowlist is verified
+    // separately and would otherwise drop the test frame before we got
+    // a chance to inspect the sanitized payload.
+    const raw = JSON.stringify({ type: 'PARTY_CHAT', nick: 'evil\r\nPRIVMSG #hack :pwned' });
     duplex.push(raw + '\r\n');
     await tick();
 
@@ -531,8 +534,8 @@ describe('BotLinkHub', () => {
       hub.close();
     });
 
-    it('forwards a JOIN frame from leaf1 to leaf2 and leaf3 but NOT back to leaf1', async () => {
-      const joinFrame = { type: 'JOIN', channel: '#test', nick: 'user1' };
+    it('forwards a BOTJOIN frame from leaf1 to leaf2 and leaf3 but NOT back to leaf1', async () => {
+      const joinFrame = { type: 'BOTJOIN', channel: '#test', nick: 'user1' };
       pushFrame(duplex1, joinFrame);
       await tick();
 
@@ -613,7 +616,7 @@ describe('BotLinkHub', () => {
       const received: Array<{ botname: string; frame: LinkFrame }> = [];
       hub.onLeafFrame = (botname, frame) => received.push({ botname, frame });
 
-      pushFrame(duplex1, { type: 'JOIN', channel: '#test', nick: 'u' });
+      pushFrame(duplex1, { type: 'BOTJOIN', channel: '#test', nick: 'u' });
       pushFrame(duplex2, { type: 'CMD', command: '.help', args: '', fromHandle: 'op' });
       await tick();
 

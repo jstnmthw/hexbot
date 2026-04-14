@@ -166,6 +166,11 @@ export class BanListSyncer {
         if (!isValidMask(mask)) return null;
         banList.addBan(channel, mask, String(frame.setBy ?? ''), Number(frame.setAt ?? 0));
         if (frame.enforce) {
+          // The consumer of `enforce_ban` is responsible for capping how
+          // many nicks it sweeps in one pass — a `*!*@*` mask combined
+          // with `enforce:true` from a peer would otherwise let one
+          // shared frame kick every user on the channel. Document the
+          // contract here so the cap survives any future refactor.
           return { action: 'enforce_ban', channel, mask };
         }
         return null;

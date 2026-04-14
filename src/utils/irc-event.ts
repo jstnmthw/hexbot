@@ -40,10 +40,17 @@ export function isObjectArray(val: unknown): val is Array<Record<string, unknown
 /**
  * Parse ident and hostname from a full IRC hostmask string (nick!ident@hostname).
  * Returns empty strings for ident/hostname if the format does not match.
+ *
+ * A malformed input like `nick@host` (missing the `!` ident separator)
+ * previously silently filled `ident` with the nick via the
+ * `substring(bangIdx + 1, atIdx)` arithmetic; we now reject it to empty.
  */
 export function parseHostmask(hostmask: string): { ident: string; hostname: string } {
   const bangIdx = hostmask.indexOf('!');
   const atIdx = hostmask.lastIndexOf('@');
+  if (bangIdx < 0 || atIdx < 0 || bangIdx > atIdx) {
+    return { ident: '', hostname: atIdx >= 0 ? hostmask.substring(atIdx + 1) : '' };
+  }
   return {
     ident: hostmask.substring(bangIdx + 1, atIdx),
     hostname: hostmask.substring(atIdx + 1),
