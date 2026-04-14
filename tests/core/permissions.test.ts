@@ -927,4 +927,47 @@ describe('Permissions', () => {
       expect(infoMsgs.some((m) => m.includes('from manual'))).toBe(true);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // saveToDb: transactional per-record upsert (stability audit 2026-04-14)
+  // -------------------------------------------------------------------------
+
+  describe('saveToDb: transactional per-record upsert', () => {
+    let permsDb: BotDatabase;
+    let withDbPerms: Permissions;
+
+    beforeEach(() => {
+      permsDb = new BotDatabase(':memory:');
+      permsDb.open();
+      withDbPerms = new Permissions(permsDb, null);
+    });
+
+    afterEach(() => {
+      permsDb.close();
+    });
+
+    it('does not delete rows whose key still exists in memory', () => {
+      // Previously saveToDb() wiped the whole `_permissions` namespace
+      // and re-inserted every user on every single-user mutation. This
+      // test guards that a setGlobalFlags on one user leaves the other
+      // users untouched at the storage layer.
+      withDbPerms.addUser('alice', '*!alice@*', 'n', 'test');
+      withDbPerms.addUser('bob', '*!bob@*', 'o', 'test');
+      withDbPerms.setGlobalFlags('alice', 'nm', 'test');
+
+      const keys = permsDb
+        .list('_permissions')
+        .map((r) => r.key)
+        .sort();
+      expect(keys).toEqual(['alice', 'bob']);
+    });
+
+    it('drops rows for removed users', () => {
+      withDbPerms.addUser('alice', '*!alice@*', 'n', 'test');
+      withDbPerms.addUser('bob', '*!bob@*', 'o', 'test');
+      withDbPerms.removeUser('bob', 'test');
+      const keys = permsDb.list('_permissions').map((r) => r.key);
+      expect(keys).toEqual(['alice']);
+    });
+  });
 });

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { BotDatabase } from '../src/database';
+import { BotDatabase, DatabaseFullError } from '../src/database';
 
 function tempDbPath(label: string): string {
   return join(tmpdir(), `hexbot-${label}-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
@@ -518,6 +518,47 @@ describe('BotDatabase', () => {
     it('keeps everything when retention is 0 or unset', () => {
       db.logModAction({ action: 'kick', source: 'irc', by: 'a', target: 'b' });
       expect(db.getModLog()).toHaveLength(1);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // transaction() helper + error classification (stability audit 2026-04-14)
+  // ---------------------------------------------------------------------------
+
+  describe('transaction() helper', () => {
+    it('commits on success', () => {
+      db.transaction(() => {
+        db.set('ns', 'k1', 'v1');
+        db.set('ns', 'k2', 'v2');
+      });
+      expect(db.get('ns', 'k1')).toBe('v1');
+      expect(db.get('ns', 'k2')).toBe('v2');
+    });
+
+    it('rolls back when the callback throws', () => {
+      db.set('ns', 'seed', 'initial');
+      expect(() =>
+        db.transaction(() => {
+          db.set('ns', 'seed', 'mutated');
+          throw new Error('abort');
+        }),
+      ).toThrow('abort');
+      expect(db.get('ns', 'seed')).toBe('initial');
+    });
+  });
+
+  describe('writes-disabled degrade mode', () => {
+    // We can't portably simulate SQLITE_FULL in-memory, so poke the
+    // internal `writesDisabled` flag directly to exercise the degrade
+    // branch. The typed guard in `set`/`del` throws DatabaseFullError
+    // when the flag is set; reads remain available.
+    it('throws DatabaseFullError on mutating calls once writes are disabled', () => {
+      const internal = db as unknown as { writesDisabled: boolean };
+      internal.writesDisabled = true;
+      expect(() => db.set('ns', 'k', 'v')).toThrow(DatabaseFullError);
+      expect(() => db.del('ns', 'k')).toThrow(DatabaseFullError);
+      // Reads still work — the degrade path is deliberately asymmetric.
+      expect(db.get('ns', 'k')).toBeNull();
     });
   });
 });

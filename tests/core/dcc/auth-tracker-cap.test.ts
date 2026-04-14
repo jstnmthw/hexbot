@@ -1,5 +1,9 @@
-// Covers audit finding W-DCC4: the `maxEntries` hard cap with
-// oldest-by-`firstFailure` eviction.
+// Covers two audit findings against DCCAuthTracker:
+//  - W-DCC4 (memleak 2026-04-14): `maxEntries` hard cap with
+//    oldest-by-`firstFailure` eviction.
+//  - stability 2026-04-14: banCount decay on success + cap at BAN_COUNT_MAX
+//    so legitimate users who occasionally typo don't accumulate a
+//    permanently escalating lockout.
 import { describe, expect, it } from 'vitest';
 
 import { DCCAuthTracker } from '../../../src/core/dcc/auth-tracker';
@@ -38,5 +42,36 @@ describe('DCCAuthTracker maxEntries (W-DCC4)', () => {
   it('uses the default maxEntries=10_000 when not specified', () => {
     const tracker = new DCCAuthTracker();
     expect(tracker.maxEntries).toBe(10_000);
+  });
+});
+
+describe('DCCAuthTracker: banCount decays on success', () => {
+  it('decrements banCount by one step when recordSuccess fires', () => {
+    const tracker = new DCCAuthTracker({ maxFailures: 2, baseLockMs: 1000 });
+    // Two failures → ban with banCount=1
+    tracker.recordFailure('alice', 1000);
+    tracker.recordFailure('alice', 1100);
+    // recordSuccess should halve the escalation
+    tracker.recordSuccess('alice');
+    // A fresh fail cycle should now hit the BASE lock, not 2× base.
+    tracker.recordFailure('alice', 2_000_000); // far past any decay window
+    tracker.recordFailure('alice', 2_000_100);
+    const status = tracker.check('alice', 2_000_200);
+    expect(status.locked).toBe(true);
+    expect(status.lockedUntil - 2_000_100).toBe(1000);
+  });
+
+  it('caps banCount escalation so the lockout duration does not run away', () => {
+    // With maxFailures=1 every failure escalates, but after BAN_COUNT_MAX=8
+    // the lock duration plateaus at base * 2^8 = 256_000 ms.
+    const tracker = new DCCAuthTracker({ maxFailures: 1, baseLockMs: 1000 });
+    let t = 1000;
+    for (let i = 0; i < 20; i++) {
+      tracker.recordFailure('mallory', t);
+      t += 500; // stay inside the 1h decay window so banCount keeps climbing
+    }
+    const status = tracker.check('mallory', t);
+    const duration = status.lockedUntil - t;
+    expect(duration).toBeLessThanOrEqual(256_000);
   });
 });
