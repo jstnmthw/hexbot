@@ -17,6 +17,14 @@ export interface CommandContext {
   hostname?: string;
   channel: string | null;
   /**
+   * Services account name from the triggering event's IRCv3 account-tag.
+   * Carried through from the bridge so `$a:` patterns resolve on the first
+   * command after a nick change, before channel-state gets its next
+   * account-notify update. `undefined` means "no account-tag on this
+   * event"; `null` means "server confirmed the nick is not identified".
+   */
+  account?: string | null;
+  /**
    * When the command arrived over DCC, the session that sent it. Set by
    * {@link DCCSession.onLine}; undefined for every other transport. Used
    * by DCC-only commands (e.g. `.console`) to reach per-session state.
@@ -166,7 +174,7 @@ export class CommandHandler {
         ctx.reply('Permission denied.');
         return;
       }
-      const handlerCtx = {
+      const handlerCtx: HandlerContext = {
         nick: ctx.nick,
         ident: ctx.ident ?? '',
         hostname: ctx.hostname ?? '',
@@ -177,6 +185,10 @@ export class CommandHandler {
         reply: ctx.reply,
         replyPrivate: ctx.reply,
       };
+      // Thread the inbound account-tag through to the flag check so `$a:`
+      // patterns resolve on the first command after a nick change, before
+      // channel-state has received a fresh account-notify for the new nick.
+      if (ctx.account !== undefined) handlerCtx.account = ctx.account;
       if (!this.permissions.checkFlags(entry.options.flags, handlerCtx)) {
         ctx.reply('Permission denied.');
         return;

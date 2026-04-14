@@ -286,10 +286,17 @@ export class IRCBridge {
       args: message,
     });
 
-    // Actions dispatch through pubm/msgm (wildcard text match)
+    // CTCP ACTION is the same primitive as PRIVMSG from the spam/flood
+    // perspective — one inbound frame counts against the same bucket so an
+    // attacker can't just spam `/me` to bypass the pub/msg flood limit.
+    const floodKey = ident && hostname ? `${nick}!${ident}@${hostname}` : nick;
     if (isChannel) {
+      const flood = this.dispatcher.floodCheck('pub', floodKey, ctx);
+      if (flood.blocked) return;
       this.dispatcher.dispatch('pubm', ctx).catch(this.dispatchError('pubm'));
     } else {
+      const flood = this.dispatcher.floodCheck('msg', floodKey, ctx);
+      if (flood.blocked) return;
       this.dispatcher.dispatch('msgm', ctx).catch(this.dispatchError('msgm'));
     }
   }
@@ -302,6 +309,15 @@ export class IRCBridge {
 
     if (!this.isValidChannel(channel)) return;
 
+    // extended-join surfaces the services account name on the JOIN event. We
+    // prime the dispatcher's fast path and stamp the ctx so flag-gated binds
+    // (and auto-op specifically) can skip a NickServ ACC round-trip when the
+    // server has already vouched for the joiner.
+    const account = extractAccountTag(event);
+    if (account !== undefined && nick && this.channelState?.setAccountForNick) {
+      this.channelState.setAccountForNick(nick, account);
+    }
+
     const ctx = this.buildContext({
       nick,
       ident,
@@ -311,6 +327,7 @@ export class IRCBridge {
       command: 'JOIN',
       args: '',
     });
+    if (account !== undefined) ctx.account = account;
 
     this.dispatcher.dispatch('join', ctx).catch(this.dispatchError('join'));
   }

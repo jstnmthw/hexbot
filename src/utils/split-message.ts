@@ -67,8 +67,18 @@ function splitLineInto(line: string, budget: number, out: string[]): void {
     return;
   }
 
+  // Early truncation — `Array.from(line)` allocates a Unicode code point
+  // array proportional to `line.length`. A plugin forwarding a multi-MB
+  // string would allocate a giant intermediate array even though only
+  // `MAX_LINES * maxBytes * 2` code units can possibly survive after
+  // splitting. Cut the input down before we iterate. The bound is
+  // deliberately loose (2x) so we don't chop mid-word when the budget
+  // splits exactly on a character boundary.
+  const maxCodeUnits = MAX_LINES * budget * 2;
+  const truncatedLine = line.length > maxCodeUnits ? line.slice(0, maxCodeUnits) : line;
+
   // Iterate by Unicode code point so we never split a surrogate pair.
-  const cps = Array.from(line);
+  const cps = Array.from(truncatedLine);
   let start = 0;
 
   while (start < cps.length) {

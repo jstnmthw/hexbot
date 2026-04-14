@@ -343,6 +343,7 @@ export class Bot {
         botNick: this.config.irc.nick,
         logger: this.logger,
         db: this.db,
+        eventBus: this.eventBus,
         consoleFlagStore: {
           get: (handle) => this.db.get('dcc', `console_flags:${handle}`),
           set: (handle, flags) => this.db.set('dcc', `console_flags:${handle}`, flags),

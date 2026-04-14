@@ -106,10 +106,27 @@ const ProxyConfigOnDiskSchema = z.strictObject({
   password_env: z.string().optional(),
 });
 
+const IPv4DottedQuadSchema = z
+  .string()
+  .regex(/^(?:\d{1,3}\.){3}\d{1,3}$/)
+  .refine(
+    (ip) => {
+      const parts = ip.split('.').map((p) => Number(p));
+      return parts.every((p) => Number.isInteger(p) && p >= 0 && p <= 255);
+    },
+    { message: 'ip must be a valid IPv4 dotted-quad (DCC advertises IPv4 literals only)' },
+  );
+
+const DccPortTupleSchema = z
+  .tuple([z.number().int().min(1024).max(65535), z.number().int().min(1024).max(65535)])
+  .refine((tuple) => tuple[0] <= tuple[1], {
+    message: 'port_range: first port must be <= second port',
+  });
+
 const DccConfigSchema = z.strictObject({
   enabled: z.boolean(),
-  ip: z.string(),
-  port_range: z.tuple([z.number(), z.number()]),
+  ip: IPv4DottedQuadSchema,
+  port_range: DccPortTupleSchema,
   require_flags: z.string(),
   max_sessions: z.number(),
   idle_timeout_ms: z.number(),

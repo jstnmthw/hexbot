@@ -3,7 +3,7 @@
 import Parser from 'rss-parser';
 
 import type { ChannelHandlerContext, PluginAPI } from '../../src/types';
-import { pollFeed } from './feed-fetcher';
+import { type FetchFeedOpts, pollFeed } from './feed-fetcher';
 import { announceItems } from './feed-formatter';
 import {
   type FeedConfig,
@@ -15,6 +15,7 @@ import {
   loadRuntimeFeeds,
   saveRuntimeFeed,
 } from './feed-store';
+import { validateFeedUrl } from './url-validator';
 
 // Re-export for tests that still import from the plugin root.
 export { hashItem } from './feed-store';
@@ -26,6 +27,16 @@ interface RssPluginConfig {
   max_title_length: number;
   request_timeout_ms: number;
   max_per_poll: number;
+  max_feed_bytes: number;
+  allow_http: boolean;
+}
+
+function fetchOptsFor(cfg: RssPluginConfig): FetchFeedOpts {
+  return {
+    timeoutMs: cfg.request_timeout_ms,
+    maxBytes: cfg.max_feed_bytes,
+    allowHttp: cfg.allow_http,
+  };
 }
 
 /** Narrow an unknown value to `Error` so we can read `.message` safely. */
@@ -57,10 +68,12 @@ export async function init(api: PluginAPI): Promise<void> {
     if (!activeFeeds.has(feed.id)) activeFeeds.set(feed.id, feed);
   }
 
+  const fetchOpts = fetchOptsFor(cfg);
+
   // Silent first-run seeding: mark all existing items as seen without announcing
   for (const feed of activeFeeds.values()) {
     try {
-      await pollFeed(api, parser, feed, 'silent', cfg.max_per_poll);
+      await pollFeed(api, parser, feed, 'silent', cfg.max_per_poll, fetchOpts);
     } catch (err) {
       api.error(`Error seeding feed "${feed.id}":`, errorMessage(err));
     }
@@ -74,7 +87,7 @@ export async function init(api: PluginAPI): Promise<void> {
       if (Date.now() - lastPoll < interval) continue;
 
       try {
-        const items = await pollFeed(api, parser, feed, 'announce', cfg.max_per_poll);
+        const items = await pollFeed(api, parser, feed, 'announce', cfg.max_per_poll, fetchOpts);
         if (items.length > 0) {
           await announceItems(api, feed, items, cfg.max_title_length);
         }
@@ -154,6 +167,8 @@ function loadConfig(api: PluginAPI): RssPluginConfig {
     max_title_length: numOrDefault('max_title_length', 300),
     request_timeout_ms: numOrDefault('request_timeout_ms', 10000),
     max_per_poll: numOrDefault('max_per_poll', 5),
+    max_feed_bytes: numOrDefault('max_feed_bytes', 5 * 1024 * 1024),
+    allow_http: c.allow_http === true,
   };
 }
 
@@ -218,6 +233,21 @@ async function handleAdd(
 
   const [id, url] = args;
 
+  // Shape guards — reject garbage before we touch the DB or the network.
+  // `id` is used as a KV key and in log lines, `url` rides into http.get,
+  // and `interval` sets a setTimeout; each needs to be a well-formed
+  // primitive before we go any further.
+  if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) {
+    api.notice(ctx.nick, 'Feed id must be 1–32 chars of [A-Za-z0-9_-].');
+    logCmd(api, ctx, 'add', 'rejected', `bad id: ${id}`);
+    return;
+  }
+  if (url.length === 0 || url.length > 2048) {
+    api.notice(ctx.nick, 'Feed URL must be 1–2048 chars.');
+    logCmd(api, ctx, 'add', 'rejected', 'bad url length');
+    return;
+  }
+
   let channel: string | undefined;
   let intervalStr: string | undefined;
   for (const tok of args.slice(2)) {
@@ -228,6 +258,12 @@ async function handleAdd(
     }
   }
   if (!channel) channel = ctx.channel;
+  // eslint-disable-next-line no-control-regex -- IRC channel names exclude BEL (0x07) per RFC 2812
+  if (!/^#[^\s,\x07:]{1,49}$/.test(channel)) {
+    api.notice(ctx.nick, `Invalid channel: "${channel}"`);
+    logCmd(api, ctx, 'add', 'rejected', `bad channel: ${channel}`);
+    return;
+  }
   const interval = intervalStr ? parseInt(intervalStr, 10) : 3600;
 
   if (activeFeeds.has(id)) {
@@ -236,9 +272,22 @@ async function handleAdd(
     return;
   }
 
-  if (Number.isNaN(interval) || interval < 60) {
-    api.notice(ctx.nick, 'Interval must be a number >= 60 seconds.');
+  if (!Number.isInteger(interval) || interval < 60 || interval > 86400) {
+    api.notice(ctx.nick, 'Interval must be an integer between 60 and 86400 seconds.');
     logCmd(api, ctx, 'add', 'rejected', 'bad interval');
+    return;
+  }
+
+  // SSRF guard: validate the URL (scheme, DNS-resolved IPs) before we touch
+  // the DB or the network. An operator with `+m` can still submit any URL;
+  // this is what keeps them from aiming the bot at cloud metadata, the
+  // bot-link hub port, or internal network resources.
+  try {
+    await validateFeedUrl(url, { allowHttp: cfg.allow_http });
+  } catch (err) {
+    const msg = errorMessage(err);
+    api.notice(ctx.nick, `Feed URL rejected: ${msg}`);
+    logCmd(api, ctx, 'add', 'rejected', `url validation: ${msg}`);
     return;
   }
 
@@ -255,7 +304,14 @@ async function handleAdd(
   // Seed every current item as seen, and return the newest as a one-shot
   // preview so the admin gets instant confirmation the feed is working.
   try {
-    const preview = await pollFeed(api, parser, feed, 'seedPreview', cfg.max_per_poll);
+    const preview = await pollFeed(
+      api,
+      parser,
+      feed,
+      'seedPreview',
+      cfg.max_per_poll,
+      fetchOptsFor(cfg),
+    );
     if (preview.length > 0) {
       await announceItems(api, feed, preview, cfg.max_title_length);
       api.notice(
@@ -324,10 +380,11 @@ async function handleCheck(
     return;
   }
 
+  const fetchOpts = fetchOptsFor(cfg);
   let totalNew = 0;
   for (const feed of targets) {
     try {
-      const items = await pollFeed(api, parser, feed, 'announce', cfg.max_per_poll);
+      const items = await pollFeed(api, parser, feed, 'announce', cfg.max_per_poll, fetchOpts);
       if (items.length > 0) {
         await announceItems(api, feed, items, cfg.max_title_length);
         totalNew += items.length;

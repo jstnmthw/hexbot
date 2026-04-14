@@ -23,6 +23,15 @@ const SHORT_TTL = 30_000; // 30 seconds — request/reply cycles
 const RELAY_TTL = 60 * 60_000; // 1 hour — live relay sessions
 const PARTY_TTL = 7 * 86_400_000; // 7 days — remote DCC party members
 
+/**
+ * Cap on the number of in-flight CMD and PROTECT_* routing entries. Normal
+ * operation clears these within SHORT_TTL, so hitting the cap is a strong
+ * signal that either the TTL sweeper failed or an attacker is planting
+ * entries faster than they can age out. Dropping new requests past the cap
+ * is preferable to unbounded Map growth over long uptimes.
+ */
+const MAX_PENDING_ROUTES = 4096;
+
 export interface RelayRouterDeps {
   botname: string;
   logger: LoggerLike | null;
@@ -79,8 +88,15 @@ export class BotLinkRelayRouter {
   }
 
   /** Track a pending CMD being forwarded to another leaf so CMD_RESULT can be returned. */
-  trackCmdRoute(ref: string, fromBot: string): void {
+  trackCmdRoute(ref: string, fromBot: string): boolean {
+    if (this.cmdRoutes.size >= MAX_PENDING_ROUTES) {
+      this.deps.logger?.warn(
+        `cmdRoutes at cap (${MAX_PENDING_ROUTES}) — dropping CMD ref ${ref} from ${fromBot}`,
+      );
+      return false;
+    }
     this.cmdRoutes.set(ref, { botname: fromBot, createdAt: Date.now() });
+    return true;
   }
 
   /** Resolve a CMD_RESULT frame to its origin leaf, returning that bot's name if known. */
@@ -92,8 +108,15 @@ export class BotLinkRelayRouter {
   }
 
   /** Track a PROTECT_* request so its ACK can be routed back to the requesting leaf. */
-  trackProtectRequest(ref: string, fromBot: string): void {
+  trackProtectRequest(ref: string, fromBot: string): boolean {
+    if (this.protectRequests.size >= MAX_PENDING_ROUTES) {
+      this.deps.logger?.warn(
+        `protectRequests at cap (${MAX_PENDING_ROUTES}) — dropping ref ${ref} from ${fromBot}`,
+      );
+      return false;
+    }
     this.protectRequests.set(ref, { botname: fromBot, createdAt: Date.now() });
+    return true;
   }
 
   /** Forward a PROTECT_ACK back to the originating leaf. */

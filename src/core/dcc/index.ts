@@ -15,6 +15,7 @@ import { createInterface as createReadline } from 'node:readline';
 import type { CommandExecutor } from '../../command-handler';
 import type { BotDatabase } from '../../database';
 import type { BindRegistrar } from '../../dispatcher';
+import type { BotEventBus } from '../../event-bus';
 import type { LogRecord, LogSink, LoggerLike } from '../../logger';
 import { Logger as LoggerClass } from '../../logger';
 import type { DccConfig, HandlerContext, PluginServices, UserRecord } from '../../types';
@@ -241,6 +242,13 @@ export interface DCCManagerDeps {
   db?: BotDatabase | null;
   /** Optional live stats provider for the DCC session banner. */
   getStats?: () => BannerStats;
+  /**
+   * Event bus used to subscribe to `user:passwordChanged` and
+   * `user:removed` so the manager can close any live session for a
+   * rotated or deleted handle. Optional so existing test fixtures keep
+   * working, but the production wiring in `bot.ts` always passes it.
+   */
+  eventBus?: BotEventBus | null;
 }
 
 export interface PendingDCC {
@@ -353,6 +361,7 @@ export class DCCSession implements DCCSessionEntry {
     this.versionForBanner = version;
     this.botNickForBanner = botNick;
 
+    this.attachLineLengthGuard();
     this.rl = createReadline({ input: this.socket, crlfDelay: Infinity });
     const rl = this.rl;
 
@@ -363,12 +372,45 @@ export class DCCSession implements DCCSessionEntry {
     this.resetPromptIdle();
 
     rl.on('line', (line: string) => {
+      this.pendingLineBytes = 0;
       this.onLine(line);
     });
 
     this.socket.on('close', () => this.onClose());
     /* v8 ignore next -- socket error event unreachable in tests: Duplex.emit('error') propagates even with a handler */
     this.socket.on('error', () => this.onClose());
+  }
+
+  /**
+   * Maximum bytes accepted for a single DCC input line before we drop the
+   * session. Legitimate commands and passwords are always well under 4 KiB;
+   * anything larger is either broken client input or an attacker streaming
+   * bytes without a newline to pin memory during the prompt window.
+   */
+  private static readonly MAX_LINE_BYTES = 4096;
+  private pendingLineBytes = 0;
+
+  /**
+   * Count bytes that arrive on the socket between newlines and destroy the
+   * session if a single line exceeds {@link MAX_LINE_BYTES}. This closes
+   * the "fill the prompt buffer without a newline" DoS path: readline
+   * buffers everything until `\n`, so without a cap an attacker who wins
+   * the CTCP race can stream gigabytes into a prompt that never resolves.
+   */
+  private attachLineLengthGuard(): void {
+    this.socket.on('data', (chunk: Buffer) => {
+      const newlineIdx = chunk.lastIndexOf(0x0a);
+      if (newlineIdx === -1) {
+        this.pendingLineBytes += chunk.length;
+      } else {
+        this.pendingLineBytes = chunk.length - newlineIdx - 1;
+      }
+      if (this.pendingLineBytes > DCCSession.MAX_LINE_BYTES) {
+        this.socket.destroy(
+          new Error(`DCC line length exceeded ${DCCSession.MAX_LINE_BYTES} bytes`),
+        );
+      }
+    });
   }
 
   /** Read-only view of the session phase — used by tests. */
@@ -417,6 +459,7 @@ export class DCCSession implements DCCSessionEntry {
     this.versionForBanner = version;
     this.botNickForBanner = botNick;
 
+    this.attachLineLengthGuard();
     this.rl = createReadline({ input: this.socket, crlfDelay: Infinity });
     const rl = this.rl;
 
@@ -425,6 +468,7 @@ export class DCCSession implements DCCSessionEntry {
     this.resetIdle();
 
     rl.on('line', (line: string) => {
+      this.pendingLineBytes = 0;
       this.onLine(line);
     });
 
@@ -601,7 +645,7 @@ export class DCCSession implements DCCSessionEntry {
       return;
     }
 
-    if (trimmed === '.who') {
+    if (trimmed === '.who' || trimmed === '.online') {
       const list = this.manager.getSessionList();
       if (list.length === 0) {
         this.writeLine('No users on the console.');
@@ -779,6 +823,11 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   private logger: LoggerLike | null;
   private getStatsFn: (() => BannerStats) | null;
   private db: BotDatabase | null;
+  private eventBus: BotEventBus | null;
+  // Store as `unknown` functions — the typed `BotEvents` signatures collide
+  // with `BotEventBus.off`'s constrained generic, so we widen at storage
+  // and keep the narrowing at listener-construction time in attach().
+  private eventBusListeners: Array<{ event: string; fn: (...args: never[]) => void }> = [];
 
   private readonly sessions: Map<string, DCCSessionEntry>;
   private readonly portAllocator: PortAllocator;
@@ -811,6 +860,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     this.authTracker = deps.authTracker ?? new DCCAuthTracker();
     this.consoleFlagStore = deps.consoleFlagStore ?? createInMemoryConsoleFlagStore();
     this.db = deps.db ?? null;
+    this.eventBus = deps.eventBus ?? null;
   }
 
   /** Read-only access to the console flag store — used by `.console <handle>`. */
@@ -901,6 +951,31 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     this.logSink = (record) => this.fanoutLogToSessions(record);
     LoggerClass.addSink(this.logSink);
 
+    // Close live sessions on password rotation or deletion. Without this,
+    // a compromised session that was authenticated under the old password
+    // keeps running until idle timeout — rotating the password has no
+    // effect on whatever the attacker is already doing.
+    if (this.eventBus) {
+      const onPasswordChanged = (handle: string): void => {
+        this.closeSessionsForHandle(handle, 'password rotated');
+      };
+      const onUserRemoved = (handle: string): void => {
+        this.closeSessionsForHandle(handle, 'user removed');
+      };
+      this.eventBus.on('user:passwordChanged', onPasswordChanged);
+      this.eventBus.on('user:removed', onUserRemoved);
+      this.eventBusListeners.push(
+        {
+          event: 'user:passwordChanged',
+          fn: onPasswordChanged as unknown as (...args: never[]) => void,
+        },
+        {
+          event: 'user:removed',
+          fn: onUserRemoved as unknown as (...args: never[]) => void,
+        },
+      );
+    }
+
     this.logger?.info(
       `DCC CHAT listening (${this.config.ip}, ports ${this.config.port_range[0]}–${this.config.port_range[1]})`,
     );
@@ -938,6 +1013,19 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
       this.client.removeListener(event, fn);
     }
     this.ircListeners = [];
+    if (this.eventBus) {
+      for (const { event, fn } of this.eventBusListeners) {
+        // Cast is safe: we only ever push listeners we registered on this
+        // bus via `.on()` with the same pair, and `.off()` wants the
+        // matching narrowed signature back.
+        (
+          this.eventBus as unknown as {
+            off: (e: string, f: (...args: never[]) => void) => void;
+          }
+        ).off(event, fn);
+      }
+    }
+    this.eventBusListeners = [];
     this.closeAll(reason);
     // Close any pending (not-yet-accepted) servers
     /* v8 ignore start -- pending DCC servers require real TCP; this.pending is always empty in tests */
@@ -1324,5 +1412,27 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
       session.close(reason);
     }
     this.sessions.clear();
+  }
+
+  /**
+   * Close every live session whose authenticated handle matches `handle`
+   * (case-insensitive). Triggered by `user:passwordChanged` and
+   * `user:removed` so a compromised session that authenticated under the
+   * old credentials cannot survive a rotation.
+   */
+  private closeSessionsForHandle(handle: string, reason: string): void {
+    const lowerHandle = handle.toLowerCase();
+    const toClose: Array<[string, DCCSessionEntry]> = [];
+    for (const [key, session] of this.sessions.entries()) {
+      if (session.handle.toLowerCase() === lowerHandle) {
+        toClose.push([key, session]);
+      }
+    }
+    if (toClose.length === 0) return;
+    this.logger?.warn(`Closing ${toClose.length} DCC session(s) for ${handle}: ${reason}`);
+    for (const [key, session] of toClose) {
+      session.close(`Session ended: ${reason}.`);
+      this.sessions.delete(key);
+    }
   }
 }

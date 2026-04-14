@@ -368,7 +368,8 @@ When a DCC user runs `.relay <botname>`, their input is proxied to the remote bo
 
 ### Network considerations
 
-- Bot link connections are **unencrypted TCP**. For WAN deployments, use a VPN or SSH tunnel.
+- **Bot link connections are unencrypted TCP and the HELLO password hash is replay-able.** The hub auth is a single fixed-salt `scrypt` hash that a passive observer on the link path can capture and replay from any non-banned IP. A future release will move to a challenge-response HMAC handshake; until then, you **must not run the link over a network you do not control**.
+- **Mandatory tunnel.** For any WAN deployment, bot-link traffic must travel inside a WireGuard / OpenVPN / SSH tunnel. Running bot-link over the public internet with no tunnel is an unsupported configuration regardless of password strength.
 - The `listen.host` config should be set to a private IP or `127.0.0.1` when bots are co-located. Do not expose the link port to the public internet without transport encryption.
 
 ## 12. Security checklist for code review

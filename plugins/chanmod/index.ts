@@ -232,7 +232,7 @@ export function init(api: PluginAPI): void {
   );
 
   // Sticky ban enforcement doesn't return a teardown (binds are auto-cleaned)
-  setupStickyBans(api);
+  setupStickyBans(api, state);
 
   // Periodic cleanup of expired intentionalModeChanges and enforcementCooldown entries
   api.bind('time', '-', '60', () => {

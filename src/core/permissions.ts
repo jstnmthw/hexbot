@@ -1,6 +1,6 @@
 // HexBot — Permissions system
 // Hostmask-based identity, n/m/o/v flags with per-channel overrides.
-import type { BotDatabase } from '../database';
+import type { BotDatabase, ModLogSource } from '../database';
 import type { BotEventBus } from '../event-bus';
 import type { LoggerLike } from '../logger';
 import type { HandlerContext, UserRecord } from '../types';
@@ -41,6 +41,24 @@ export function hasOwnerOrMaster(record: { global: string }): boolean {
  * matching alone is not strong enough.
  */
 const ACCOUNT_PATTERN_PREFIX = '$a:';
+
+/**
+ * Rank a wildcard pattern by how specific it is. Higher score = more
+ * specific = preferred when multiple records match the same identity.
+ *
+ * Heuristic: count literal (non-wildcard) characters and subtract a small
+ * penalty per wildcard. This keeps `alice!*@host.isp.net` ahead of
+ * `*!*@host.isp.net` and keeps a literal hostmask ahead of either.
+ */
+function patternSpecificity(pattern: string): number {
+  let literal = 0;
+  let wildcards = 0;
+  for (const ch of pattern) {
+    if (ch === '*' || ch === '?') wildcards++;
+    else literal++;
+  }
+  return literal * 10 - wildcards;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -90,7 +108,13 @@ export class Permissions {
   // -------------------------------------------------------------------------
 
   /** Add a new user with a handle, initial hostmask, and global flags. */
-  addUser(handle: string, hostmask: string, globalFlags: string, source?: string): void {
+  addUser(
+    handle: string,
+    hostmask: string,
+    globalFlags: string,
+    source?: string,
+    transport?: ModLogSource,
+  ): void {
     const lower = handle.toLowerCase();
     if (this.users.has(lower)) {
       throw new Error(`User "${handle}" already exists`);
@@ -109,7 +133,14 @@ export class Permissions {
     this.persist();
 
     const by = source ?? 'unknown';
-    this.recordModAction('adduser', null, handle, by, `hostmask=${hostmask} flags=${flags}`);
+    this.recordModAction(
+      'adduser',
+      null,
+      handle,
+      by,
+      `hostmask=${hostmask} flags=${flags}`,
+      transport,
+    );
     this.eventBus?.emit('user:added', handle);
   }
 
@@ -140,7 +171,7 @@ export class Permissions {
   }
 
   /** Remove a user by handle. */
-  removeUser(handle: string, source?: string): void {
+  removeUser(handle: string, source?: string, transport?: ModLogSource): void {
     const lower = handle.toLowerCase();
     if (!this.users.has(lower)) {
       throw new Error(`User "${handle}" not found`);
@@ -149,7 +180,7 @@ export class Permissions {
     this.persist();
 
     const by = source ?? 'unknown';
-    this.recordModAction('deluser', null, handle, by, null);
+    this.recordModAction('deluser', null, handle, by, null, transport);
     this.eventBus?.emit('user:removed', handle);
   }
 
@@ -193,7 +224,7 @@ export class Permissions {
   }
 
   /** Set global flags for a user (replaces existing). */
-  setGlobalFlags(handle: string, flags: string, source?: string): void {
+  setGlobalFlags(handle: string, flags: string, source?: string, transport?: ModLogSource): void {
     const record = this.getUser(handle);
     if (!record) {
       throw new Error(`User "${handle}" not found`);
@@ -203,7 +234,7 @@ export class Permissions {
     this.persist();
 
     const by = source ?? 'unknown';
-    this.recordModAction('flags', null, handle, by, `global=${record.global}`);
+    this.recordModAction('flags', null, handle, by, `global=${record.global}`, transport);
     this.eventBus?.emit('user:flagsChanged', handle, record.global, record.channels);
   }
 
@@ -213,7 +244,7 @@ export class Permissions {
    *
    * Persists and emits `user:passwordChanged` (handle only — never the hash).
    */
-  setPasswordHash(handle: string, hash: string, source?: string): void {
+  setPasswordHash(handle: string, hash: string, source?: string, transport?: ModLogSource): void {
     const record = this.getUser(handle);
     if (!record) {
       throw new Error(`User "${handle}" not found`);
@@ -222,7 +253,7 @@ export class Permissions {
     this.persist();
 
     const by = source ?? 'unknown';
-    this.recordModAction('chpass', null, handle, by, null);
+    this.recordModAction('chpass', null, handle, by, null, transport);
     this.eventBus?.emit('user:passwordChanged', handle);
   }
 
@@ -247,7 +278,13 @@ export class Permissions {
   }
 
   /** Set per-channel flags for a user (replaces existing for that channel). */
-  setChannelFlags(handle: string, channel: string, flags: string, source?: string): void {
+  setChannelFlags(
+    handle: string,
+    channel: string,
+    flags: string,
+    source?: string,
+    transport?: ModLogSource,
+  ): void {
     const record = this.getUser(handle);
     if (!record) {
       throw new Error(`User "${handle}" not found`);
@@ -263,7 +300,7 @@ export class Permissions {
     this.persist();
 
     const by = source ?? 'unknown';
-    this.recordModAction('flags', channel, handle, by, `channel=${normalized}`);
+    this.recordModAction('flags', channel, handle, by, `channel=${normalized}`, transport);
     this.eventBus?.emit('user:flagsChanged', handle, record.global, record.channels);
   }
 
@@ -296,21 +333,37 @@ export class Permissions {
    * answer for events without an authoritative account source.
    */
   findByHostmask(fullHostmask: string, account?: string | null): UserRecord | null {
+    // Score every matching pattern across every record and return the single
+    // most specific winner. First-match-wins would let two users with
+    // overlapping patterns race on Map iteration order, so an unprivileged
+    // record whose pattern is `*!*@host.isp.net` could eclipse an owner
+    // record whose pattern is `alice!*@host.isp.net` if it happened to be
+    // stored first. SECURITY.md §3.3 forbids that outcome.
+    let best: { record: UserRecord; score: number } | null = null;
     for (const record of this.users.values()) {
       for (const pattern of record.hostmasks) {
+        let matched = false;
+        let score = 0;
         if (pattern.startsWith(ACCOUNT_PATTERN_PREFIX)) {
           if (account == null) continue;
           const accountPattern = pattern.substring(ACCOUNT_PATTERN_PREFIX.length);
           if (accountPattern.length === 0) continue;
           if (wildcardMatch(accountPattern, account, true, this.casemapping)) {
-            return record;
+            matched = true;
+            // $a: patterns are authoritative from services — prefer them over
+            // hostmask matches by scoring them at a higher tier.
+            score = 1_000_000 + patternSpecificity(accountPattern);
           }
         } else if (wildcardMatch(pattern, fullHostmask, true, this.casemapping)) {
-          return record;
+          matched = true;
+          score = patternSpecificity(pattern);
+        }
+        if (matched && (best === null || score > best.score)) {
+          best = { record, score };
         }
       }
     }
-    return null;
+    return best?.record ?? null;
   }
 
   // -------------------------------------------------------------------------
@@ -516,10 +569,21 @@ export class Permissions {
     target: string,
     by: string,
     detail: string | null,
+    transport?: ModLogSource,
   ): void {
     tryLogModAction(
       this.db,
-      { action, source: 'system', by, channel, target, reason: detail },
+      {
+        action,
+        // When the caller threads the transport through we preserve it —
+        // otherwise fall back to the historical 'system' label so tests
+        // and internal seeders (e.g. `ensureOwner`) still produce a row.
+        source: transport ?? 'system',
+        by,
+        channel,
+        target,
+        reason: detail,
+      },
       this.logger,
     );
   }

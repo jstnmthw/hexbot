@@ -2,7 +2,7 @@
 // Discovers, loads, unloads, and hot-reloads plugins. Each plugin gets a scoped API.
 // The shape of that API (and the per-plugin wrappers) lives in plugin-api-factory.ts.
 import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { resolveSecrets } from './config';
@@ -191,7 +191,19 @@ export class PluginLoader {
 
     // Build the full set of plugin names: configured plugins first, then
     // auto-discovered plugins from the plugins directory that aren't listed.
-    const pluginNames = new Set(Object.keys(pluginsConfig));
+    // Keys from `plugins.json` pass through `join(pluginDir, name, 'index.ts')`
+    // below, so any entry whose name fails SAFE_NAME_RE is a path-traversal
+    // attempt and is dropped with a loud warning instead of being imported.
+    const pluginNames = new Set<string>();
+    for (const rawName of Object.keys(pluginsConfig)) {
+      if (!SAFE_NAME_RE.test(rawName)) {
+        this.logger?.warn(
+          `Ignoring plugin config entry "${rawName}" — invalid name (path-traversal guard)`,
+        );
+        continue;
+      }
+      pluginNames.add(rawName);
+    }
     try {
       for (const entry of readdirSync(this.pluginDir, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
@@ -233,18 +245,47 @@ export class PluginLoader {
   async load(pluginPath: string, pluginsConfig?: PluginsConfig): Promise<LoadResult> {
     const absPath = resolve(pluginPath);
 
-    if (!existsSync(absPath)) {
+    // Path traversal guard — reject any plugin path that resolves outside
+    // the configured plugin directory before we call `import()` on it.
+    // `resolve(this.pluginDir) + sep` is the canonical form we compare
+    // against; without this, a `plugins.json` entry like `../../../etc`
+    // would execute whatever module sat at the resolved path.
+    const absPluginDir = resolve(this.pluginDir) + sep;
+    if (!absPath.startsWith(absPluginDir)) {
       const name = this.inferPluginName(absPath);
-      return { name, status: 'error', error: `Plugin file not found: ${absPath}` };
+      return {
+        name,
+        status: 'error',
+        error: `Plugin path escapes plugin directory: ${pluginPath}`,
+      };
+    }
+
+    // Validate the directory name against SAFE_NAME_RE before import. The
+    // inferred name is the immediate parent directory of `index.ts`; it
+    // must match the same character set we enforce on `mod.name`.
+    const inferredName = this.inferPluginName(absPath);
+    if (!SAFE_NAME_RE.test(inferredName)) {
+      return {
+        name: inferredName,
+        status: 'error',
+        error: `Plugin directory name "${inferredName}" contains invalid characters`,
+      };
+    }
+
+    if (!existsSync(absPath)) {
+      return { name: inferredName, status: 'error', error: `Plugin file not found: ${absPath}` };
     }
 
     let mod: Record<string, unknown>;
     try {
       mod = await this.importWithCacheBust(absPath);
     } catch (err) {
-      const name = this.inferPluginName(absPath);
       const message = err instanceof Error ? err.message : String(err);
-      return { name, status: 'error', error: `Failed to import plugin: ${message}` };
+      return {
+        name: inferredName,
+        status: 'error',
+        error: `Failed to import plugin: ${message}`,
+      };
     }
 
     // Validate required exports

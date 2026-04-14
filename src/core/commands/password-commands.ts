@@ -60,12 +60,15 @@ export function registerPasswordCommands(deps: PasswordCommandDeps): void {
       category: 'permissions',
     },
     async (args, ctx) => {
-      // Transport check — passwords must never travel over IRC PRIVMSG.
-      if (ctx.source === 'irc') {
-        ctx.reply(
-          'chpass: passwords must not be sent over IRC. Use the bot console (DCC) or REPL.',
-        );
-        failure(ctx, 'rejected: irc transport');
+      // Transport allowlist — passwords may travel over REPL (local stdin) or
+      // DCC CHAT (TLS-equivalent per-user console) only. IRC PRIVMSG is the
+      // obvious plaintext leak; `botlink` would pipe the password over the
+      // hub/leaf TCP link (plaintext) and is also refused. Any future
+      // transport added to `CommandContext['source']` must be explicitly
+      // allowlisted here rather than implicitly permitted.
+      if (ctx.source !== 'repl' && ctx.source !== 'dcc') {
+        ctx.reply('chpass: passwords must be set from the bot console (DCC) or REPL only.');
+        failure(ctx, `rejected: ${ctx.source} transport`);
         return;
       }
 
@@ -139,7 +142,7 @@ export function registerPasswordCommands(deps: PasswordCommandDeps): void {
       }
 
       const source = ctx.source === 'repl' ? 'REPL' : ctx.nick;
-      permissions.setPasswordHash(targetHandle, hash, source);
+      permissions.setPasswordHash(targetHandle, hash, source, ctx.source);
 
       if (isSelfRotation) {
         ctx.reply(`chpass: your password has been updated.`);

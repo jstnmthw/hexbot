@@ -27,13 +27,18 @@ export function stripHtmlTags(input: string): string {
   return curr;
 }
 
-export function formatItem(feed: FeedConfig, item: FeedItem, maxTitleLength: number): string {
-  const feedName = feed.name ?? feed.id;
-  let title = stripHtmlTags(item.title ?? '').trim();
+export function formatItem(
+  api: PluginAPI,
+  feed: FeedConfig,
+  item: FeedItem,
+  maxTitleLength: number,
+): string {
+  const feedName = api.stripFormatting(feed.name ?? feed.id);
+  let title = api.stripFormatting(stripHtmlTags(item.title ?? '').trim());
   if (title.length > maxTitleLength) {
     title = title.substring(0, maxTitleLength) + '\u2026';
   }
-  const link = item.link ?? '';
+  const link = api.stripFormatting(item.link ?? '');
   return `\x02[${feedName}]\x02 ${title}${link ? ` \u2014 ${link}` : ''}`;
 }
 
@@ -53,7 +58,7 @@ export async function announceItems(
   }
 
   for (let i = 0; i < items.length; i++) {
-    const line = formatItem(feed, items[i], maxTitleLength);
+    const line = formatItem(api, feed, items[i], maxTitleLength);
     for (const channel of feed.channels) {
       api.say(channel, line);
     }

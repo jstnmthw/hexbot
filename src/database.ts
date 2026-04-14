@@ -5,6 +5,20 @@ import type { Database as DatabaseType, Statement } from 'better-sqlite3';
 
 import type { BotEventBus } from './event-bus';
 import type { LoggerLike } from './logger';
+import { sanitize } from './utils/sanitize';
+import { stripFormatting } from './utils/strip-formatting';
+
+/**
+ * Strip IRC control codes and `\r\n\0` from a display-bound mod_log field
+ * before persisting it. SQL itself is parameterized so injection is
+ * impossible, but an operator console (DCC, REPL, tail plugin) will
+ * render whatever bytes are in the row — a crafted nick that embeds
+ * `\x03` or CRLF can still poison the viewer if we don't scrub on write.
+ */
+function scrubModLogField(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  return stripFormatting(sanitize(value));
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -288,16 +302,25 @@ export class BotDatabase {
       throw new Error(`logModAction: invalid outcome "${outcome}"`);
     }
 
+    // Scrub every display-bound text field on write. SQL injection is not
+    // possible (parameters are bound), but a crafted nick that embeds
+    // `\x03` / `\r\n` / IRC mirc colors can still poison an audit
+    // viewer at read time if we don't strip here.
+    const scrubbedBy = scrubModLogField(by);
+    const scrubbedPlugin = scrubModLogField(plugin);
+    const scrubbedChannel = scrubModLogField(channel);
+    const scrubbedTarget = scrubModLogField(target);
+    const scrubbedReason = scrubModLogField(reason);
     const metadataJson = metadata == null ? null : JSON.stringify(metadata);
     const result = this.stmtLogMod.run(
       action,
       source,
-      by,
-      plugin,
-      channel,
-      target,
+      scrubbedBy,
+      scrubbedPlugin,
+      scrubbedChannel,
+      scrubbedTarget,
       outcome,
-      reason,
+      scrubbedReason,
       metadataJson,
     );
 
@@ -312,12 +335,12 @@ export class BotDatabase {
         timestamp: Math.floor(Date.now() / 1000),
         action,
         source,
-        by,
-        plugin,
-        channel,
-        target,
+        by: scrubbedBy,
+        plugin: scrubbedPlugin,
+        channel: scrubbedChannel,
+        target: scrubbedTarget,
         outcome,
-        reason,
+        reason: scrubbedReason,
         metadata,
       });
     }

@@ -144,7 +144,12 @@ export function init(api: PluginAPI): void {
         return;
       }
 
-      const formatted = template.replace('$text', () => text);
+      // Strip IRC control codes from user-supplied text before
+      // interpolating into the theme template. Although irc-bridge already
+      // scrubs `\r\n\0`, mIRC color/bold codes pass through and would let a
+      // `+o` caller sneak color into a topic template that didn't include
+      // any. Strip them uniformly here.
+      const formatted = template.replace('$text', () => api.stripFormatting(text));
       api.notice(ctx.nick, formatted);
       return;
     }
@@ -163,7 +168,12 @@ export function init(api: PluginAPI): void {
       return;
     }
 
-    const formatted = template.replace('$text', () => text);
+    // Strip IRC control codes from user-supplied text before
+    // interpolating into the theme template. Although irc-bridge already
+    // scrubs `\r\n\0`, mIRC color/bold codes pass through and would let a
+    // `+o` caller sneak color into a topic template that didn't include
+    // any. Strip them uniformly here.
+    const formatted = template.replace('$text', () => api.stripFormatting(text));
 
     // Warn if the formatted topic is very long (typical IRC limit ~390 chars)
     if (formatted.length > 390) {

@@ -491,8 +491,14 @@ describe('handleProtectFrame', () => {
       expect(bot.client.messages).toHaveLength(0);
     });
 
-    it('PROTECT_INVITE succeeds with ops', () => {
+    it('PROTECT_INVITE succeeds with ops for a recognized user', () => {
       setupChannel(bot, '#test', true);
+      // Recognition check: the invite target must be present in the
+      // local permissions DB AND visible in channel-state under a
+      // matching hostmask. Without this, a compromised leaf could
+      // invite arbitrary nicks into an invite-only channel.
+      bot.permissions.addUser('friend', 'friend!*@*', 'o', 'test');
+      addUserToChannel(bot, '#test', 'friend');
 
       const acks: LinkFrame[] = [];
       const deps: ProtectHandlerDeps = {
@@ -521,6 +527,72 @@ describe('handleProtectFrame', () => {
         (m) => m.type === 'raw' && m.message?.includes('INVITE'),
       );
       expect(invites.length).toBeGreaterThan(0);
+    });
+
+    it('PROTECT_INVITE refuses unrecognized nicks', () => {
+      setupChannel(bot, '#test', true);
+
+      const acks: LinkFrame[] = [];
+      const deps: ProtectHandlerDeps = {
+        channelState: bot.channelState,
+        permissions: bot.permissions,
+        ircCommands: bot.ircCommands,
+        botNick: bot.client.user.nick,
+        sendAck: (ack) => acks.push(ack),
+      };
+
+      const result = handleProtectFrame(
+        {
+          type: 'PROTECT_INVITE',
+          channel: '#test',
+          nick: 'imposter',
+          requestedBy: 'leaf1',
+          ref: 'inv-3',
+        },
+        deps,
+      );
+
+      expect(result).toBeDefined();
+      expect(result!.success).toBe(false);
+      expect(String(result!.message ?? '')).toContain('not recognized');
+
+      const invites = bot.client.messages.filter(
+        (m) => m.type === 'raw' && m.message?.includes('INVITE'),
+      );
+      expect(invites).toHaveLength(0);
+    });
+
+    it('PROTECT_UNBAN refuses wildcard-only masks', () => {
+      setupChannel(bot, '#test', true);
+
+      const acks: LinkFrame[] = [];
+      const deps: ProtectHandlerDeps = {
+        channelState: bot.channelState,
+        permissions: bot.permissions,
+        ircCommands: bot.ircCommands,
+        botNick: bot.client.user.nick,
+        sendAck: (ack) => acks.push(ack),
+      };
+
+      // Empty string is rejected earlier by the generic `!nick` guard at
+      // the top of handleProtectFrame, so this test only covers masks that
+      // reach the UNBAN branch but should still be refused.
+      for (const mask of ['*!*@*', '*', '**']) {
+        bot.client.clearMessages();
+        const result = handleProtectFrame(
+          {
+            type: 'PROTECT_UNBAN',
+            channel: '#test',
+            nick: mask,
+            requestedBy: 'leaf1',
+            ref: `unban-${mask || 'empty'}`,
+          },
+          deps,
+        );
+        expect(result).toBeDefined();
+        expect(result!.success).toBe(false);
+        expect(String(result!.message ?? '')).toContain('too broad');
+      }
     });
 
     it('PROTECT_KICK includes custom reason', () => {

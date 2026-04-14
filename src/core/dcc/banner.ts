@@ -127,7 +127,7 @@ export function renderBanner(opts: BannerRenderOptions, writeLine: (line: string
     `  ${lbl('Session')}${B}${opts.handle}${B} (${opts.nick}!${opts.ident}@${opts.hostname})`,
   );
   writeLine(`  ${lbl('Flags')}${flagDisplay}`);
-  writeLine(`  ${lbl('Console')}${consoleDisplay}`);
+  writeLine(`  ${lbl('ConFlags')}${consoleDisplay}`);
   if (opts.stats) {
     const chanList = opts.stats.channels.length > 0 ? opts.stats.channels.join(', ') : grey('none');
     writeLine(
@@ -145,7 +145,7 @@ export function renderBanner(opts: BannerRenderOptions, writeLine: (line: string
   writeLine('');
   writeLine(`Use ${B}.help${B} for basic help.`);
   writeLine(`Use ${B}.help${B} <command> for help on a specific command.`);
-  writeLine(`Use ${B}.console${B} to see who is on the console.`);
+  writeLine(`Use ${B}.online${B} to see who is on the console.`);
   writeLine('');
   writeLine(`Commands start with '.' — everything else is console chat.`);
   writeLine('');

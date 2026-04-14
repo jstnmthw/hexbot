@@ -298,7 +298,19 @@ export class MemoManager {
           return;
         }
         const nick = rest[0];
+        // RFC-1459 nick shape plus a length cap. Without this, a crafted
+        // `nick` argument could carry control characters into the
+        // MemoServ command line or exploit the services-protocol parser
+        // on the destination network.
+        if (!/^[A-Za-z_[\]\\`^{|}][A-Za-z0-9_[\]\\`^{|}-]{0,31}$/.test(nick)) {
+          ctx.reply(`Invalid nick: "${nick}"`);
+          return;
+        }
         const message = trimmed.substring(trimmed.indexOf(nick) + nick.length).trim();
+        if (message.length === 0) {
+          ctx.reply('Usage: .memo send <nick> <message>');
+          return;
+        }
         this.client.say(this.config.memoserv_nick, `SEND ${nick} ${message}`);
         break;
       }

@@ -103,11 +103,27 @@ export function handleProtectFrame(
     }
     case 'PROTECT_UNBAN': {
       if (!hasOps) return undefined;
-      deps.ircCommands.mode(channel, '-b', nick);
+      // Refuse wildcard-heavy masks — `*!*@*`, empty string, anything that
+      // contains no literal characters — because an attacker who compromises
+      // one leaf could otherwise wipe the whole channel ban list by sending
+      // a single PROTECT_UNBAN frame. A specific mask (`nick!ident@host` or
+      // similar) still works.
+      const mask = String(nick).trim();
+      if (mask.length === 0 || /^[*!@? ]*$/.test(mask) || mask === '*!*@*') {
+        return sendAndReturn(false, `UNBAN mask "${mask}" too broad — refusing`);
+      }
+      deps.ircCommands.mode(channel, '-b', mask);
       return sendAndReturn(true);
     }
     case 'PROTECT_INVITE': {
       if (!hasOps) return undefined;
+      // Only invite nicks the local permissions DB recognises by FULL
+      // hostmask (or account pattern). A nick-only path would let a
+      // compromised leaf invite arbitrary nicks — including attackers —
+      // into an invite-only channel.
+      if (!isRecognized()) {
+        return sendAndReturn(false, `Nick "${nick}" not recognized by hostmask/account`);
+      }
       deps.ircCommands.invite(channel, nick);
       return sendAndReturn(true);
     }

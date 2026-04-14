@@ -309,7 +309,7 @@ export interface PluginPermissions {
    * Look up a user by `nick!ident@host`. Returns a {@link PublicUserRecord}
    * with `password_hash` stripped — plugins never see password material.
    */
-  findByHostmask(hostmask: string): PublicUserRecord | null;
+  findByHostmask(hostmask: string, account?: string | null): PublicUserRecord | null;
   checkFlags(requiredFlags: string, ctx: HandlerContext): boolean;
 }
 

@@ -139,6 +139,18 @@ export function createPluginApi(
   const wrappedHandlers = new WeakMap<BindHandler, Map<string, BindHandler>>();
 
   // Build plugin-facing bot config (password omitted; filesystem paths omitted).
+  //
+  // `chanmod` carries `nick_recovery_password` — the NickServ GHOST password
+  // — so we must NEVER hand a shallow copy of the whole object to every
+  // plugin. Only the chanmod plugin itself needs the live password; every
+  // other plugin gets the config with the password field stripped.
+  const buildPluginChanmodView = (): PluginBotConfig['chanmod'] => {
+    if (!botConfig.chanmod) return undefined;
+    if (pluginId === 'chanmod') return { ...botConfig.chanmod };
+    const { nick_recovery_password: _ignored, ...rest } = botConfig.chanmod;
+    return { ...rest };
+  };
+
   const pluginBotConfig: PluginBotConfig = {
     irc: {
       ...botConfig.irc,
@@ -155,7 +167,7 @@ export function createPluginApi(
     },
     // database and pluginDir intentionally omitted — plugins don't need filesystem paths
     logging: { ...botConfig.logging },
-    chanmod: botConfig.chanmod ? { ...botConfig.chanmod } : undefined,
+    chanmod: buildPluginChanmodView(),
   };
 
   const api: PluginAPI = {
@@ -312,8 +324,8 @@ function createPluginDbApi(db: BotDatabase | null, pluginId: string): PluginDB {
 /** Exported for unit tests — verifies `password_hash` is stripped from the plugin view. */
 export function createPluginPermissionsApi(permissions: Permissions): PluginPermissions {
   return Object.freeze({
-    findByHostmask(hostmask: string) {
-      const record = permissions.findByHostmask(hostmask);
+    findByHostmask(hostmask: string, account?: string | null) {
+      const record = permissions.findByHostmask(hostmask, account);
       if (!record) return null;
       // Strip password_hash before returning — plugins must never see secret material.
       // Shallow clone is enough because password_hash is a string.

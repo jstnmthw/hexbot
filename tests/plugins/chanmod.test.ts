@@ -3079,6 +3079,168 @@ describe('chanmod plugin — NickServ auto-op verification failure', () => {
 });
 
 // ---------------------------------------------------------------------------
+// IRCv3 account-tag fast path for auto-op
+// ---------------------------------------------------------------------------
+// Regression coverage for the Phase 1 audit finding — the join bind uses flag
+// `'-'` which bypasses the dispatcher's VerificationProvider gate, so the
+// only thing standing between a compromised nick and an ACC race is the
+// manual gate inside grantMode(). These tests lock in that gate for every
+// mode path and prove the extended-join fast path skips NickServ.
+describe('chanmod plugin — account-tag auto-op fast path', () => {
+  it('uses extended-join account instead of NickServ when account present on JOIN', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      freshBot.pluginLoader.getBotConfig().identity.require_acc_for = ['+o'];
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: { enabled: true, config: { notify_on_fail: true } },
+      });
+      giveBotOps(freshBot, '#test');
+      freshBot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
+      vi.spyOn(freshBot.services, 'isAvailable').mockReturnValue(true);
+      const verifyUser = vi
+        .spyOn(freshBot.services, 'verifyUser')
+        .mockResolvedValue({ verified: true, account: 'alice' });
+      freshBot.client.clearMessages();
+      freshBot.client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'alice.host',
+        channel: '#test',
+        account: 'alice',
+      });
+      await tick();
+      expect(verifyUser).not.toHaveBeenCalled();
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'mode' && m.args?.includes('Alice')),
+      ).toBeDefined();
+    } finally {
+      vi.restoreAllMocks();
+      freshBot.cleanup();
+    }
+  });
+
+  it('refuses auto-op when extended-join says the nick is not identified', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      freshBot.pluginLoader.getBotConfig().identity.require_acc_for = ['+o'];
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: { enabled: true, config: { notify_on_fail: true } },
+      });
+      giveBotOps(freshBot, '#test');
+      freshBot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
+      vi.spyOn(freshBot.services, 'isAvailable').mockReturnValue(true);
+      const verifyUser = vi
+        .spyOn(freshBot.services, 'verifyUser')
+        .mockResolvedValue({ verified: true, account: 'alice' });
+      freshBot.client.clearMessages();
+      freshBot.client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'alice.host',
+        channel: '#test',
+        account: '*',
+      });
+      await tick();
+      expect(verifyUser).not.toHaveBeenCalled();
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'mode' && m.args?.includes('Alice')),
+      ).toBeUndefined();
+    } finally {
+      vi.restoreAllMocks();
+      freshBot.cleanup();
+    }
+  });
+
+  it('falls back to NickServ verifyUser when no account tag is attached', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      freshBot.pluginLoader.getBotConfig().identity.require_acc_for = ['+o'];
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: { enabled: true, config: { notify_on_fail: true } },
+      });
+      giveBotOps(freshBot, '#test');
+      freshBot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
+      vi.spyOn(freshBot.services, 'isAvailable').mockReturnValue(true);
+      const verifyUser = vi
+        .spyOn(freshBot.services, 'verifyUser')
+        .mockResolvedValue({ verified: true, account: 'alice' });
+      freshBot.client.clearMessages();
+      simulateJoin(freshBot, 'Alice', 'alice', 'alice.host', '#test');
+      await tick();
+      expect(verifyUser).toHaveBeenCalledWith('Alice');
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'mode' && m.args?.includes('Alice')),
+      ).toBeDefined();
+    } finally {
+      vi.restoreAllMocks();
+      freshBot.cleanup();
+    }
+  });
+
+  it('gates +h auto-halfop via verifyUser when require_acc_for includes +h', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      freshBot.pluginLoader.getBotConfig().identity.require_acc_for = ['+h'];
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          // User-permission flag 'v' is mapped to halfop here (halfop_flags
+          // is a user-flag list, and 'h' is not a valid permission flag per
+          // VALID_FLAGS = 'nmovd'). The test proves verifyUser still gates
+          // the +h grant — independent of which user flag drove it.
+          config: { op_flags: [], halfop_flags: ['v'], voice_flags: [], notify_on_fail: true },
+        },
+      });
+      giveBotOps(freshBot, '#test');
+      freshBot.permissions.addUser('bob', '*!bob@bob.host', 'v', 'test');
+      vi.spyOn(freshBot.services, 'isAvailable').mockReturnValue(true);
+      const verifyUser = vi
+        .spyOn(freshBot.services, 'verifyUser')
+        .mockResolvedValue({ verified: false, account: null });
+      freshBot.client.clearMessages();
+      simulateJoin(freshBot, 'Bob', 'bob', 'bob.host', '#test');
+      await tick();
+      expect(verifyUser).toHaveBeenCalledWith('Bob');
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'mode' && m.args?.includes('Bob')),
+      ).toBeUndefined();
+    } finally {
+      vi.restoreAllMocks();
+      freshBot.cleanup();
+    }
+  });
+
+  it('gates +v auto-voice via verifyUser when require_acc_for includes +v', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      freshBot.pluginLoader.getBotConfig().identity.require_acc_for = ['+v'];
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: {
+          enabled: true,
+          config: { op_flags: [], halfop_flags: [], voice_flags: ['v'], notify_on_fail: true },
+        },
+      });
+      giveBotOps(freshBot, '#test');
+      freshBot.permissions.addUser('carol', '*!carol@carol.host', 'v', 'test');
+      vi.spyOn(freshBot.services, 'isAvailable').mockReturnValue(true);
+      const verifyUser = vi
+        .spyOn(freshBot.services, 'verifyUser')
+        .mockResolvedValue({ verified: false, account: null });
+      freshBot.client.clearMessages();
+      simulateJoin(freshBot, 'Carol', 'carol', 'carol.host', '#test');
+      await tick();
+      expect(verifyUser).toHaveBeenCalledWith('Carol');
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'mode' && m.args?.includes('Carol')),
+      ).toBeUndefined();
+    } finally {
+      vi.restoreAllMocks();
+      freshBot.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Ban auto-lift: startup timer and time bind (bans.ts lines 65-68, 73)
 // ---------------------------------------------------------------------------
 describe('chanmod plugin — ban auto-lift timers', () => {

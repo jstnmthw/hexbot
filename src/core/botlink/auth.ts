@@ -5,6 +5,8 @@
 // pending-handshake counting, manual CIDR bans, and the persisted link-ban
 // store. Extracted from BotLinkHub so the escalation math and ban-state
 // management can be unit-tested without standing up a full hub.
+import { timingSafeEqual } from 'node:crypto';
+
 import type { BotDatabase } from '../../database';
 import type { BotEventBus } from '../../event-bus';
 import type { LoggerLike } from '../../logger';
@@ -236,10 +238,17 @@ export class BotLinkAuthManager {
   // Password verification
   // -------------------------------------------------------------------------
 
-  /** Compare the HELLO password against the expected hash. */
+  /**
+   * Compare the HELLO password against the expected hash. Length check
+   * first — `timingSafeEqual` throws on mismatched buffer lengths, and the
+   * caller is an attacker-controlled wire frame so unequal-length inputs
+   * must be handled without leaking length information via an exception.
+   */
   verifyPassword(sent: string): boolean {
-    // TODO (security audit WARNING): switch to crypto.timingSafeEqual.
-    return sent === this.expectedHash;
+    const sentBuf = Buffer.from(sent, 'utf8');
+    const expectedBuf = Buffer.from(this.expectedHash, 'utf8');
+    if (sentBuf.length !== expectedBuf.length) return false;
+    return timingSafeEqual(sentBuf, expectedBuf);
   }
 
   // -------------------------------------------------------------------------

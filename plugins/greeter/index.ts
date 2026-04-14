@@ -156,7 +156,13 @@ export function init(api: PluginAPI): void {
         ctx.replyPrivate(`You need at least +${minFlag} to set a custom greet.`);
         return;
       }
-      const sanitized = rawMsg.replace(/[\r\n]/g, '').slice(0, MAX_GREET_LEN);
+      // Strip IRC control codes on write (in addition to CRLF) so a user
+      // can't seed a greet with `\x03` / `\x02` and have it rendered back
+      // later as colored or bold spoof lines.
+      const sanitized = api
+        .stripFormatting(rawMsg)
+        .replace(/[\r\n\0]/g, '')
+        .slice(0, MAX_GREET_LEN);
       api.db.set(`greet:${record.handle}`, sanitized);
       ctx.replyPrivate('Custom greet set.');
       return;

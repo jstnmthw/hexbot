@@ -175,8 +175,8 @@ describe('.chpass', () => {
     });
   });
 
-  describe('IRC transport (rejected)', () => {
-    it('refuses to run over PRIVMSG', async () => {
+  describe('non-allowlisted transports (rejected)', () => {
+    it('refuses to run over IRC PRIVMSG', async () => {
       perms.addUser('admin', '*!a@host', 'n', 'REPL');
       const ctx = makeCtx({
         source: 'irc',
@@ -186,7 +186,21 @@ describe('.chpass', () => {
         channel: '#test',
       });
       await handler.execute('.chpass admin validpass1', ctx);
-      expect(ctx.reply.mock.calls[0][0]).toContain('must not be sent over IRC');
+      expect(ctx.reply.mock.calls[0][0]).toMatch(/DCC.*REPL/);
+      expect(perms.getPasswordHash('admin')).toBeNull();
+    });
+
+    it('refuses to run over botlink CMD frames', async () => {
+      perms.addUser('admin', '*!a@host', 'n', 'REPL');
+      const ctx = makeCtx({
+        source: 'botlink',
+        nick: 'admin',
+        ident: 'botlink',
+        hostname: 'botlink',
+        channel: null,
+      });
+      await handler.execute('.chpass admin validpass1', ctx);
+      expect(ctx.reply.mock.calls[0][0]).toMatch(/DCC.*REPL/);
       expect(perms.getPasswordHash('admin')).toBeNull();
     });
   });

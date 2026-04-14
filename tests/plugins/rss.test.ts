@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { httpLayer } from '../../plugins/rss/feed-fetcher';
 // Import the plugin module (gets mocked rss-parser)
 import { formatItem, hashItem, init, stripHtmlTags, teardown } from '../../plugins/rss/index';
 import { BotDatabase } from '../../src/database';
@@ -17,15 +18,39 @@ import type {
 // Mock rss-parser at module level (applies to direct imports)
 // ---------------------------------------------------------------------------
 
-const mockParseURL =
-  vi.fn<
-    (url: string) => Promise<{ items: Array<{ guid?: string; title?: string; link?: string }> }>
-  >();
+type ParsedFeed = { items: Array<{ guid?: string; title?: string; link?: string }> };
+
+// mockParseURL models what the test harness expects back from a feed poll.
+// The real flow now fetches XML via httpLayer.fetchFeedXml (which we stub to
+// a fake string) and hands it to parser.parseString — we stitch both ends to
+// the same mock so existing test bodies keep driving per-feed items.
+const mockParseURL = vi.fn<(url: string) => Promise<ParsedFeed>>();
 
 vi.mock('rss-parser', () => ({
   default: class MockParser {
-    parseURL = mockParseURL;
+    parseString = async (xml: string): Promise<ParsedFeed> => {
+      const url = xml.replace(/^<!--url:|-->$/g, '');
+      return mockParseURL(url);
+    };
   },
+}));
+
+// Route fetchFeedXml to a sentinel that encodes the source URL so parseString
+// can thread the mock response back. validateFeedUrl never runs in this path.
+const originalFetchFeedXml = httpLayer.fetchFeedXml;
+httpLayer.fetchFeedXml = async (url: string): Promise<string> => `<!--url:${url}-->`;
+void originalFetchFeedXml;
+
+// handleAdd also calls validateFeedUrl directly to block SSRF before saving a
+// runtime feed. Tests use placeholder domains like `https://new.com/rss`, so
+// we stub the validator to a no-op that records calls — the url-validator's
+// own behavior is covered in plugins/rss/url-validator.test.ts.
+vi.mock('../../plugins/rss/url-validator', () => ({
+  validateFeedUrl: vi.fn(async (rawUrl: string) => ({
+    url: new URL(rawUrl),
+    resolvedIps: ['203.0.113.1'],
+  })),
+  isPublicAddress: () => true,
 }));
 
 // ---------------------------------------------------------------------------
@@ -225,8 +250,20 @@ describe('rss plugin — formatItem', () => {
     name: 'Test Feed',
   };
 
+  // Minimal PluginAPI stub — formatItem only needs stripFormatting, and we
+  // want the real implementation so the IRC control code tests below
+  // exercise the actual scrub path rather than a passthrough.
+  const stripFn = (text: string): string =>
+    text
+      // eslint-disable-next-line no-control-regex -- stripping IRC formatting control bytes
+      .replace(/[\x02\x1d\x1f\x1e\x0f\x16]/g, '')
+      // eslint-disable-next-line no-control-regex -- mIRC color escape \x03
+      .replace(/\x03(?:\d{1,2}(?:,\d{1,2})?)?/g, '');
+  const fmtApi = { stripFormatting: stripFn } as unknown as PluginAPI;
+
   it('formats with bold feed name, title, and link', () => {
     const result = formatItem(
+      fmtApi,
       feed,
       { title: 'Hello World', link: 'https://example.com/1' },
       baseCfg.max_title_length,
@@ -236,6 +273,7 @@ describe('rss plugin — formatItem', () => {
 
   it('strips HTML tags from title', () => {
     const result = formatItem(
+      fmtApi,
       feed,
       { title: '<b>Bold</b> and <i>italic</i>', link: 'https://x.com' },
       baseCfg.max_title_length,
@@ -252,6 +290,7 @@ describe('rss plugin — formatItem', () => {
     // `<...>` substrings in the output.
     const nasty = '<scr<script>ipt>alert(1)</scr</script>ipt> <<scrip<scrip<script>t>t>ipt>t> hi';
     const result = formatItem(
+      fmtApi,
       feed,
       { title: nasty, link: 'https://x.com' },
       baseCfg.max_title_length,
@@ -262,9 +301,23 @@ describe('rss plugin — formatItem', () => {
     expect(result).toContain('hi');
   });
 
+  it('strips IRC formatting embedded in feed title', () => {
+    const result = formatItem(
+      fmtApi,
+      feed,
+      { title: '\x02bold\x02 \x034red\x03 \x1funder\x1f', link: 'https://x.com' },
+      baseCfg.max_title_length,
+    );
+    // stripFormatting removes \x02/\x03/\x1f — only plain text remains.
+    expect(result).toContain('bold red under');
+    expect(result).not.toContain('\x034');
+    expect(result).not.toContain('\x1f');
+  });
+
   it('truncates long titles with ellipsis', () => {
     const longTitle = 'A'.repeat(350);
     const result = formatItem(
+      fmtApi,
       feed,
       { title: longTitle, link: 'https://x.com' },
       baseCfg.max_title_length,
@@ -275,6 +328,7 @@ describe('rss plugin — formatItem', () => {
   it('uses feed id as name when name is not set', () => {
     const noNameFeed = { id: 'myid', url: 'https://x.com/rss', channels: ['#test'] };
     const result = formatItem(
+      fmtApi,
       noNameFeed,
       { title: 'Post', link: 'https://x.com' },
       baseCfg.max_title_length,
@@ -283,13 +337,13 @@ describe('rss plugin — formatItem', () => {
   });
 
   it('handles missing link gracefully', () => {
-    const result = formatItem(feed, { title: 'No Link' }, baseCfg.max_title_length);
+    const result = formatItem(fmtApi, feed, { title: 'No Link' }, baseCfg.max_title_length);
     expect(result).toBe('\x02[Test Feed]\x02 No Link');
     expect(result).not.toContain('\u2014');
   });
 
   it('handles missing title gracefully', () => {
-    const result = formatItem(feed, { link: 'https://x.com' }, baseCfg.max_title_length);
+    const result = formatItem(fmtApi, feed, { link: 'https://x.com' }, baseCfg.max_title_length);
     expect(result).toBe('\x02[Test Feed]\x02  \u2014 https://x.com');
   });
 });

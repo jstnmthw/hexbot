@@ -300,8 +300,15 @@ export class ChannelState {
       this.channels.delete(lower);
     }
 
-    // If the user is no longer in any tracked channel, remove from network accounts
-    if (nick !== this.botNick) {
+    // If the user is no longer in any tracked channel, remove from network
+    // accounts. Use an ircLower compare so case-insensitive nick handling
+    // stays consistent with the rest of the file — a raw `!==` would
+    // incorrectly treat `Bot` and `bot` as different nicks on RFC1459
+    // casemapping networks.
+    if (
+      !this.botNick ||
+      ircLower(nick, this.casemapping) !== ircLower(this.botNick, this.casemapping)
+    ) {
       const nickLower = ircLower(nick, this.casemapping);
       if (this.networkAccounts.has(nickLower)) {
         let stillPresent = false;

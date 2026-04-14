@@ -121,14 +121,24 @@ export function handleRelayFrame(
       log?.debug(`RELAY_INPUT dropped: no virtual session for handle "${handle}"`);
       return;
     }
+    // Re-verify the handle still exists on this bot before processing the
+    // frame. If the user record was removed (e.g. `.deluser` on the hub
+    // fanning out to leaves) the session should terminate instead of
+    // continuing to execute commands under a dangling identity.
+    const user = deps.permissions.getUser(handle);
+    if (!user) {
+      log?.warn(`RELAY_INPUT for deleted handle "${handle}" — ending session`);
+      sessions.delete(handle);
+      deps.sender.send({ type: 'RELAY_END', handle, reason: 'user removed' });
+      return;
+    }
     const line = String(frame.line ?? '');
     if (line.startsWith('.')) {
       log?.debug(`RELAY_INPUT "${handle}": ${line}`);
-      const user = deps.permissions.getUser(handle);
       deps.commandHandler
         .execute(line, {
           source: 'botlink',
-          nick: user?.hostmasks[0]?.split('!')[0] || handle,
+          nick: user.hostmasks[0]?.split('!')[0] || handle,
           ident: 'relay',
           hostname: 'relay',
           channel: null,

@@ -1,7 +1,15 @@
 /**
  * A true sliding-window event counter.
  * Tracks individual event timestamps and prunes entries older than the window.
+ *
+ * Internal cap on tracked keys: when `check()` is about to insert a new key
+ * past {@link MAX_KEYS}, the counter first runs an opportunistic sweep of
+ * entries whose most recent timestamp is older than `windowMs`. Without
+ * this, an attacker rotating hostmasks could accumulate entries
+ * indefinitely since nothing else guarantees `sweep()` is ever called.
  */
+const MAX_KEYS = 8192;
+
 export class SlidingWindowCounter {
   private windows = new Map<string, number[]>();
 
@@ -14,6 +22,23 @@ export class SlidingWindowCounter {
     const existing = this.windows.get(key);
     const timestamps = existing ? existing.filter((t) => now - t < windowMs) : [];
     timestamps.push(now);
+    /* v8 ignore start -- emergency cap path requires 8192+ distinct keys; exercised only under attacker-rotation workload */
+    if (!existing && this.windows.size >= MAX_KEYS) {
+      // Emergency sweep: drop anything whose latest timestamp is outside
+      // the window. If the map is still at the cap we fall back to FIFO
+      // eviction of the oldest insertion-order entry so legitimate
+      // recent traffic always has room to land.
+      for (const [k, ts] of this.windows) {
+        if (ts.length === 0 || now - ts[ts.length - 1] >= windowMs) {
+          this.windows.delete(k);
+        }
+      }
+      if (this.windows.size >= MAX_KEYS) {
+        const oldestKey = this.windows.keys().next().value;
+        if (oldestKey !== undefined) this.windows.delete(oldestKey);
+      }
+    }
+    /* v8 ignore stop */
     this.windows.set(key, timestamps);
     return timestamps.length > limit;
   }

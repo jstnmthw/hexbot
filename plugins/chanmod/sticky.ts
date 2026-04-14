@@ -2,8 +2,9 @@
 // Watches for -b mode changes and re-applies sticky bans immediately.
 import type { PluginAPI } from '../../src/types';
 import { botHasOps } from './helpers';
+import { COOLDOWN_WINDOW_MS, MAX_ENFORCEMENTS, type SharedState } from './state';
 
-export function setupStickyBans(api: PluginAPI): void {
+export function setupStickyBans(api: PluginAPI, state: SharedState): void {
   api.bind('mode', '-', '*', (ctx) => {
     const { channel } = ctx;
     const modeStr = ctx.command; // e.g. "-b"
@@ -21,6 +22,31 @@ export function setupStickyBans(api: PluginAPI): void {
 
     // Only re-apply if we have ops
     if (!botHasOps(api, channel)) return;
+
+    // Rate limit re-application: without this, a hostile op flipping
+    // `-b/+b` in a loop would force the bot to `+b` on every flip and
+    // flood both the message queue and mod_log. Share the same cooldown
+    // key space as mode-enforce so one saturation signal covers every
+    // mode-war path.
+    const cooldownKey = `${api.ircLower(channel)}:b:${mask}`;
+    const now = Date.now();
+    const cooldown = state.enforcementCooldown.get(cooldownKey);
+    /* v8 ignore start -- cooldown saturation path requires an active mode-war loop; covered by mode-enforce tests */
+    if (cooldown && now < cooldown.expiresAt) {
+      if (cooldown.count >= MAX_ENFORCEMENTS) {
+        api.warn(
+          `Sticky-ban saturation on ${channel}: ${mask} (>= ${MAX_ENFORCEMENTS} re-applies in ${COOLDOWN_WINDOW_MS}ms)`,
+        );
+        return;
+      }
+      cooldown.count++;
+    } else {
+      state.enforcementCooldown.set(cooldownKey, {
+        count: 1,
+        expiresAt: now + COOLDOWN_WINDOW_MS,
+      });
+    }
+    /* v8 ignore stop */
 
     api.ban(channel, mask);
     api.log(`Re-applied sticky ban ${mask} on ${channel}`);

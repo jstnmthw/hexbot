@@ -15,6 +15,17 @@ import {
 } from '../botlink';
 import type { BotlinkDCCView } from '../dcc';
 
+// Commands forbidden from traveling over `.bot` because their positional
+// arguments are secrets. These never reach mod_log metadata and are refused
+// at the dispatch point so a compromised operator account cannot proxy a
+// password-rotation command through the bot link.
+const BOT_RELAY_FORBIDDEN_COMMANDS = new Set(['chpass']);
+
+// Subcommands whose args land in mod_log as `[redacted]` even when they are
+// allowed to dispatch. Kept separate from the hard-refusal list so future
+// secret-bearing admin verbs can be redacted without blocking them outright.
+const BOT_RELAY_REDACTED_COMMANDS = new Set(['chpass']);
+
 // ---------------------------------------------------------------------------
 // Helpers — guard and dispatch between hub/leaf
 // ---------------------------------------------------------------------------
@@ -481,17 +492,32 @@ export function registerBotlinkCommands(
 
       // Strip leading dot if present (user may type `.bot leaf1 .status` or `.bot leaf1 status`)
       const cmdText = command.startsWith('.') ? command.slice(1) : command;
-      const [cmdName, ...cmdArgs] = cmdText.split(/\s+/);
+      const [cmdNameRaw, ...cmdArgs] = cmdText.split(/\s+/);
+      const cmdName = cmdNameRaw.toLowerCase();
+
+      if (BOT_RELAY_FORBIDDEN_COMMANDS.has(cmdName)) {
+        ctx.reply(`Command "${cmdName}" cannot be relayed via .bot for security reasons.`);
+        tryAudit(db, ctx, {
+          action: 'bot-remote-denied',
+          target: targetBot,
+          reason: `.${cmdName}`,
+          metadata: { command: cmdName, denied: 'forbidden-relay' },
+        });
+        return;
+      }
 
       // Audit the remote dispatch on the originating bot — remote command
       // execution across the hub must land in the origin's audit trail
       // before we hand off, so a deny on the leaf side still leaves a
-      // record of who tried what.
+      // record of who tried what. Redact positional args for any command
+      // whose arguments carry secrets; mod_log retention is unbounded and
+      // we do not trust it as a password store.
+      const redactArgs = BOT_RELAY_REDACTED_COMMANDS.has(cmdName);
       tryAudit(db, ctx, {
         action: 'bot-remote',
         target: targetBot,
-        reason: `.${cmdText}`,
-        metadata: { command: cmdName, args: cmdArgs.join(' ') },
+        reason: redactArgs ? `.${cmdName} [redacted]` : `.${cmdText}`,
+        metadata: { command: cmdName, args: redactArgs ? '[redacted]' : cmdArgs.join(' ') },
       });
 
       // Execute on self — just run the command locally
@@ -549,7 +575,15 @@ export function registerBotlinkCommands(
         ctx.reply('Usage: .bsay <botname|*> <target> <message>');
         return;
       }
-      const [, botname, target, message] = match;
+      const [, rawBotname, rawTarget, rawMessage] = match;
+      // Sanitize once at the top so the local send path and the frame path
+      // see identical, control-character-free strings. Before this, the
+      // frame path shipped the raw target/message across the link without
+      // stripping \r\n\0, letting a compromised +m caller inject CRLF into
+      // the receiving bot's IRC output.
+      const target = sanitize(rawTarget);
+      const message = sanitize(rawMessage);
+      const botname = sanitize(rawBotname);
       tryAudit(db, ctx, {
         action: 'bsay',
         target,
@@ -557,7 +591,7 @@ export function registerBotlinkCommands(
       });
 
       const sendLocal = (): void => {
-        if (ircSay) ircSay(sanitize(target), sanitize(message));
+        if (ircSay) ircSay(target, message);
         else ctx.reply('IRC client not available on this bot.');
       };
 

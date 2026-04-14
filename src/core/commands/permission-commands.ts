@@ -28,8 +28,29 @@ export function registerPermissionCommands(
       }
 
       const [handle, hostmask, flags] = parts;
+
+      // Shape and length validation — reject garbage arguments before they
+      // hit the DB. Handles follow the same character set as plugin
+      // directory names; hostmasks are bounded to prevent unbounded DB
+      // rows; all three reject embedded control characters as a defense
+      // against log / audit injection from a compromised transport.
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/.test(handle)) {
+        ctx.reply(
+          'Invalid handle — must start alphanumeric, then alphanumeric/underscore/hyphen, max 32 chars.',
+        );
+        return;
+      }
+      if (hostmask.length === 0 || hostmask.length > 200 || /[\r\n\0]/.test(hostmask)) {
+        ctx.reply('Invalid hostmask — max 200 chars and no control characters.');
+        return;
+      }
+      if (flags.length === 0 || flags.length > 16 || /[\r\n\0]/.test(flags)) {
+        ctx.reply('Invalid flags — max 16 chars and no control characters.');
+        return;
+      }
+
       const source = ctx.source === 'repl' ? 'REPL' : ctx.nick;
-      permissions.addUser(handle, hostmask, flags, source);
+      permissions.addUser(handle, hostmask, flags, source, ctx.source);
       ctx.reply(`User "${handle}" added with hostmask ${hostmask} and flags ${flags}`);
     },
   );
@@ -50,8 +71,25 @@ export function registerPermissionCommands(
         return;
       }
 
+      // Last-owner guard: if the target is `+n` and they are the only `+n`
+      // user on the bot, refuse the deletion. Losing the last owner leaves
+      // the bot with no one able to run owner-only commands and requires
+      // manual DB surgery to recover.
+      const target = permissions.getUser(handle);
+      if (target && target.global.includes(OWNER_FLAG)) {
+        const ownerCount = permissions
+          .listUsers()
+          .filter((u) => u.global.includes(OWNER_FLAG)).length;
+        if (ownerCount <= 1) {
+          ctx.reply(
+            `Refusing to delete "${handle}" — they are the only +n owner. Add another owner first.`,
+          );
+          return;
+        }
+      }
+
       const source = ctx.source === 'repl' ? 'REPL' : ctx.nick;
-      permissions.removeUser(handle, source);
+      permissions.removeUser(handle, source, ctx.source);
       ctx.reply(`User "${handle}" removed`);
     },
   );
@@ -96,26 +134,36 @@ export function registerPermissionCommands(
       const flagsArg = parts[1];
       const source = ctx.source === 'repl' ? 'REPL' : ctx.nick;
 
-      // Guard: only owners can grant the owner flag
+      // Guard: only owners can grant flags at master level (`m`) or higher.
+      // A `+m` master was previously allowed to promote arbitrary users to
+      // `+m`, which is an escalation path — any master could seed a parallel
+      // line of masters without owner involvement. Tighten the gate so
+      // granting `m` or `n` requires `+n`.
       if (ctx.source !== 'repl' && ctx.source !== 'botlink') {
         const callerHostmask = `${ctx.nick}!${ctx.ident ?? ''}@${ctx.hostname ?? ''}`;
         const caller = permissions.findByHostmask(callerHostmask);
-        if (!caller || !caller.global.includes(OWNER_FLAG)) {
-          if (flagsArg.includes(OWNER_FLAG)) {
-            ctx.reply('Only owners (+n) can grant the owner flag.');
-            return;
-          }
+        const callerIsOwner = caller?.global.includes(OWNER_FLAG) ?? false;
+        const grantsMasterOrHigher = flagsArg.includes(OWNER_FLAG) || flagsArg.includes('m');
+        if (grantsMasterOrHigher && !callerIsOwner) {
+          ctx.reply('Only owners (+n) can grant master or higher flags.');
+          return;
         }
       }
 
       if (parts.length >= 3 && parts[2].startsWith('#')) {
         // Channel-specific flags
         const channel = parts[2];
-        permissions.setChannelFlags(handle, channel, flagsArg.replace(/^\+/, ''), source);
+        permissions.setChannelFlags(
+          handle,
+          channel,
+          flagsArg.replace(/^\+/, ''),
+          source,
+          ctx.source,
+        );
         ctx.reply(`Channel flags for "${handle}" in ${channel} set to "${flagsArg}"`);
       } else {
         // Global flags
-        permissions.setGlobalFlags(handle, flagsArg.replace(/^\+/, ''), source);
+        permissions.setGlobalFlags(handle, flagsArg.replace(/^\+/, ''), source, ctx.source);
         ctx.reply(`Global flags for "${handle}" set to "${flagsArg}"`);
       }
     },

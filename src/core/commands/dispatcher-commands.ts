@@ -2,6 +2,7 @@
 // Registers .binds with the command handler.
 import type { CommandHandler } from '../../command-handler';
 import type { EventDispatcher } from '../../dispatcher';
+import { stripFormatting } from '../../utils/strip-formatting';
 import { formatTable } from '../../utils/table';
 
 /**
@@ -30,11 +31,15 @@ export function registerDispatcherCommands(
         return;
       }
 
+      // stripFormatting on every user-influenced column — plugin IDs and
+      // bind masks originate from plugin code, so a compromised plugin
+      // could otherwise inject IRC control codes into an operator's
+      // console via the `.binds` output.
       const rows = binds.map((b) => [
-        b.type,
-        b.flags,
-        `"${b.mask}"`,
-        `→ ${b.pluginId}`,
+        stripFormatting(b.type),
+        stripFormatting(b.flags),
+        `"${stripFormatting(b.mask)}"`,
+        `→ ${stripFormatting(b.pluginId)}`,
         `(hits: ${b.hits})`,
       ]);
       const header = pluginId ? `Binds for "${pluginId}"` : 'All binds';

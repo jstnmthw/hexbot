@@ -34,6 +34,12 @@ function computeDesiredMode(allFlags: string, config: ChanmodConfig): DesiredMod
  * `require_acc_for` demands it. Used by both the join handler and the
  * flag-change reconciler.
  *
+ * When `knownAccount` is defined (non-empty string), it came from IRCv3
+ * extended-join / account-tag / account-notify — the server has already
+ * vouched for the identity and we can skip the NickServ ACC round-trip.
+ * `null` means the server explicitly said the nick is NOT identified; we
+ * reject the grant without ever asking NickServ.
+ *
  * Returns once the grant is queued (or skipped). Errors are logged, not thrown.
  */
 async function grantMode(
@@ -42,24 +48,44 @@ async function grantMode(
   channel: string,
   nick: string,
   desired: 'o' | 'h' | 'v',
+  knownAccount: string | null | undefined = undefined,
 ): Promise<void> {
   const requireAccFor = api.botConfig.identity.require_acc_for;
   const flagToApply = desired === 'o' ? '+o' : desired === 'h' ? '+h' : '+v';
   const needsVerification = requireAccFor.includes(flagToApply) && api.services.isAvailable();
 
   if (needsVerification) {
-    api.log(`Verifying ${nick} via NickServ before applying ${flagToApply} in ${channel}`);
-    const result = await api.services.verifyUser(nick);
-    if (!result.verified) {
-      api.log(`Verification failed for ${nick} in ${channel} — not applying ${flagToApply}`);
+    // Fast path: IRCv3 account data is authoritative and means we do not
+    // have to wait on NickServ. null = server says "not identified" — the
+    // only correct response is to refuse the grant (this closes the race
+    // the audit flagged even without the dispatcher verification gate).
+    if (knownAccount === null) {
+      api.log(
+        `Skipping ${flagToApply} for ${nick} in ${channel} — IRCv3 account-tag says not identified`,
+      );
       if (config.notify_on_fail) {
         api.notice(nick, 'Auto-op: NickServ verification failed. Please identify and rejoin.');
       }
       return;
     }
-    api.log(
-      `Verified ${nick} (account: ${result.account}) — applying ${flagToApply} in ${channel}`,
-    );
+    if (typeof knownAccount === 'string' && knownAccount.length > 0) {
+      api.log(
+        `Verified ${nick} via IRCv3 account-tag (${knownAccount}) — applying ${flagToApply} in ${channel}`,
+      );
+    } else {
+      api.log(`Verifying ${nick} via NickServ before applying ${flagToApply} in ${channel}`);
+      const result = await api.services.verifyUser(nick);
+      if (!result.verified) {
+        api.log(`Verification failed for ${nick} in ${channel} — not applying ${flagToApply}`);
+        if (config.notify_on_fail) {
+          api.notice(nick, 'Auto-op: NickServ verification failed. Please identify and rejoin.');
+        }
+        return;
+      }
+      api.log(
+        `Verified ${nick} (account: ${result.account}) — applying ${flagToApply} in ${channel}`,
+      );
+    }
   }
 
   if (desired === 'o') {
@@ -209,7 +235,7 @@ export function setupAutoOp(
     const desired = computeDesiredMode(allFlags, config);
     if (!desired) return;
 
-    await grantMode(api, config, channel, nick, desired);
+    await grantMode(api, config, channel, nick, desired, ctx.account);
   });
 
   // React to .adduser / .flags / .addhostmask so mode changes take effect

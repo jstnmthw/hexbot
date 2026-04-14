@@ -180,8 +180,11 @@ describe('permission-commands', () => {
 
   describe('.deluser', () => {
     it('should remove a user', async () => {
-      const addCtx = makeCtx();
-      await handler.execute('.adduser admin *!t@h n', addCtx);
+      // Seed two owners so the last-owner deletion guard doesn't block.
+      // The guard refuses to remove the last +n record, so tests that
+      // actually delete an owner need a spare.
+      await handler.execute('.adduser admin *!t@h n', makeCtx());
+      await handler.execute('.adduser spare *!s@h n', makeCtx());
 
       const ctx = makeCtx();
       await handler.execute('.deluser admin', ctx);
@@ -190,6 +193,17 @@ describe('permission-commands', () => {
 
       const output = ctx.reply.mock.calls[0][0];
       expect(output).toContain('removed');
+    });
+
+    it('refuses to delete the last +n owner', async () => {
+      await handler.execute('.adduser solo *!s@h n', makeCtx());
+
+      const ctx = makeCtx();
+      await handler.execute('.deluser solo', ctx);
+
+      expect(perms.getUser('solo')).not.toBeNull();
+      const output = ctx.reply.mock.calls[0][0];
+      expect(output).toContain('only +n owner');
     });
 
     it('should report error for unknown user', async () => {
@@ -325,7 +339,7 @@ describe('.flags owner escalation guard', () => {
     const ctx = makeCtx({ source: 'irc', nick: 'master', ident: 'master', hostname: 'host' });
     await handler.execute('.flags target +n', ctx);
 
-    expect(ctx.reply).toHaveBeenCalledWith('Only owners (+n) can grant the owner flag.');
+    expect(ctx.reply).toHaveBeenCalledWith('Only owners (+n) can grant master or higher flags.');
     // Flags should remain unchanged
     expect(perms.getUser('target')!.global).toBe('o');
   });
@@ -352,7 +366,7 @@ describe('.flags owner escalation guard', () => {
     const ctx = makeCtx({ source: 'dcc', nick: 'dccmaster' });
     await handler.execute('.flags target +n', ctx);
 
-    expect(ctx.reply).toHaveBeenCalledWith('Only owners (+n) can grant the owner flag.');
+    expect(ctx.reply).toHaveBeenCalledWith('Only owners (+n) can grant master or higher flags.');
     expect(perms.getUser('target')!.global).toBe('o');
   });
 

@@ -96,12 +96,21 @@ function botHasOps(channel: string): boolean {
 /** Return true if the nick has any privileged flag (n/m/o) in the channel.
  *  When `knownHostmask` is provided (e.g. from ctx for part events where the
  *  user has already left channel state), it skips the channel-state lookup.
+ *  `account` is the IRCv3 account tag (or null for "server says not
+ *  identified") from the triggering event — threading it through means users
+ *  whose only permission record is a `$a:<account>` pattern are still
+ *  recognised as privileged and skip the flood kick.
  */
-function isPrivileged(nick: string, channel: string, knownHostmask?: string): boolean {
+function isPrivileged(
+  nick: string,
+  channel: string,
+  knownHostmask?: string,
+  account?: string | null,
+): boolean {
   if (!cfg.ignoreOps) return false;
   const hostmask = knownHostmask ?? api.getUserHostmask(channel, nick);
   if (!hostmask) return false;
-  const user = api.permissions.findByHostmask(hostmask);
+  const user = api.permissions.findByHostmask(hostmask, account);
   if (!user) return false;
   const flags = user.global + (user.channels[channel] ?? '');
   return /[nmo]/.test(flags);
@@ -114,7 +123,7 @@ function isPrivileged(nick: string, channel: string, knownHostmask?: string): bo
 async function handleMsgFlood(ctx: ChannelHandlerContext): Promise<void> {
   const { channel } = ctx;
   if (api.isBotNick(ctx.nick)) return;
-  if (isPrivileged(ctx.nick, channel)) return;
+  if (isPrivileged(ctx.nick, channel, undefined, ctx.account)) return;
   const key = `${api.ircLower(ctx.nick)}@${api.ircLower(channel)}`;
   if (!rateLimits.check('msg', key)) return;
   const action = enforcement.recordOffence(key);
@@ -132,7 +141,7 @@ function handleJoinFlood(ctx: JoinContext): void {
   const hostmask = api.buildHostmask(ctx);
   const key = `join:${api.ircLower(hostmask)}`;
   if (!rateLimits.check('join', key)) return;
-  if (isPrivileged(ctx.nick, channel)) return;
+  if (isPrivileged(ctx.nick, channel, hostmask, ctx.account)) return;
   const action = enforcement.recordOffence(key);
   lockdown.record(channel, hostmask);
   enforcement.apply(
@@ -150,7 +159,7 @@ function handlePartFlood(ctx: PartContext): void {
   const key = `part:${api.ircLower(hostmask)}`;
   if (!rateLimits.check('part', key)) return;
   // Pass hostmask directly — user has already left channel state by the time the part bind fires
-  if (isPrivileged(ctx.nick, channel, hostmask)) return;
+  if (isPrivileged(ctx.nick, channel, hostmask, ctx.account)) return;
   const action = enforcement.recordOffence(key);
   lockdown.record(channel, hostmask);
   enforcement.apply(
@@ -169,9 +178,19 @@ function handleNickFlood(ctx: NickContext): void {
   if (!rateLimits.check('nick', key)) return;
   // Use the new nick (ctx.args) for channel lookup and punishment — the old nick is gone
   const newNick = ctx.args;
-  // Nick changes are global — punish in the first channel where we have ops
+
+  // Resolve privilege once globally — nick changes are a network-wide event
+  // and the user's permission record does not vary channel-to-channel. The
+  // old code rescanned per channel, which cost the bot a permissions lookup
+  // for every configured channel on every nick change and would let an
+  // ignoreOps-protected user still get enforced in channels ordered before
+  // their first privileged match.
+  if (cfg.ignoreOps) {
+    const user = api.permissions.findByHostmask(hostmask, ctx.account);
+    if (user && /[nmo]/.test(user.global)) return;
+  }
+
   for (const channel of api.botConfig.irc.channels) {
-    if (isPrivileged(newNick, channel)) return;
     if (!botHasOps(channel)) continue;
     const action = enforcement.recordOffence(key);
     enforcement.apply(

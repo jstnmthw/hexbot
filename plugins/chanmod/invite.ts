@@ -8,7 +8,13 @@ export function setupInvite(
   _config: ChanmodConfig,
   _state: SharedState,
 ): () => void {
-  api.bind('invite', '-', '*', (ctx) => {
+  // Bind with an op-trust flag set so the dispatcher's VerificationProvider
+  // gate fires on invite — an attacker who races an admin's nick before
+  // NickServ identifies can no longer `/invite` the bot into arbitrary
+  // channels. The handler still runs the per-channel flag check below;
+  // the bind flag only guarantees the inviter's identity is verified
+  // before we reach the body.
+  api.bind('invite', '+n|+m|+o', '*', (ctx) => {
     const { channel } = ctx;
 
     const enabled = api.channelSettings.getFlag(channel, 'invite');
@@ -17,7 +23,7 @@ export function setupInvite(
     // Use the hostmask from the INVITE message directly — the IRC protocol
     // includes nick!ident@host so no channel state lookup is needed.
     const fullHostmask = api.buildHostmask(ctx);
-    const user = api.permissions.findByHostmask(fullHostmask);
+    const user = api.permissions.findByHostmask(fullHostmask, ctx.account);
     if (!user) return;
 
     const globalFlags = user.global;
