@@ -4,10 +4,10 @@ import { ensureOwner } from '../../src/core/owner-bootstrap';
 import { verifyPassword } from '../../src/core/password';
 import { Permissions } from '../../src/core/permissions';
 import { BotDatabase } from '../../src/database';
-import type { Logger } from '../../src/logger';
+import type { LoggerLike } from '../../src/logger';
 import type { BotConfig } from '../../src/types';
 
-type TestLogger = Logger & {
+type TestLogger = LoggerLike & {
   info: Mock;
   warn: Mock;
   error: Mock;
@@ -21,7 +21,9 @@ function makeLogger(): TestLogger {
     error: vi.fn(),
     debug: vi.fn(),
     child: () => logger,
-  } as unknown as TestLogger;
+    setLevel: () => {},
+    getLevel: () => 'info',
+  };
   return logger;
 }
 

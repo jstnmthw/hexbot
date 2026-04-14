@@ -379,7 +379,8 @@ describe('BotDatabase', () => {
         raw.close();
       }
 
-      const rows = (db as unknown as { db: Database.Database }).db
+      const rows = db
+        .rawHandleForTests()
         .prepare(`SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='mod_log'`)
         .all() as Array<{ name: string }>;
       const names = rows.map((r) => r.name);
@@ -490,7 +491,7 @@ describe('BotDatabase', () => {
       const seed = new BotDatabase(tmp);
       seed.open();
       seed.logModAction({ action: 'new', source: 'irc', by: 'a', target: 'b' });
-      const internal = (seed as unknown as { db: Database.Database }).db;
+      const internal = seed.rawHandleForTests();
       // Backdate: 10 days old
       const ancient = Math.floor(Date.now() / 1000) - 10 * 86400;
       internal

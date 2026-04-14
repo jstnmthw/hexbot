@@ -6,7 +6,7 @@ import type { Socket } from 'node:net';
 import { createInterface as createReadline } from 'node:readline';
 
 import type { CommandContext, CommandEntry, PreExecuteHook } from '../../command-handler';
-import type { Logger } from '../../logger';
+import type { LoggerLike } from '../../logger';
 import type { UserRecord } from '../../types';
 import { sanitize } from '../../utils/sanitize';
 
@@ -141,7 +141,7 @@ export class RateCounter {
 export class BotLinkProtocol {
   private socket: Socket;
   private rl: import('readline').Interface | null = null;
-  private logger: Logger | null;
+  private logger: LoggerLike | null;
   private closed = false;
 
   /** Fired when a valid frame is received. */
@@ -151,7 +151,7 @@ export class BotLinkProtocol {
   /** Fired on socket error. */
   onError: ((err: Error) => void) | null = null;
 
-  constructor(socket: Socket, logger?: Logger | null) {
+  constructor(socket: Socket, logger?: LoggerLike | null) {
     this.socket = socket;
     this.logger = logger ?? null;
 

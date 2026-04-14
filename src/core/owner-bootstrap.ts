@@ -6,7 +6,7 @@
 // hash on file. Subsequent boots find the hash present and leave it alone,
 // so `.chpass` rotations persist across restarts. To force a re-seed, clear
 // the hash and restart with the env var set.
-import type { Logger } from '../logger';
+import type { LoggerLike } from '../logger';
 import type { BotConfig } from '../types';
 import { hashPassword } from './password';
 import type { Permissions } from './permissions';
@@ -14,7 +14,7 @@ import type { Permissions } from './permissions';
 export interface EnsureOwnerDeps {
   config: Pick<BotConfig, 'owner' | 'dcc'>;
   permissions: Permissions;
-  logger: Logger;
+  logger: LoggerLike;
 }
 
 /**

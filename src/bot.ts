@@ -62,7 +62,7 @@ import { EventDispatcher } from './dispatcher';
 import type { VerificationProvider } from './dispatcher';
 import { BotEventBus } from './event-bus';
 import { IRCBridge } from './irc-bridge';
-import { type Logger, createLogger } from './logger';
+import { type LoggerLike, createLogger } from './logger';
 import { PluginLoader } from './plugin-loader';
 import type { Casemapping } from './types';
 import type { BotConfig } from './types';
@@ -85,7 +85,7 @@ export class Bot {
   readonly commandHandler: CommandHandler;
   readonly eventBus: BotEventBus;
   readonly client: InstanceType<typeof IrcClient>;
-  readonly logger: Logger;
+  readonly logger: LoggerLike;
 
   readonly pluginLoader: PluginLoader;
   readonly channelSettings: ChannelSettings;
@@ -105,7 +105,7 @@ export class Bot {
   private _sharedBanList: SharedBanList | null = null;
   private _lifecycleHandle: ConnectionLifecycleHandle | null = null;
   private _reconnectDriver: ReconnectDriver | null = null;
-  private botLogger: Logger;
+  private botLogger: LoggerLike;
   private _casemapping: Casemapping = 'rfc1459';
 
   /** Snapshot of the reconnect driver state — used by the `.status` command. */
@@ -917,8 +917,8 @@ export class Bot {
   }
 
   /** Lazy-initialized child logger for the relay handler. */
-  private _relayLoggerCache: Logger | null = null;
-  private get _relayLogger(): Logger {
+  private _relayLoggerCache: LoggerLike | null = null;
+  private get _relayLogger(): LoggerLike {
     this._relayLoggerCache ??= this.logger.child('botlink:relay');
     return this._relayLoggerCache;
   }

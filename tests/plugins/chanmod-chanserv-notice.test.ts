@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { AnopeBackend } from '../../plugins/chanmod/anope-backend';
-import type { AthemeBackend } from '../../plugins/chanmod/atheme-backend';
+import type {
+  AnopeNoticeBackend,
+  AthemeNoticeBackend,
+} from '../../plugins/chanmod/chanserv-notice';
 import {
   createProbeState,
   markProbePending,
   setupChanServNotice,
 } from '../../plugins/chanmod/chanserv-notice';
+import type { BackendAccess } from '../../plugins/chanmod/protection-backend';
 import type { ChanmodConfig } from '../../plugins/chanmod/state';
 
 // ---------------------------------------------------------------------------
@@ -53,53 +56,48 @@ function createMockConfig(type: 'atheme' | 'anope' = 'atheme'): ChanmodConfig {
 
 function createMockAthemeBackend() {
   const calls: Array<{ channel: string; flags: string }> = [];
-  const accessLevels = new Map<string, string>();
+  const accessLevels = new Map<string, BackendAccess>();
   const autoDetected = new Set<string>();
-  return {
-    backend: {
-      name: 'atheme',
-      handleFlagsResponse(channel: string, flagString: string) {
-        calls.push({ channel, flags: flagString });
-        // Simulate auto-detect behavior
-        if (!accessLevels.has(channel.toLowerCase()) && flagString !== '(none)') {
-          accessLevels.set(channel.toLowerCase(), 'op');
-          autoDetected.add(channel.toLowerCase());
-        }
-      },
-      getAccess(channel: string) {
-        return accessLevels.get(channel.toLowerCase()) ?? 'none';
-      },
-      isAutoDetected(channel: string) {
-        return autoDetected.has(channel.toLowerCase());
-      },
-    } as unknown as AthemeBackend,
-    calls,
+  const backend: AthemeNoticeBackend = {
+    name: 'atheme',
+    handleFlagsResponse(channel: string, flagString: string) {
+      calls.push({ channel, flags: flagString });
+      if (!accessLevels.has(channel.toLowerCase()) && flagString !== '(none)') {
+        accessLevels.set(channel.toLowerCase(), 'op');
+        autoDetected.add(channel.toLowerCase());
+      }
+    },
+    getAccess(channel: string) {
+      return accessLevels.get(channel.toLowerCase()) ?? 'none';
+    },
+    isAutoDetected(channel: string) {
+      return autoDetected.has(channel.toLowerCase());
+    },
   };
+  return { backend, calls };
 }
 
 function createMockAnopeBackend() {
   const calls: Array<{ channel: string; level: number }> = [];
-  const accessLevels = new Map<string, string>();
+  const accessLevels = new Map<string, BackendAccess>();
   const autoDetected = new Set<string>();
-  return {
-    backend: {
-      name: 'anope',
-      handleAccessResponse(channel: string, level: number) {
-        calls.push({ channel, level });
-        if (!accessLevels.has(channel.toLowerCase()) && level >= 5) {
-          accessLevels.set(channel.toLowerCase(), 'op');
-          autoDetected.add(channel.toLowerCase());
-        }
-      },
-      getAccess(channel: string) {
-        return accessLevels.get(channel.toLowerCase()) ?? 'none';
-      },
-      isAutoDetected(channel: string) {
-        return autoDetected.has(channel.toLowerCase());
-      },
-    } as unknown as AnopeBackend,
-    calls,
+  const backend: AnopeNoticeBackend = {
+    name: 'anope',
+    handleAccessResponse(channel: string, level: number) {
+      calls.push({ channel, level });
+      if (!accessLevels.has(channel.toLowerCase()) && level >= 5) {
+        accessLevels.set(channel.toLowerCase(), 'op');
+        autoDetected.add(channel.toLowerCase());
+      }
+    },
+    getAccess(channel: string) {
+      return accessLevels.get(channel.toLowerCase()) ?? 'none';
+    },
+    isAutoDetected(channel: string) {
+      return autoDetected.has(channel.toLowerCase());
+    },
   };
+  return { backend, calls };
 }
 
 beforeEach(() => {

@@ -7,7 +7,7 @@
 // management can be unit-tested without standing up a full hub.
 import type { BotDatabase } from '../../database';
 import type { BotEventBus } from '../../event-bus';
-import type { Logger } from '../../logger';
+import type { LoggerLike } from '../../logger';
 import type { BotlinkConfig } from '../../types';
 import { AdminListStore } from '../../utils/admin-list-store';
 import { tryLogModAction } from '../audit';
@@ -130,19 +130,28 @@ const MAX_AUTH_TRACKERS = 10_000;
  */
 export class BotLinkAuthManager {
   private readonly config: BotlinkConfig;
-  private readonly logger: Logger | null;
+  private readonly logger: LoggerLike | null;
   private readonly eventBus: BotEventBus | null;
   private readonly db: BotDatabase | null;
   private readonly expectedHash: string;
-  private readonly authTracker: Map<string, AuthTracker> = new Map();
+  /**
+   * Per-IP auth-failure state with LRU ordering via Map insertion order.
+   * Exposed `readonly` so tests can seed / inspect the LRU; production code
+   * reads and mutates through the helper methods below.
+   */
+  readonly authTracker: Map<string, AuthTracker> = new Map();
   private readonly pendingHandshakes: Map<string, number> = new Map();
-  private readonly manualCidrBans: Map<string, LinkBan> = new Map();
+  /**
+   * Manually-banned CIDR ranges, keyed by normalized CIDR string. Exposed
+   * `readonly` so tests can seed entries directly for sweep / limit tests.
+   */
+  readonly manualCidrBans: Map<string, LinkBan> = new Map();
   private readonly linkBanStore: AdminListStore<LinkBan> | null;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     config: BotlinkConfig,
-    logger: Logger | null,
+    logger: LoggerLike | null,
     eventBus: BotEventBus | null,
     db: BotDatabase | null,
   ) {

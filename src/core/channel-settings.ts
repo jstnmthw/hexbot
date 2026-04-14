@@ -8,7 +8,7 @@
 // pre-normalisation databases, `get()` falls back to the raw channel name
 // on a miss so operators don't silently lose existing settings.
 import type { BotDatabase } from '../database';
-import type { Logger } from '../logger';
+import type { LoggerLike } from '../logger';
 import type {
   ChannelSettingChangeCallback,
   ChannelSettingDef,
@@ -33,10 +33,10 @@ export class ChannelSettings {
   private defs: Map<string, ChannelSettingEntry> = new Map();
   private changeListeners: Map<string, ChannelSettingChangeCallback[]> = new Map();
   private readonly ircLower: ChannelLower;
-  private readonly logger: Logger | undefined;
+  private readonly logger: LoggerLike | undefined;
   private readonly db: BotDatabase;
 
-  constructor(db: BotDatabase, logger?: Logger, ircLower?: ChannelLower) {
+  constructor(db: BotDatabase, logger?: LoggerLike, ircLower?: ChannelLower) {
     this.db = db;
     this.logger = logger;
     this.ircLower = ircLower ?? DEFAULT_LOWER;

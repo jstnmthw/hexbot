@@ -3,7 +3,7 @@
 // reconnect scheduling is delegated to the ReconnectDriver — this module
 // only classifies the disconnect reason and tells the driver about it.
 import type { BotEventBus } from '../event-bus';
-import type { Logger } from '../logger';
+import type { LoggerLike } from '../logger';
 import type { BotConfig, Casemapping } from '../types';
 import type { BindHandler, BindType } from '../types';
 import { toEventObject } from '../utils/irc-event';
@@ -93,7 +93,7 @@ export interface ConnectionLifecycleDeps {
   dispatcher: {
     bind(type: BindType, flags: string, mask: string, handler: BindHandler, owner?: string): void;
   };
-  logger: Logger;
+  logger: LoggerLike;
   /** Channel state tracker — required for periodic presence check. */
   channelState?: PresenceCheckChannelState;
 }
@@ -341,7 +341,7 @@ function ingestSTSDirective(deps: ConnectionLifecycleDeps): void {
 }
 
 /** Log TLS cipher info from the underlying socket. */
-function logTlsCipher(client: LifecycleIRCClient, logger: Logger): void {
+function logTlsCipher(client: LifecycleIRCClient, logger: LoggerLike): void {
   // irc-framework does not expose the underlying socket in its public types, so
   // we walk the private connection/transport chain via `unknown`. Double-cast
   // would be needed because `LifecycleIRCClient` and `InternalClient` are
@@ -369,7 +369,7 @@ function logTlsCipher(client: LifecycleIRCClient, logger: Logger): void {
 /** Register listeners for IRC join-error numerics (irc error + unknown command). */
 function registerJoinErrorListeners(
   client: LifecycleIRCClient,
-  logger: Logger,
+  logger: LoggerLike,
   listeners: Array<{ event: string; fn: (...args: unknown[]) => void }>,
 ): void {
   const JOIN_ERROR_NAMES: Record<string, string> = {

@@ -638,13 +638,15 @@ describe('PluginLoader', () => {
       const cfgPath = writePluginsJson(configDir, {});
 
       const logs: string[] = [];
-      const logger = {
+      const logger: import('../src/logger').LoggerLike = {
         child: () => logger,
         info: () => {},
         error: (msg: string) => logs.push(msg),
         warn: () => {},
         debug: () => {},
-      } as unknown as import('../src/logger').Logger;
+        setLevel: () => {},
+        getLevel: () => 'info',
+      };
 
       const { loader } = createLoaderFull(tempDir, { logger });
       const results = await loader.loadAll(cfgPath);

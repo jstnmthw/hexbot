@@ -4,8 +4,7 @@
 // and unregistered-channel errors. Called from chanserv-notice.ts when
 // the configured backend is Atheme.
 import type { PluginAPI } from '../../src/types';
-import type { AthemeBackend } from './atheme-backend';
-import type { ProbeState } from './chanserv-notice';
+import type { AthemeNoticeBackend, ProbeState } from './chanserv-notice';
 import { resolveProbeForBot, syncAccessToSettings } from './chanserv-notice';
 import { getBotNick } from './helpers';
 
@@ -26,7 +25,7 @@ const ATHEME_NOT_REGISTERED_RE = /channel\s+\x02?(#\S+?)\x02?\s+is\s+not\s+regis
  */
 export function handleAthemeNotice(
   api: PluginAPI,
-  backend: AthemeBackend,
+  backend: AthemeNoticeBackend,
   probeState: ProbeState,
   text: string,
 ): void {

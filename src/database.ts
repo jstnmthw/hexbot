@@ -4,7 +4,7 @@ import Database from 'better-sqlite3';
 import type { Database as DatabaseType, Statement } from 'better-sqlite3';
 
 import type { BotEventBus } from './event-bus';
-import type { Logger } from './logger';
+import type { LoggerLike } from './logger';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -115,7 +115,7 @@ export interface BotDatabaseOptions {
 export class BotDatabase {
   private db: DatabaseType | null = null;
   private readonly path: string;
-  private logger: Logger | null;
+  private logger: LoggerLike | null;
   private readonly modLogEnabled: boolean;
   private readonly modLogRetentionDays: number;
   private eventBus: BotEventBus | null = null;
@@ -128,7 +128,7 @@ export class BotDatabase {
   private stmtListPrefix!: Statement;
   private stmtLogMod!: Statement;
 
-  constructor(path: string, logger?: Logger | null, options?: BotDatabaseOptions) {
+  constructor(path: string, logger?: LoggerLike | null, options?: BotDatabaseOptions) {
     this.path = path;
     this.logger = logger?.child('database') ?? null;
     this.modLogEnabled = options?.modLogEnabled ?? true;
@@ -142,6 +142,20 @@ export class BotDatabase {
    */
   setEventBus(eventBus: BotEventBus | null): void {
     this.eventBus = eventBus;
+  }
+
+  /**
+   * Test-only escape hatch to the underlying `better-sqlite3` handle so
+   * integration tests can inspect schema state (index creation checks)
+   * or seed backdated rows for retention tests. Production code must
+   * never call this — all runtime reads/writes go through the typed
+   * methods on this class.
+   *
+   * @throws if the database has not been opened.
+   */
+  rawHandleForTests(): DatabaseType {
+    if (!this.db) throw new Error('Database not open');
+    return this.db;
   }
 
   /** Open the database connection and initialize schema. */

@@ -5,7 +5,7 @@ import { CommandHandler } from '../../../src/command-handler';
 import type { CommandContext } from '../../../src/command-handler';
 import { BanStore } from '../../../src/core/ban-store';
 import { registerBanCommands } from '../../../src/core/commands/ban-commands';
-import { IRCCommands } from '../../../src/core/irc-commands';
+import type { BanOperator } from '../../../src/core/irc-commands';
 import { Permissions } from '../../../src/core/permissions';
 import { BotDatabase } from '../../../src/database';
 import { createLogger } from '../../../src/logger';
@@ -27,8 +27,8 @@ describe('ban admin commands', () => {
   let db: BotDatabase;
   let banStore: BanStore;
   let commandHandler: CommandHandler;
-  let banSpy: ReturnType<typeof vi.fn>;
-  let unbanSpy: ReturnType<typeof vi.fn>;
+  let banSpy: BanOperator['ban'];
+  let unbanSpy: BanOperator['unban'];
 
   beforeEach(() => {
     db = new BotDatabase(':memory:');
@@ -39,14 +39,10 @@ describe('ban admin commands', () => {
     commandHandler = new CommandHandler(perms);
     banSpy = vi.fn();
     unbanSpy = vi.fn();
-    const ircCommands = {
-      ban: banSpy,
-      unban: unbanSpy,
-    } as unknown as IRCCommands;
     registerBanCommands({
       commandHandler,
       banStore,
-      ircCommands,
+      ircCommands: { ban: banSpy, unban: unbanSpy },
       db,
       hub: null,
       sharedBanList: null,
@@ -105,7 +101,7 @@ describe('ban admin commands', () => {
       registerBanCommands({
         commandHandler: ch2,
         banStore: bs2,
-        ircCommands: { ban: vi.fn(), unban: vi.fn() } as unknown as IRCCommands,
+        ircCommands: { ban: vi.fn(), unban: vi.fn() },
         db: db2,
         hub: null,
         sharedBanList: mockSharedBanList as never,
@@ -181,7 +177,7 @@ describe('ban admin commands', () => {
       registerBanCommands({
         commandHandler: ch2,
         banStore: bs2,
-        ircCommands: { ban: vi.fn(), unban: vi.fn() } as unknown as IRCCommands,
+        ircCommands: { ban: vi.fn(), unban: vi.fn() },
         db: db2,
         hub: mockHub,
         sharedBanList: null,
@@ -239,7 +235,7 @@ describe('ban admin commands', () => {
       registerBanCommands({
         commandHandler: ch2,
         banStore: bs2,
-        ircCommands: { ban: vi.fn(), unban: vi.fn() } as unknown as IRCCommands,
+        ircCommands: { ban: vi.fn(), unban: vi.fn() },
         db: db2,
         hub: mockHub,
         sharedBanList: null,

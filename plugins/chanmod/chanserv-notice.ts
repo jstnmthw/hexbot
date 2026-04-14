@@ -8,12 +8,36 @@
 //   - chanserv-notice-atheme.ts  (Atheme FLAGS responses)
 //   - chanserv-notice-anope.ts   (Anope ACCESS LIST, GETKEY, INFO responses)
 import type { PluginAPI } from '../../src/types';
-import type { AnopeBackend } from './anope-backend';
-import type { AthemeBackend } from './atheme-backend';
 import { handleAnopeNotice } from './chanserv-notice-anope';
 import { handleAthemeNotice } from './chanserv-notice-atheme';
 import type { BackendAccess } from './protection-backend';
 import type { ChanmodConfig } from './state';
+
+// ---------------------------------------------------------------------------
+// Narrow backend role interfaces — what the ChanServ notice parsers need.
+// The concrete `AthemeBackend` / `AnopeBackend` classes satisfy these
+// structurally. Tests can pass plain objects without casting.
+// ---------------------------------------------------------------------------
+
+/** Common shape the shared `syncAccessToSettings` helper needs. */
+export interface NoticeBackendCommon {
+  getAccess(channel: string): BackendAccess;
+  isAutoDetected(channel: string): boolean;
+}
+
+/** Narrow interface `handleAthemeNotice` depends on. */
+export interface AthemeNoticeBackend extends NoticeBackendCommon {
+  readonly name: 'atheme';
+  handleFlagsResponse(channel: string, flags: string): void;
+}
+
+/** Narrow interface `handleAnopeNotice` depends on. */
+export interface AnopeNoticeBackend extends NoticeBackendCommon {
+  readonly name: 'anope';
+  handleAccessResponse(channel: string, level: number): void;
+}
+
+export type NoticeBackend = AthemeNoticeBackend | AnopeNoticeBackend;
 
 /** Timeout for ChanServ probe responses (10 seconds). */
 const PROBE_TIMEOUT_MS = 10_000;
@@ -55,7 +79,7 @@ export function createProbeState(): ProbeState {
 export interface ChanServNoticeOptions {
   api: PluginAPI;
   config: ChanmodConfig;
-  backend: AthemeBackend | AnopeBackend;
+  backend: NoticeBackend;
   probeState: ProbeState;
 }
 
@@ -63,7 +87,7 @@ export interface ChanServNoticeOptions {
  * Bind a notice handler that routes ChanServ responses to the backend.
  * Returns a teardown function.
  */
-function isAthemeBackend(b: AthemeBackend | AnopeBackend): b is AthemeBackend {
+function isAthemeBackend(b: NoticeBackend): b is AthemeNoticeBackend {
   return b.name === 'atheme';
 }
 
@@ -142,7 +166,7 @@ export function markProbePending(
  */
 export function syncAccessToSettings(
   api: PluginAPI,
-  backend: AthemeBackend | AnopeBackend,
+  backend: NoticeBackendCommon,
   channel: string,
 ): void {
   const access: BackendAccess = backend.getAccess(channel);

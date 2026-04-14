@@ -5,7 +5,7 @@ import { connect } from 'node:net';
 import type { Socket } from 'node:net';
 
 import type { CommandContext } from '../../command-handler';
-import type { Logger } from '../../logger';
+import type { LoggerLike } from '../../logger';
 import type { BotlinkConfig } from '../../types';
 import { PendingRequestMap } from './pending';
 import {
@@ -26,7 +26,7 @@ import {
 export class BotLinkLeaf {
   private config: BotlinkConfig;
   private version: string;
-  private logger: Logger | null;
+  private logger: LoggerLike | null;
   private socketFactory: SocketFactory;
   private protocol: BotLinkProtocol | null = null;
   private connected = false;
@@ -59,7 +59,7 @@ export class BotLinkLeaf {
   constructor(
     config: BotlinkConfig,
     version: string,
-    logger?: Logger | null,
+    logger?: LoggerLike | null,
     socketFactory?: SocketFactory,
   ) {
     this.config = config;

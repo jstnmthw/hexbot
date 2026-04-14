@@ -212,13 +212,15 @@ describe('.chpass', () => {
         set: () => {},
       } as unknown as BotDatabase;
       const warns: unknown[][] = [];
-      const logger = {
+      const logger: import('../../../src/logger').LoggerLike = {
         info: () => {},
         warn: (...args: unknown[]) => warns.push(args),
         debug: () => {},
         error: () => {},
         child: () => logger,
-      } as unknown as import('../../../src/logger').Logger;
+        setLevel: () => {},
+        getLevel: () => 'info',
+      };
 
       const perms = new Permissions(throwingDb, logger);
       perms.addUser('admin', '*!a@host', 'n', 'REPL');

@@ -2,7 +2,7 @@
 // NickServ integration — bot authentication and user identity verification.
 import type { BotDatabase } from '../database';
 import type { BotEventBus } from '../event-bus';
-import type { Logger } from '../logger';
+import type { LoggerLike } from '../logger';
 import type { ServicesConfig, VerifyResult } from '../types';
 import { toEventObject } from '../utils/irc-event';
 import { type Casemapping, ircLower } from '../utils/wildcard';
@@ -32,7 +32,7 @@ export interface ServicesDeps {
   client: ServicesClient;
   servicesConfig: ServicesConfig;
   eventBus: BotEventBus;
-  logger?: Logger | null;
+  logger?: LoggerLike | null;
   /**
    * Database used to record `nickserv-verify-timeout` rows when a NickServ
    * identity check times out. Optional so tests that don't care about the
@@ -49,7 +49,7 @@ export class Services {
   private client: ServicesClient;
   private servicesConfig: ServicesConfig;
   private eventBus: BotEventBus;
-  private logger: Logger | null;
+  private logger: LoggerLike | null;
   private db: BotDatabase | null;
   private pending: Map<string, PendingVerify> = new Map();
   private noticeListener: ((...args: unknown[]) => void) | null = null;

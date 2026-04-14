@@ -521,7 +521,7 @@ describe('.modlog command', () => {
 
     it('since 1h windows recent rows only', async () => {
       // Insert one row with a backdated timestamp via raw SQL to simulate age.
-      const internalDb = (db as unknown as { db: import('better-sqlite3').Database }).db;
+      const internalDb = db.rawHandleForTests();
       internalDb
         .prepare(
           `INSERT INTO mod_log (timestamp, action, source, by_user, channel, target, outcome)

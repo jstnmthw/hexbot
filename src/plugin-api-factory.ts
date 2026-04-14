@@ -16,9 +16,9 @@ import type { MessageQueue } from './core/message-queue';
 import type { Permissions } from './core/permissions';
 import type { Services } from './core/services';
 import type { BotDatabase } from './database';
-import type { EventDispatcher } from './dispatcher';
+import type { BindRegistrar } from './dispatcher';
 import type { BotEventBus } from './event-bus';
-import type { Logger } from './logger';
+import type { LoggerLike } from './logger';
 import type {
   BindHandler,
   BindType,
@@ -62,7 +62,7 @@ export interface IRCClientForPlugins {
  * it trivial to unit-test the API shape in isolation.
  */
 export interface PluginApiDeps {
-  dispatcher: EventDispatcher;
+  dispatcher: BindRegistrar;
   eventBus: BotEventBus;
   db: BotDatabase | null;
   permissions: Permissions;
@@ -76,7 +76,7 @@ export interface PluginApiDeps {
   channelSettings: ChannelSettings | null;
   banStore: BanStore | null;
   /** Root bot logger — the factory derives a per-plugin child from it. */
-  rootLogger: Logger | null;
+  rootLogger: LoggerLike | null;
   getCasemapping: () => Casemapping;
   getServerSupports: () => Record<string, string>;
   /** Shared map of onModesReady listeners, keyed by pluginId, for cleanup on unload. */
@@ -463,7 +463,7 @@ function createPluginIrcActionsApi(
 function createPluginAuditApi(
   db: BotDatabase | null,
   pluginId: string,
-  logger: Logger | null,
+  logger: LoggerLike | null,
 ): PluginAudit {
   if (!db) {
     return Object.freeze({ log() {} });
@@ -618,7 +618,7 @@ function createPluginHelpApi(
 }
 
 function createPluginLogApi(
-  pluginLogger: Logger | null,
+  pluginLogger: LoggerLike | null,
 ): Pick<PluginAPI, 'log' | 'error' | 'warn' | 'debug'> {
   return {
     log(...args: unknown[]): void {

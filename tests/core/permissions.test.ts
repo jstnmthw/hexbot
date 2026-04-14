@@ -815,13 +815,15 @@ describe('Permissions', () => {
 
     it('never records the hash in logs or mod_log', () => {
       const logs: string[] = [];
-      const mockLogger = {
+      const mockLogger: import('../../src/logger').LoggerLike = {
         info: (msg: string) => logs.push(msg),
         warn: (msg: string) => logs.push(msg),
         debug: () => {},
         error: () => {},
         child: () => mockLogger,
-      } as unknown as import('../../src/logger').Logger;
+        setLevel: () => {},
+        getLevel: () => 'info',
+      };
 
       const p = new Permissions(db, mockLogger);
       p.addUser('admin', '*!a@h', 'n', 'REPL');
@@ -885,13 +887,15 @@ describe('Permissions', () => {
   describe('syncUser', () => {
     it('uses "botlink" as default source when source is omitted', () => {
       const infoMsgs: string[] = [];
-      const mockLogger = {
+      const mockLogger: import('../../src/logger').LoggerLike = {
         info: (msg: string) => infoMsgs.push(msg),
         warn: () => {},
         debug: () => {},
         error: () => {},
         child: () => mockLogger,
-      } as unknown as import('../../src/logger').Logger;
+        setLevel: () => {},
+        getLevel: () => 'info',
+      };
 
       const p = new Permissions(undefined, mockLogger);
       p.syncUser('synced-user', ['*!test@host'], 'o', {});
@@ -904,13 +908,15 @@ describe('Permissions', () => {
 
     it('uses provided source when given', () => {
       const infoMsgs: string[] = [];
-      const mockLogger = {
+      const mockLogger: import('../../src/logger').LoggerLike = {
         info: (msg: string) => infoMsgs.push(msg),
         warn: () => {},
         debug: () => {},
         error: () => {},
         child: () => mockLogger,
-      } as unknown as import('../../src/logger').Logger;
+        setLevel: () => {},
+        getLevel: () => 'info',
+      };
 
       const p = new Permissions(undefined, mockLogger);
       p.syncUser('synced-user2', ['*!test@host'], 'o', {}, 'manual');

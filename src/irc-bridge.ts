@@ -4,7 +4,7 @@
 import { type ServerCapabilities, defaultServerCapabilities } from './core/isupport';
 import type { MessageQueue } from './core/message-queue';
 import type { EventDispatcher } from './dispatcher';
-import type { Logger } from './logger';
+import type { LoggerLike } from './logger';
 import type { HandlerContext } from './types';
 import { isModeArray, parseHostmask, toEventObject } from './utils/irc-event';
 import { sanitize } from './utils/sanitize';
@@ -37,7 +37,7 @@ interface IRCBridgeOptions {
   botNick: string;
   messageQueue?: MessageQueue | null;
   channelState?: ChannelStateProvider | null;
-  logger?: Logger | null;
+  logger?: LoggerLike | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +108,7 @@ export class IRCBridge {
   private botNick: string;
   private messageQueue: MessageQueue | null;
   private channelState: ChannelStateProvider | null;
-  private logger: Logger | null;
+  private logger: LoggerLike | null;
   private listeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
   private ctcpRateLimiter = new SlidingWindowCounter();
   private topicStartupGrace = false;

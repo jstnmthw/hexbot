@@ -4,8 +4,7 @@
 // INFO responses (founder detection). Called from chanserv-notice.ts when
 // the configured backend is Anope.
 import type { PluginAPI } from '../../src/types';
-import type { AnopeBackend } from './anope-backend';
-import type { ProbeState } from './chanserv-notice';
+import type { AnopeNoticeBackend, ProbeState } from './chanserv-notice';
 import {
   consumeFirstPendingProbe,
   resolveProbeForBot,
@@ -52,7 +51,7 @@ const ANOPE_INFO_END_RE = /^For more verbose information/i;
  */
 export function handleAnopeNotice(
   api: PluginAPI,
-  backend: AnopeBackend,
+  backend: AnopeNoticeBackend,
   probeState: ProbeState,
   text: string,
 ): void {

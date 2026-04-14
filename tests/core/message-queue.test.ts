@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MessageQueue } from '../../src/core/message-queue';
-import type { Logger } from '../../src/logger';
+import type { LoggerLike } from '../../src/logger';
 
 /** Short alias used throughout; every test now has to pass a target. */
 const T = '#test';
@@ -203,15 +203,17 @@ describe('MessageQueue', () => {
 
   it('clear() on already-empty queue does not log', () => {
     const debugMsgs: string[] = [];
-    const mockLogger = {
+    const mockLogger: LoggerLike = {
       debug: (msg: string) => debugMsgs.push(msg),
       warn: () => {},
       info: () => {},
       error: () => {},
-      child: function () {
-        return this;
+      child() {
+        return mockLogger;
       },
-    } as unknown as Logger;
+      setLevel: () => {},
+      getLevel: () => 'info',
+    };
 
     const q = new MessageQueue({ rate: 1, burst: 0, logger: mockLogger });
     expect(q.pending).toBe(0);
@@ -241,13 +243,15 @@ describe('MessageQueue', () => {
 
   it('logs warning on queue full when logger is provided', () => {
     const warnMsgs: string[] = [];
-    const mockLogger = {
+    const mockLogger: LoggerLike = {
       warn: (msg: string) => warnMsgs.push(msg),
       debug: () => {},
       info: () => {},
       error: () => {},
       child: () => mockLogger,
-    } as unknown as Logger;
+      setLevel: () => {},
+      getLevel: () => 'info',
+    };
 
     const q = new MessageQueue({ rate: 2, burst: 0, logger: mockLogger });
 

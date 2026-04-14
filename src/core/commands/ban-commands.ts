@@ -6,12 +6,12 @@ import { formatDuration, parseDuration } from '../../utils/duration';
 import { tryAudit } from '../audit';
 import type { BanStore } from '../ban-store';
 import type { BotLinkHub, SharedBanList } from '../botlink';
-import type { IRCCommands } from '../irc-commands';
+import type { BanOperator } from '../irc-commands';
 
 export interface BanCommandsDeps {
   commandHandler: CommandHandler;
   banStore: BanStore;
-  ircCommands: IRCCommands;
+  ircCommands: BanOperator;
   db: BotDatabase;
   hub: BotLinkHub | null;
   sharedBanList: SharedBanList | null;

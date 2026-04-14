@@ -10,7 +10,7 @@ import {
 } from '../../src/core/connection-lifecycle';
 import type { ReconnectDriver, ReconnectState } from '../../src/core/reconnect-driver';
 import { BotEventBus } from '../../src/event-bus';
-import type { Logger } from '../../src/logger';
+import type { LoggerLike } from '../../src/logger';
 import type { BotConfig } from '../../src/types';
 import { createMockLogger } from '../helpers/mock-logger';
 
@@ -97,7 +97,7 @@ function makeMockDriver(): MockReconnectDriver {
 interface TestContext {
   client: MockClient;
   eventBus: BotEventBus;
-  logger: Logger;
+  logger: LoggerLike;
   applyCasemapping: ReturnType<typeof vi.fn>;
   messageQueue: { clear: ReturnType<typeof vi.fn> };
   dispatcher: { bind: ReturnType<typeof vi.fn> };

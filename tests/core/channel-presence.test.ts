@@ -8,7 +8,7 @@ import {
   registerConnectionEvents,
 } from '../../src/core/connection-lifecycle';
 import { BotEventBus } from '../../src/event-bus';
-import type { Logger } from '../../src/logger';
+import type { LoggerLike } from '../../src/logger';
 import type { BotConfig } from '../../src/types';
 import { createMockLogger } from '../helpers/mock-logger';
 
@@ -82,7 +82,7 @@ const makeLogger = createMockLogger;
 interface TestContext {
   client: MockClient;
   channelState: MockChannelState;
-  logger: Logger;
+  logger: LoggerLike;
   handle: ConnectionLifecycleHandle;
 }
 

@@ -1,6 +1,6 @@
 // HexBot — Event dispatcher
 // Routes IRC events to registered handlers based on bind type, mask, and flags.
-import type { Logger } from './logger';
+import type { LoggerLike } from './logger';
 import type {
   BindHandler,
   BindType,
@@ -102,7 +102,7 @@ export class EventDispatcher {
   private timers: Map<BindEntry, ReturnType<typeof setInterval>> = new Map();
   private permissions: PermissionsProvider | null;
   private verification: VerificationProvider | null = null;
-  private logger: Logger | null;
+  private logger: LoggerLike | null;
   private casemapping: Casemapping = 'rfc1459';
 
   private floodNotice: FloodNoticeProvider | null = null;
@@ -116,7 +116,7 @@ export class EventDispatcher {
   private floodWarned = new Set<string>();
   private lastFloodSweep = 0;
 
-  constructor(permissions?: PermissionsProvider | null, logger?: Logger | null) {
+  constructor(permissions?: PermissionsProvider | null, logger?: LoggerLike | null) {
     this.permissions = permissions ?? null;
     this.logger = logger?.child('dispatcher') ?? null;
   }

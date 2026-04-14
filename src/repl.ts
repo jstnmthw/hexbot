@@ -4,7 +4,7 @@
 import { type Interface as ReadlineInterface, createInterface } from 'node:readline';
 
 import type { Bot } from './bot';
-import { Logger } from './logger';
+import { Logger, type LoggerLike } from './logger';
 import { toEventObject } from './utils/irc-event';
 import { sanitize } from './utils/sanitize';
 
@@ -15,11 +15,11 @@ import { sanitize } from './utils/sanitize';
 export class BotREPL {
   private bot: Bot;
   private rl: ReadlineInterface | null = null;
-  private logger: Logger | null;
-  private ircLogger: Logger | null;
+  private logger: LoggerLike | null;
+  private ircLogger: LoggerLike | null;
   private ircListeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
 
-  constructor(bot: Bot, logger?: Logger | null) {
+  constructor(bot: Bot, logger?: LoggerLike | null) {
     this.bot = bot;
     this.logger = logger?.child('repl') ?? null;
     this.ircLogger = logger?.child('irc') ?? null;

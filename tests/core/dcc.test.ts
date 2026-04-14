@@ -11,7 +11,12 @@ import {
   isPassiveDcc,
   parseDccChatPayload,
 } from '../../src/core/dcc';
-import type { DCCIRCClient, DCCSessionEntry, DCCSessionManager } from '../../src/core/dcc';
+import type {
+  DCCIRCClient,
+  DCCSessionEntry,
+  DCCSessionManager,
+  PendingDCC,
+} from '../../src/core/dcc';
 import { hashPassword } from '../../src/core/password';
 import type { BindRegistrar } from '../../src/dispatcher';
 import type {
@@ -580,6 +585,7 @@ describe('DCCManager', () => {
         handler = fn;
       },
     );
+    const pendingMap = new Map<number, PendingDCC>();
     const m = new DCCManager({
       client,
       dispatcher,
@@ -589,12 +595,12 @@ describe('DCCManager', () => {
       config: makeConfig(),
       version: '1.0.0',
       botNick: 'hexbot',
+      pending: pendingMap,
     });
     m.attach();
 
     // Inject a fake pending entry for this nick
-    const pendingMap = (m as unknown as { pending: Map<number, { nick: string }> }).pending;
-    pendingMap.set(50001, { nick: 'testnick' } as never);
+    pendingMap.set(50001, { nick: 'testnick' } as PendingDCC);
 
     await handler(makeCtx('testnick'));
     expect(client.notices.some((n) => n.message.includes('already pending'))).toBe(true);
@@ -2017,17 +2023,25 @@ describe('DCCManager.openSession prompt integration', () => {
 
     // Seed a failure so recordSuccess has something to clear
     tracker.recordFailure('AliceNick!alice@alice.host');
-    const fakeSession = {
+    const fakeSession: DCCSessionEntry = {
       handle: 'alice',
       nick: 'AliceNick',
       connectedAt: Date.now(),
       isRelaying: false,
+      relayTarget: null,
+      handleFlags: 'nm',
       rateLimitKey: 'AliceNick!alice@alice.host',
+      isClosed: false,
+      isStale: false,
       writeLine: vi.fn(),
       close: vi.fn(),
       enterRelay: vi.fn(),
       exitRelay: vi.fn(),
-    } as unknown as DCCSession;
+      confirmRelay: vi.fn(),
+      getConsoleFlags: () => '',
+      setConsoleFlags: vi.fn(),
+      receiveLog: vi.fn(),
+    };
 
     mgr.onAuthSuccess(fakeSession);
 

@@ -2,7 +2,7 @@
 // Hostmask-based identity, n/m/o/v flags with per-channel overrides.
 import type { BotDatabase } from '../database';
 import type { BotEventBus } from '../event-bus';
-import type { Logger } from '../logger';
+import type { LoggerLike } from '../logger';
 import type { HandlerContext, UserRecord } from '../types';
 import { type Casemapping, ircLower, wildcardMatch } from '../utils/wildcard';
 import { tryLogModAction } from './audit';
@@ -61,12 +61,12 @@ export type AccountLookup = (nick: string) => string | null | undefined;
 export class Permissions {
   private users: Map<string, UserRecord> = new Map();
   private db: BotDatabase | null;
-  private logger: Logger | null;
+  private logger: LoggerLike | null;
   private eventBus: BotEventBus | null;
   private casemapping: Casemapping = 'rfc1459';
   private accountLookup: AccountLookup | null = null;
 
-  constructor(db?: BotDatabase | null, logger?: Logger | null, eventBus?: BotEventBus | null) {
+  constructor(db?: BotDatabase | null, logger?: LoggerLike | null, eventBus?: BotEventBus | null) {
     this.db = db ?? null;
     this.logger = logger?.child('permissions') ?? null;
     this.eventBus = eventBus ?? null;

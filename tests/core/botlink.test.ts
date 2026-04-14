@@ -3732,20 +3732,9 @@ describe('BotLinkHub sweepStaleRoutes — relay & party TTL', () => {
     const now = Date.now();
 
     // Reach into the router's private state to seed both kinds of stale
-    // entries. The hub owns a BotLinkRelayRouter that holds the four maps
-    // directly; we cast through `unknown` to poke at them without widening
-    // the public API.
-    type RouterInternals = {
-      activeRelays: Map<string, { originBot: string; targetBot: string; createdAt: number }>;
-      remotePartyUsers: Map<
-        string,
-        { handle: string; nick: string; botname: string; connectedAt: number; idle: number }
-      >;
-      protectRequests: Map<string, { botname: string; createdAt: number }>;
-      cmdRoutes: Map<string, { botname: string; createdAt: number }>;
-      sweepStaleRoutes: () => void;
-    };
-    const routes = (hub as unknown as { routes: RouterInternals }).routes;
+    // The hub owns a BotLinkRelayRouter that holds the four state maps as
+    // public readonly fields — tests seed through them directly.
+    const routes = hub.routes;
 
     // Stale + fresh protect request and cmd route — covers the SHORT_TTL branches.
     routes.protectRequests.set('stale-protect', { botname: 'leaf1', createdAt: now - 60_000 });

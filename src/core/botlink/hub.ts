@@ -7,7 +7,7 @@ import type { Server as NetServer, Socket } from 'node:net';
 
 import type { BotDatabase } from '../../database';
 import type { BotEventBus } from '../../event-bus';
-import type { Logger } from '../../logger';
+import type { LoggerLike } from '../../logger';
 import type { BotlinkConfig } from '../../types';
 import type { Permissions } from '../permissions';
 import { type AuthBanEntry, BotLinkAuthManager } from './auth';
@@ -52,16 +52,18 @@ interface LeafConnection {
 export class BotLinkHub {
   private server: NetServer | null = null;
   private leaves: Map<string, LeafConnection> = new Map();
-  private routes: BotLinkRelayRouter;
+  /** Relay routing state owner. Public-readable so tests can seed sweep state. */
+  readonly routes: BotLinkRelayRouter;
   /** Pending commands sent by the hub itself (from .bot). Key: ref. */
   private pendingCmds = new PendingRequestMap<string[]>();
   private eventBusListeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
   private cmdRefCounter = 0;
   private config: BotlinkConfig;
   private version: string;
-  private logger: Logger | null;
+  private logger: LoggerLike | null;
   private eventBus: BotEventBus | null;
-  private auth: BotLinkAuthManager;
+  /** Auth/ban state owner. Public-readable so tests can seed LRU/CIDR state. */
+  readonly auth: BotLinkAuthManager;
   private pingIntervalMs: number;
   private linkTimeoutMs: number;
 
@@ -79,7 +81,7 @@ export class BotLinkHub {
   constructor(
     config: BotlinkConfig,
     version: string,
-    logger?: Logger | null,
+    logger?: LoggerLike | null,
     eventBus?: BotEventBus | null,
     db?: BotDatabase | null,
   ) {

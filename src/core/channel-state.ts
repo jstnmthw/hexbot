@@ -2,7 +2,7 @@
 // Tracks who is in each channel, their modes, and hostmasks.
 // Updated in real time from IRC events.
 import type { BotEventBus } from '../event-bus';
-import type { Logger } from '../logger';
+import type { LoggerLike } from '../logger';
 import { isModeArray, isObjectArray, toEventObject } from '../utils/irc-event';
 import { type Casemapping, ircLower } from '../utils/wildcard';
 import { type ServerCapabilities, defaultServerCapabilities } from './isupport';
@@ -57,13 +57,13 @@ export class ChannelState {
   private networkAccounts: Map<string, string | null> = new Map();
   private client: ChannelStateClient;
   private eventBus: BotEventBus;
-  private logger: Logger | null;
+  private logger: LoggerLike | null;
   private listeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
   private botNick = '';
   private casemapping: Casemapping = 'rfc1459';
   private capabilities: ServerCapabilities = defaultServerCapabilities();
 
-  constructor(client: ChannelStateClient, eventBus: BotEventBus, logger?: Logger | null) {
+  constructor(client: ChannelStateClient, eventBus: BotEventBus, logger?: LoggerLike | null) {
     this.client = client;
     this.eventBus = eventBus;
     this.logger = logger?.child('channel-state') ?? null;

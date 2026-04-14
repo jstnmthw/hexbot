@@ -15,7 +15,7 @@ import { createInterface as createReadline } from 'node:readline';
 import type { CommandExecutor } from '../../command-handler';
 import type { BotDatabase } from '../../database';
 import type { BindRegistrar } from '../../dispatcher';
-import type { LogRecord, LogSink, Logger } from '../../logger';
+import type { LogRecord, LogSink, LoggerLike } from '../../logger';
 import { Logger as LoggerClass } from '../../logger';
 import type { DccConfig, HandlerContext, PluginServices, UserRecord } from '../../types';
 import { toEventObject } from '../../utils/irc-event';
@@ -216,9 +216,11 @@ export interface DCCManagerDeps {
   config: DccConfig;
   version: string;
   botNick: string;
-  logger?: Logger | null;
+  logger?: LoggerLike | null;
   /** Injectable session store. Default: new Map(). */
   sessions?: Map<string, DCCSessionEntry>;
+  /** Injectable pending-connect store (port → entry). Default: new Map(). */
+  pending?: Map<number, PendingDCC>;
   /** Injectable port allocator. Default: RangePortAllocator from config.port_range. */
   portAllocator?: PortAllocator;
   /** Injectable auth tracker. Default: new DCCAuthTracker() with stock parameters. */
@@ -241,7 +243,7 @@ export interface DCCManagerDeps {
   getStats?: () => BannerStats;
 }
 
-interface PendingDCC {
+export interface PendingDCC {
   nick: string;
   user: UserRecord;
   ident: string;
@@ -293,7 +295,7 @@ export class DCCSession implements DCCSessionEntry {
   private rl: import('readline').Interface | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
-  private logger: Logger | null;
+  private logger: LoggerLike | null;
   private consoleFlagStore: ConsoleFlagStore | null;
   private consoleFlags: Set<ConsoleFlagLetter>;
 
@@ -315,7 +317,7 @@ export class DCCSession implements DCCSessionEntry {
     socket: Socket;
     commandHandler: CommandExecutor;
     idleTimeoutMs: number;
-    logger?: Logger | null;
+    logger?: LoggerLike | null;
     consoleFlagStore?: ConsoleFlagStore | null;
   }) {
     this.manager = opts.manager;
@@ -774,13 +776,14 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   private commandHandler: CommandExecutor;
   private config: DccConfig;
   private version: string;
-  private logger: Logger | null;
+  private logger: LoggerLike | null;
   private getStatsFn: (() => BannerStats) | null;
   private db: BotDatabase | null;
 
   private readonly sessions: Map<string, DCCSessionEntry>;
   private readonly portAllocator: PortAllocator;
-  private pending: Map<number, PendingDCC> = new Map(); // key = port
+  /** Port → awaiting-connect entry. Injectable via `deps.pending` for tests. */
+  private readonly pending: Map<number, PendingDCC>;
   private casemapping: Casemapping = 'rfc1459';
   private botNick: string;
   private ircListeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
@@ -804,6 +807,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     this.getStatsFn = deps.getStats ?? null;
     this.sessions = deps.sessions ?? new Map();
     this.portAllocator = deps.portAllocator ?? new RangePortAllocator(deps.config.port_range);
+    this.pending = deps.pending ?? new Map();
     this.authTracker = deps.authTracker ?? new DCCAuthTracker();
     this.consoleFlagStore = deps.consoleFlagStore ?? createInMemoryConsoleFlagStore();
     this.db = deps.db ?? null;

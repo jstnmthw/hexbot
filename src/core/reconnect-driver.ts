@@ -28,7 +28,7 @@
 // notifications. Keeping the boundaries clean makes the module trivially
 // unit-testable without any IRC mock.
 import type { BotEventBus } from '../event-bus';
-import type { Logger } from '../logger';
+import type { LoggerLike } from '../logger';
 import type { ReconnectPolicy } from './connection-lifecycle';
 
 // ---------------------------------------------------------------------------
@@ -51,7 +51,7 @@ export interface ReconnectDriverConfig {
 export interface ReconnectDriverDeps {
   /** Called to re-open the IRC connection. Usually `() => client.connect()`. */
   connect: () => void;
-  logger: Logger;
+  logger: LoggerLike;
   eventBus: BotEventBus;
   config: ReconnectDriverConfig;
   /**

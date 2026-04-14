@@ -17,7 +17,7 @@ import type { Services } from './core/services';
 import type { BotDatabase } from './database';
 import type { EventDispatcher } from './dispatcher';
 import type { BotEventBus } from './event-bus';
-import type { Logger } from './logger';
+import type { LoggerLike } from './logger';
 import { type IRCClientForPlugins, createPluginApi } from './plugin-api-factory';
 import type { BotConfig, Casemapping, PluginAPI, PluginsConfig } from './types';
 
@@ -94,7 +94,7 @@ export interface PluginLoaderDeps {
   helpRegistry?: HelpRegistry | null;
   channelSettings?: ChannelSettings | null;
   banStore?: BanStore | null;
-  logger?: Logger | null;
+  logger?: LoggerLike | null;
   getCasemapping?: () => Casemapping;
   getServerSupports?: () => Record<string, string>;
 }
@@ -122,8 +122,8 @@ export class PluginLoader {
   private helpRegistry: HelpRegistry | null;
   private channelSettings: ChannelSettings | null;
   private banStore: BanStore | null;
-  private logger: Logger | null;
-  private rootLogger: Logger | null;
+  private logger: LoggerLike | null;
+  private rootLogger: LoggerLike | null;
   private getCasemapping: () => Casemapping;
   private getServerSupports: () => Record<string, string>;
   private modesReadyListeners: Map<string, Array<(channel: string) => void>> = new Map();

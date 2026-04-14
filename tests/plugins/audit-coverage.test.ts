@@ -50,7 +50,8 @@ function buildApi(pluginId: string): { api: PluginAPI; db: BotDatabase } {
     dispatcher: {
       bind: vi.fn(),
       unbind: vi.fn(),
-    } as unknown as PluginApiDeps['dispatcher'],
+      unbindAll: vi.fn(),
+    },
     eventBus,
     db,
     permissions: {} as PluginApiDeps['permissions'],

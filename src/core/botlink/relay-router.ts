@@ -5,7 +5,7 @@
 // routing, and the remote party-line user table. Factoring these out of
 // `BotLinkHub` lets the hub focus on connection lifecycle while relay
 // bookkeeping (including the TTL sweep) lives in one place.
-import type { Logger } from '../../logger';
+import type { LoggerLike } from '../../logger';
 import type { LinkFrame, PartyLineUser } from './protocol';
 
 interface RelayEntry {
@@ -25,7 +25,7 @@ const PARTY_TTL = 7 * 86_400_000; // 7 days — remote DCC party members
 
 export interface RelayRouterDeps {
   botname: string;
-  logger: Logger | null;
+  logger: LoggerLike | null;
   send: (botname: string, frame: LinkFrame) => boolean;
   /**
    * Deliver a frame locally when the target is the hub itself, otherwise
@@ -39,14 +39,14 @@ export interface RelayRouterDeps {
 }
 
 export class BotLinkRelayRouter {
-  /** Active relay sessions. Key: handle. */
-  private activeRelays = new Map<string, RelayEntry>();
+  /** Active relay sessions. Key: handle. Exposed `readonly` so tests can seed sweep state. */
+  readonly activeRelays = new Map<string, RelayEntry>();
   /** Pending protect requests keyed by ref, waiting for PROTECT_ACK. */
-  private protectRequests = new Map<string, PendingEntry>();
+  readonly protectRequests = new Map<string, PendingEntry>();
   /** CMD routing table — tracks toBot-routed commands for CMD_RESULT forwarding. */
-  private cmdRoutes = new Map<string, PendingEntry>();
+  readonly cmdRoutes = new Map<string, PendingEntry>();
   /** Remote party line users tracked from PARTY_JOIN/PARTY_PART frames. Key: `handle@botname`. */
-  private remotePartyUsers = new Map<string, PartyLineUser>();
+  readonly remotePartyUsers = new Map<string, PartyLineUser>();
 
   constructor(private readonly deps: RelayRouterDeps) {}
 

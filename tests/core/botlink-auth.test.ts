@@ -412,9 +412,7 @@ describe('auth brute-force protection', () => {
 
   it('promotes touched authTracker entries to most-recently-used (LRU)', async () => {
     const hub = makeHub(hubConfig({ max_auth_failures: 99 }), '1.0.0');
-    // Reach into private state to verify insertion-order promotion.
-    type AuthInternals = { authTracker: Map<string, unknown> };
-    const auth = (hub as unknown as { auth: AuthInternals }).auth;
+    const auth = hub.auth;
 
     await sendBadAuth(hub, '10.50.0.1');
     await sendBadAuth(hub, '10.50.0.2');
@@ -428,13 +426,7 @@ describe('auth brute-force protection', () => {
 
   it('LRU-evicts the oldest authTracker entry when the hard cap is hit', async () => {
     const hub = makeHub(hubConfig({ max_auth_failures: 99 }), '1.0.0');
-    type AuthInternals = {
-      authTracker: Map<
-        string,
-        { failures: number; firstFailure: number; bannedUntil: number; banCount: number }
-      >;
-    };
-    const auth = (hub as unknown as { auth: AuthInternals }).auth;
+    const auth = hub.auth;
 
     // Seed 10_000 entries directly to fill the cap, then trigger one more
     // failure — the oldest seeded entry should be evicted.
@@ -459,13 +451,7 @@ describe('auth brute-force protection', () => {
 
   it('sweeps expired CIDR manual bans on connection-driven sweep', async () => {
     const hub = makeHub(hubConfig(), '1.0.0');
-    type AuthInternals = {
-      manualCidrBans: Map<
-        string,
-        { ip: string; bannedUntil: number; reason: string; setBy: string; setAt: number }
-      >;
-    };
-    const auth = (hub as unknown as { auth: AuthInternals }).auth;
+    const auth = hub.auth;
 
     // Seed an expired CIDR ban directly, then trigger sweep via a connection.
     auth.manualCidrBans.set('203.0.113.0/24', {
@@ -495,8 +481,7 @@ describe('auth brute-force protection', () => {
     const hub = makeHub(hubConfig(), '1.0.0', mockLogger as never);
 
     // Seed the manualCidrBans map directly to skip 500 round-trips.
-    type AuthInternals = { manualCidrBans: Map<string, unknown> };
-    const auth = (hub as unknown as { auth: AuthInternals }).auth;
+    const auth = hub.auth;
     for (let i = 0; i < 500; i++) {
       auth.manualCidrBans.set(`10.${Math.floor(i / 256)}.${i % 256}.0/24`, {
         ip: `10.${Math.floor(i / 256)}.${i % 256}.0/24`,

@@ -1,7 +1,7 @@
 // HexBot — IRC commands core module
 // Convenience wrappers for common IRC operations with mod action logging.
 import type { BotDatabase } from '../database';
-import type { Logger } from '../logger';
+import type { LoggerLike } from '../logger';
 import { sanitize } from '../utils/sanitize';
 import { type ModActor, tryLogModAction } from './audit';
 import { type ServerCapabilities, defaultServerCapabilities } from './isupport';
@@ -18,6 +18,17 @@ export interface IRCCommandsClient {
   part(channel: string, message?: string): void;
   raw(line: string): void;
   mode?(target: string, mode: string, ...params: string[]): void;
+}
+
+/**
+ * Narrow role interface for consumers that only need to set/lift channel
+ * bans (e.g. `.ban`/`.unban` command registrars). `IRCCommands` satisfies
+ * this structurally — use this type in consumers so tests can pass plain
+ * objects without casting.
+ */
+export interface BanOperator {
+  ban(channel: string, mask: string, actor?: ModActor): void;
+  unban(channel: string, mask: string, actor?: ModActor): void;
 }
 
 /**
@@ -75,7 +86,7 @@ function parseModeString(s: string): ModeSegment[] {
 export class IRCCommands {
   private client: IRCCommandsClient;
   private db: BotDatabase | null;
-  private logger: Logger | null;
+  private logger: LoggerLike | null;
   private modesPerLine: number;
   private capabilities: ServerCapabilities = defaultServerCapabilities();
   private defaultActor: ModActor = DEFAULT_ACTOR;
@@ -84,7 +95,7 @@ export class IRCCommands {
     client: IRCCommandsClient,
     db: BotDatabase | null,
     modesPerLine?: number,
-    logger?: Logger | null,
+    logger?: LoggerLike | null,
   ) {
     this.client = client;
     this.db = db;

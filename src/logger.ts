@@ -74,10 +74,30 @@ export interface ChildLoggerOptions {
 }
 
 // ---------------------------------------------------------------------------
+// LoggerLike — the narrow interface consumers should depend on
+// ---------------------------------------------------------------------------
+
+/**
+ * The instance surface of {@link Logger}. Consumers should type their
+ * logger field as `LoggerLike` so tests can pass plain mock objects
+ * without `as unknown as Logger` casts. `Logger implements LoggerLike`
+ * keeps the two in lockstep.
+ */
+export interface LoggerLike {
+  debug(...args: unknown[]): void;
+  info(...args: unknown[]): void;
+  warn(...args: unknown[]): void;
+  error(...args: unknown[]): void;
+  child(prefix: string, options?: ChildLoggerOptions): LoggerLike;
+  setLevel(level: LogLevel): void;
+  getLevel(): LogLevel;
+}
+
+// ---------------------------------------------------------------------------
 // Logger
 // ---------------------------------------------------------------------------
 
-export class Logger {
+export class Logger implements LoggerLike {
   private prefix: string | null;
   private readonly category: string | null;
   private levelRef: { value: LogLevel };

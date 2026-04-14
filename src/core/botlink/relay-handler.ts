@@ -2,7 +2,7 @@
 // Extracted from bot.ts for testability. Handles incoming RELAY_* frames
 // that create and manage virtual relay sessions between linked bots.
 import type { CommandContext } from '../../command-handler';
-import type { Logger } from '../../logger';
+import type { LoggerLike } from '../../logger';
 import type { stripFormatting as StripFormattingFn } from '../../utils/strip-formatting';
 import type { DCCSessionEntry } from '../dcc';
 import type { LinkFrame } from './protocol';
@@ -46,7 +46,7 @@ export interface RelayHandlerDeps {
   botname: string;
   sender: RelaySender;
   stripFormatting: typeof StripFormattingFn;
-  logger?: Logger | null;
+  logger?: LoggerLike | null;
 }
 
 /** Per-handle virtual session state tracked on the target bot. */

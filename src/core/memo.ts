@@ -13,7 +13,7 @@
 //    (owner) or m (master) flags can use .memo.
 import type { CommandContext, CommandHandler } from '../command-handler';
 import type { EventDispatcher } from '../dispatcher';
-import type { Logger } from '../logger';
+import type { LoggerLike } from '../logger';
 import type { Casemapping, HandlerContext, MemoConfig } from '../types';
 import { ircLower } from '../utils/wildcard';
 import { hasOwnerOrMaster } from './permissions';
@@ -53,7 +53,7 @@ export interface MemoDeps {
   permissions: MemoPermissions;
   channelState: MemoChannelState;
   client: MemoIRCClient;
-  logger?: Logger | null;
+  logger?: LoggerLike | null;
   dccManager?: MemoDCCManager | null;
   /**
    * Predicate: does this handle have an active DCC console via a botnet
@@ -90,7 +90,7 @@ export class MemoManager {
   private permissions: MemoPermissions;
   private channelState: MemoChannelState;
   private client: MemoIRCClient;
-  private logger: Logger | null;
+  private logger: LoggerLike | null;
   private dccManager: MemoDCCManager | null;
   private hasRelayConsole: (handle: string) => boolean;
   private casemapping: Casemapping = 'rfc1459';

@@ -37,7 +37,7 @@
 //   `setTargmax` / `getTargmax` for plugins and future multi-target work
 //   but do not split/merge here. See `docs/audits/irc-logic-2026-04-11.md`
 //   §10 for context.
-import type { Logger } from '../logger';
+import type { LoggerLike } from '../logger';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,7 +49,7 @@ export interface MessageQueueOptions {
   /** Burst allowance — messages that can send immediately before throttling. Default: 4 */
   burst?: number;
   /** Logger instance */
-  logger?: Logger | null;
+  logger?: LoggerLike | null;
 }
 
 /**
@@ -85,7 +85,7 @@ export class MessageQueue {
   private readonly costMs: number;
   /** Maximum budget in milliseconds: burst * costMs. */
   private readonly capacityMs: number;
-  private readonly logger: Logger | null;
+  private readonly logger: LoggerLike | null;
   /** ISUPPORT TARGMAX map, surfaced but not enforced. Keys are uppercased command names. */
   private targmax: Record<string, number> = {};
 
