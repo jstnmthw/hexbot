@@ -1,7 +1,8 @@
 // HexBot — Entry point
 // Parses CLI args, starts the bot, optionally starts the REPL.
-import { closeSync, openSync, unlinkSync, utimesSync } from 'node:fs';
+import { closeSync, openSync, readFileSync, unlinkSync, utimesSync } from 'node:fs';
 import net from 'node:net';
+import { basename } from 'node:path';
 
 import { Bot } from './bot';
 import { BotREPL } from './repl';
@@ -69,6 +70,15 @@ function parseConfigArg(argv: string[]): string | undefined {
   return undefined;
 }
 const configPath = parseConfigArg(args);
+
+// Set process.title so htop/ps shows e.g. "hexbot (v0.2.3) - blueangel"
+// instead of the full `tsx … --config=…` line. Read package.json relative
+// to this file so it resolves under both `tsx src/index.ts` and `node dist/index.js`.
+const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')) as {
+  version: string;
+};
+const instanceName = configPath ? basename(configPath, '.json') : 'default';
+process.title = `hexbot (v${pkg.version}) - ${instanceName}`;
 
 // ---------------------------------------------------------------------------
 // Boot
