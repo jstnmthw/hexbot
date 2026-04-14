@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   type ConnectionLifecycleDeps,
@@ -32,6 +32,11 @@ class MockClient extends EventEmitter implements LifecycleIRCClient {
 
   join(channel: string, key?: string): void {
     this.joins.push({ channel, key });
+  }
+
+  quit(_message?: string): void {
+    // Simulate closing the connection
+    this.emit('close');
   }
 }
 
@@ -578,6 +583,48 @@ describe('registerConnectionEvents', () => {
       const err = new Error('socket failure');
       client.emit('socket error', err);
       expect(handler).toHaveBeenCalledWith(err);
+    });
+  });
+
+  describe('registration timeout (§6)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('aborts registration if no IRC greeting arrives within 30s of socket connect', () => {
+      const { client, deps, reconnectDriver } = makeContext();
+      registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      // Socket connected but no 'registered' event yet
+      client.emit('socket connected');
+      expect(reconnectDriver.onDisconnect).not.toHaveBeenCalled();
+
+      // Advance to 30s — registration timeout should fire
+      vi.advanceTimersByTime(30_000);
+      expect(reconnectDriver.onDisconnect).toHaveBeenCalledOnce();
+      const policy = reconnectDriver.onDisconnect.mock.calls[0][0];
+      expect(policy.tier).toBe('transient');
+      expect(policy.label).toBe('registration timeout');
+    });
+
+    it('cancels the timeout if registration completes before 30s', () => {
+      const { client, deps, reconnectDriver } = makeContext();
+      registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      client.emit('socket connected');
+      vi.advanceTimersByTime(10_000);
+      client.emit('registered');
+      vi.advanceTimersByTime(20_000);
+      expect(reconnectDriver.onDisconnect).not.toHaveBeenCalled();
     });
   });
 

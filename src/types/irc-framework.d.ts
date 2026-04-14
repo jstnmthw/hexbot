@@ -17,6 +17,8 @@ declare module 'irc-framework' {
       account: string;
       password: string;
     };
+    /** Abort connection if IRC registration doesn't complete within this time (ms). */
+    connection_timeout?: number;
     [key: string]: unknown;
   }
 

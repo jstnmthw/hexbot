@@ -25,6 +25,11 @@ class MockClient extends EventEmitter implements LifecycleIRCClient {
   join(channel: string, key?: string): void {
     this.joins.push({ channel, key });
   }
+
+  quit(_message?: string): void {
+    // Simulate closing the connection
+    this.emit('close');
+  }
 }
 
 // ---------------------------------------------------------------------------

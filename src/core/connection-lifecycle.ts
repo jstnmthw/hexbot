@@ -21,6 +21,7 @@ export interface LifecycleIRCClient {
   on(event: string, listener: (...args: unknown[]) => void): void;
   removeListener(event: string, listener: (...args: unknown[]) => void): void;
   join(channel: string, key?: string): void;
+  quit(message?: string): void;
   /**
    * irc-framework's `network.supports()` returns a string for most tokens, a
    * boolean for flag-only tokens, and parsed arrays for a handful of special
@@ -130,6 +131,10 @@ export function registerConnectionEvents(
   // Captures the last IRC ERROR reason or socket error so we can classify
   // it when 'close' fires — irc-framework's 'close' event only passes a boolean.
   let lastCloseReason: string | null = null;
+  // If the server accepts a connection but doesn't send the IRC greeting
+  // within 30s, abort and let the reconnect driver retry. Without this,
+  // stalled connections wait for TCP timeout (~2.5 min) before retrying.
+  let registrationTimer: ReturnType<typeof setTimeout> | null = null;
 
   const listeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
 
@@ -145,6 +150,11 @@ export function registerConnectionEvents(
 
   const onRegistered = () => {
     lastCloseReason = null;
+    // Registration succeeded, cancel the stall timeout.
+    if (registrationTimer !== null) {
+      clearTimeout(registrationTimer);
+      registrationTimer = null;
+    }
     reconnectDriver.onConnected();
     logger.info(`Connected to ${cfg.host}:${cfg.port} as ${cfg.nick}`);
 
@@ -170,6 +180,22 @@ export function registerConnectionEvents(
     }
   };
 
+  // When the socket is opened (TCP connected), start a timer that aborts
+  // registration if it doesn't complete within 30s. This catches stalled
+  // connections where the server accepts the socket but never sends the
+  // greeting (common after a crash when the server has temporarily blocked
+  // the connection). Without this, irc-framework waits for the TCP timeout
+  // (~2.5 min) before aborting.
+  const onSocketConnected = () => {
+    registrationTimer = setTimeout(() => {
+      registrationTimer = null;
+      lastCloseReason = 'registration timeout';
+      logger.warn('IRC registration timeout — no greeting received within 30s');
+      // Close the socket so 'close' event fires and reconnect logic runs.
+      client.quit('Registration timeout');
+    }, 30_000);
+  };
+
   // Capture the server's IRC ERROR message (e.g. "Closing Link: ... (Throttled)")
   // which fires just before the socket closes. irc-framework emits this as 'irc error'
   // with error === 'irc' and reason containing the server message.
@@ -186,6 +212,12 @@ export function registerConnectionEvents(
     const reason = lastCloseReason ?? 'connection closed';
     const policy = classifyCloseReason(lastCloseReason);
     lastCloseReason = null;
+
+    // Cancel any pending registration timeout — the socket is closed so the timer is moot.
+    if (registrationTimer !== null) {
+      clearTimeout(registrationTimer);
+      registrationTimer = null;
+    }
 
     logger.info(`Connection closed: ${reason}`);
     deps.eventBus.emit('bot:disconnected', reason);
@@ -209,6 +241,7 @@ export function registerConnectionEvents(
   };
 
   listen('registered', onRegistered);
+  listen('socket connected', onSocketConnected);
   listen('irc error', onIrcError);
   listen('close', onClose);
   listen('socket error', onSocketError);
@@ -225,6 +258,11 @@ export function registerConnectionEvents(
         client.removeListener(event, fn);
       }
       listeners.length = 0;
+      // Also clear any pending registration timeout
+      if (registrationTimer !== null) {
+        clearTimeout(registrationTimer);
+        registrationTimer = null;
+      }
     },
     cancelReconnect() {
       reconnectDriver.cancel();
@@ -333,7 +371,7 @@ const TRANSIENT_LABEL_PATTERNS: Array<[RegExp, string]> = [
   // These still classify as `transient` — the label just makes the log
   // line name the cause instead of saying "unknown reason".
   [/ping\s+timeout/i, 'ping timeout'],
-  [/registration\s+tim(?:e|ed)\s*out/i, 'registration timeout'],
+  [/registration\s+(?:tim(?:e|ed)\s*)?out/i, 'registration timeout'],
   [/server\s+shutting\s+down/i, 'server shutting down'],
   [/restart\s+in\s+progress/i, 'server restart'],
   [/closing\s+link/i, 'closing link'],
