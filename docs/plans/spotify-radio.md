@@ -69,6 +69,14 @@ A plugin that turns the hexbot into a classic "now playing" IRC radio announcer 
   - Run `pnpm run spotify:auth`, complete the flow, confirm a refresh token is printed.
   - Run `pnpm run spotify:auth --code <fake>` with an invalid code and confirm a clean error, not a crash.
 
+**Security audit follow-ups (2026-04-14):**
+
+- [ ] Bind the loopback listener with an explicit `'127.0.0.1'` host argument: `server.listen(8888, '127.0.0.1', ...)`. Node's default `listen(port)` binds to `::` on dual-stack systems, which would expose the callback endpoint to the local network during the auth flow.
+- [ ] Wrap the token-exchange POST in a `try/catch` that re-throws a sanitised error containing only the HTTP status — never the request body (authorization code, client secret) or the response body (may echo credentials in error shapes).
+- [ ] Install a top-level `process.on('uncaughtException')` handler that logs a generic message and `process.exit(1)` without printing stack traces that could contain the authorization code or client secret.
+- [ ] Validate the returned `code` query parameter does not contain `\r`, `\n`, or `\0` before posting it to the token endpoint (defence in depth).
+- [ ] Resolve: either document how `--code` headless mode persists the PKCE `code_verifier` between the authorize print and the code exchange, or drop `--code` mode and use plain authorization-code flow (PKCE is technically unnecessary for a confidential client with a `client_secret` — see audit INFO finding).
+
 ### Phase 2: Plugin skeleton and config wiring
 
 **Goal:** A no-op `spotify-radio` plugin that loads, reads its config through the `_env` indirection, logs a startup banner, and unloads cleanly.
@@ -83,15 +91,20 @@ A plugin that turns the hexbot into a classic "now playing" IRC radio announcer 
     "poll_interval_sec": 10,
     "session_ttl_hours": 6,
     "announce_prefix": "[radio]",
-    "allowed_link_hosts": ["open.spotify.com", "spotify.link"],
+    "allowed_link_hosts": ["open.spotify.com"],
     "max_consecutive_errors": 5
   }
   ```
-  Secrets are declared via `_env` fields. `plugins.json` may override `poll_interval_sec`, `session_ttl_hours`, `announce_prefix`, `allowed_link_hosts`, and `max_consecutive_errors` — never the three `_env` fields.
+  Secrets are declared via `_env` fields. `plugins.json` may override `poll_interval_sec`, `session_ttl_hours`, `announce_prefix`, `allowed_link_hosts`, and `max_consecutive_errors` — never the three `_env` fields. `allowed_link_hosts` defaults to `open.spotify.com` only; `spotify.link` shorts cannot be validated server-side (client-side JS redirects — see 2026-04-14 security audit) and must be explicitly opted in via `plugins.json` if an operator accepts the phishing risk.
 - [ ] Create `plugins/spotify-radio/index.ts` with required exports (`name`, `version`, `description`, `init`, `teardown`), a `PluginConfig` interface mirroring the JSON shape, and a `loadConfig(api)` helper that validates types and asserts secrets are non-empty (same pattern as `plugins/rss/index.ts` `loadConfig`).
 - [ ] On missing or empty `client_id` / `client_secret` / `refresh_token`, throw from `init()` with a message that names the env var (not its value): e.g. `HEX_SPOTIFY_REFRESH_TOKEN not set — run 'pnpm run spotify:auth' on your workstation and paste the result into config/bot.env`. hexbot's plugin loader treats an `init()` throw as a load failure and runs `teardown()`, so resources are cleaned.
 - [ ] Implement a stub `teardown()` that clears the module-level session variable (defined in phase 4). No-op for now.
 - [ ] Verification: Enable plugin in `config/plugins.json`, start bot with `HEX_SPOTIFY_*` set to dummy non-empty values, confirm `[plugin:spotify-radio] Loaded` banner. Start with those vars unset and confirm the load fails with the exact env var name in the error.
+
+**Security audit follow-ups (2026-04-14):**
+
+- [ ] `loadConfig` validation errors name the env var only — never interpolate the resolved value even on "present but malformed" failures (e.g., surrounding whitespace, wrong length).
+- [ ] New `tests/plugins/spotify-radio/plugin-init.test.ts` file spies on `api.log` / `api.error` during every `loadConfig` failure path and asserts that no call argument contains the test client_id, client_secret, or refresh_token strings.
 
 ### Phase 3: Spotify HTTP client (access token + currently-playing)
 
@@ -127,7 +140,7 @@ interface CurrentlyPlaying {
 - `POST https://accounts.spotify.com/api/token`
 - Body: `grant_type=refresh_token&refresh_token=<token>` (form-encoded).
 - `Authorization: Basic <base64(client_id:client_secret)>`.
-- Parse `{ access_token, expires_in }` (Spotify sometimes also returns a new `refresh_token` — if present, **log a warning and ignore it** for MVP; the operator needs to know rotation happened but we don't support dynamic refresh-token update without restart).
+- Parse `{ access_token, expires_in }`. Spotify may also return a new `refresh_token` — when present, **hold it in a module-local mutable variable for the remainder of the process lifetime** and use it on subsequent mints. Log at `info` that rotation happened (fact only, never the value). The bot must not persist the rotated token back to `bot.env` — on a restart, the operator re-runs `spotify:auth` if Spotify has fully rotated. See 2026-04-14 security audit for rationale.
 - Non-200 → throw `SpotifyAuthError` with the HTTP status but **not** the response body (the body can contain echoed credentials in some error shapes).
 
 **`getCurrentlyPlaying`:**
@@ -152,6 +165,14 @@ interface CurrentlyPlaying {
 - [ ] Implement `getCurrentlyPlaying()` with the full error branching.
 - [ ] Export the error classes (`SpotifyAuthError`, `SpotifyRateLimitError`, `SpotifyHttpError`, `SpotifyNetworkError`).
 - [ ] Verification: unit tests in `tests/plugins/spotify-radio/spotify-client.test.ts`. See test plan for cases.
+
+**Security audit follow-ups (2026-04-14):**
+
+- [ ] Hold the refresh token in a module-local mutable variable inside `createSpotifyClient`, seeded from `opts.refreshToken` at creation time. When Spotify returns a new `refresh_token` in a token-endpoint response, overwrite the variable and log at `info` that rotation happened (the fact, never the value). Do not write to `bot.env`.
+- [ ] Wrap every `fetch` call in a `fetchWithTimeout` helper that uses an `AbortController` with a 10-second timeout. Map `AbortError` to `SpotifyNetworkError` so the existing error-budget path handles it.
+- [ ] Add test: mocked token endpoint returns a new `refresh_token`; assert the next `refreshAccessToken()` call uses the new value and the old one is never re-sent.
+- [ ] Add test: `getCurrentlyPlaying()` on a hung fetch throws `SpotifyNetworkError` after 10 seconds.
+- [ ] Secret-redaction test must also verify that `SpotifyAuthError` instances never include the response body, authorization header, or Basic-auth credential bytes.
 
 ### Phase 4: Session state and URL validation
 
@@ -182,11 +203,12 @@ Single-session-for-the-whole-bot is intentional for MVP. Multi-channel concurren
 - Trim input. Reject if empty.
 - Parse with `new URL(raw)`. Catch parse errors → reject.
 - Reject unless `url.protocol === 'https:'`.
-- Reject unless `url.hostname` (lowercased) is in `allowedHosts` (configured default: `open.spotify.com`, `spotify.link`).
+- Reject unless `url.hostname` (lowercased) is in `allowedHosts` (configured default: `open.spotify.com` only — see 2026-04-14 security audit for why `spotify.link` is NOT in the default set).
 - **Path-shape allowlist:**
-  - For `open.spotify.com`: pathname must match `/^\/jam\/[A-Za-z0-9]{1,64}(\/.*)?$/` (Jam share links look like `/jam/<id>`; trailing query strings are allowed and preserved).
-  - For `spotify.link`: pathname must match `/^\/[A-Za-z0-9]{1,32}$/` (short-link shape; cannot further validate without following the redirect, which we deliberately do not do — following arbitrary operator-pasted URLs would be another phishing vector).
+  - For `open.spotify.com`: pathname must match `/^\/jam\/[A-Za-z0-9]{1,64}\/?$/` (Jam share links look like `/jam/<id>` with an optional trailing slash; no deeper path segments allowed — the looser `(\/.*)?` tail from an earlier draft accepted non-Jam paths under the same host).
+  - For `spotify.link` (not in the default allowlist, only present if the operator explicitly opts in): pathname must match `/^\/[A-Za-z0-9]{1,32}$/`. **Warning:** even with this path check, spotify.link shorts use client-side JavaScript redirects and cannot be server-side-validated to confirm they actually point to a Jam. Opting in is accepting a phishing risk.
 - Reject any URL containing `\r`, `\n`, `\0` (belt-and-braces; the IRC bridge already strips these, but the allowed character classes above do it naturally).
+- **Query-string hygiene:** before returning, iterate `url.searchParams` and delete every key except `si` (Spotify's tracking/attribution parameter is safe; anything else — `utm_*`, arbitrary client-supplied params — is stripped). Defence-in-depth against the operator pasting a tracking-pixel-laden URL.
 - On accept, return the normalized URL string (`url.toString()`). On reject, return `null`.
 
 The validator is a pure function. Test it exhaustively.
@@ -198,11 +220,27 @@ The validator is a pure function. Test it exhaustively.
 - [ ] Flesh out `teardown()`: null out `session`, `spotify`, `cfg`. No dangling timers to clear because the poll loop is driven by a `time` bind (auto-removed on unload).
 - [ ] Verification: covered by unit tests in the next phase.
 
+**Security audit follow-ups (2026-04-14):**
+
+- [ ] `JAM_PATH` regex is `/^\/jam\/[A-Za-z0-9]{1,64}\/?$/` — strict match with optional single trailing slash, no deeper path segments.
+- [ ] `validateJamUrl` strips every query parameter except `si` before returning `url.toString()`.
+- [ ] Default `allowed_link_hosts` is `["open.spotify.com"]` only. `spotify.link` is NOT included by default.
+- [ ] `url-validator.test.ts` extended cases:
+  - Reject `https://open.spotify.com/jam/abc/arbitrary/nested/path`.
+  - Reject `https://spotify.link/ABcd1234` under default config.
+  - Accept `https://spotify.link/ABcd1234` **only** when the test harness passes `["open.spotify.com", "spotify.link"]` explicitly.
+  - Accept `https://open.spotify.com/jam/abc123?si=xyz&utm_source=evil`, assert `utm_source` is absent from the returned URL, assert `si=xyz` is preserved.
+
 ### Phase 5: Commands (`!radio`, `!listen`)
 
 **Goal:** The user-facing IRC surface. Permission-gated on/off, public status/listen.
 
-**Bind strategy.** `pub` binds are non-stackable — one handler per exact command mask. Use one `pub '-' '!radio'` handler that dispatches subcommands internally and enforces `n` flag only on mutating subcommands via `api.permissions.checkFlags('n', ctx)`. This keeps the bare `!radio` (status) and `!listen` readable by everyone while still gating `on`/`off` to owner.
+**Bind strategy.** `pub` binds are non-stackable — one handler per exact command mask. Use one `pub '-' '!radio'` handler that dispatches subcommands internally. Mutating subcommands must pass **two** gates:
+
+1. `api.permissions.checkFlags('n', ctx)` — hostmask-based flag check.
+2. `await api.services.verifyUser(ctx.nick)` — NickServ ACC verification, but **only** when `api.services.isAvailable()`. On networks without services, gate 1 alone is the only option.
+
+Gate 2 is required because the dispatcher's built-in `VerificationProvider` gate only triggers when the **bind's flag requirement** matches `config.identity.require_acc_for`. This bind uses `-` (subcommand dispatcher pattern), so the dispatcher does not verify — the handler must. See 2026-04-14 security audit for the shared-vhost race-condition rationale (SECURITY.md §3.2, §3.4). The status-only subcommands (`!radio`, `!listen`) do not need either gate.
 
 **Command grammar:**
 
@@ -223,7 +261,7 @@ The validator is a pure function. Test it exhaustively.
 **Logging policy (matches `plugins/rss` `logCmd`):**
 
 - `!radio on/off` attempts log at `debug`.
-- Successes log at `info` with `who` = `nick!ident@host` (unredacted is fine — these are hostmasks, not secrets).
+- Successes log at `info` with `who` = `nick!ident@host`. Pass every user-supplied string through `api.stripFormatting()` at the log call site, including `ctx.nick` — hostmasks aren't secrets, but a nick containing IRC colour codes or ANSI escapes is a log-injection vector per SECURITY.md §5.3.
 - Permission rejections log at `debug` and send a notice to the invoker.
 - Never log the refresh token, access token, or client secret at any level.
 
@@ -241,6 +279,13 @@ The validator is a pure function. Test it exhaustively.
 - [ ] Implement `handleRadioStatus(api, ctx, public)` that prints to channel when `public=true` and via notice otherwise.
 - [ ] Register `!radio` and `!listen` help entries via `api.registerHelp`.
 - [ ] Verification: see the command-routing test in the test plan.
+
+**Security audit follow-ups (2026-04-14):**
+
+- [ ] Every mutating `!radio` subcommand (`on`, `off`) calls `await api.services.verifyUser(ctx.nick)` after `checkFlags('n', ctx)` and before any state mutation, but only when `api.services.isAvailable()` is true. On failure, notice the invoker with `NickServ verification required for this command.` and log at `debug`.
+- [ ] Every plugin log line that interpolates `ctx.nick` or other user-supplied strings runs them through `api.stripFormatting()` first.
+- [ ] `command-routing.test.ts` case: mocked `VerificationProvider` returns `{ verified: false, account: null }`; assert `!radio on <valid-url>` is refused and `session` remains `null`.
+- [ ] `command-routing.test.ts` case: `api.services.isAvailable()` returns `false` (services not configured); assert command proceeds with hostmask-only gating (so networks without NickServ still work).
 
 ### Phase 6: Poll loop and announce-on-change
 
@@ -315,6 +360,11 @@ api.say(session.channel, line)
 - [ ] Ensure `handleRadioOff('ttl' | 'error')` is reachable from the tick handler and does the same cleanup as the manual path.
 - [ ] Verification: integration-style test that drives the tick handler through a fake clock against a mocked Spotify client (see test plan).
 
+**Security audit follow-ups (2026-04-14):**
+
+- [ ] Tick handler includes a generic `catch (e: unknown)` after the four typed `catch` branches that increments `session.consecutiveErrors`, logs via `api.error('[spotify-radio] unexpected tick error', e)`, and escalates to `handleRadioOff('error')` when the threshold is hit.
+- [ ] `poll-loop.test.ts` case: mock `announceTrack` or the formatter to throw; assert the tick handler catches, increments `consecutiveErrors`, and does not propagate the error out of the bind.
+
 ### Phase 7: README and operator docs
 
 **Goal:** An operator who has never seen the plugin can go from zero to a working radio session in under ten minutes.
@@ -361,6 +411,13 @@ Required sections:
 - [ ] Write `plugins/spotify-radio/README.md` per the structure above.
 - [ ] Add a brief note in `docs/SECURITY.md` section 6 (config secrets list) that names the three new `HEX_SPOTIFY_*` vars — so anyone auditing secrets sees them in the same place as the existing ones.
 - [ ] Verification: Read it cold. Can a second pair of eyes follow it end-to-end without asking for help?
+
+**Security audit follow-ups (2026-04-14):**
+
+- [ ] Document the Feb 2026 Spotify developer-mode Premium requirement as a prerequisite (newly created developer client IDs require a Premium account for development mode).
+- [ ] Document the refresh-token rotation behaviour: operators may occasionally need to re-run `pnpm run spotify:auth` after a bot restart if Spotify has fully rotated the refresh token during the previous run.
+- [ ] Troubleshooting entry: `Request denied — NickServ verification required` → user must be identified with NickServ before the bot accepts mutating `!radio` commands on networks where `require_acc_for` covers `+n`.
+- [ ] Security notes section: mention that `spotify.link` shorts are NOT accepted by default, and explain the client-side-JS-redirect reasoning.
 
 ## Config changes
 
@@ -698,6 +755,17 @@ Channel-visible (not a notice) so other listeners see queue activity in real tim
 - [ ] `api.registerHelp` entry for `!request`.
 - [ ] Tests: see the post-MVP test plan below.
 
+**Security audit follow-ups (2026-04-14):**
+
+- [ ] Rate-limit map is keyed on `${ctx.ident}@${ctx.hostname}` (lowercased), not `ctx.nick`. A `/nick` rotation from the same host must NOT reset the cooldown. Matches the CTCP rate-limiter pattern in SECURITY.md §10.2.
+- [ ] Per-"nick" pending cap counts per `ident@host`, not per display nick. `QueuedRequest` stores `requestedByIdentity` alongside `requestedBy` (display nick for UI) so the cap enforces on the persistent identity.
+- [ ] `searchTrack` constructs its URL via `new URL()` + `url.searchParams.set()`, not string concatenation. Same for `getTrack` path-segment construction.
+- [ ] Strip `\r`, `\n`, `\0` from the cleaned input in `resolveRequestInput` before sending to Spotify (defence in depth — the bridge already strips these).
+- [ ] `request.test.ts` cases:
+  - Cooldown is NOT reset when the same `ident@host` rotates nicks.
+  - Pending cap counts across nick rotations from one `ident@host`.
+  - Search query with `&type=album` injected is URL-encoded, not smuggled into the Spotify request.
+
 ### Phase 10: Host queue management and listener peek commands
 
 **Goal:** Host can inspect, curate, and pause the queue; listeners get lightweight public peek commands.
@@ -729,6 +797,11 @@ requestsMuted: boolean; // defaults to false; set via !radio requests off/on
 - [ ] Add `formatQueueLine` and `formatHistoryLine` to `format.ts` (dim `#id` in grey, title in bold yellow, artist in orange, nick in pink).
 - [ ] Register `api.registerHelp` entries for every new command.
 - [ ] Tests: see the post-MVP test plan below.
+
+**Security audit follow-ups (2026-04-14):**
+
+- [ ] Every mutating queue subcommand (`played`, `drop`, `clear`, `requests on`, `requests off`) runs the same two-gate check as Phase 5: `checkFlags('n', ctx)` then `await api.services.verifyUser(ctx.nick)` when services are available.
+- [ ] `queue-commands.test.ts` case: mocked verification failure refuses every mutating queue subcommand.
 
 ### Phase 11: Auto-mark-played and requester attribution
 
@@ -873,3 +946,58 @@ All tests follow the MVP conventions: Vitest, no real network, mocked `SpotifyCl
 ## Post-MVP database changes
 
 **Still none.** The queue, per-nick cooldowns, and session summary all live in module state and die with the session. Persistence is explicitly deferred to the Phase 12 backlog and requires its own planning round.
+
+## Security audit (2026-04-14)
+
+Pre-implementation security audit against `docs/SECURITY.md`. **Findings:** 1 critical, 4 warnings, 8 info — all folded into this plan as inline design changes or per-phase `**Security audit follow-ups (2026-04-14):**` checkbox subsections.
+
+### Open questions resolved during audit
+
+- **spotify.link short URLs:** removed from default allowlist. Client-side JS redirects (confirmed via web research) can't be server-side validated; accepting them by default reintroduces the phishing vector the plan already called out. Operators may opt in via `plugins.json` and accept the risk.
+- **Refresh-token rotation:** hold new token in-memory for process lifetime. Writing back to `bot.env` would fight the `_env` read-only contract and create file-write race conditions; ignoring rotation kills sessions silently. The in-memory path survives the process, and operators re-run `spotify:auth` on restart if Spotify has fully rotated.
+- **NickServ ACC race on mutating `!radio` subcommands:** keep the single-bind grammar, add inline `await api.services.verifyUser(ctx.nick)` after the hostmask flag check. The core API already exists at `src/plugin-api-factory.ts:348`; no core changes needed. The alternative of splitting into per-subcommand binds would have churned the user-facing command grammar for marginal benefit.
+
+### Findings (summary)
+
+| Severity | Title                                                                                         | Phase | Status                                                              |
+| -------- | --------------------------------------------------------------------------------------------- | ----- | ------------------------------------------------------------------- |
+| CRITICAL | `spotify.link` in default `allowed_link_hosts` — phishing vector via client-side JS redirects | 2, 4  | Fix applied inline; default now `["open.spotify.com"]`              |
+| WARNING  | `!radio` subcommand dispatcher bypasses dispatcher's NickServ ACC gate                        | 5, 10 | Fix applied inline; two-gate pattern with `api.services.verifyUser` |
+| WARNING  | `!request` rate limiter keyed on nick — bypassable via `/nick` rotation                       | 9     | Fix applied inline; keyed on `ident@host`                           |
+| WARNING  | Refresh-token rotation ignored — eventually kills session                                     | 3     | Fix applied inline; held in-memory for process lifetime             |
+| WARNING  | Jam URL path regex `(\/.*)?` tail accepts non-Jam paths                                       | 4     | Fix applied inline; strict `\/?$` + non-`si` query-param stripping  |
+| INFO     | Auth helper must bind loopback to `127.0.0.1` explicitly                                      | 1     | Checkbox follow-up                                                  |
+| INFO     | Auth helper must scrub secrets from error stack traces                                        | 1     | Checkbox follow-up                                                  |
+| INFO     | `SpotifyClient` `fetch` calls need 10s `AbortController` timeout                              | 3     | Checkbox follow-up                                                  |
+| INFO     | Poll tick handler needs generic catch-all after typed catches                                 | 6     | Checkbox follow-up                                                  |
+| INFO     | `!request` search must use `URL` + `searchParams`, not string concat                          | 9     | Checkbox follow-up                                                  |
+| INFO     | Log lines must run `ctx.nick` through `api.stripFormatting()`                                 | 5     | Inline in Phase 5 logging policy                                    |
+| INFO     | `loadConfig` must not log resolved secret values on validation failure                        | 2     | Checkbox follow-up                                                  |
+| INFO     | PKCE is technically unnecessary for a confidential client                                     | 1     | Checkbox follow-up — decide keep-or-drop                            |
+
+### Passed checks (baseline the plan already gets right)
+
+Documented here so future audits don't re-flag them and implementers know these aren't accidental omissions:
+
+- Secrets flow through `_env` indirection per SECURITY.md §6.1 — no `process.env` reads from plugin code.
+- `api.stripFormatting()` applied to all Spotify-sourced strings (title, artist, album) before splicing into announcements.
+- `\r`, `\n`, `\0` explicitly stripped from raw URL input and request text.
+- URL validator case-folds `hostname` before allowlist comparison and pins `url.protocol === 'https:'`.
+- `SpotifyAuthError` explicitly excludes the response body (credentials can be echoed in some Spotify error shapes).
+- Access-token cache re-mints 60s before expiry to absorb in-flight requests.
+- TTL and error-budget are independent circuit breakers on the poll loop.
+- `api.say` routes through the project's outbound message queue (SECURITY.md §5.1) — no per-plugin rate limiting needed on announcements.
+- Poll loop driven by `api.bind('time', ...)` not raw `setInterval` — auto-unbinds on plugin reload, matches SECURITY.md §4.3.
+- Secret-redaction is a testable invariant in Phase 3's test plan (spy on `log`/`error`, assert no secret strings).
+
+### Web research basis
+
+- [Spotify Web API rate limits](https://developer.spotify.com/documentation/web-api/concepts/rate-limits) — 30-second rolling window, no published fixed RPS, `Retry-After` in seconds.
+- [Feb 2026 Web API Migration Guide](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide) — confirms `GET /me/player/currently-playing`, `GET /search` (limit capped at 10; plan uses 1), and `GET /tracks/{id}` (singular path form) all remain available. Batch `GET /tracks?ids=` was removed; plan doesn't use it.
+- [Feb 2026 Web API Changelog](https://developer.spotify.com/documentation/web-api/references/changes/february-2026) — `Track` object drops `popularity`, `available_markets`, `external_ids`, `linked_from`; plan depends on none of these.
+- [Spotify developer blog, 2026-02-06](https://developer.spotify.com/blog/2026-02-06-update-on-developer-access-and-platform-security) — newly created development-mode client IDs now require a Premium account. Plan already requires Premium for Jam hosting.
+- [Authorization Code with PKCE Flow](https://developer.spotify.com/documentation/web-api/tutorials/code-pkce-flow) — PKCE targets public clients; confidential clients must still use `client_secret`. This plugin is confidential; PKCE is defensive extra but not required.
+- [Refreshing tokens](https://developer.spotify.com/documentation/web-api/tutorials/refreshing-tokens) — Spotify may rotate `refresh_token` on refresh; clients should honour it.
+- [Spotify community — spotify.link decode endpoint request](https://community.spotify.com/t5/Spotify-for-Developers/Give-us-an-endpoint-to-decode-new-shortened-share-links/td-p/5523686) — confirms `spotify.link` uses client-side JavaScript redirects (`window.top.location.replace`), not HTTP 3xx. Server-side validation impossible.
+
+**Re-audit trigger:** after Phases 1–7 code lands. Design audits catch architecture issues; a second pass against the implementation catches drift (e.g., a missing `stripFormatting` call in one branch).
