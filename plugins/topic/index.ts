@@ -10,10 +10,12 @@ export const description =
   'Set channel topics with color-coded theme borders; optional topic protection via lock/unlock';
 
 const PREVIEW_COOLDOWN_MS = 60_000;
-let previewCooldown: Map<string, number>;
 
 export function init(api: PluginAPI): void {
-  previewCooldown = new Map();
+  // `previewCooldown` lives inside `init()` as a const so a plugin
+  // reload can't leak the old Map into bind closures that still reference
+  // the prior module. See audit finding W-SP2 (2026-04-14).
+  const previewCooldown = new Map<string, number>();
 
   // Register per-channel settings for topic protection
   api.channelSettings.register([
@@ -248,6 +250,7 @@ export function init(api: PluginAPI): void {
   });
 }
 
-export function teardown(): void {
-  previewCooldown.clear();
-}
+// Binds are auto-cleaned by the plugin loader and `previewCooldown` now
+// lives inside `init()` so teardown has nothing to do — the GC drops the
+// old module's closure graph once nothing references it.
+export function teardown(): void {}

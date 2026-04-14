@@ -24,8 +24,22 @@ export interface EnforcementConfig {
   banDurationMinutes: number;
 }
 
+// Hard cap on distinct keys in the offence tracker. Acts as a belt-and-braces
+// defence against nick-rotation botnets: even after C2's hostmask rekey, a
+// spoof-ident attacker can still produce thousands of unique hostmasks per
+// minute. When the tracker is about to grow past this, oldest-insertion-first
+// entries get evicted. See audit finding C2 (2026-04-14).
+const MAX_OFFENCE_ENTRIES = 2000;
+
 export class EnforcementExecutor {
   private offenceTracker = new Map<string, OffenceEntry>();
+  /**
+   * Fire-and-forget enforcement actions currently awaiting completion.
+   * `teardown()` awaits all of them before the plugin unloads so a
+   * pending ban/kick can't touch the torn-down api. See audit finding
+   * W-FL5 (2026-04-14).
+   */
+  private readonly inFlight = new Set<Promise<void>>();
 
   constructor(
     private readonly api: PluginAPI,
@@ -61,6 +75,17 @@ export class EnforcementExecutor {
       entry.lastSeen = now;
       return this.actionFor(entry.count - 1);
     }
+    // About to insert a new key (or replace an aged-out one). If that would
+    // take us past the hard cap, evict in insertion order until below it.
+    if (!entry && this.offenceTracker.size >= MAX_OFFENCE_ENTRIES) {
+      const excess = this.offenceTracker.size - MAX_OFFENCE_ENTRIES + 1;
+      let evicted = 0;
+      for (const oldestKey of this.offenceTracker.keys()) {
+        if (evicted >= excess) break;
+        this.offenceTracker.delete(oldestKey);
+        evicted++;
+      }
+    }
     this.offenceTracker.set(key, { count: 1, lastSeen: now });
     return this.actionFor(0);
   }
@@ -68,15 +93,34 @@ export class EnforcementExecutor {
   /** Apply the named action (warn/kick/tempban). Fire-and-forget errors are logged. */
   apply(action: string, channel: string, nick: string, reason: string): void {
     if (!this.botHasOps(channel)) return;
-    this.applyInner(action, channel, nick, reason).catch(this.logError);
+    const p = this.applyInner(action, channel, nick, reason).catch(this.logError);
+    this.inFlight.add(p);
+    // The `finally` keeps the Set bounded: each promise removes itself on
+    // settle so the Set only holds truly-in-flight work at any moment.
+    p.finally(() => this.inFlight.delete(p));
+  }
+
+  /**
+   * Await every in-flight enforcement action to settle. Called from the
+   * plugin's async teardown so a still-pending kick or ban doesn't
+   * call back into the disposed api. Uses `allSettled` so one failure
+   * doesn't short-circuit the drain.
+   */
+  async drainPending(): Promise<void> {
+    if (this.inFlight.size === 0) return;
+    await Promise.allSettled(this.inFlight);
   }
 
   /**
    * Lift any timed bans whose expiry has passed. Called from the periodic
-   * sweep bind. No-op when the bot doesn't have ops on the recorded channel.
+   * sweep bind. Without the grace-period branch, a ban persists forever
+   * if the bot permanently loses ops on the channel — the record would
+   * grow the `ban:` KV space unboundedly and slow every `db.list('ban:')`
+   * scan. See audit finding W-FL6 (2026-04-14).
    */
   liftExpiredBans(): void {
     const now = Date.now();
+    const GRACE_MS = 86_400_000; // 24h past expiry → delete regardless of ops
     for (const { key, value } of this.api.db.list('ban:')) {
       let record: BanRecord;
       try {
@@ -95,6 +139,14 @@ export class EnforcementExecutor {
       if (record.expires > 0 && record.expires <= now) {
         if (this.botHasOps(record.channel)) {
           this.api.mode(record.channel, '-b', record.mask);
+          this.api.db.del(key);
+        } else if (now - record.expires > GRACE_MS) {
+          // Bot is without ops past the grace window — drop the record
+          // so the KV scan doesn't grow forever. The ban itself stays
+          // on the server until a human op lifts it.
+          this.api.warn(
+            `Flood ban ${record.mask} on ${record.channel} past ${GRACE_MS / 3_600_000}h grace window; dropping record (bot lacks ops)`,
+          );
           this.api.db.del(key);
         }
       }

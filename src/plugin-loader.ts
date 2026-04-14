@@ -74,6 +74,13 @@ interface LoadedPlugin {
   description: string;
   filePath: string;
   teardown?: () => void | Promise<void>;
+  /**
+   * Neutralise the plugin's api handle — every method becomes a no-op.
+   * Called after teardown so a stale closure retaining the api can't
+   * fan out to the dispatcher, database, or IRC client on the next
+   * reload. See audit finding W-PS1 (2026-04-14).
+   */
+  disposeApi: () => void;
   /** True if teardown() threw an error — resources may not have been released cleanly. */
   teardownFailed?: boolean;
 }
@@ -324,7 +331,7 @@ export class PluginLoader {
     // Create scoped API
     const config = this.mergeConfig(pluginName, absPath, pluginsConfig);
     const channelScope = pluginsConfig?.[pluginName]?.channels;
-    const api = this.createPluginApi(pluginName, config, channelScope);
+    const { api, dispose: disposeApi } = this.createPluginApi(pluginName, config, channelScope);
 
     // Call init()
     try {
@@ -342,29 +349,7 @@ export class PluginLoader {
           /* swallow teardown errors */
         }
       }
-      // Clean up binds registered during partial init
-      this.dispatcher.unbindAll(pluginName);
-      // Remove help entries
-      this.helpRegistry?.unregister(pluginName);
-      // Remove channel setting defs and change listeners
-      this.channelSettings?.unregister(pluginName);
-      this.channelSettings?.offChange(pluginName);
-      // Remove modesReady listeners
-      const modesListeners = this.modesReadyListeners.get(pluginName);
-      if (modesListeners) {
-        for (const fn of modesListeners) this.eventBus.off('channel:modesReady', fn);
-        this.modesReadyListeners.delete(pluginName);
-      }
-      // Remove permissionsChanged listeners
-      const permsListeners = this.permissionsChangedListeners.get(pluginName);
-      if (permsListeners) {
-        for (const fn of permsListeners) {
-          this.eventBus.off('user:added', fn);
-          this.eventBus.off('user:flagsChanged', fn);
-          this.eventBus.off('user:hostmaskAdded', fn);
-        }
-        this.permissionsChangedListeners.delete(pluginName);
-      }
+      this.cleanupPluginResources(pluginName, disposeApi);
       return { name: pluginName, status: 'error', error: `Plugin init() threw: ${message}` };
     }
 
@@ -375,6 +360,7 @@ export class PluginLoader {
       description: typeof mod.description === 'string' ? mod.description : '',
       filePath: absPath,
       teardown: mod.teardown,
+      disposeApi,
     };
     this.loaded.set(pluginName, plugin);
 
@@ -407,33 +393,7 @@ export class PluginLoader {
       }
     }
 
-    // Remove all binds
-    this.dispatcher.unbindAll(pluginName);
-
-    // Remove help entries
-    this.helpRegistry?.unregister(pluginName);
-
-    // Remove channel setting defs and change listeners (stored values are intentionally preserved)
-    this.channelSettings?.unregister(pluginName);
-    this.channelSettings?.offChange(pluginName);
-
-    // Remove modesReady listeners
-    const modesListeners = this.modesReadyListeners.get(pluginName);
-    if (modesListeners) {
-      for (const fn of modesListeners) this.eventBus.off('channel:modesReady', fn);
-      this.modesReadyListeners.delete(pluginName);
-    }
-
-    // Remove permissionsChanged listeners
-    const permsListeners = this.permissionsChangedListeners.get(pluginName);
-    if (permsListeners) {
-      for (const fn of permsListeners) {
-        this.eventBus.off('user:added', fn);
-        this.eventBus.off('user:flagsChanged', fn);
-        this.eventBus.off('user:hostmaskAdded', fn);
-      }
-      this.permissionsChangedListeners.delete(pluginName);
-    }
+    this.cleanupPluginResources(pluginName, plugin.disposeApi);
 
     // Remove from loaded map
     this.loaded.delete(pluginName);
@@ -480,11 +440,59 @@ export class PluginLoader {
   // Scoped plugin API
   // -------------------------------------------------------------------------
 
+  /**
+   * Drop every resource a plugin registered against core subsystems —
+   * binds, help entries, channel settings, event-bus listeners, and the
+   * scoped api handle. Used by both `load()`'s init-catch path and
+   * `unload()` so the two cleanup recipes can never drift apart. See
+   * audit finding W-PS3 (2026-04-14).
+   */
+  private cleanupPluginResources(pluginName: string, disposeApi: () => void): void {
+    // Neutralise the plugin's api handle first so no downstream cleanup
+    // step can reach back into a plugin method. See W-PS1.
+    try {
+      disposeApi();
+    } catch (err) {
+      this.logger?.error(`[plugin-loader] disposeApi() for ${pluginName} threw:`, err);
+    }
+
+    // Drain any event-bus listeners the plugin registered via
+    // `trackListener(pluginName, ...)`. See W-BO1.
+    this.eventBus.removeByOwner(pluginName);
+
+    // Clean up binds, help entries, and channel settings.
+    this.dispatcher.unbindAll(pluginName);
+    this.helpRegistry?.unregister(pluginName);
+    this.channelSettings?.unregister(pluginName);
+    this.channelSettings?.offChange(pluginName);
+
+    // Drain the per-plugin `onModesReady` listeners registered via the
+    // plugin API. These live in a parallel map (not trackListener) so the
+    // off* methods can look them up by callback identity. See W-PS2.
+    const modesListeners = this.modesReadyListeners.get(pluginName);
+    if (modesListeners) {
+      for (const fn of modesListeners) this.eventBus.off('channel:modesReady', fn);
+      this.modesReadyListeners.delete(pluginName);
+    }
+
+    // Drain the per-plugin `onPermissionsChanged` listeners. One wrapper
+    // per callback is fanned across three events.
+    const permsListeners = this.permissionsChangedListeners.get(pluginName);
+    if (permsListeners) {
+      for (const fn of permsListeners) {
+        this.eventBus.off('user:added', fn);
+        this.eventBus.off('user:flagsChanged', fn);
+        this.eventBus.off('user:hostmaskAdded', fn);
+      }
+      this.permissionsChangedListeners.delete(pluginName);
+    }
+  }
+
   private createPluginApi(
     pluginId: string,
     config: Record<string, unknown>,
     channelScope?: string[],
-  ): PluginAPI {
+  ): ReturnType<typeof createPluginApi> {
     return createPluginApi(
       {
         dispatcher: this.dispatcher,

@@ -57,6 +57,17 @@ export interface BotEvents {
 // ---------------------------------------------------------------------------
 
 export class BotEventBus extends EventEmitter {
+  /**
+   * Per-owner listener registry. Populated by {@link trackListener} so
+   * {@link removeByOwner} can drain every subscription a plugin (or
+   * subsystem) added without each owner having to bookkeep its own
+   * list. See audit finding W-BO1 (2026-04-14).
+   */
+  private readonly ownerListeners = new Map<
+    string,
+    Array<{ event: keyof BotEvents; fn: (...args: never[]) => void }>
+  >();
+
   override emit<K extends keyof BotEvents>(event: K, ...args: BotEvents[K]): boolean;
   override emit(event: string | symbol, ...args: unknown[]): boolean {
     return super.emit(event, ...args);
@@ -81,5 +92,43 @@ export class BotEventBus extends EventEmitter {
   ): this;
   override off(event: string | symbol, listener: (...args: unknown[]) => void): this {
     return super.off(event, listener);
+  }
+
+  /**
+   * Register a listener that will be automatically removed when
+   * {@link removeByOwner} is called with the same owner id. Prefer this
+   * over bare `.on()` from any subsystem whose lifetime is shorter than
+   * the bus itself — it closes the reload-residue loophole where a
+   * forgotten teardown leaks every listener the owner ever registered.
+   */
+  trackListener<K extends keyof BotEvents>(
+    owner: string,
+    event: K,
+    listener: (...args: BotEvents[K]) => void,
+  ): void {
+    this.on(event, listener);
+    const list = this.ownerListeners.get(owner) ?? [];
+    // Store as the widest signature so the heterogeneous list type-checks;
+    // `off()`'s own overload accepts this via contravariance at the call
+    // site in removeByOwner.
+    list.push({ event, fn: listener as unknown as (...args: never[]) => void });
+    this.ownerListeners.set(owner, list);
+  }
+
+  /**
+   * Drain every listener registered under `owner` via {@link trackListener}.
+   * Safe to call for an unknown owner (no-op) so teardown paths can call
+   * it unconditionally.
+   */
+  removeByOwner(owner: string): void {
+    const list = this.ownerListeners.get(owner);
+    if (!list) return;
+    for (const { event, fn } of list) {
+      // Contravariant bridge: the listener was stored as `(...never[]) => void`
+      // but off() wants `(...BotEvents[K]) => void`. The stored fn is the
+      // same reference we passed to .on(), so the cast is safe.
+      (this.off as (event: keyof BotEvents, fn: (...args: never[]) => void) => this)(event, fn);
+    }
+    this.ownerListeners.delete(owner);
   }
 }

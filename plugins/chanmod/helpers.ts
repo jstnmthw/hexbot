@@ -27,12 +27,27 @@ export function isValidNick(nick: string): boolean {
   return /^[a-zA-Z[\]\\`_^{|}][a-zA-Z0-9[\]\\`_^{|}\\-]{0,49}$/.test(nick);
 }
 
+/**
+ * Threshold above which `markIntentional` triggers an inline sweep of
+ * expired entries before recording the new one. A wildcard ban on a
+ * populated channel can spike this map to thousands of entries between
+ * the 60s periodic prune ticks, so we prune opportunistically past the
+ * cap. See audit finding W-CM2 (2026-04-14).
+ */
+const INTENTIONAL_INLINE_SWEEP_AT = 10_000;
+
 export function markIntentional(
   state: SharedState,
   api: PluginAPI,
   channel: string,
   nick: string,
 ): void {
+  if (state.intentionalModeChanges.size >= INTENTIONAL_INLINE_SWEEP_AT) {
+    const now = Date.now();
+    for (const [k, expiresAt] of state.intentionalModeChanges) {
+      if (now >= expiresAt) state.intentionalModeChanges.delete(k);
+    }
+  }
   const key = `${api.ircLower(channel)}:${api.ircLower(nick)}`;
   state.intentionalModeChanges.set(key, Date.now() + INTENTIONAL_TTL_MS);
 }

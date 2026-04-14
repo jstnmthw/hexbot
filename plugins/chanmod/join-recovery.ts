@@ -139,6 +139,25 @@ export function setupJoinRecovery(opts: JoinRecoveryOptions): () => void {
     state.cycles.track(timer);
   });
 
+  // --- Drop recovery state when the bot leaves/is kicked ---
+  //
+  // Without this, a recoveryState entry left over from a failed join
+  // sticks around for the plugin lifetime if an operator manually .parts
+  // the channel. See audit finding W-CM4 (2026-04-14).
+  const dropRecovery = (channel: string) => {
+    const chanKey = api.ircLower(channel);
+    const rs = recoveryState.get(chanKey);
+    if (rs?.resetTimer) clearTimeout(rs.resetTimer);
+    recoveryState.delete(chanKey);
+    probedChannels.delete(chanKey);
+  };
+  api.bind('part', '-', '*', (ctx) => {
+    if (api.isBotNick(ctx.nick)) dropRecovery(ctx.channel);
+  });
+  api.bind('kick', '-', '*', (ctx) => {
+    if (api.isBotNick(ctx.nick)) dropRecovery(ctx.channel);
+  });
+
   return () => {
     for (const rs of recoveryState.values()) {
       if (rs.resetTimer) clearTimeout(rs.resetTimer);

@@ -12,7 +12,13 @@ import type { ThreatCallback } from './mode-enforce';
 import { setupModeEnforce } from './mode-enforce';
 import { setupProtection } from './protection';
 import { ProtectionChain, toBackendAccess } from './protection-backend';
-import { PENDING_STATE_TTL_MS, createState, pruneExpiredState, readConfig } from './state';
+import {
+  PENDING_STATE_TTL_MS,
+  clearSharedState,
+  createState,
+  pruneExpiredState,
+  readConfig,
+} from './state';
 import { setupStickyBans } from './sticky';
 import { assessThreat } from './takeover-detect';
 import { setupTopicRecovery } from './topic-recovery';
@@ -66,6 +72,11 @@ export function init(api: PluginAPI): void {
     backend.onRecoverCallback = (channel: string) => {
       state.pendingRecoverCleanup.set(api.ircLower(channel), Date.now() + PENDING_STATE_TTL_MS);
     };
+    // Null the callback on teardown so a retained backend reference can't
+    // pin `state` via this closure. See audit finding C3 (2026-04-14).
+    teardowns.push(() => {
+      backend.onRecoverCallback = undefined;
+    });
     chain.addBackend(backend);
     concreteBackend = backend;
   }
@@ -223,13 +234,20 @@ export function init(api: PluginAPI): void {
     setupTopicRecovery(api, config, state),
   );
 
-  // Sticky ban enforcement doesn't return a teardown (binds are auto-cleaned)
-  setupStickyBans(api, state);
+  // Sticky ban binds are auto-cleaned; the no-op teardown returned here just
+  // keeps the registration pattern consistent with the other setup* helpers.
+  teardowns.push(setupStickyBans(api, state));
 
   // Periodic cleanup of expired intentionalModeChanges and enforcementCooldown entries
   api.bind('time', '-', '60', () => {
     pruneExpiredState(state);
   });
+
+  // Belt-and-braces: null every Map/Set on shared state at teardown so a
+  // retained closure cannot pin the per-channel history graph. Registered
+  // last so earlier teardowns still see live state. See audit finding C3
+  // (2026-04-14).
+  teardowns.push(() => clearSharedState(state));
 }
 
 export function teardown(): void {

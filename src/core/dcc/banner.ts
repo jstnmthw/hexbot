@@ -113,7 +113,7 @@ export function renderBanner(opts: BannerRenderOptions, writeLine: (line: string
   // Owner-only notice
   if (opts.flags.includes('n')) {
     writeLine('');
-    writeLine(`${red(`${B}⛧${B}`)} You are an owner of this bot.`);
+    writeLine(`${red(`⊕`)} You are an owner of this bot.`);
   }
 
   // Stats table

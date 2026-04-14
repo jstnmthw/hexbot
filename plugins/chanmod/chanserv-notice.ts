@@ -55,8 +55,11 @@ export interface ProbeState {
   pendingInfoProbes: Map<string, string>;
   /** Channel that the current multi-line INFO response is about (set on "Information for channel #xxx:"). */
   activeInfoChannel: string | null;
-  /** Timeout timers for probe responses. */
-  probeTimers: ReturnType<typeof setTimeout>[];
+  /**
+   * Timeout timers for probe responses. Using a Set (instead of an array)
+   * so self-removal on fire is O(1); see audit finding W-CM3.
+   */
+  probeTimers: Set<ReturnType<typeof setTimeout>>;
   /** Channels with pending GETKEY probes. Value = channel name. Callback fires with the key. */
   pendingGetKey: Map<string, (key: string | null) => void>;
 }
@@ -67,7 +70,7 @@ export function createProbeState(): ProbeState {
     pendingAnopeProbes: new Map(),
     pendingInfoProbes: new Map(),
     activeInfoChannel: null,
-    probeTimers: [],
+    probeTimers: new Set(),
     pendingGetKey: new Map(),
   };
 }
@@ -116,7 +119,7 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
     probeState.pendingGetKey.clear();
     probeState.activeInfoChannel = null;
     for (const t of probeState.probeTimers) clearTimeout(t);
-    probeState.probeTimers.length = 0;
+    probeState.probeTimers.clear();
   };
 }
 
@@ -148,11 +151,9 @@ export function markProbePending(
         `ChanServ access probe for ${channel} timed out — no services response (access remains 'none')`,
       );
     }
-    // Self-clean: remove this timer from the list after it fires
-    const idx = probeState.probeTimers.indexOf(timer);
-    if (idx !== -1) probeState.probeTimers.splice(idx, 1);
+    probeState.probeTimers.delete(timer);
   }, PROBE_TIMEOUT_MS);
-  probeState.probeTimers.push(timer);
+  probeState.probeTimers.add(timer);
 }
 
 // ---------------------------------------------------------------------------

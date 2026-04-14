@@ -4,7 +4,11 @@
 // class. Lives behind its own module so the plugin's bind handlers just ask
 // "did this user flood X" without knowing which counter belongs to which
 // event — and so the sweep schedule stays in one place.
-import { SlidingWindowCounter } from './sliding-window';
+//
+// Uses the canonical SlidingWindowCounter from src/utils (hard key cap +
+// emergency sweep) so a nick-rotation attacker can't balloon the map
+// between 60s plugin sweeps. See memleak audit C1 (2026-04-14).
+import { SlidingWindowCounter } from '../../src/utils/sliding-window';
 
 export type RateLimitKind = 'msg' | 'join' | 'part' | 'nick';
 

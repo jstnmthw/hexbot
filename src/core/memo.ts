@@ -13,6 +13,7 @@
 //    (owner) or m (master) flags can use .memo.
 import type { CommandContext, CommandHandler } from '../command-handler';
 import type { EventDispatcher } from '../dispatcher';
+import type { BotEventBus } from '../event-bus';
 import type { LoggerLike } from '../logger';
 import type { Casemapping, HandlerContext, MemoConfig } from '../types';
 import { ircLower } from '../utils/wildcard';
@@ -56,6 +57,13 @@ export interface MemoDeps {
   logger?: LoggerLike | null;
   dccManager?: MemoDCCManager | null;
   /**
+   * Optional event bus for lifecycle hooks — wired so `attach()` can
+   * prune `deliveryCooldown` when a user is removed. Without this, the
+   * map accumulates entries for every admin that ever got a delivery
+   * notification. See audit finding W-CS1 (2026-04-14).
+   */
+  eventBus?: BotEventBus;
+  /**
    * Predicate: does this handle have an active DCC console via a botnet
    * relay into another bot? When true, `relayToOnlineAdmins` skips the
    * user — the DCC mirror fanout has already delivered the raw service
@@ -94,6 +102,8 @@ export class MemoManager {
   private dccManager: MemoDCCManager | null;
   private hasRelayConsole: (handle: string) => boolean;
   private casemapping: Casemapping = 'rfc1459';
+  private eventBus: BotEventBus | null;
+  private onUserRemoved: ((handle: string) => void) | null = null;
 
   /** Number of unread memos reported by MemoServ. */
   pendingMemoCount = 0;
@@ -111,6 +121,7 @@ export class MemoManager {
     this.logger = deps.logger?.child('memo') ?? null;
     this.dccManager = deps.dccManager ?? null;
     this.hasRelayConsole = deps.hasRelayConsole ?? (() => false);
+    this.eventBus = deps.eventBus ?? null;
   }
 
   /** Update casemapping when the server announces it. */
@@ -138,6 +149,14 @@ export class MemoManager {
       this.registerMemoServRelay();
     }
     this.registerJoinDelivery();
+    if (this.eventBus) {
+      // Prune the delivery-cooldown entry when a user is removed so the
+      // map doesn't accumulate entries for handles that no longer exist.
+      this.onUserRemoved = (handle: string): void => {
+        this.deliveryCooldown.delete(this.lowerNick(handle));
+      };
+      this.eventBus.on('user:removed', this.onUserRemoved);
+    }
     this.logger?.info('Memo system attached');
   }
 
@@ -145,6 +164,10 @@ export class MemoManager {
   detach(): void {
     this.dispatcher.unbindAll(OWNER_ID);
     this.commandHandler.unregisterCommand('memo');
+    if (this.eventBus && this.onUserRemoved) {
+      this.eventBus.off('user:removed', this.onUserRemoved);
+      this.onUserRemoved = null;
+    }
     this.deliveryCooldown.clear();
     this.logger?.info('Memo system detached');
   }

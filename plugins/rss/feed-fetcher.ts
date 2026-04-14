@@ -42,6 +42,13 @@ export interface FetchFeedOpts {
   timeoutMs: number;
   maxBytes?: number;
   allowHttp?: boolean;
+  /**
+   * External abort signal — callers (the plugin `teardown`) forward a
+   * module-level signal through so an in-flight fetch is interrupted
+   * when the plugin is unloaded or reloaded. Composed with the
+   * internal wall-clock timer inside {@link doRequest}.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -72,7 +79,9 @@ export async function pollFeed(
   maxPerPoll: number,
   fetchOpts: FetchFeedOpts,
 ): Promise<FeedItem[]> {
+  if (fetchOpts.signal?.aborted) throw new Error('rss poll aborted');
   const xml = await httpLayer.fetchFeedXml(feed.url, fetchOpts);
+  if (fetchOpts.signal?.aborted) throw new Error('rss poll aborted');
   const result = await parser.parseString(xml);
   const newItems: FeedItem[] = [];
   let previewCaptured = false;
@@ -123,12 +132,14 @@ export async function fetchFeedXml(url: string, opts: FetchFeedOpts): Promise<st
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_FEED_BYTES;
   let currentUrl = url;
   for (let redirect = 0; redirect <= MAX_REDIRECTS; redirect++) {
+    if (opts.signal?.aborted) throw new Error('rss fetch aborted');
     const validated = await validateFeedUrl(currentUrl, { allowHttp: opts.allowHttp });
     const result = await doRequest(
       validated.url,
       validated.resolvedAddresses,
       opts.timeoutMs,
       maxBytes,
+      opts.signal,
     );
     if (result.kind === 'body') return result.body;
     if (redirect === MAX_REDIRECTS) {
@@ -150,6 +161,7 @@ function doRequest(
   resolvedAddresses: ResolvedAddress[],
   timeoutMs: number,
   maxBytes: number,
+  externalSignal?: AbortSignal,
 ): Promise<FetchResult> {
   return new Promise((resolve, reject) => {
     // Pin the socket to the validator's first resolved address. Node's
@@ -174,7 +186,27 @@ function doRequest(
       abort.abort(new Error(`request wall-clock timeout after ${wallClockMs}ms`));
     }, wallClockMs);
 
-    const cleanup = () => clearTimeout(wallClockTimer);
+    // Forward the plugin-level abort signal into the internal AbortController
+    // so teardown mid-fetch tears the socket down immediately, rather than
+    // waiting the full wall-clock timeout.
+    let externalHandler: (() => void) | null = null;
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        abort.abort(externalSignal.reason ?? new Error('rss fetch aborted'));
+      } else {
+        externalHandler = () => {
+          abort.abort(externalSignal.reason ?? new Error('rss fetch aborted'));
+        };
+        externalSignal.addEventListener('abort', externalHandler, { once: true });
+      }
+    }
+
+    const cleanup = () => {
+      clearTimeout(wallClockTimer);
+      if (externalSignal && externalHandler) {
+        externalSignal.removeEventListener('abort', externalHandler);
+      }
+    };
     const resolveOnce = (value: FetchResult) => {
       cleanup();
       resolve(value);

@@ -37,3 +37,7 @@ export function init(api: PluginAPI): void {
     api.ctcpResponse(ctx.nick, 'TIME', new Date().toString());
   });
 }
+
+// Binds are auto-cleaned by the plugin loader, but an explicit teardown
+// export makes intent clear and keeps lint checks that require one happy.
+export function teardown(): void {}

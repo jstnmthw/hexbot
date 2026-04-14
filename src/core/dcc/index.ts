@@ -23,6 +23,7 @@ import { toEventObject } from '../../utils/irc-event';
 import { sanitize } from '../../utils/sanitize';
 import { type Casemapping, ircLower } from '../../utils/wildcard';
 import { tryLogModAction } from '../audit';
+import { clearAuditTailForSession, clearPagerForSession } from '../commands/modlog-commands';
 import { verifyPassword } from '../password';
 import { DCCAuthTracker } from './auth-tracker';
 import { type BannerStats, renderBanner } from './banner';
@@ -399,6 +400,14 @@ export class DCCSession implements DCCSessionEntry {
   private static readonly MAX_BLANK_PROMPTS = 3;
   private pendingLineBytes = 0;
   private blankPromptCount = 0;
+  /**
+   * Named reference to the 'data' listener installed by
+   * {@link attachLineLengthGuard}. Stored so {@link clearAllTimers} can
+   * remove it explicitly — without this, the closure (which captures
+   * `this`) lives until the socket itself is destroyed. See audit
+   * finding W-DCC1 (2026-04-14).
+   */
+  private dataGuard: ((chunk: Buffer) => void) | null = null;
 
   /**
    * Count bytes that arrive on the socket between newlines and destroy the
@@ -408,7 +417,7 @@ export class DCCSession implements DCCSessionEntry {
    * the CTCP race can stream gigabytes into a prompt that never resolves.
    */
   private attachLineLengthGuard(): void {
-    this.socket.on('data', (chunk: Buffer) => {
+    this.dataGuard = (chunk: Buffer) => {
       const newlineIdx = chunk.lastIndexOf(0x0a);
       if (newlineIdx === -1) {
         this.pendingLineBytes += chunk.length;
@@ -420,7 +429,8 @@ export class DCCSession implements DCCSessionEntry {
           new Error(`DCC line length exceeded ${DCCSession.MAX_LINE_BYTES} bytes`),
         );
       }
-    });
+    };
+    this.socket.on('data', this.dataGuard);
   }
 
   /** Read-only view of the session phase — used by tests. */
@@ -715,6 +725,7 @@ export class DCCSession implements DCCSessionEntry {
     this.idleTimer = setTimeout(() => {
       this.close('Idle timeout.');
     }, this.idleTimeoutMs);
+    this.idleTimer.unref?.();
   }
 
   /** Shorter timer used while the password prompt is open. */
@@ -723,6 +734,7 @@ export class DCCSession implements DCCSessionEntry {
     this.idleTimer = setTimeout(() => {
       this.close('Password prompt timed out.');
     }, DCC_PROMPT_TIMEOUT_MS);
+    this.idleTimer.unref?.();
   }
 
   /**
@@ -795,6 +807,13 @@ export class DCCSession implements DCCSessionEntry {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;
     }
+    // Detach the line-length guard 'data' listener so its closure (which
+    // captures `this`) is eligible for GC immediately on close, rather
+    // than waiting for the socket itself to be destroyed and collected.
+    if (this.dataGuard !== null) {
+      this.socket.off('data', this.dataGuard);
+      this.dataGuard = null;
+    }
     // Defensive: close() may arrive while a pending relay is still awaiting
     // confirmation. The happy-path exitRelay() clears this timer first, so
     // the branch only fires if the socket dies mid-handshake. setRelayState()
@@ -820,6 +839,11 @@ export class DCCSession implements DCCSessionEntry {
     this.manager.removeSession(this.nick);
     this.manager.announce(`*** ${this.handle} has left the console`);
     this.manager.notifyPartyPart(this.handle, this.nick);
+    // Eagerly drop modlog pager and audit-tail subscriptions tied to this
+    // session — without this they linger for `IDLE_TIMEOUT_MS` (30 min)
+    // past close. See audit findings W-CMD1/W-CMD2 (2026-04-14).
+    clearPagerForSession(`dcc:${this.handle}`);
+    clearAuditTailForSession(`dcc:${this.handle}`);
     this.logger?.info(`DCC session closed: ${this.handle} (${reason ?? 'unknown'})`);
   }
 
@@ -834,6 +858,10 @@ export class DCCSession implements DCCSessionEntry {
     this.manager.removeSession(this.nick);
     this.manager.announce(`*** ${this.handle} has left the console`);
     this.manager.notifyPartyPart(this.handle, this.nick);
+    // Eagerly drop modlog pager and audit-tail subscriptions tied to this
+    // session — see audit findings W-CMD1/W-CMD2 (2026-04-14).
+    clearPagerForSession(`dcc:${this.handle}`);
+    clearAuditTailForSession(`dcc:${this.handle}`);
     this.logger?.info(`DCC disconnected: ${this.handle} (${this.nick})`);
   }
 }
@@ -893,6 +921,15 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   private authSweepTimer: NodeJS.Timeout | null = null;
   private readonly consoleFlagStore: ConsoleFlagStore;
   private logSink: LogSink | null = null;
+  /**
+   * True after {@link attach} has wired up its listeners and timers. Used
+   * to short-circuit double-attach — without this, a second `attach()`
+   * call without an intervening `detach()` would overwrite
+   * {@link ircListeners}, {@link eventBusListeners}, and
+   * {@link authSweepTimer}, leaking the original set. See audit finding
+   * W-DCC3 (2026-04-14).
+   */
+  private attached = false;
 
   /** Failure tracker for the password prompt — exponential backoff on repeat. */
   readonly authTracker: DCCAuthTracker;
@@ -980,6 +1017,11 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
   /** Attach to the dispatcher — starts listening for DCC CTCP requests. */
   attach(): void {
+    if (this.attached) {
+      this.logger?.warn('DCCManager.attach() called twice without detach(); ignoring');
+      return;
+    }
+    this.attached = true;
     this.warnIfDeprecatedNickservVerify();
     this.dispatcher.bind('ctcp', '-', 'DCC', this.onDccCtcp.bind(this), PLUGIN_ID);
 
@@ -1048,6 +1090,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
   /** Detach and close all sessions. */
   detach(reason = 'Bot shutting down.'): void {
+    this.attached = false;
     if (this.authSweepTimer) {
       clearInterval(this.authSweepTimer);
       this.authSweepTimer = null;
@@ -1393,9 +1436,11 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     socket.setKeepAlive(true, 60_000);
 
     // Early error handler — guards the window before DCCSession.start()
-    // attaches its own. Once the session is started, its handler also fires
-    // (and is idempotent), so both coexist harmlessly.
-    socket.on('error', (err) => {
+    // attaches its own. Use `.once` so it self-removes after firing (or
+    // becomes GC-eligible with the socket if no pre-start error occurs),
+    // avoiding the two-coexisting-listeners pattern flagged in audit
+    // finding W-DCC2 (2026-04-14).
+    socket.once('error', (err) => {
       this.logger?.debug(`DCC socket error for ${pending.nick}: ${err.message}`);
     });
 

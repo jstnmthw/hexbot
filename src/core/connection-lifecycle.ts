@@ -221,6 +221,14 @@ export function registerConnectionEvents(
       registrationTimer = null;
     }
 
+    // Clear the per-channel presence check interval too. Without this the
+    // interval keeps firing "Not in configured channel X" during long
+    // rate-limited backoffs. See audit finding W-CL1 (2026-04-14).
+    if (presenceTimer !== null) {
+      clearInterval(presenceTimer);
+      presenceTimer = null;
+    }
+
     logger.info(`Connection closed: ${reason}`);
     deps.eventBus.emit('bot:disconnected', reason);
 

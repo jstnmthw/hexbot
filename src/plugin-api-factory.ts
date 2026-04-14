@@ -97,9 +97,37 @@ const PERMISSIONS_CHANGE_EVENTS = [
 // ---------------------------------------------------------------------------
 
 /**
+ * Handle returned by {@link createPluginApi}. Callers get the usual frozen
+ * `api` to hand to the plugin's `init()`, plus a `dispose()` hook that
+ * post-teardown converts every method on the api into a no-op. This is the
+ * architectural defense against closures that outlive plugin unload: even
+ * if a stale `setInterval` or retained ESM module still holds `api`, once
+ * disposed it cannot fan out to the dispatcher, database, or IRC client.
+ * See audit finding W-PS1 (2026-04-14).
+ */
+export interface PluginApiHandle {
+  readonly api: PluginAPI;
+  /** Turn every method on the returned `api` into a no-op. Idempotent. */
+  dispose(): void;
+}
+
+/** Keys on the top-level api whose value is a sub-API namespace whose
+ *  methods must also be no-op'd after dispose. Data-only keys like
+ *  `botConfig` and `config` are deliberately excluded — reading them
+ *  after dispose is harmless since they don't reference the bot graph. */
+const SUB_API_KEYS = new Set([
+  'permissions',
+  'services',
+  'db',
+  'banStore',
+  'channelSettings',
+  'audit',
+]);
+
+/**
  * Build the scoped `PluginAPI` a plugin's `init(api)` receives. Returns a
- * frozen object so plugins can't mutate the API surface — sub-objects are
- * shallow-frozen by the individual sub-factories.
+ * handle containing the frozen api and a `dispose()` hook so plugin-loader
+ * can neutralise the api post-teardown. See {@link PluginApiHandle}.
  *
  * @param deps           All external state the API needs to call back into.
  * @param pluginId       Stable plugin identifier (used for logging + DB namespacing).
@@ -112,7 +140,7 @@ export function createPluginApi(
   pluginId: string,
   config: Record<string, unknown>,
   channelScope?: string[],
-): PluginAPI {
+): PluginApiHandle {
   const pluginLogger = deps.rootLogger?.child(`plugin:${pluginId}`) ?? null;
   const { getCasemapping, getServerSupports, dispatcher, botConfig } = deps;
 
@@ -179,7 +207,13 @@ export function createPluginApi(
     chanmod: buildPluginChanmodView(),
   };
 
-  const api: PluginAPI = {
+  // Mutable cell shared by every guarded method returned from the factory.
+  // `dispose()` flips this; every wrapped method early-returns `undefined`
+  // once set, so a closure still holding a reference to this api can no
+  // longer fan out to the bot's core graph. See W-PS1.
+  const disposedCell = { disposed: false };
+
+  const rawApi: PluginAPI = {
     pluginId,
     bind<T extends BindType>(type: T, flags: string, mask: string, handler: BindHandler<T>): void {
       // The dispatcher stores handlers as the widest BindHandler<BindType>.
@@ -252,7 +286,50 @@ export function createPluginApi(
     ...createPluginLogApi(pluginLogger),
   };
 
-  return Object.freeze(api);
+  // Wrap every method (top-level + sub-API namespaces in SUB_API_KEYS) with
+  // a guard that short-circuits to `undefined` after `dispose()` is called.
+  // Data-only keys like `botConfig` and `config` are preserved unchanged —
+  // reading them after dispose is harmless.
+  const guardedApi = Object.freeze(
+    wrapApiMethods(rawApi as unknown as Record<string, unknown>, disposedCell, SUB_API_KEYS),
+  ) as unknown as PluginAPI;
+
+  return {
+    api: guardedApi,
+    dispose: () => {
+      disposedCell.disposed = true;
+    },
+  };
+}
+
+/**
+ * Clone `obj` into a fresh frozen object whose function-valued entries are
+ * replaced with guards that early-return `undefined` once `cell.disposed`
+ * is true. Keys in `recurseInto` are themselves walked one more level —
+ * used for the sub-API namespaces (`api.db`, `api.permissions`, etc.) so
+ * their methods are guarded too. Anything else (primitive, data object)
+ * is copied through unchanged.
+ */
+function wrapApiMethods(
+  obj: Record<string, unknown>,
+  cell: { disposed: boolean },
+  recurseInto: Set<string> | null,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (typeof value === 'function') {
+      const fn = value as (...args: unknown[]) => unknown;
+      result[key] = function guarded(this: unknown, ...args: unknown[]): unknown {
+        if (cell.disposed) return undefined;
+        return fn.apply(this, args);
+      };
+    } else if (recurseInto && recurseInto.has(key) && typeof value === 'object' && value !== null) {
+      result[key] = Object.freeze(wrapApiMethods(value as Record<string, unknown>, cell, null));
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -514,19 +591,49 @@ function createPluginChannelStateApi(
   permissionsChangedListeners: Map<string, Array<(handle: string) => void>>,
 ): Pick<
   PluginAPI,
-  'getChannel' | 'getUsers' | 'getUserHostmask' | 'onModesReady' | 'onPermissionsChanged'
+  | 'getChannel'
+  | 'getUsers'
+  | 'getUserHostmask'
+  | 'onModesReady'
+  | 'offModesReady'
+  | 'onPermissionsChanged'
+  | 'offPermissionsChanged'
 > {
+  // Per-plugin callback→wrapper maps used by off*() to look up the actual
+  // listener that was installed on the event bus. Keyed by the plugin's
+  // original callback reference so a plugin can `offX(sameFn)` cleanly.
+  // See audit finding W-PS2 (2026-04-14).
+  const modesReadyByCallback = new Map<(channel: string) => void, (channel: string) => void>();
+  const permissionsByCallback = new Map<
+    (handle: string) => void,
+    (handle: string, ...rest: unknown[]) => void
+  >();
+
   return {
     onModesReady(callback: (channel: string) => void): void {
+      if (modesReadyByCallback.has(callback)) return; // idempotent
       const wrappedListener = (channel: string): void => {
         callback(channel);
       };
       eventBus.on('channel:modesReady', wrappedListener);
+      modesReadyByCallback.set(callback, wrappedListener);
       const list = modesReadyListeners.get(pluginId) ?? [];
       list.push(wrappedListener);
       modesReadyListeners.set(pluginId, list);
     },
+    offModesReady(callback: (channel: string) => void): void {
+      const wrapped = modesReadyByCallback.get(callback);
+      if (!wrapped) return;
+      eventBus.off('channel:modesReady', wrapped);
+      modesReadyByCallback.delete(callback);
+      const list = modesReadyListeners.get(pluginId);
+      if (list) {
+        const idx = list.indexOf(wrapped);
+        if (idx !== -1) list.splice(idx, 1);
+      }
+    },
     onPermissionsChanged(callback: (handle: string) => void): void {
+      if (permissionsByCallback.has(callback)) return; // idempotent
       // One wrapper fans three events into the plugin callback. The three
       // events carry different tail params (global flags, hostmask, ...);
       // we only surface `handle` (arg 0) and discard the rest.
@@ -536,9 +643,23 @@ function createPluginChannelStateApi(
       for (const ev of PERMISSIONS_CHANGE_EVENTS) {
         eventBus.on(ev, wrappedListener);
       }
+      permissionsByCallback.set(callback, wrappedListener);
       const list = permissionsChangedListeners.get(pluginId) ?? [];
       list.push(wrappedListener);
       permissionsChangedListeners.set(pluginId, list);
+    },
+    offPermissionsChanged(callback: (handle: string) => void): void {
+      const wrapped = permissionsByCallback.get(callback);
+      if (!wrapped) return;
+      for (const ev of PERMISSIONS_CHANGE_EVENTS) {
+        eventBus.off(ev, wrapped);
+      }
+      permissionsByCallback.delete(callback);
+      const list = permissionsChangedListeners.get(pluginId);
+      if (list) {
+        const idx = list.indexOf(wrapped);
+        if (idx !== -1) list.splice(idx, 1);
+      }
     },
     getChannel(name: string) {
       if (!channelState) return undefined;

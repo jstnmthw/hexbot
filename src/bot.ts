@@ -35,7 +35,7 @@ import { registerChannelCommands } from './core/commands/channel-commands';
 import { registerDccConsoleCommands } from './core/commands/dcc-console-commands';
 import { registerDispatcherCommands } from './core/commands/dispatcher-commands';
 import { registerIRCAdminCommands } from './core/commands/irc-commands-admin';
-import { registerModlogCommands } from './core/commands/modlog-commands';
+import { registerModlogCommands, shutdownModLogCommands } from './core/commands/modlog-commands';
 import { registerPasswordCommands } from './core/commands/password-commands';
 import { registerPermissionCommands } from './core/commands/permission-commands';
 import { registerPluginCommands } from './core/commands/plugin-commands';
@@ -242,6 +242,7 @@ export class Bot {
       channelState,
       client,
       logger: this.logger,
+      eventBus,
       hasRelayConsole: (handle) => this._relayVirtualSessions.has(handle),
     });
     return {
@@ -617,63 +618,102 @@ export class Bot {
   async shutdown(): Promise<void> {
     this.botLogger.info('Shutting down...');
 
+    // Each step is independent of the others — a throw in one subsystem's
+    // teardown must not block the ones after it. Previously, every step
+    // ran sequentially without catches, so a single bad `close()` skipped
+    // `db.close()` and leaked everything downstream. See audit finding
+    // W-BO2 (2026-04-14).
+    const step = (name: string, fn: () => void): void => {
+      try {
+        fn();
+      } catch (err) {
+        this.botLogger.error(`Shutdown step "${name}" threw:`, err);
+      }
+    };
+
     // Cancel any pending reconnect BEFORE tearing down the client so a
     // stray timer cannot fire mid-shutdown and re-open a socket.
-    if (this._reconnectDriver) {
-      this._reconnectDriver.cancel();
-      this._reconnectDriver = null;
-    }
+    step('reconnect-driver.cancel', () => {
+      if (this._reconnectDriver) {
+        this._reconnectDriver.cancel();
+        this._reconnectDriver = null;
+      }
+    });
 
-    if (this._lifecycleHandle) {
-      this._lifecycleHandle.stopPresenceCheck();
-      this._lifecycleHandle.removeListeners();
-      this._lifecycleHandle = null;
-    }
+    step('lifecycle-handle', () => {
+      if (this._lifecycleHandle) {
+        this._lifecycleHandle.stopPresenceCheck();
+        this._lifecycleHandle.removeListeners();
+        this._lifecycleHandle = null;
+      }
+    });
 
-    if (this._onBotlinkDisconnectedCleanup) {
-      this.eventBus.off('botlink:disconnected', this._onBotlinkDisconnectedCleanup);
-      this._onBotlinkDisconnectedCleanup = null;
-    }
+    step('botlink-disconnect-listener', () => {
+      if (this._onBotlinkDisconnectedCleanup) {
+        this.eventBus.off('botlink:disconnected', this._onBotlinkDisconnectedCleanup);
+        this._onBotlinkDisconnectedCleanup = null;
+      }
+    });
 
-    if (this._botLinkHub) {
-      this._botLinkHub.close();
-      this._botLinkHub = null;
-    }
-    if (this._botLinkLeaf) {
-      this._botLinkLeaf.disconnect();
-      this._botLinkLeaf = null;
-    }
+    step('botlink-hub.close', () => {
+      if (this._botLinkHub) {
+        this._botLinkHub.close();
+        this._botLinkHub = null;
+      }
+    });
+    step('botlink-leaf.disconnect', () => {
+      if (this._botLinkLeaf) {
+        this._botLinkLeaf.disconnect();
+        this._botLinkLeaf = null;
+      }
+    });
 
-    for (const { event, fn } of this._relayMirrorListeners) {
-      this.client.removeListener(event, fn);
-    }
-    this._relayMirrorListeners = [];
+    step('relay-mirror-listeners', () => {
+      for (const { event, fn } of this._relayMirrorListeners) {
+        this.client.removeListener(event, fn);
+      }
+      this._relayMirrorListeners = [];
+    });
 
-    if (this._dccManager) {
-      this._dccManager.detach('Bot shutting down.');
-      this._dccManager = null;
-    }
+    step('dcc.detach', () => {
+      if (this._dccManager) {
+        this._dccManager.detach('Bot shutting down.');
+        this._dccManager = null;
+      }
+    });
 
-    this.memo.detach();
-    this.services.detach();
-    this.channelState.detach();
+    step('memo.detach', () => this.memo.detach());
+    step('services.detach', () => this.services.detach());
+    step('channel-state.detach', () => this.channelState.detach());
 
-    if (this.bridge) {
-      this.bridge.detach();
-      this.bridge = null;
-    }
+    step('bridge.detach', () => {
+      if (this.bridge) {
+        this.bridge.detach();
+        this.bridge = null;
+      }
+    });
 
-    this.messageQueue.flush();
-    this.messageQueue.stop();
+    step('message-queue.flush', () => this.messageQueue.flush());
+    step('message-queue.stop', () => this.messageQueue.stop());
 
     if (this.client.connected) {
-      const quitMsg = this.config.quit_message ?? `HexBot v${this.readPackageVersion()}`;
-      this.client.quit(quitMsg);
-      // Give the QUIT message a moment to send
-      await new Promise<void>((r) => setTimeout(r, 500));
+      try {
+        const quitMsg = this.config.quit_message ?? `HexBot v${this.readPackageVersion()}`;
+        this.client.quit(quitMsg);
+        // Give the QUIT message a moment to send
+        await new Promise<void>((r) => setTimeout(r, 500));
+      } catch (err) {
+        this.botLogger.error('Shutdown step "client.quit" threw:', err);
+      }
     }
 
-    this.db.close();
+    // Drop modlog pagers and audit-tail subscriptions — each tail
+    // listener holds a closure over the REPL reply function so
+    // leaving them attached leaks the full session context across
+    // a reload. See audit findings W-CMD1/W-CMD2 (2026-04-14).
+    step('modlog-commands.shutdown', () => shutdownModLogCommands());
+
+    step('db.close', () => this.db.close());
     this.botLogger.info('Shutdown complete');
   }
 
@@ -764,6 +804,10 @@ export class Bot {
             // would otherwise sit in memory forever. NAMES will repopulate
             // fresh state on the new session.
             this.channelState.clearAllChannels();
+            // Fail any in-flight NickServ verifications fast rather than
+            // letting them age out to a misleading `nickserv-verify-timeout`
+            // audit row. See audit finding W-CL2 (2026-04-14).
+            this.services.cancelPendingVerifies('disconnected');
           },
           onSTSDirective: (directive, currentTls) => {
             // Persist the directive so future startups inherit the policy.

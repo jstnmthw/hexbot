@@ -49,4 +49,54 @@ describe('BotEventBus', () => {
     bus.emit('bot:connected');
     expect(fn).not.toHaveBeenCalled();
   });
+
+  describe('trackListener / removeByOwner', () => {
+    it('trackListener delivers events like on()', () => {
+      const bus = new BotEventBus();
+      const fn = vi.fn();
+      bus.trackListener('plugin-x', 'bot:disconnected', fn);
+      bus.emit('bot:disconnected', 'oops');
+      expect(fn).toHaveBeenCalledWith('oops');
+    });
+
+    it('removeByOwner drops every tracked listener for that owner', () => {
+      const bus = new BotEventBus();
+      const connectedFn = vi.fn();
+      const disconnectedFn = vi.fn();
+      bus.trackListener('plugin-x', 'bot:connected', connectedFn);
+      bus.trackListener('plugin-x', 'bot:disconnected', disconnectedFn);
+      bus.removeByOwner('plugin-x');
+      bus.emit('bot:connected');
+      bus.emit('bot:disconnected', 'gone');
+      expect(connectedFn).not.toHaveBeenCalled();
+      expect(disconnectedFn).not.toHaveBeenCalled();
+    });
+
+    it('removeByOwner only affects the named owner', () => {
+      const bus = new BotEventBus();
+      const xFn = vi.fn();
+      const yFn = vi.fn();
+      bus.trackListener('plugin-x', 'bot:connected', xFn);
+      bus.trackListener('plugin-y', 'bot:connected', yFn);
+      bus.removeByOwner('plugin-x');
+      bus.emit('bot:connected');
+      expect(xFn).not.toHaveBeenCalled();
+      expect(yFn).toHaveBeenCalledTimes(1);
+    });
+
+    it('removeByOwner for unknown owner is a no-op', () => {
+      const bus = new BotEventBus();
+      expect(() => bus.removeByOwner('nobody')).not.toThrow();
+    });
+
+    it('removeByOwner clears its registry so a second call is a no-op', () => {
+      const bus = new BotEventBus();
+      const fn = vi.fn();
+      bus.trackListener('plugin-x', 'bot:connected', fn);
+      bus.removeByOwner('plugin-x');
+      bus.removeByOwner('plugin-x'); // second call — the owner entry is gone
+      bus.emit('bot:connected');
+      expect(fn).not.toHaveBeenCalled();
+    });
+  });
 });

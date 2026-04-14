@@ -47,6 +47,7 @@ export async function announceItems(
   feed: FeedConfig,
   items: FeedItem[],
   maxTitleLength: number,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (feed.channels.length === 0) {
     api.warn(`Feed "${feed.id}" has no channels configured — skipping announcement`);
@@ -54,13 +55,28 @@ export async function announceItems(
   }
 
   for (let i = 0; i < items.length; i++) {
+    if (signal?.aborted) return;
     const line = formatItem(api, feed, items[i], maxTitleLength);
     for (const channel of feed.channels) {
       api.say(channel, line);
     }
     // Drip-feed at 500ms per item so a burst doesn't flood the channel or
-    // trip the server's own rate limiter.
-    if (i < items.length - 1) await new Promise((resolve) => setTimeout(resolve, 500));
+    // trip the server's own rate limiter. The sleep is interruptible: if
+    // the plugin is torn down mid-drip the abort resolves the sleep
+    // immediately so we return without touching `api` again.
+    if (i < items.length - 1) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve();
+        }, 500);
+        const onAbort = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        if (signal) signal.addEventListener('abort', onAbort, { once: true });
+      });
+    }
   }
 
   api.log(`Announced ${items.length} item(s) from "${feed.id}" to ${feed.channels.join(', ')}`);

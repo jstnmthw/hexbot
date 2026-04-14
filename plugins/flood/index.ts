@@ -62,11 +62,6 @@ let lockdown: LockdownController;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Shared error handler for fire-and-forget flood actions. */
-function logFloodError(err: unknown): void {
-  api.error('Flood action error:', err);
-}
-
 /** Read a numeric config value with fallback. */
 function cfgNum(key: string, fallback: number): number {
   const v = api.config[key];
@@ -124,7 +119,11 @@ async function handleMsgFlood(ctx: ChannelHandlerContext): Promise<void> {
   const { channel } = ctx;
   if (api.isBotNick(ctx.nick)) return;
   if (isPrivileged(ctx.nick, channel, undefined, ctx.account)) return;
-  const key = `${api.ircLower(ctx.nick)}@${api.ircLower(channel)}`;
+  // Key by hostmask, not nick: otherwise a nick-rotation botnet mints a
+  // fresh tracker entry per nick change and escapes escalation. See audit
+  // finding C2 (2026-04-14).
+  const hostmask = api.buildHostmask(ctx);
+  const key = `msg:${api.ircLower(hostmask)}@${api.ircLower(channel)}`;
   if (!rateLimits.check('msg', key)) return;
   const action = enforcement.recordOffence(key);
   enforcement.apply(
@@ -217,12 +216,24 @@ function handleNickFlood(ctx: NickContext): void {
 export function init(pluginApi: PluginAPI): void {
   api = pluginApi;
 
-  const msgWindowSecs = cfgNum('msg_window_secs', 3);
-  const joinWindowSecs = cfgNum('join_window_secs', 60);
-  const partWindowSecs = cfgNum('part_window_secs', 60);
-  const nickWindowSecs = cfgNum('nick_window_secs', 60);
-  const lockWindowSecs = cfgNum('flood_lock_window', 60);
-  const lockDurationSecs = cfgNum('flood_lock_duration', 60);
+  // Window must be > 0 — a zero-window sweep is a silent no-op (see audit
+  // W-FL1). Warn and clamp to the documented default instead of crashing
+  // the plugin load.
+  const windowSecs = (key: string, fallback: number): number => {
+    const v = cfgNum(key, fallback);
+    if (v <= 0) {
+      api.warn(`${key}=${v} is invalid (must be > 0); using default ${fallback}s`);
+      return fallback;
+    }
+    return v;
+  };
+
+  const msgWindowSecs = windowSecs('msg_window_secs', 3);
+  const joinWindowSecs = windowSecs('join_window_secs', 60);
+  const partWindowSecs = windowSecs('part_window_secs', 60);
+  const nickWindowSecs = windowSecs('nick_window_secs', 60);
+  const lockWindowSecs = windowSecs('flood_lock_window', 60);
+  const lockDurationSecs = windowSecs('flood_lock_duration', 60);
   cfg = {
     msgThreshold: cfgNum('msg_threshold', 5),
     msgWindowSecs,
@@ -255,6 +266,15 @@ export function init(pluginApi: PluginAPI): void {
     defaultLockMode: cfgStr('flood_lock_mode', 'R'),
   };
 
+  // Capture `api` into a closure here rather than reading the module-level
+  // `api` binding inside the error handler — a retained closure from a
+  // prior load would otherwise fall through to the old (now-disposed) api.
+  // See audit finding W-FL5 (2026-04-14).
+  const capturedApi = api;
+  const logFloodError = (err: unknown): void => {
+    capturedApi.error('Flood action error:', err);
+  };
+
   rateLimits = new RateLimitTracker(cfg);
   enforcement = new EnforcementExecutor(api, cfg, botHasOps, logFloodError);
   lockdown = new LockdownController(api, cfg, botHasOps);
@@ -274,6 +294,15 @@ export function init(pluginApi: PluginAPI): void {
   api.bind('join', '-', '*', handleJoinFlood);
   api.bind('part', '-', '*', handlePartFlood);
   api.bind('nick', '-', '*', handleNickFlood);
+  // Drop lockdown state when the bot itself leaves a channel, otherwise
+  // the scheduled unlock timer fires against a channel we're not in and
+  // the entry lingers until then. See audit finding W-FL2 (2026-04-14).
+  api.bind('part', '-', '*', (ctx) => {
+    if (api.isBotNick(ctx.nick)) lockdown.dropChannel(ctx.channel);
+  });
+  api.bind('kick', '-', '*', (ctx) => {
+    if (api.isBotNick(ctx.nick)) lockdown.dropChannel(ctx.channel);
+  });
   api.bind('time', '-', '60', () => {
     enforcement.liftExpiredBans();
     rateLimits.sweep();
@@ -286,7 +315,12 @@ export function init(pluginApi: PluginAPI): void {
 // Teardown
 // ---------------------------------------------------------------------------
 
-export function teardown(): void {
+export async function teardown(): Promise<void> {
+  // Drain any in-flight enforcement promises before nulling state so a
+  // late-resolving ban/kick can't touch the disposed api. Bounded by
+  // `enforcement.apply()`'s fire-and-forget surface; usually empty.
+  // See audit finding W-FL5 (2026-04-14).
+  await enforcement.drainPending();
   rateLimits.reset();
   enforcement.clear();
   lockdown.clear();

@@ -4,7 +4,7 @@ import type { PluginAPI } from '../../src/types';
 import { botHasOps } from './helpers';
 import { COOLDOWN_WINDOW_MS, MAX_ENFORCEMENTS, type SharedState } from './state';
 
-export function setupStickyBans(api: PluginAPI, state: SharedState): void {
+export function setupStickyBans(api: PluginAPI, state: SharedState): () => void {
   api.bind('mode', '-', '*', (ctx) => {
     const { channel } = ctx;
     const modeStr = ctx.command; // e.g. "-b"
@@ -51,4 +51,8 @@ export function setupStickyBans(api: PluginAPI, state: SharedState): void {
     api.ban(channel, mask);
     api.log(`Re-applied sticky ban ${mask} on ${channel}`);
   });
+
+  // Binds are auto-cleaned by the plugin loader; this teardown is a no-op
+  // but keeps the call site consistent with the other setup* helpers.
+  return () => {};
 }

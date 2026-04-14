@@ -87,7 +87,7 @@ function buildApi(pluginId: string): { api: PluginAPI; db: BotDatabase } {
     permissionsChangedListeners: new Map(),
   };
 
-  const api = createPluginApi(deps, pluginId, {});
+  const { api } = createPluginApi(deps, pluginId, {});
   return { api, db };
 }
 

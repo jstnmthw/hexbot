@@ -188,10 +188,9 @@ export class AnopeBackend implements ProtectionBackend {
           this.probeState.pendingGetKey.delete(chanKey);
           this.api.debug(`Anope: GETKEY probe for ${channel} timed out`);
         }
-        const idx = this.probeState?.probeTimers.indexOf(timer) ?? -1;
-        if (idx !== -1) this.probeState!.probeTimers.splice(idx, 1);
+        this.probeState?.probeTimers.delete(timer);
       }, GETKEY_TIMEOUT_MS);
-      this.probeState.probeTimers.push(timer);
+      this.probeState.probeTimers.add(timer);
     }
   }
 

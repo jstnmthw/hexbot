@@ -72,6 +72,20 @@ interface PagerState {
 
 const pagers = new Map<string, PagerState>();
 
+/**
+ * Tail listeners keyed by session. Module-scoped (not hidden inside
+ * `registerModLogCommands`) so {@link clearAuditTailForSession} and
+ * {@link shutdownModLogCommands} can find them from teardown paths.
+ * Holds a closure over `ctx.reply` per entry, so any shutdown path
+ * that skips cleanup leaks the REPL/DCC session context. See audit
+ * findings W-CMD1 and W-CMD2 (2026-04-14).
+ */
+interface TailEntry {
+  listener: (entry: ModLogEntry) => void;
+  eventBus: BotEventBus;
+}
+const tailListeners = new Map<string, TailEntry>();
+
 function sessionKey(ctx: CommandContext): string {
   if (ctx.source === 'dcc' && ctx.dccSession) return `dcc:${ctx.dccSession.handle}`;
   if (ctx.source === 'repl') return 'repl';
@@ -91,6 +105,29 @@ function pruneIdle(now = Date.now()): void {
 /** Clear a session's pager — exposed so DCC/REPL tear-down can drop the entry eagerly. */
 export function clearPagerForSession(key: string): void {
   pagers.delete(key);
+}
+
+/** Clear a session's audit-tail subscription — exposed so DCC/REPL tear-down can unsubscribe eagerly. */
+export function clearAuditTailForSession(key: string): void {
+  const entry = tailListeners.get(key);
+  if (entry) {
+    entry.eventBus.off('audit:log', entry.listener);
+    tailListeners.delete(key);
+  }
+}
+
+/**
+ * Teardown-time cleanup — drop every pager and every audit-tail
+ * subscription. Called from `Bot.shutdown()` so a bot restart doesn't
+ * leak the closures held by tailListeners or the page rows held by
+ * pagers.
+ */
+export function shutdownModLogCommands(): void {
+  pagers.clear();
+  for (const entry of tailListeners.values()) {
+    entry.eventBus.off('audit:log', entry.listener);
+  }
+  tailListeners.clear();
 }
 
 /** Test-only: drop every pager. */
@@ -410,8 +447,6 @@ export function registerModlogCommands(deps: RegisterDeps): void {
   // .audit-tail — live stream of audit:log events (REPL only)
   // -------------------------------------------------------------------------
 
-  const tailListeners = new Map<string, (entry: ModLogEntry) => void>();
-
   handler.registerCommand(
     'audit-tail',
     {
@@ -432,7 +467,7 @@ export function registerModlogCommands(deps: RegisterDeps): void {
       if (trimmed === 'off') {
         const existing = tailListeners.get('repl');
         if (existing) {
-          eventBus.off('audit:log', existing);
+          eventBus.off('audit:log', existing.listener);
           tailListeners.delete('repl');
           ctx.reply('.audit-tail off');
         } else {
@@ -447,14 +482,14 @@ export function registerModlogCommands(deps: RegisterDeps): void {
       }
       // Replace any existing listener — only one tail per REPL.
       const old = tailListeners.get('repl');
-      if (old) eventBus.off('audit:log', old);
+      if (old) eventBus.off('audit:log', old.listener);
 
       const matcher = makeMatcher(parsed.filter);
       const listener = (entry: ModLogEntry): void => {
         if (matcher(entry)) ctx.reply(renderRow(entry));
       };
       eventBus.on('audit:log', listener);
-      tailListeners.set('repl', listener);
+      tailListeners.set('repl', { listener, eventBus });
       ctx.reply('.audit-tail on (use `.audit-tail off` to stop)');
     },
   );

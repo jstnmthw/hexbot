@@ -149,7 +149,9 @@ function makeMockAPI(db: BotDatabase, config: Record<string, unknown> = {}): Moc
     changeNick() {},
 
     onModesReady() {},
+    offModesReady() {},
     onPermissionsChanged() {},
+    offPermissionsChanged() {},
     getChannel() {
       return undefined;
     },

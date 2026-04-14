@@ -36,6 +36,7 @@ function fetchOptsFor(cfg: RssPluginConfig): FetchFeedOpts {
     timeoutMs: cfg.request_timeout_ms,
     maxBytes: cfg.max_feed_bytes,
     allowHttp: cfg.allow_http,
+    signal: abortController?.signal,
   };
 }
 
@@ -60,9 +61,17 @@ let activeFeeds = new Map<string, FeedConfig>();
 // every downstream `result.items` read.
 type RssCustomFields = Record<string, never>;
 let parser: Parser<RssCustomFields, RssCustomFields>;
+/**
+ * Module-level abort signal. Aborted in {@link teardown} so any in-flight
+ * HTTP fetch or drip-fed announce loop that outlives the plugin module
+ * (e.g. a 30s wall-clock timer still mid-flight) stops touching the
+ * torn-down `api` reference. See audit findings W-RSS1/2/3.
+ */
+let abortController: AbortController | null = null;
 
 export async function init(api: PluginAPI): Promise<void> {
   const cfg = loadConfig(api);
+  abortController = new AbortController();
   parser = new Parser<RssCustomFields, RssCustomFields>({ timeout: cfg.request_timeout_ms });
 
   // Merge config-file feeds with runtime-added feeds from KV
@@ -93,7 +102,7 @@ export async function init(api: PluginAPI): Promise<void> {
       try {
         const items = await pollFeed(api, parser, feed, 'announce', cfg.max_per_poll, fetchOpts);
         if (items.length > 0) {
-          await announceItems(api, feed, items, cfg.max_title_length);
+          await announceItems(api, feed, items, cfg.max_title_length, abortController?.signal);
         }
       } catch (err) {
         api.error(`Error polling feed "${feed.id}" (${feed.url}):`, errorMessage(err));
@@ -147,6 +156,12 @@ export async function init(api: PluginAPI): Promise<void> {
 }
 
 export function teardown(): void {
+  // Abort any in-flight HTTP fetch or drip-fed announce loop before we
+  // drop the `activeFeeds` reference. Without this a still-pending
+  // wall-clock timer in feed-fetcher would keep calling through to
+  // the torn-down `api`.
+  abortController?.abort(new Error('rss plugin torn down'));
+  abortController = null;
   activeFeeds.clear();
 }
 
@@ -357,7 +372,7 @@ async function handleAdd(
       fetchOptsFor(cfg),
     );
     if (preview.length > 0) {
-      await announceItems(api, feed, preview, cfg.max_title_length);
+      await announceItems(api, feed, preview, cfg.max_title_length, abortController?.signal);
       api.notice(
         ctx.nick,
         `Feed "${id}" added. Posted latest article to ${channel} as preview; future items will announce automatically.`,
@@ -433,7 +448,7 @@ async function handleCheck(
     try {
       const items = await pollFeed(api, parser, feed, 'announce', cfg.max_per_poll, fetchOpts);
       if (items.length > 0) {
-        await announceItems(api, feed, items, cfg.max_title_length);
+        await announceItems(api, feed, items, cfg.max_title_length, abortController?.signal);
         totalNew += items.length;
       }
     } catch (err) {

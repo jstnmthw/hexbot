@@ -97,6 +97,22 @@ export class Services {
   }
 
   /**
+   * Abort every in-flight NickServ verify. Intended for the disconnect
+   * path so a mid-verification socket drop fails the awaiting caller
+   * immediately instead of waiting for the natural timeout and writing
+   * a misleading `nickserv-verify-timeout` audit row. See audit finding
+   * W-CL2 (2026-04-14).
+   */
+  cancelPendingVerifies(reason: string): void {
+    if (this.pending.size === 0) return;
+    this.logger?.info(`Cancelling ${this.pending.size} pending verify(s): ${reason}`);
+    for (const p of this.pending.values()) {
+      p.controller.abort();
+    }
+    this.pending.clear();
+  }
+
+  /**
    * Authenticate the bot with NickServ (non-SASL fallback).
    * Call this after the bot is registered on the network.
    * SASL is handled by irc-framework at connect time — this is the fallback.

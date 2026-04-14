@@ -30,6 +30,14 @@ export class DCCAuthTracker {
   readonly baseLockMs: number;
   /** Upper bound on the exponential lockout duration. */
   readonly maxLockMs: number;
+  /**
+   * Hard cap on distinct tracker entries. A brute-force attacker cycling
+   * identities can otherwise grow the map arbitrarily between 24h-based
+   * sweeps. When {@link recordFailure} is about to insert a new entry
+   * past this cap, the oldest-by-`firstFailure` entry is evicted. See
+   * audit finding W-DCC4 (2026-04-14).
+   */
+  readonly maxEntries: number;
 
   constructor(
     options: {
@@ -37,12 +45,14 @@ export class DCCAuthTracker {
       windowMs?: number;
       baseLockMs?: number;
       maxLockMs?: number;
+      maxEntries?: number;
     } = {},
   ) {
     this.maxFailures = options.maxFailures ?? 5;
     this.windowMs = options.windowMs ?? 60_000;
     this.baseLockMs = options.baseLockMs ?? 300_000;
     this.maxLockMs = options.maxLockMs ?? 86_400_000;
+    this.maxEntries = options.maxEntries ?? 10_000;
   }
 
   /** Is this key currently locked out? */
@@ -59,6 +69,21 @@ export class DCCAuthTracker {
   recordFailure(key: string, now: number = Date.now()): DCCAuthLockStatus {
     let tracker = this.trackers.get(key);
     if (!tracker) {
+      // About to insert a new entry. If we'd exceed the hard cap, evict
+      // the oldest-by-firstFailure entry first. Iterating to find the
+      // oldest is O(n); acceptable because this only fires past 10k
+      // distinct keys under brute-force conditions.
+      if (this.trackers.size >= this.maxEntries) {
+        let oldestKey: string | null = null;
+        let oldestFirstFailure = Infinity;
+        for (const [k, entry] of this.trackers) {
+          if (entry.firstFailure < oldestFirstFailure) {
+            oldestFirstFailure = entry.firstFailure;
+            oldestKey = k;
+          }
+        }
+        if (oldestKey !== null) this.trackers.delete(oldestKey);
+      }
       tracker = { failures: 0, firstFailure: now, bannedUntil: 0, banCount: 0 };
       this.trackers.set(key, tracker);
     }

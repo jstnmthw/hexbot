@@ -178,6 +178,32 @@ export function createState(): SharedState {
   return state;
 }
 
+/**
+ * Belt-and-braces teardown helper: null every Map/Set on the shared state so
+ * that even if something retains a reference to `state` past plugin unload
+ * (e.g. a closure captured by a backend callback that outlived its owner),
+ * the per-channel history graph cannot pin the process. See audit finding
+ * C3 (2026-04-14).
+ */
+export function clearSharedState(state: SharedState): void {
+  state.intentionalModeChanges.clear();
+  state.enforcementCooldown.clear();
+  state.cycles.clearAll();
+  for (const timer of state.enforcementTimers) clearTimeout(timer);
+  state.enforcementTimers.clear();
+  if (state.startupTimer) {
+    clearTimeout(state.startupTimer);
+    state.startupTimer = null;
+  }
+  state.splitOpsSnapshot.clear();
+  state.threatScores.clear();
+  state.pendingRecoverCleanup.clear();
+  state.lastKnownModes.clear();
+  state.unbanRequested.clear();
+  state.knownGoodTopics.clear();
+  state.takeoverWarnedChannels.clear();
+}
+
 /** Prune expired entries from intentionalModeChanges and enforcementCooldown,
  *  plus TTL-based cleanup of pendingRecoverCleanup/unbanRequested/cycle locks
  *  so a dropped follow-up event (services outage, etc.) doesn't leak entries. */

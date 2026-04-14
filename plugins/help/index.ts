@@ -6,9 +6,6 @@ export const name = 'help';
 export const version = '1.0.0';
 export const description = 'Provides !help command listing available bot commands';
 
-/** Track last !help (list view) invocation time per nick for flood protection. */
-const cooldowns = new Map<string, number>();
-
 /** Bold the trigger (first word) of a usage string, leaving args unbolded. */
 function boldTrigger(usage: string): string {
   const spaceIdx = usage.indexOf(' ');
@@ -34,6 +31,11 @@ function filterByPermission(
 type ReplyType = 'notice' | 'privmsg' | 'channel_notice';
 
 export function init(api: PluginAPI): void {
+  // Per-nick cooldown map scoped inside `init()` — see audit finding
+  // W-SP3 (2026-04-14). A module-level Map gets pinned by the stale
+  // closure on reload; this scope bound ensures GC collects it.
+  const cooldowns = new Map<string, number>();
+
   const rawCooldown = api.config.cooldown_ms;
   const cooldownMs = typeof rawCooldown === 'number' ? rawCooldown : 30000;
   const rawReplyType = api.config.reply_type;
@@ -170,6 +172,6 @@ export function init(api: PluginAPI): void {
   api.bind('msg', '-', '!help', handler);
 }
 
-export function teardown(): void {
-  cooldowns.clear();
-}
+// `cooldowns` now lives inside `init()` so teardown has nothing to do;
+// the GC drops the old module's closure graph once nothing references it.
+export function teardown(): void {}

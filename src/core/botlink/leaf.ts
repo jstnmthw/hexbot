@@ -392,6 +392,12 @@ export class BotLinkLeaf {
     this.pingTimer = setInterval(() => {
       if (Date.now() - this.lastHeartbeatAt > this.linkTimeoutMs) {
         this.logger?.warn('Hub timed out');
+        // Stop the interval inline before closing the socket: a concurrent
+        // destroyed-socket condition can suppress the `onClose` path that
+        // would otherwise drain the timer. See audit finding W-BL1
+        // (2026-04-14). The hub's analogous branch in hub.ts already does
+        // this; this brings the leaf in line.
+        this.stopHeartbeat();
         this.protocol?.close();
         return;
       }

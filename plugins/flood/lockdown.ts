@@ -34,6 +34,12 @@ export class LockdownController {
     const lowerChannel = this.api.ircLower(channel);
     const lowerMask = this.api.ircLower(hostmask);
 
+    // While a lockdown is active for this channel, stop recording new
+    // flooders. Without this the per-channel `flooders` Set grows to
+    // botnet-size during long lockdowns since `sweep()` deliberately
+    // skips locked channels. See audit finding W-FL3 (2026-04-14).
+    if (this.activeLocks.has(lowerChannel)) return;
+
     if (!this.flooders.has(lowerChannel)) {
       this.flooders.set(lowerChannel, new Set());
       this.timestamps.set(lowerChannel, []);
@@ -87,6 +93,23 @@ export class LockdownController {
     this.timestamps.clear();
     for (const timer of this.activeLocks.values()) clearTimeout(timer);
     this.activeLocks.clear();
+  }
+
+  /**
+   * Drop lockdown state for a channel the bot just left or was kicked
+   * from. Without this the scheduled unlock timer still fires against
+   * a channel the bot isn't in, and the entry lingers until the timer
+   * does. See audit finding W-FL2 (2026-04-14).
+   */
+  dropChannel(channel: string): void {
+    const lowerChannel = this.api.ircLower(channel);
+    const timer = this.activeLocks.get(lowerChannel);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.activeLocks.delete(lowerChannel);
+    }
+    this.flooders.delete(lowerChannel);
+    this.timestamps.delete(lowerChannel);
   }
 
   private trigger(channel: string): void {

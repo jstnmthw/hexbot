@@ -401,6 +401,8 @@ export interface PluginAPI {
   // Channel state
   /** Register a callback for when channel modes are received from the server (RPL_CHANNELMODEIS). Auto-cleaned on unload. */
   onModesReady(callback: (channel: string) => void): void;
+  /** Remove a callback previously registered with {@link onModesReady}. No-op if not registered. */
+  offModesReady(callback: (channel: string) => void): void;
   getChannel(name: string): ChannelState | undefined;
   getUsers(channel: string): ChannelUser[];
   getUserHostmask(channel: string, nick: string): string | undefined;
@@ -412,6 +414,8 @@ export interface PluginAPI {
    * the changed user. Auto-cleaned on unload.
    */
   onPermissionsChanged(callback: (handle: string) => void): void;
+  /** Remove a callback previously registered with {@link onPermissionsChanged}. No-op if not registered. */
+  offPermissionsChanged(callback: (handle: string) => void): void;
 
   // Permissions (read-only)
   permissions: PluginPermissions;
