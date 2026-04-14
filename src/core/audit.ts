@@ -65,6 +65,11 @@ export function auditOptions(
  * that already happened in memory. Optional `logger` records the failure
  * at warn — pass `null` for sites that should swallow silently.
  *
+ * Returns the `mod_log` row id on a successful write, or `null` when the
+ * db was missing, the write was skipped (retention/degraded), or it
+ * threw and was swallowed. Callers that need to reference the row later
+ * (e.g. the DCC login-row `beforeId` cursor) can capture the id here.
+ *
  * Use {@link tryAudit} when you have a {@link CommandContext}; reach for
  * this raw form only when the caller is a class method or background task
  * that already has fully-built `LogModActionOptions`.
@@ -73,12 +78,13 @@ export function tryLogModAction(
   db: BotDatabase | null,
   options: LogModActionOptions,
   logger?: AuditLogger | null,
-): void {
-  if (!db) return;
+): number | null {
+  if (!db) return null;
   try {
-    db.logModAction(options);
+    return db.logModAction(options);
   } catch (err) {
     logger?.warn(`Failed to record mod_log entry for ${options.action}:`, err);
+    return null;
   }
 }
 

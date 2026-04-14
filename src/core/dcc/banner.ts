@@ -60,6 +60,20 @@ export function formatUptime(ms: number): string {
   return parts.join(' ');
 }
 
+/**
+ * Failed-login warning data surfaced at the top of the banner. Omitted or
+ * null when there is nothing to warn about (clean session, or the
+ * session was started via the preview / test entry points that bypass
+ * the real auth pipeline).
+ */
+export interface BannerLoginSummary {
+  failedSince: number;
+  mostRecent: { timestamp: number; peer: string } | null;
+  lockoutsSince: number;
+  /** True when the window anchor is bot-start rather than a prior login. */
+  usedBootFallback: boolean;
+}
+
 export interface BannerRenderOptions {
   handle: string;
   flags: string;
@@ -72,6 +86,14 @@ export interface BannerRenderOptions {
   stats: BannerStats | null;
   /** Other active session handles — excludes the session that's being rendered. */
   otherSessions: string[];
+  /** Failed-login warning block; omit for preview/test callers. */
+  loginSummary?: BannerLoginSummary | null;
+}
+
+/** Truncate a peer string so it never overflows one terminal line. */
+function truncatePeer(peer: string, max = 40): string {
+  if (peer.length <= max) return peer;
+  return `${peer.slice(0, max - 1)}…`;
 }
 
 /**
@@ -114,6 +136,27 @@ export function renderBanner(opts: BannerRenderOptions, writeLine: (line: string
   if (opts.flags.includes('n')) {
     writeLine('');
     writeLine(`${red(`⊕`)} You are an owner of this bot.`);
+  }
+
+  // Failed-login warning — sits above the stats table so it lands in the
+  // most prominent spot without shoving the logo around. Shown only when
+  // there's something to warn about.
+  const summary = opts.loginSummary ?? null;
+  if (summary && (summary.failedSince > 0 || summary.lockoutsSince > 0)) {
+    writeLine('');
+    if (summary.failedSince > 0) {
+      const anchor = summary.usedBootFallback ? 'since bot start' : 'since your last login';
+      const noun = summary.failedSince === 1 ? 'failed login attempt' : 'failed login attempts';
+      writeLine(`${red('⚠')} ${B}${summary.failedSince}${B} ${noun} ${anchor}`);
+      if (summary.mostRecent) {
+        const when = new Date(summary.mostRecent.timestamp * 1000).toLocaleTimeString();
+        writeLine(`  └ most recent: ${when} from ${truncatePeer(summary.mostRecent.peer)}`);
+      }
+    }
+    if (summary.lockoutsSince > 0) {
+      const times = summary.lockoutsSince === 1 ? '1 time' : `${summary.lockoutsSince} times`;
+      writeLine(`${red('⚠')} rate-limit triggered ${times} in that window`);
+    }
   }
 
   // Stats table

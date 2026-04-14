@@ -2048,4 +2048,271 @@ describe('DCCManager.openSession prompt integration', () => {
     expect(tracker.check('AliceNick!alice@alice.host').failures).toBe(0);
     expect(localSessions.size).toBe(1);
   });
+
+  it('onAuthSuccess writes a login/success mod_log row and returns its id', async () => {
+    const { BotDatabase } = await import('../../src/database');
+    const db = new BotDatabase(':memory:');
+    db.open();
+    const mgr = new DCCManager({
+      client: new MockIRCClient(),
+      dispatcher: makeDispatcher(),
+      permissions: makePermissions(null),
+      services: makeServices(),
+      commandHandler: makeCommandHandler(),
+      config: makeConfig(),
+      version: '1.0.0',
+      botNick: 'hexbot',
+      db,
+    });
+
+    const fakeSession: DCCSessionEntry = {
+      handle: 'alice',
+      nick: 'AliceNick',
+      connectedAt: Date.now(),
+      isRelaying: false,
+      relayTarget: null,
+      handleFlags: 'nm',
+      rateLimitKey: 'AliceNick!alice@alice.host',
+      isClosed: false,
+      isStale: false,
+      writeLine: vi.fn(),
+      close: vi.fn(),
+      enterRelay: vi.fn(),
+      exitRelay: vi.fn(),
+      confirmRelay: vi.fn(),
+      getConsoleFlags: () => '',
+      setConsoleFlags: vi.fn(),
+      receiveLog: vi.fn(),
+    };
+
+    const id = mgr.onAuthSuccess(fakeSession);
+
+    expect(typeof id).toBe('number');
+    const rows = db.getModLog({ action: 'login' });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe(id);
+    expect(rows[0].source).toBe('dcc');
+    expect(rows[0].by).toBe('alice');
+    expect(rows[0].target).toBe('alice');
+    expect(rows[0].outcome).toBe('success');
+    expect(rows[0].metadata).toMatchObject({ peer: 'AliceNick!alice@alice.host' });
+    db.close();
+  });
+
+  it('onAuthSuccess returns null and writes nothing when db is absent', () => {
+    const mgr = new DCCManager({
+      client: new MockIRCClient(),
+      dispatcher: makeDispatcher(),
+      permissions: makePermissions(null),
+      services: makeServices(),
+      commandHandler: makeCommandHandler(),
+      config: makeConfig(),
+      version: '1.0.0',
+      botNick: 'hexbot',
+      // no db
+    });
+
+    const fakeSession: DCCSessionEntry = {
+      handle: 'alice',
+      nick: 'AliceNick',
+      connectedAt: Date.now(),
+      isRelaying: false,
+      relayTarget: null,
+      handleFlags: 'nm',
+      rateLimitKey: 'AliceNick!alice@alice.host',
+      isClosed: false,
+      isStale: false,
+      writeLine: vi.fn(),
+      close: vi.fn(),
+      enterRelay: vi.fn(),
+      exitRelay: vi.fn(),
+      confirmRelay: vi.fn(),
+      getConsoleFlags: () => '',
+      setConsoleFlags: vi.fn(),
+      receiveLog: vi.fn(),
+    };
+
+    expect(mgr.onAuthSuccess(fakeSession)).toBeNull();
+  });
+
+  it('getLoginSummaryForHandle returns null without a db', () => {
+    const mgr = new DCCManager({
+      client: new MockIRCClient(),
+      dispatcher: makeDispatcher(),
+      permissions: makePermissions(null),
+      services: makeServices(),
+      commandHandler: makeCommandHandler(),
+      config: makeConfig(),
+      version: '1.0.0',
+      botNick: 'hexbot',
+    });
+    expect(mgr.getLoginSummaryForHandle('alice', null)).toBeNull();
+  });
+
+  it('onAuthFailure still writes a login row for a subsequent success', async () => {
+    // Integration sanity: the login-row path and the auth-fail path coexist
+    // so the banner's "since your last login" window has both anchors to work with.
+    const { BotDatabase } = await import('../../src/database');
+    const db = new BotDatabase(':memory:');
+    db.open();
+    const mgr = new DCCManager({
+      client: new MockIRCClient(),
+      dispatcher: makeDispatcher(),
+      permissions: makePermissions(null),
+      services: makeServices(),
+      commandHandler: makeCommandHandler(),
+      config: makeConfig(),
+      version: '1.0.0',
+      botNick: 'hexbot',
+      db,
+      getBootTs: () => 1_000_000,
+    });
+
+    mgr.onAuthFailure('Eve!eve@evil.host', 'alice');
+    const fakeSession: DCCSessionEntry = {
+      handle: 'alice',
+      nick: 'AliceNick',
+      connectedAt: Date.now(),
+      isRelaying: false,
+      relayTarget: null,
+      handleFlags: 'nm',
+      rateLimitKey: 'AliceNick!alice@alice.host',
+      isClosed: false,
+      isStale: false,
+      writeLine: vi.fn(),
+      close: vi.fn(),
+      enterRelay: vi.fn(),
+      exitRelay: vi.fn(),
+      confirmRelay: vi.fn(),
+      getConsoleFlags: () => '',
+      setConsoleFlags: vi.fn(),
+      receiveLog: vi.fn(),
+    };
+    const id = mgr.onAuthSuccess(fakeSession);
+
+    const summary = mgr.getLoginSummaryForHandle('alice', id);
+    expect(summary).not.toBeNull();
+    // The one failure pre-dates the login row we just wrote — surface it.
+    expect(summary?.failedSince).toBe(1);
+    expect(summary?.mostRecent?.peer).toBe('Eve!eve@evil.host');
+    db.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderBanner — failed-login warning block
+// ---------------------------------------------------------------------------
+
+describe('renderBanner login summary', () => {
+  const rb = async () => (await import('../../src/core/dcc/banner')).renderBanner;
+  const strip = async () => (await import('../../src/utils/strip-formatting')).stripFormatting;
+
+  const baseOpts = {
+    handle: 'alice',
+    flags: '',
+    nick: 'AliceNick',
+    ident: 'alice',
+    hostname: 'alice.host',
+    consoleFlags: new Set<never>(),
+    version: '1.0.0',
+    botNick: 'hexbot',
+    stats: null,
+    otherSessions: [] as string[],
+  };
+
+  it('renders no warning block when loginSummary is null', async () => {
+    const renderBanner = await rb();
+    const stripFormatting = await strip();
+    const lines: string[] = [];
+    renderBanner({ ...baseOpts, loginSummary: null }, (line) => lines.push(line));
+    const output = stripFormatting(lines.join('\n'));
+    expect(output).not.toMatch(/failed login attempt/);
+    expect(output).not.toMatch(/rate-limit/);
+  });
+
+  it('renders a single-line count and most-recent line when failures exist', async () => {
+    const renderBanner = await rb();
+    const stripFormatting = await strip();
+    const lines: string[] = [];
+    renderBanner(
+      {
+        ...baseOpts,
+        loginSummary: {
+          failedSince: 3,
+          mostRecent: { timestamp: 1_700_000_000, peer: '198.51.100.7:53214' },
+          lockoutsSince: 0,
+          usedBootFallback: false,
+        },
+      },
+      (line) => lines.push(line),
+    );
+    const output = stripFormatting(lines.join('\n'));
+    expect(output).toMatch(/3 failed login attempts since your last login/);
+    expect(output).toMatch(/most recent: .* from 198\.51\.100\.7:53214/);
+    expect(output).not.toMatch(/rate-limit/);
+  });
+
+  it('renders both lines when lockoutsSince > 0', async () => {
+    const renderBanner = await rb();
+    const stripFormatting = await strip();
+    const lines: string[] = [];
+    renderBanner(
+      {
+        ...baseOpts,
+        loginSummary: {
+          failedSince: 5,
+          mostRecent: { timestamp: 1_700_000_000, peer: 'foe!eve@host:1' },
+          lockoutsSince: 2,
+          usedBootFallback: false,
+        },
+      },
+      (line) => lines.push(line),
+    );
+    const output = stripFormatting(lines.join('\n'));
+    expect(output).toMatch(/5 failed login attempts/);
+    expect(output).toMatch(/rate-limit triggered 2 times/);
+  });
+
+  it('switches phrasing to "since bot start" when usedBootFallback is true', async () => {
+    const renderBanner = await rb();
+    const stripFormatting = await strip();
+    const lines: string[] = [];
+    renderBanner(
+      {
+        ...baseOpts,
+        loginSummary: {
+          failedSince: 1,
+          mostRecent: { timestamp: 1_700_000_000, peer: 'x!y@z' },
+          lockoutsSince: 0,
+          usedBootFallback: true,
+        },
+      },
+      (line) => lines.push(line),
+    );
+    const output = stripFormatting(lines.join('\n'));
+    expect(output).toMatch(/1 failed login attempt since bot start/);
+    expect(output).not.toMatch(/since your last login/);
+  });
+
+  it('truncates overly long peer strings', async () => {
+    const renderBanner = await rb();
+    const stripFormatting = await strip();
+    const longPeer = 'very.long.hostname.example.com:65535/with/extra/bits/that/overflow';
+    const lines: string[] = [];
+    renderBanner(
+      {
+        ...baseOpts,
+        loginSummary: {
+          failedSince: 1,
+          mostRecent: { timestamp: 1_700_000_000, peer: longPeer },
+          lockoutsSince: 0,
+          usedBootFallback: false,
+        },
+      },
+      (line) => lines.push(line),
+    );
+    const output = stripFormatting(lines.join('\n'));
+    expect(output).toContain('…');
+    expect(output).not.toContain(longPeer);
+  });
 });

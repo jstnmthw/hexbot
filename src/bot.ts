@@ -131,6 +131,15 @@ export class Bot {
     return this._botLinkLeaf;
   }
   private startTime: number = Date.now();
+  /**
+   * Bot start time as a unix-epoch ms timestamp. Exposed so the REPL
+   * startup summary and DCC login-summary banner can anchor "since bot
+   * start" windows on the same value the stats banner already uses for
+   * `uptime`.
+   */
+  get startedAt(): number {
+    return this.startTime;
+  }
   private configuredChannels: ChannelEntry[] = [];
   /**
    * Plugin names that failed to load at startup. Surfaced via
@@ -508,6 +517,7 @@ export class Bot {
         userCount: this.permissions.listUsers().length,
         uptime: Date.now() - this.startTime,
       }),
+      getBootTs: () => Math.floor(this.startTime / 1000),
     });
     this._dccManager.attach();
     registerDccConsoleCommands(this.commandHandler, this._dccManager, this.db);

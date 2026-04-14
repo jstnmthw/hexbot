@@ -5,6 +5,7 @@ import { type Interface as ReadlineInterface, createInterface } from 'node:readl
 
 import type { Bot } from './bot';
 import { tryAudit } from './core/audit';
+import { buildReplStartupLine, buildReplStartupSummary } from './core/dcc/login-summary';
 import { Logger, type LoggerLike } from './logger';
 import { toEventObject } from './utils/irc-event';
 import { sanitize } from './utils/sanitize';
@@ -82,6 +83,11 @@ export class BotREPL {
 
     this.logger?.info('Interactive mode. Type .help for commands, .quit to exit.');
 
+    // Surface aggregate DCC auth failures since boot — the REPL has no
+    // per-user login event of its own, so we anchor on `startedAt` and
+    // print one line above the first prompt when there's anything to show.
+    this.printStartupLoginSummary();
+
     this.rl.on('line', (line: string) => {
       // Both `.catch()` and `.finally()` are wired: `catch` swallows
       // unexpected rejections from deep within `handleLine` (which
@@ -104,6 +110,23 @@ export class BotREPL {
     });
 
     this.rl.prompt();
+  }
+
+  /**
+   * Print a one-line aggregate of DCC auth failures since bot start.
+   * Anchored on `Bot.startedAt` (unix seconds) so the window is exactly
+   * "since this process started" — no per-user login event is written
+   * for REPL, so there is no prior-login anchor to fall back on.
+   */
+  private printStartupLoginSummary(): void {
+    try {
+      const bootTs = Math.floor(this.bot.startedAt / 1000);
+      const summary = buildReplStartupSummary(this.bot.db, bootTs);
+      const line = buildReplStartupLine(summary);
+      if (line !== null) this.print(line);
+    } catch (err) {
+      this.logger?.warn('REPL startup login summary failed:', err);
+    }
   }
 
   /** Stop the REPL. Idempotent — safe to call from rl.on('close') and .quit. */

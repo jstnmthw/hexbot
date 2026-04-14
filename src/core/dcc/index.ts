@@ -26,7 +26,7 @@ import { tryLogModAction } from '../audit';
 import { clearAuditTailForSession, clearPagerForSession } from '../commands/modlog-commands';
 import { verifyPassword } from '../password';
 import { DCCAuthTracker } from './auth-tracker';
-import { type BannerStats, renderBanner } from './banner';
+import { type BannerLoginSummary, type BannerStats, renderBanner } from './banner';
 import {
   type ConsoleFlagLetter,
   type ConsoleFlagStore,
@@ -35,6 +35,7 @@ import {
   parseCanonicalFlags,
   shouldDeliverToSession,
 } from './console-flags';
+import { buildLoginSummary } from './login-summary';
 import {
   DCC_PROMPT_TIMEOUT_MS,
   type DccChatPayload,
@@ -141,13 +142,29 @@ export interface DCCSessionManager {
    * Called when the password prompt succeeds. The session has entered the
    * `active` phase and should be announced to other sessions. Implementations
    * may also clear any rate-limit failure counters for the session's key.
+   *
+   * Returns the `mod_log` row id of the `login/success` row written for
+   * this session, or `null` when no row was written (degraded db, test
+   * mock). DCCSession threads the id into `getLoginSummaryForHandle()`
+   * so the row we literally just wrote is excluded from the "previous
+   * login" lookup.
    */
-  onAuthSuccess?(session: DCCSessionEntry): void;
+  onAuthSuccess?(session: DCCSessionEntry): number | null;
   /**
    * Called when the password prompt fails. The session is about to close.
    * Implementations should increment failure counters and emit warnings.
    */
   onAuthFailure?(key: string, handle: string): void;
+  /**
+   * Build the failed-login warning block for the banner. Returns `null`
+   * when the implementation has no db wired up (test fixtures) or there
+   * is nothing to warn about. Optional so mocks don't have to implement
+   * it — DCCSession defaults to `null` when absent.
+   */
+  getLoginSummaryForHandle?(
+    handle: string,
+    beforeLoginId: number | null,
+  ): BannerLoginSummary | null;
 }
 
 /** Options for DCCSessionEntry.enterRelay — optional pending-confirmation timeout. */
@@ -244,6 +261,14 @@ export interface DCCManagerDeps {
   /** Optional live stats provider for the DCC session banner. */
   getStats?: () => BannerStats;
   /**
+   * Bot start timestamp source (unix seconds). Used by the failed-login
+   * banner as the "since" anchor when a handle has no prior login row
+   * (first-ever auth, or retention-swept). Reuses {@link Bot.startedAt}
+   * in production; a lambda is used so the manager can be constructed
+   * before the bot's own `startedAt` is finalised.
+   */
+  getBootTs?: () => number;
+  /**
    * Event bus used to subscribe to `user:passwordChanged` and
    * `user:removed` so the manager can close any live session for a
    * rotated or deleted handle. Optional so existing test fixtures keep
@@ -317,6 +342,13 @@ export class DCCSession implements DCCSessionEntry {
   private botNickForBanner = '';
   /** Cached `nick!ident@host` — stable for the life of the session. */
   private readonly _rateLimitKey: string;
+  /**
+   * `mod_log` row id of the `login/success` row written for this session,
+   * or null when no row was written. Threaded into the banner's
+   * login-summary lookup so the row we just wrote is never returned as
+   * the "previous login".
+   */
+  private lastWrittenLoginId: number | null = null;
 
   constructor(opts: {
     manager: DCCSessionManager;
@@ -499,6 +531,8 @@ export class DCCSession implements DCCSessionEntry {
 
   /** Send the welcome banner + stats. Called after the password prompt succeeds. */
   private showBanner(): void {
+    const loginSummary =
+      this.manager.getLoginSummaryForHandle?.(this.handle, this.lastWrittenLoginId) ?? null;
     renderBanner(
       {
         handle: this.handle,
@@ -514,6 +548,7 @@ export class DCCSession implements DCCSessionEntry {
           .getSessionList()
           .filter((s) => s.handle !== this.handle)
           .map((s) => s.handle),
+        loginSummary,
       },
       (line) => this.writeLine(line),
     );
@@ -792,7 +827,11 @@ export class DCCSession implements DCCSessionEntry {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;
     }
-    this.manager.onAuthSuccess?.(this);
+    // Manager writes the `login/success` row and returns its id so the
+    // banner's login-summary lookup can exclude the row we just wrote
+    // via the `beforeId` cursor. A mock manager that doesn't implement
+    // this returns undefined → captured as null.
+    this.lastWrittenLoginId = this.manager.onAuthSuccess?.(this) ?? null;
     this.showBanner();
     this.resetIdle();
   }
@@ -944,6 +983,8 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   /** Failure tracker for the password prompt — exponential backoff on repeat. */
   readonly authTracker: DCCAuthTracker;
 
+  private getBootTs: (() => number) | null;
+
   constructor(deps: DCCManagerDeps) {
     this.client = deps.client;
     this.dispatcher = deps.dispatcher;
@@ -962,6 +1003,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     this.consoleFlagStore = deps.consoleFlagStore ?? createInMemoryConsoleFlagStore();
     this.db = deps.db ?? null;
     this.eventBus = deps.eventBus ?? null;
+    this.getBootTs = deps.getBootTs ?? null;
   }
 
   /** Read-only access to the console flag store — used by `.console <handle>`. */
@@ -969,8 +1011,15 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     return this.consoleFlagStore;
   }
 
-  /** Called by DCCSession when the password prompt succeeds. */
-  onAuthSuccess(session: DCCSessionEntry): void {
+  /**
+   * Called by DCCSession when the password prompt succeeds. Writes the
+   * `login/success` row and returns its `mod_log` id so the session can
+   * thread it into the banner's login-summary lookup via the `beforeId`
+   * cursor — excluding the row we literally just wrote from the
+   * "previous login" query. Returns `null` when no row was written
+   * (`db` is absent, retention disabled, or the write was degraded).
+   */
+  onAuthSuccess(session: DCCSessionEntry): number | null {
     const key = session.rateLimitKey;
     this.authTracker.recordSuccess(key);
     // Emit the info log before registering the session so the DCC fanout
@@ -981,6 +1030,43 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     this.sessions.set(ircLower(session.nick, this.casemapping), session);
     this.announce(`*** ${session.handle} has joined the console`);
     this.onPartyJoin?.(session.handle, session.nick);
+    // Write the `login/success` row after the in-memory state is
+    // consistent — a degraded audit write must not block the session
+    // from going active.
+    return tryLogModAction(
+      this.db,
+      {
+        action: 'login',
+        source: 'dcc',
+        by: session.handle,
+        target: session.handle,
+        outcome: 'success',
+        metadata: { peer: session.rateLimitKey },
+      },
+      this.logger,
+    );
+  }
+
+  /**
+   * Build the failed-login warning block for the banner. `beforeLoginId`
+   * is the id of the `login/success` row the manager just wrote in
+   * {@link onAuthSuccess} — passed through as the `beforeId` cursor so
+   * the row we literally just wrote is excluded from the "previous
+   * login" lookup. Returns `null` when there's no db wired up.
+   */
+  getLoginSummaryForHandle(
+    handle: string,
+    beforeLoginId: number | null,
+  ): BannerLoginSummary | null {
+    if (!this.db) return null;
+    const bootTs = this.getBootTs?.() ?? Math.floor(Date.now() / 1000);
+    const summary = buildLoginSummary(this.db, handle, bootTs, beforeLoginId);
+    return {
+      failedSince: summary.failedSince,
+      mostRecent: summary.mostRecent,
+      lockoutsSince: summary.lockoutsSince,
+      usedBootFallback: summary.usedBootFallback,
+    };
   }
 
   /** Called by DCCSession when the password prompt fails. */

@@ -475,15 +475,19 @@ export class BotDatabase {
    * pre-Phase-1 signature no longer compile; every caller threads `source`
    * explicitly. When the db was opened with `modLogEnabled: false`, the
    * insert is skipped silently.
+   *
+   * Returns the `lastInsertRowid` of the written row so callers that need
+   * to reference it later (e.g. cursor filter `beforeId`) can capture it,
+   * or `null` when the write was skipped/degraded.
    */
-  logModAction(options: LogModActionOptions): void {
+  logModAction(options: LogModActionOptions): number | null {
     this.ensureOpen();
-    if (!this.modLogEnabled) return;
+    if (!this.modLogEnabled) return null;
     if (this.writesDisabled) {
       // Spill to the operator-visible fallback sink rather than dropping
       // the row silently. See stability audit 2026-04-14.
       this.auditFallback?.(options);
-      return;
+      return null;
     }
 
     const {
@@ -542,10 +546,12 @@ export class BotDatabase {
         // without emitting audit:log — the subscriber will see the
         // fallback row when the sink reports on .status.
         this.auditFallback?.(options);
-        return;
+        return null;
       }
       throw err;
     }
+
+    const id = Number(result.lastInsertRowid);
 
     // Fire the audit:log event so subscribers (Phase 6 `.audit-tail`,
     // future audit-stream plugins) can react without polling the table.
@@ -554,7 +560,7 @@ export class BotDatabase {
     // ended up with because the DB default is `unixepoch()` at insert time.
     if (this.eventBus) {
       this.eventBus.emit('audit:log', {
-        id: Number(result.lastInsertRowid),
+        id,
         timestamp: Math.floor(Date.now() / 1000),
         action,
         source,
@@ -567,6 +573,8 @@ export class BotDatabase {
         metadata,
       });
     }
+
+    return id;
   }
 
   /** Query the mod log with optional filters. */
