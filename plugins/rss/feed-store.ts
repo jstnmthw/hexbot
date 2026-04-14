@@ -45,8 +45,28 @@ export function hasSeen(api: PluginAPI, feedId: string, hash: string): boolean {
   return api.db.get(`rss:seen:${feedId}:${hash}`) !== undefined;
 }
 
+/**
+ * Hard cap on dedup entries retained per feed. A high-volume feed that posts
+ * 30k+ items in a day would otherwise accumulate all of them between daily
+ * `cleanupSeen` sweeps, causing `db.list('rss:seen:')` to briefly hold them
+ * all in memory. Trimming oldest-first on every write keeps the table bounded.
+ * See memleak audit 2026-04-14 INFO note.
+ */
+export const MAX_SEEN_PER_FEED = 1000;
+
 export function markSeen(api: PluginAPI, feedId: string, hash: string): void {
   api.db.set(`rss:seen:${feedId}:${hash}`, new Date().toISOString());
+  trimSeenToCap(api, feedId);
+}
+
+function trimSeenToCap(api: PluginAPI, feedId: string): void {
+  const entries = api.db.list(`rss:seen:${feedId}:`);
+  if (entries.length <= MAX_SEEN_PER_FEED) return;
+  entries.sort((a, b) => Date.parse(a.value) - Date.parse(b.value));
+  const excess = entries.length - MAX_SEEN_PER_FEED;
+  for (let i = 0; i < excess; i++) {
+    api.db.del(entries[i].key);
+  }
 }
 
 export function getLastPoll(api: PluginAPI, feedId: string): number {

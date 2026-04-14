@@ -25,6 +25,11 @@ export class ListenerGroup {
   private entries: Array<{ event: string; fn: Listener }> = [];
 
   constructor(target: ListenerTarget) {
+    if (typeof target.removeListener !== 'function' && typeof target.off !== 'function') {
+      throw new TypeError(
+        '[listener-group] target exposes neither removeListener nor off — refusing to attach listeners that cannot be removed',
+      );
+    }
     this.target = target;
   }
 

@@ -30,6 +30,14 @@ function isBanEntry(value: unknown): value is BanEntry {
   );
 }
 
+/**
+ * Hard cap on masks tracked per channel. A compromised or hostile peer
+ * could otherwise inject arbitrarily many masks via `syncBans` / `syncExempts`
+ * — defence in depth, trusted-peer model is our first line. See memleak audit
+ * 2026-04-14 INFO note.
+ */
+const MAX_MASKS_PER_CHANNEL = 256;
+
 /** Per-channel mask list (bans or exempts). */
 class MaskList {
   private entries: Map<string, BanEntry[]> = new Map();
@@ -42,9 +50,14 @@ class MaskList {
     const lower = channel.toLowerCase();
     if (!this.entries.has(lower)) this.entries.set(lower, []);
     const list = this.entries.get(lower)!;
-    if (!list.some((b) => b.mask === mask)) {
-      list.push({ mask, setBy, setAt });
+    if (list.some((b) => b.mask === mask)) return;
+    if (list.length >= MAX_MASKS_PER_CHANNEL) {
+      console.warn(
+        `[botlink-sharing] dropping mask for ${lower}: channel list at cap (${MAX_MASKS_PER_CHANNEL})`,
+      );
+      return;
     }
+    list.push({ mask, setBy, setAt });
   }
 
   remove(channel: string, mask: string): void {
@@ -59,7 +72,15 @@ class MaskList {
   }
 
   sync(channel: string, entries: BanEntry[]): void {
-    this.entries.set(channel.toLowerCase(), [...entries]);
+    const lower = channel.toLowerCase();
+    if (entries.length > MAX_MASKS_PER_CHANNEL) {
+      console.warn(
+        `[botlink-sharing] truncating sync for ${lower}: ${entries.length} masks exceeds cap (${MAX_MASKS_PER_CHANNEL})`,
+      );
+      this.entries.set(lower, entries.slice(0, MAX_MASKS_PER_CHANNEL));
+      return;
+    }
+    this.entries.set(lower, [...entries]);
   }
 
   channels(): IterableIterator<string> {

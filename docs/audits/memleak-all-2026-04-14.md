@@ -163,30 +163,40 @@ On the positive side: no leaks were found in plugin-loader, dispatcher, irc-brid
 ## INFO findings (short-form)
 
 - [x] Plugin API captures full `deps` bag via closures (`plugin-api-factory.ts:110-256`); benign today, but coupled with W-PS1 is the "loaded gun" if teardown misses anything — consider nulling plugin API methods after unload. **Addressed by W-PS1 (2026-04-14)** — post-teardown every method is a no-op, so the retained `deps` closures can no longer fan out.
-- [ ] `EventDispatcher` has no `destroy()` method for graceful shutdown; not a leak, but blocks atomic "stop everything" during `Bot.stop()`.
-- [ ] `plugin-loader.ts` `importedOnce: Set<string>` grows by unique plugin entry path (bounded), safe today but misleadingly named.
-- [ ] `command-handler.ts` commands Map has no `unregisterByOwner(owner)` helper; reload leaks depend on plugin-loader tracking command names by hand.
-- [ ] `repl.ts` holds the whole `Bot` instance by reference — benign (lifetimes match).
-- [ ] `index.ts` `recoverableTimestamps: number[]` bounded at 100.
-- [ ] `database.ts` ad-hoc `db.prepare()` in `getModLog`/`countModLog` uses parameterized `LIKE`, so better-sqlite3's statement cache is bounded by WHERE permutations.
-- [ ] `ListenerGroup` silently no-ops if target exposes neither `removeListener` nor `off` — interface-contract edge case; add a runtime assertion.
-- [ ] DCC socket listener count approaches Node's default-10 cap; consolidate or `setMaxListeners(N)` with a documented reason.
-- [ ] DCC `attach()` `authSweepTimer` re-assignment without clearing prior (INFO-5 in the DCC scan) — gated behind the same "double-attach" precondition as W-DCC3.
-- [ ] `closeSessionsForHandle` uses plain JS `toLowerCase()` instead of `ircLower` — consistency note, not a leak.
-- [ ] BotLink `sharing.ts` `MaskList` has no per-channel cap; bounded in practice by IRC-server ban-list limits, but a compromised peer can inject high-cardinality masks.
-- [ ] BotLink `remotePartyUsers` has 7-day TTL but no hard cap — a malicious leaf can grow it to `MAX_PENDING_ROUTES`-equivalent between sweeps.
+- [x] `ListenerGroup` silently no-ops if target exposes neither `removeListener` nor `off` — interface-contract edge case; add a runtime assertion. **Fixed 2026-04-15** (constructor throws on targets exposing neither alias).
+- [x] `closeSessionsForHandle` uses plain JS `toLowerCase()` instead of `ircLower` — consistency note, not a leak. **Fixed 2026-04-15** (`src/core/dcc/index.ts:1657`).
+- [x] BotLink leaf reconnect `socket.once('connect', ...) / once('error', ...)` with symmetric `removeListener` is correct but subtle — add a comment. **Fixed 2026-04-15** — comment added at the attach site.
 - [x] ~~BotLink `relay-handler.ts` `sessions` map has no TTL sweep and no leaf-disconnect hook~~ **— verified 2026-04-14: `bot.ts:570-581` wires `_onBotlinkDisconnectedCleanup` on `eventBus.on('botlink:disconnected', ...)` which iterates `_relayVirtualSessions` and deletes every entry whose `fromBot` matches the disconnecting leaf. The cleanup hook is present; this is not a finding.**
-- [ ] BotLink `cmdRefCounter` monotonic (noted; overflow in ~3 million years).
-- [ ] BotLink hub handshake `finish('ok')` path is correctly wired through `acceptHandshake`'s timer clear.
-- [ ] BotLink leaf reconnect `socket.once('connect', ...) / once('error', ...)` with symmetric `removeListener` is correct but subtle — add a comment.
-- [ ] `BotLinkProtocol` doesn't explicitly `off()` `rl.on('line')` / `socket.on('close')` — safe (readline/Socket clean up on destroy) but relies on node internals.
 - [x] `pending-verify` timer fires `nickserv-verify-timeout` audit rows after disconnect (addressed by W-CL2). **Addressed by W-CL2 (2026-04-14).**
-- [ ] `rss:seen:` KV set has only time-based eviction; a high-volume feed can accumulate 30k+ rows per feed between daily cleanups, and `api.db.list('rss:seen:')` briefly holds them all in memory.
-- [ ] RSS `doRequest` DOCTYPE rejection path doesn't null the `chunks: Buffer[]` array immediately — Promise settlement GCs it, but there's a small reference-holding window.
-- [ ] RSS `url-validator.ts` `dns.lookup` has no explicit timeout — inherits OS resolver timing (up to 90s per fetch with redirects).
-- [ ] Chanmod `probedChannels` Set not cleared on `.part` (bounded by unique channel set).
-- [ ] Chanmod `takeoverWarnedChannels` bounded by session channel count; `resetThreat()` exists but is never called from any handler.
-- [ ] Chanmod `threatScores` per-channel events ring-buffered at 200; per-channel entries never deleted but bounded by channel count.
+- [x] RSS `url-validator.ts` `dns.lookup` has no explicit timeout — inherits OS resolver timing (up to 90s per fetch with redirects). **Already fixed** by the 2026-04-14 stability audit — `url-validator.ts:108-117` races `dns.lookup` against a 5s deadline.
+- [x] Chanmod `probedChannels` Set not cleared on `.part` (bounded by unique channel set). **Already fixed** by W-CM4 — `join-recovery.ts:147-159` `dropRecovery` clears it on bot part/kick.
+
+- [x] BotLink `sharing.ts` `MaskList` has no per-channel cap; bounded in practice by IRC-server ban-list limits, but a compromised peer can inject high-cardinality masks via `syncBans` / `syncExempts`. **Fixed 2026-04-15** — `MAX_MASKS_PER_CHANNEL = 256` cap in `sharing.ts`; `add()` drops and `sync()` truncates with warn log.
+- [x] BotLink `remotePartyUsers` has 7-day TTL but no hard cap — a malicious leaf can grow it to `MAX_PENDING_ROUTES`-equivalent between sweeps. **Fixed 2026-04-15** — `MAX_REMOTE_PARTY_USERS = 512` cap in `relay-router.ts`; `trackPartyJoin` drops new joins past the cap with warn log.
+- [x] `rss:seen:` KV set has only time-based eviction; a high-volume feed can accumulate 30k+ rows per feed between daily cleanups, and `api.db.list('rss:seen:')` briefly holds them all in memory. **Fixed 2026-04-15** — `MAX_SEEN_PER_FEED = 1000` per-feed LRU cap trimmed inline by `markSeen` in `feed-store.ts`.
+- [x] Chanmod `takeoverWarnedChannels` bounded by session channel count; `resetThreat()` exists but is never called from any handler. **Fixed 2026-04-15** — `resetThreat()` deleted as dead code (only tests referenced it); `takeoverWarnedChannels` is self-bounded by channel count and needs no further action.
+
+### Dropped items (not leaks / not applicable / stale)
+
+Removed 2026-04-15 after re-triage — each was either explicitly benign in the finding text, already fixed by a warning-tier item, or stale:
+
+- `EventDispatcher.destroy()` — not a leak, author's own note.
+- `plugin-loader.ts` `importedOnce` — bounded; rename is cosmetic only.
+- `command-handler.ts` `unregisterByOwner` — plugins don't expose `registerCommand` through the plugin API, so there's no reload path to leak.
+- `repl.ts` Bot reference — explicitly benign (lifetimes match).
+- `index.ts` `recoverableTimestamps` — bounded at 100.
+- `database.ts` prepared-statement cache — bounded by WHERE permutations.
+- DCC listener count vs default-10 cap — not a leak; silencing would only hide a warning.
+- DCC `attach()` `authSweepTimer` re-assignment — covered by W-DCC3's `attached` idempotency flag.
+- BotLink `cmdRefCounter` — overflow in ~3 million years.
+- BotLink hub handshake `finish('ok')` — "correctly wired" per audit text.
+- `BotLinkProtocol` `off()` on `rl.on('line')` / `socket.on('close')` — safe; cleanup via socket destroy is a documented Node contract.
+- RSS `doRequest` DOCTYPE chunks array — Promise settlement GCs it; no measurable window.
+- Chanmod `threatScores` — ring-buffered at 200, bounded by channel count.
+
+## Open questions
+
+All resolved 2026-04-15 — see the INFO entries above for outcomes.
 
 ---
 

@@ -159,14 +159,6 @@ export function getThreatLevel(
 }
 
 /**
- * Reset threat state for a channel (e.g., after successful recovery).
- */
-export function resetThreat(api: PluginAPI, state: SharedState, channel: string): void {
-  const key = api.ircLower(channel);
-  state.threatScores.delete(key);
-}
-
-/**
  * Get the raw threat state for a channel (for testing/debug).
  */
 export function getThreatState(

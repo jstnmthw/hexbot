@@ -24,7 +24,6 @@ import {
   assessThreat,
   getThreatLevel,
   getThreatState,
-  resetThreat,
   scoreToLevel,
 } from '../../plugins/chanmod/takeover-detect';
 import type { MockBot } from '../helpers/mock-bot';
@@ -437,18 +436,6 @@ describe('threat decay', () => {
     const level = assessThreat(api, config, state, chain, '#test', 'mode_locked', 1, 'attacker');
     expect(level).toBe(THREAT_NORMAL); // 1 < 3
     expect(getThreatState(api, state, '#test')!.score).toBe(1);
-  });
-
-  it('resetThreat clears state immediately', () => {
-    const { api } = createMockApi();
-    const config = createTestConfig();
-    const state = createState();
-    const chain = new ProtectionChain(api);
-
-    assessThreat(api, config, state, chain, '#test', 'bot_banned', 5, 'attacker');
-    resetThreat(api, state, '#test');
-    expect(getThreatLevel(api, config, state, '#test')).toBe(THREAT_NORMAL);
-    expect(getThreatState(api, state, '#test')).toBeUndefined();
   });
 });
 

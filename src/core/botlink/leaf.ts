@@ -88,6 +88,12 @@ export class BotLinkLeaf {
 
     const socket = this.socketFactory(hubPort, hubHost);
 
+    // Exactly one of these handlers fires per connect attempt. Whichever
+    // runs must explicitly remove its twin, because the `once` wrapper only
+    // detaches the firing listener — the other closure would remain
+    // attached for the lifetime of the socket, pinning `this` and a hub
+    // reference even after a successful transition to the protocol layer.
+    // See memleak audit INFO note (2026-04-14).
     const onConnect = () => {
       socket.removeListener('error', onError);
       this.connecting = false;

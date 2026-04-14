@@ -1655,10 +1655,10 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
    * old credentials cannot survive a rotation.
    */
   private closeSessionsForHandle(handle: string, reason: string): void {
-    const lowerHandle = handle.toLowerCase();
+    const lowerHandle = ircLower(handle, this.casemapping);
     const toClose: Array<[string, DCCSessionEntry]> = [];
     for (const [key, session] of this.sessions.entries()) {
-      if (session.handle.toLowerCase() === lowerHandle) {
+      if (ircLower(session.handle, this.casemapping) === lowerHandle) {
         toClose.push([key, session]);
       }
     }

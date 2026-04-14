@@ -32,6 +32,14 @@ const PARTY_TTL = 7 * 86_400_000; // 7 days — remote DCC party members
  */
 const MAX_PENDING_ROUTES = 4096;
 
+/**
+ * Cap on the remote party-user table. The 7-day PARTY_TTL means a leaf that
+ * floods PARTY_JOIN frames can grow this map arbitrarily between sweeps.
+ * Dropping new joins past the cap (with a warn) bounds worst-case growth.
+ * See memleak audit 2026-04-14 INFO note.
+ */
+const MAX_REMOTE_PARTY_USERS = 512;
+
 export interface RelayRouterDeps {
   botname: string;
   logger: LoggerLike | null;
@@ -146,6 +154,12 @@ export class BotLinkRelayRouter {
   /** Add a remote party user seen via PARTY_JOIN. */
   trackPartyJoin(fallbackBotname: string, frame: LinkFrame): void {
     const key = `${frame.handle}@${frame.fromBot}`;
+    if (!this.remotePartyUsers.has(key) && this.remotePartyUsers.size >= MAX_REMOTE_PARTY_USERS) {
+      this.deps.logger?.warn(
+        `[botlink-router] dropping PARTY_JOIN for ${key}: remotePartyUsers at cap (${MAX_REMOTE_PARTY_USERS})`,
+      );
+      return;
+    }
     this.remotePartyUsers.set(key, {
       handle: String(frame.handle ?? ''),
       nick: String(frame.nick ?? frame.handle ?? ''),
