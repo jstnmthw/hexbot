@@ -601,8 +601,8 @@ describe('registerConnectionEvents', () => {
         () => {},
         () => {},
       );
-      // Socket connected but no 'registered' event yet
-      client.emit('socket connected');
+      // Raw socket connected but no 'registered' event yet
+      client.emit('raw socket connected');
       expect(reconnectDriver.onDisconnect).not.toHaveBeenCalled();
 
       // Advance to 30s — registration timeout should fire
@@ -620,7 +620,7 @@ describe('registerConnectionEvents', () => {
         () => {},
         () => {},
       );
-      client.emit('socket connected');
+      client.emit('raw socket connected');
       vi.advanceTimersByTime(10_000);
       client.emit('registered');
       vi.advanceTimersByTime(20_000);

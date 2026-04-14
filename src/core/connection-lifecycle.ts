@@ -180,13 +180,13 @@ export function registerConnectionEvents(
     }
   };
 
-  // When the socket is opened (TCP connected), start a timer that aborts
+  // When the raw socket is opened (TCP connected), start a timer that aborts
   // registration if it doesn't complete within 30s. This catches stalled
   // connections where the server accepts the socket but never sends the
   // greeting (common after a crash when the server has temporarily blocked
   // the connection). Without this, irc-framework waits for the TCP timeout
   // (~2.5 min) before aborting.
-  const onSocketConnected = () => {
+  const onRawSocketConnected = () => {
     registrationTimer = setTimeout(() => {
       registrationTimer = null;
       lastCloseReason = 'registration timeout';
@@ -241,7 +241,7 @@ export function registerConnectionEvents(
   };
 
   listen('registered', onRegistered);
-  listen('socket connected', onSocketConnected);
+  listen('raw socket connected', onRawSocketConnected);
   listen('irc error', onIrcError);
   listen('close', onClose);
   listen('socket error', onSocketError);
