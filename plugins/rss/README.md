@@ -39,12 +39,24 @@ Add to `config/plugins.json`:
 
 ### Top-level config
 
-| Field                | Default | Description                           |
-| -------------------- | ------- | ------------------------------------- |
-| `dedup_window_days`  | `30`    | Days to remember seen items           |
-| `max_title_length`   | `300`   | Max title chars before truncation     |
-| `request_timeout_ms` | `10000` | HTTP fetch timeout                    |
-| `max_per_poll`       | `5`     | Max items announced per feed per poll |
+| Field                | Default           | Description                                                                                                                                |
+| -------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `dedup_window_days`  | `30`              | Days to remember seen items                                                                                                                |
+| `max_title_length`   | `300`             | Max title chars before truncation                                                                                                          |
+| `request_timeout_ms` | `10000`           | HTTP fetch inactivity timeout (wall-clock deadline is 3× this value)                                                                       |
+| `max_per_poll`       | `5`               | Max items announced per feed per poll                                                                                                      |
+| `max_feed_bytes`     | `5242880` (5 MiB) | Max response body size before the fetch is aborted                                                                                         |
+| `allow_http`         | `false`           | Opt-in to plaintext `http://` feeds. **Do not enable except for trusted internal feeds** — plaintext feeds can be tampered with in transit |
+
+### SSRF protections
+
+The plugin refuses to fetch any URL that fails the following checks (see `plugins/rss/url-validator.ts`):
+
+- **Scheme**: `https://` only by default. `http://` requires `allow_http: true`.
+- **Port**: only the standard web ports (`80`, `443`, `8080`, `8443`) are allowed. Non-web ports (SSH, SMTP, IRC, database) are rejected.
+- **Userinfo**: URLs containing `user:pass@` are rejected — credentials would land in the KV store and audit log.
+- **Address range**: every resolved IP must be publicly routable. Loopback, RFC1918, CGNAT, link-local, ULA, cloud metadata (`169.254.169.254`), IPv4-mapped IPv6 pointing at private space, and all reserved ranges are rejected (classified via `ipaddr.js`).
+- **DNS rebinding**: the resolved address is pinned on the socket, so the HTTP connect uses the validated IP rather than re-resolving the hostname. Each redirect is re-validated end-to-end.
 
 ## Commands
 

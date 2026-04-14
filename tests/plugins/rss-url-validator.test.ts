@@ -70,6 +70,30 @@ describe('isPublicAddress', () => {
     expect(isPublicAddress('::ffff:127.0.0.1')).toBe(false);
   });
 
+  // Regression: the earlier hand-rolled classifier used a regex that only
+  // matched the dotted form (`::ffff:a.b.c.d`), so the hex form walked past
+  // every check and was treated as public. ipaddr.js normalizes both.
+  it('rejects IPv4-mapped IPv6 in hex form (audit regression)', () => {
+    expect(isPublicAddress('::ffff:7f00:1')).toBe(false); // 127.0.0.1
+    expect(isPublicAddress('::ffff:a9fe:a9fe')).toBe(false); // 169.254.169.254
+    expect(isPublicAddress('::ffff:0a00:1')).toBe(false); // 10.0.0.1
+    expect(isPublicAddress('::ffff:c0a8:1')).toBe(false); // 192.168.0.1
+  });
+
+  it('rejects IPv6 teredo, 6to4, rfc6052, documentation', () => {
+    expect(isPublicAddress('2001::1')).toBe(false); // teredo
+    expect(isPublicAddress('2002::1')).toBe(false); // 6to4
+    expect(isPublicAddress('64:ff9b::1')).toBe(false); // rfc6052 NAT64
+    expect(isPublicAddress('2001:db8::1')).toBe(false); // documentation
+    expect(isPublicAddress('100::1')).toBe(false); // discard
+  });
+
+  it('rejects garbage that looks like an IP', () => {
+    expect(isPublicAddress('not-an-ip')).toBe(false);
+    expect(isPublicAddress('999.999.999.999')).toBe(false);
+    expect(isPublicAddress('')).toBe(false);
+  });
+
   it('accepts routable IPv6', () => {
     expect(isPublicAddress('2606:4700:4700::1111')).toBe(true);
   });
@@ -112,7 +136,19 @@ describe('validateFeedUrl', () => {
   it('accepts a public IP literal without touching DNS', async () => {
     // No mock needed — the literal shortcut never calls dns.lookup.
     const result = await validateFeedUrl('https://8.8.8.8/feed');
-    expect(result.resolvedIps).toEqual(['8.8.8.8']);
+    expect(result.resolvedAddresses).toEqual([{ address: '8.8.8.8', family: 4 }]);
+  });
+
+  it('returns family alongside each resolved address', async () => {
+    stubLookup([
+      { address: '2606:4700:4700::1111', family: 6 },
+      { address: '8.8.8.8', family: 4 },
+    ]);
+    const result = await validateFeedUrl('https://dual-stack.example.com/feed');
+    expect(result.resolvedAddresses).toEqual([
+      { address: '2606:4700:4700::1111', family: 6 },
+      { address: '8.8.8.8', family: 4 },
+    ]);
   });
 
   it('rejects IP literals inside private ranges', async () => {
@@ -122,6 +158,55 @@ describe('validateFeedUrl', () => {
 
   it('rejects IPv6 literal loopback', async () => {
     await expect(validateFeedUrl('https://[::1]/feed')).rejects.toThrow(/blocked/);
+  });
+
+  // Regression for the audit: the old validator missed `::ffff:<hex>:<hex>`
+  // because its v4-mapped regex only matched the dotted form. An attacker
+  // could aim the bot at localhost via `https://[::ffff:7f00:1]/`.
+  it('rejects IPv4-mapped IPv6 literal in hex form (audit regression)', async () => {
+    await expect(validateFeedUrl('https://[::ffff:7f00:1]/feed')).rejects.toThrow(/blocked/);
+    await expect(validateFeedUrl('https://[::ffff:a9fe:a9fe]/feed')).rejects.toThrow(/blocked/);
+  });
+
+  it('rejects URLs that embed userinfo', async () => {
+    await expect(validateFeedUrl('https://user:pass@example.com/feed')).rejects.toThrow(
+      /credentials/i,
+    );
+    await expect(validateFeedUrl('https://user@example.com/feed')).rejects.toThrow(/credentials/i);
+  });
+
+  it('rejects non-web ports by default', async () => {
+    // No DNS stub — the port check fires before resolution.
+    await expect(validateFeedUrl('https://example.com:22/feed')).rejects.toThrow(/port/);
+    await expect(validateFeedUrl('https://example.com:25/feed')).rejects.toThrow(/port/);
+    await expect(validateFeedUrl('https://example.com:6667/feed')).rejects.toThrow(/port/);
+  });
+
+  it('accepts the default web ports', async () => {
+    stubLookup([{ address: '8.8.8.8', family: 4 }]);
+    // URL() drops the scheme-default port: https://example.com:443/foo
+    // round-trips with .port === ''. That empty string is in DEFAULT_ALLOWED_PORTS.
+    const cases: Array<{ input: string; expectedPort: string }> = [
+      { input: 'https://example.com/feed', expectedPort: '' },
+      { input: 'https://example.com:443/feed', expectedPort: '' },
+      { input: 'https://example.com:8443/feed', expectedPort: '8443' },
+      { input: 'https://example.com:8080/feed', expectedPort: '8080' },
+    ];
+    for (const { input, expectedPort } of cases) {
+      const result = await validateFeedUrl(input);
+      expect(result.url.port).toBe(expectedPort);
+    }
+  });
+
+  it('honours a caller-supplied allowedPorts set', async () => {
+    stubLookup([{ address: '8.8.8.8', family: 4 }]);
+    const result = await validateFeedUrl('https://example.com:9000/feed', {
+      allowedPorts: new Set(['9000']),
+    });
+    expect(result.url.port).toBe('9000');
+    await expect(
+      validateFeedUrl('https://example.com:443/feed', { allowedPorts: new Set(['9000']) }),
+    ).rejects.toThrow(/port/);
   });
 
   it('propagates DNS errors as validation failures', async () => {

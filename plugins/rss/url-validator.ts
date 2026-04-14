@@ -2,30 +2,64 @@
 //
 // validateFeedUrl parses a URL, enforces an https-only (or http-opt-in) scheme
 // policy, resolves the hostname via DNS, and rejects any address that lives
-// inside a private, reserved, or loopback range. This is the only defense
-// between a `+m` operator running `!rss add` and the bot fetching a URL that
-// targets cloud metadata, the bot-link hub port, or other internal services.
+// outside the IPv4/IPv6 unicast (publicly routable) range. This is the only
+// defense between a `+m` operator running `!rss add` and the bot fetching a
+// URL that targets cloud metadata, the bot-link hub port, or other internal
+// services.
+//
+// Classification is delegated to `ipaddr.js` instead of hand-rolled prefix
+// regexes. The earlier audit (docs/audits/rss-2026-04-14.md) documented two
+// bypass classes in the old classifier:
+//   1. IPv4-mapped IPv6 in hex form (`::ffff:7f00:1`) walked past the
+//      dotted-only regex and was treated as public.
+//   2. Several notation edge cases (`::ffff:0:7f00:1`, `::127.0.0.1`) had
+//      similar gaps.
+// `ipaddr.js` normalizes every case, and we default-deny anything whose
+// `.range()` is not `unicast` — the only public-routable label in both the
+// IPv4 and IPv6 range taxonomies.
+import ipaddr from 'ipaddr.js';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 
-interface DnsLookupAddress {
-  address: string;
-  family: number;
-}
+/** Ports the validator will connect to by default. Operators can override via opts. */
+export const DEFAULT_ALLOWED_PORTS: ReadonlySet<string> = new Set([
+  '', // no explicit port → scheme default (443 / 80)
+  '80',
+  '443',
+  '8080',
+  '8443',
+]);
 
 export interface UrlValidationOpts {
   /** Allow http:// URLs. Default false (https-only). */
   allowHttp?: boolean;
+  /**
+   * Allowed TCP ports. Defaults to {@link DEFAULT_ALLOWED_PORTS}. An empty
+   * string entry means "scheme default port".
+   */
+  allowedPorts?: ReadonlySet<string>;
+}
+
+/** A DNS- or literal-resolved address, with the family needed to pin a socket. */
+export interface ResolvedAddress {
+  address: string;
+  family: 4 | 6;
 }
 
 export interface ValidatedFeedUrl {
   url: URL;
-  resolvedIps: string[];
+  /** Every address the hostname resolved to — all guaranteed to be public. */
+  resolvedAddresses: ResolvedAddress[];
 }
 
 /**
  * Parse and validate a feed URL. Throws Error with an operator-readable
  * message on any failure (bad scheme, DNS failure, private address, etc).
+ *
+ * On success, the returned `resolvedAddresses` are the exact IPs the fetcher
+ * MUST pin to — they close the TOCTOU window between validation and the
+ * actual HTTP connect, which otherwise lets a rebinding DNS server slip a
+ * private address past the check.
  */
 export async function validateFeedUrl(
   rawUrl: string,
@@ -38,92 +72,87 @@ export async function validateFeedUrl(
     throw new Error(`invalid URL: ${rawUrl}`);
   }
 
+  // Userinfo in URLs is a secret-handling foot-gun: the password lands in
+  // the KV store, audit log, and server access logs. If a private feed
+  // needs auth, operators should thread a separate `_env` credential.
+  if (parsed.username || parsed.password) {
+    throw new Error('URL credentials are not supported — configure auth out-of-band');
+  }
+
   const allowHttp = opts.allowHttp === true;
   if (parsed.protocol !== 'https:' && !(allowHttp && parsed.protocol === 'http:')) {
     throw new Error(`unsupported URL scheme: ${parsed.protocol || '(none)'}`);
+  }
+
+  const allowedPorts = opts.allowedPorts ?? DEFAULT_ALLOWED_PORTS;
+  if (!allowedPorts.has(parsed.port)) {
+    throw new Error(`port not allowed: ${parsed.port || '(default)'}`);
   }
 
   // URL() leaves IPv6 hostnames wrapped in brackets.
   const hostname = parsed.hostname.replace(/^\[|\]$/g, '');
   if (!hostname) throw new Error('URL has no hostname');
 
-  const resolvedIps: string[] = [];
-  if (net.isIP(hostname)) {
-    resolvedIps.push(hostname);
+  const resolvedAddresses: ResolvedAddress[] = [];
+  const literalFamily = net.isIP(hostname);
+  if (literalFamily === 4 || literalFamily === 6) {
+    resolvedAddresses.push({ address: hostname, family: literalFamily });
   } else {
-    let records: DnsLookupAddress[];
+    let records: { address: string; family: number }[];
     try {
-      records = (await dns.lookup(hostname, { all: true })) as DnsLookupAddress[];
+      records = (await dns.lookup(hostname, { all: true })) as {
+        address: string;
+        family: number;
+      }[];
     } catch (err) {
       throw new Error(`DNS lookup failed for ${hostname}: ${(err as Error).message}`, {
         cause: err,
       });
     }
-    for (const r of records) resolvedIps.push(r.address);
+    for (const r of records) {
+      if (r.family !== 4 && r.family !== 6) continue;
+      resolvedAddresses.push({ address: r.address, family: r.family });
+    }
   }
 
-  if (resolvedIps.length === 0) {
+  if (resolvedAddresses.length === 0) {
     throw new Error(`no addresses resolved for ${hostname}`);
   }
 
   // Every resolved address must be public; if any one is private, reject the
   // whole hostname. This closes DNS-rebinding style tricks where a record set
   // mixes a public and a private address.
-  for (const ip of resolvedIps) {
-    if (!isPublicAddress(ip)) {
-      throw new Error(`host ${hostname} resolves to blocked address ${ip}`);
+  for (const r of resolvedAddresses) {
+    if (!isPublicAddress(r.address)) {
+      throw new Error(`host ${hostname} resolves to blocked address ${r.address}`);
     }
   }
 
-  return { url: parsed, resolvedIps };
+  return { url: parsed, resolvedAddresses };
 }
 
 /**
- * Returns true if `ip` is a publicly routable IPv4 or IPv6 address. Any
- * private, loopback, link-local, multicast, or reserved range returns false.
+ * Returns true if `ip` is a publicly routable IPv4 or IPv6 address.
+ *
+ * Delegates to `ipaddr.js` so every notation class (including the hex form
+ * of IPv4-mapped IPv6, which was the bypass in the earlier hand-rolled
+ * classifier) is normalized before the range check. Any address whose
+ * `.range()` is not `unicast` — loopback, private, linkLocal, multicast,
+ * uniqueLocal, teredo, 6to4, rfc6052, discard, reserved, unspecified,
+ * carrierGradeNat, benchmarking — is treated as non-public.
  */
 export function isPublicAddress(ip: string): boolean {
-  const family = net.isIP(ip);
-  if (family === 4) return isPublicIPv4(ip);
-  if (family === 6) return isPublicIPv6(ip);
-  return false;
-}
-
-function isPublicIPv4(ip: string): boolean {
-  const parts = ip.split('.').map((p) => Number(p));
-  if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) {
+  let addr: ipaddr.IPv4 | ipaddr.IPv6;
+  try {
+    addr = ipaddr.parse(ip);
+  } catch {
     return false;
   }
-  const [a, b, c] = parts;
-  if (a === 0) return false; // 0.0.0.0/8 "this network"
-  if (a === 10) return false; // 10.0.0.0/8
-  if (a === 127) return false; // loopback
-  if (a === 169 && b === 254) return false; // link-local
-  if (a === 172 && b >= 16 && b <= 31) return false; // 172.16.0.0/12
-  if (a === 192 && b === 0 && c === 0) return false; // 192.0.0.0/24
-  if (a === 192 && b === 0 && c === 2) return false; // TEST-NET-1
-  if (a === 192 && b === 168) return false; // 192.168.0.0/16
-  if (a === 198 && (b === 18 || b === 19)) return false; // benchmarking
-  if (a === 198 && b === 51 && c === 100) return false; // TEST-NET-2
-  if (a === 203 && b === 0 && c === 113) return false; // TEST-NET-3
-  if (a === 100 && b >= 64 && b <= 127) return false; // 100.64.0.0/10 CGN
-  if (a >= 224) return false; // multicast (224/4) + reserved (240/4) + broadcast
-  return true;
-}
-
-function isPublicIPv6(ip: string): boolean {
-  const lc = ip.toLowerCase();
-  if (lc === '::' || lc === '::1') return false; // unspecified + loopback
-  // IPv4-mapped ::ffff:a.b.c.d — evaluate against IPv4 rules.
-  const v4mapped = lc.match(/^::ffff:([0-9.]+)$/);
-  if (v4mapped) return isPublicIPv4(v4mapped[1]);
-  if (lc.startsWith('fe8') || lc.startsWith('fe9') || lc.startsWith('fea') || lc.startsWith('feb'))
-    return false; // link-local fe80::/10
-  if (/^f[cd][0-9a-f]{2}:/.test(lc)) return false; // ULA fc00::/7
-  if (lc.startsWith('ff')) return false; // multicast ff00::/8
-  if (lc.startsWith('100:')) return false; // discard-only 100::/64
-  if (lc.startsWith('2001:db8:')) return false; // documentation
-  if (lc.startsWith('2001:0:') || lc.startsWith('2001::')) return false; // teredo
-  if (lc.startsWith('64:ff9b::')) return false; // NAT64
-  return true;
+  if (addr.kind() === 'ipv6') {
+    const v6 = addr as ipaddr.IPv6;
+    if (v6.isIPv4MappedAddress()) {
+      return v6.toIPv4Address().range() === 'unicast';
+    }
+  }
+  return addr.range() === 'unicast';
 }

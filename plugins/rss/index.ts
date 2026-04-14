@@ -115,9 +115,6 @@ export async function init(api: PluginAPI): Promise<void> {
     } else if (sub === 'remove') {
       handleRemove(api, ctx, parts[1]);
     } else if (sub === 'check') {
-      // check only requires 'o' — but the bind requires 'm', so we also
-      // allow it through. Operators who don't have 'm' can't reach the bind
-      // at all, but we keep the distinction documented for future loosening.
       await handleCheck(api, ctx, parts[1], cfg);
     } else {
       api.notice(ctx.nick, 'Usage: !rss <list|add|remove|check>');
@@ -264,7 +261,13 @@ async function handleAdd(
     logCmd(api, ctx, 'add', 'rejected', `bad channel: ${channel}`);
     return;
   }
-  const interval = intervalStr ? parseInt(intervalStr, 10) : 3600;
+  // Strict integer parse — `parseInt("60abc")` returns 60, which silently
+  // masks operator typos. Require the token to be digits-only.
+  const interval = intervalStr
+    ? /^\d+$/.test(intervalStr)
+      ? Number(intervalStr)
+      : Number.NaN
+    : 3600;
 
   if (activeFeeds.has(id)) {
     api.notice(ctx.nick, `Feed "${id}" already exists.`);
