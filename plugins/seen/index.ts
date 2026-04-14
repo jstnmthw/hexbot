@@ -136,12 +136,7 @@ function cleanupStale(api: PluginAPI, maxAgeMs: number): void {
   for (const entry of entries) {
     try {
       const parsed: unknown = JSON.parse(entry.value);
-      if (
-        typeof parsed === 'object' &&
-        parsed !== null &&
-        typeof (parsed as { time?: unknown }).time === 'number' &&
-        now - (parsed as { time: number }).time <= maxAgeMs
-      ) {
+      if (isSeenRecord(parsed) && now - parsed.time <= maxAgeMs) {
         continue;
       }
       api.db.del(entry.key);

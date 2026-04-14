@@ -18,6 +18,7 @@
 // `.range()` is not `unicast` — the only public-routable label in both the
 // IPv4 and IPv6 range taxonomies.
 import ipaddr from 'ipaddr.js';
+import type { LookupAddress } from 'node:dns';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 
@@ -98,14 +99,12 @@ export async function validateFeedUrl(
   if (literalFamily === 4 || literalFamily === 6) {
     resolvedAddresses.push({ address: hostname, family: literalFamily });
   } else {
-    let records: { address: string; family: number }[];
+    let records: LookupAddress[];
     try {
-      records = (await dns.lookup(hostname, { all: true })) as {
-        address: string;
-        family: number;
-      }[];
+      records = await dns.lookup(hostname, { all: true });
     } catch (err) {
-      throw new Error(`DNS lookup failed for ${hostname}: ${(err as Error).message}`, {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`DNS lookup failed for ${hostname}: ${message}`, {
         cause: err,
       });
     }

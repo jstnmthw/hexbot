@@ -12,10 +12,21 @@ import type { ChanmodConfig, SharedState, ThreatState } from './state';
 // Threat level constants
 // ---------------------------------------------------------------------------
 
-export const THREAT_NORMAL = 0;
-export const THREAT_ALERT = 1;
-export const THREAT_ACTIVE = 2;
-export const THREAT_CRITICAL = 3;
+export const THREAT_NORMAL = 0 as const;
+export const THREAT_ALERT = 1 as const;
+export const THREAT_ACTIVE = 2 as const;
+export const THREAT_CRITICAL = 3 as const;
+
+/**
+ * Escalating threat levels produced by {@link scoreToLevel}. Comparable with
+ * `>=` because the values are 0..3 — mode-enforce-recovery uses that for
+ * "threat is at least Alert".
+ */
+export type ThreatLevel =
+  | typeof THREAT_NORMAL
+  | typeof THREAT_ALERT
+  | typeof THREAT_ACTIVE
+  | typeof THREAT_CRITICAL;
 
 // ---------------------------------------------------------------------------
 // Threat event point values
@@ -66,7 +77,7 @@ function getOrCreateThreat(
 /**
  * Compute the threat level from a score using configured thresholds.
  */
-export function scoreToLevel(config: ChanmodConfig, score: number): number {
+export function scoreToLevel(config: ChanmodConfig, score: number): ThreatLevel {
   if (score >= config.takeover_level_3_threshold) return THREAT_CRITICAL;
   if (score >= config.takeover_level_2_threshold) return THREAT_ACTIVE;
   if (score >= config.takeover_level_1_threshold) return THREAT_ALERT;
@@ -89,7 +100,7 @@ export function assessThreat(
   points: number,
   actor: string,
   target?: string,
-): number {
+): ThreatLevel {
   const threat = getOrCreateThreat(state, api, config, channel);
   const prevLevel = scoreToLevel(config, threat.score);
 
@@ -131,7 +142,7 @@ export function getThreatLevel(
   config: ChanmodConfig,
   state: SharedState,
   channel: string,
-): number {
+): ThreatLevel {
   const key = api.ircLower(channel);
   const threat = state.threatScores.get(key);
   if (!threat) return THREAT_NORMAL;
@@ -172,7 +183,7 @@ function onLevelEscalation(
   _config: ChanmodConfig,
   chain: ProtectionChain,
   channel: string,
-  level: number,
+  level: ThreatLevel,
 ): void {
   if (level >= THREAT_ALERT) {
     // Level 1+: request ops via first available backend

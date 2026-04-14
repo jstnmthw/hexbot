@@ -106,7 +106,7 @@ export function parseISupport(client: SupportsProvider): ServerCapabilities {
     for (const raw of prefixRaw) {
       /* v8 ignore next */
       if (typeof raw !== 'object' || raw === null) continue;
-      const entry = raw as { symbol?: unknown; mode?: unknown };
+      const entry: Record<string, unknown> = raw as Record<string, unknown>;
       /* v8 ignore next */
       if (typeof entry.mode !== 'string' || typeof entry.symbol !== 'string') continue;
       prefixModes.push(entry.mode);

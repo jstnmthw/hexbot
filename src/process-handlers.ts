@@ -12,12 +12,11 @@ const RECOVERABLE_SOCKET_CODES = new Set(['ETIMEDOUT', 'ECONNRESET', 'EPIPE', 'E
  */
 export function isRecoverableSocketError(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false;
-  const err = value as { code?: unknown; stack?: unknown };
-  if (typeof err.code !== 'string' || !RECOVERABLE_SOCKET_CODES.has(err.code)) return false;
-  if (typeof err.stack !== 'string') return false;
-  return (
-    err.stack.includes('TCP.onStreamRead') || err.stack.includes('internal/stream_base_commons')
-  );
+  if (!('code' in value) || !('stack' in value)) return false;
+  const { code, stack } = value;
+  if (typeof code !== 'string' || !RECOVERABLE_SOCKET_CODES.has(code)) return false;
+  if (typeof stack !== 'string') return false;
+  return stack.includes('TCP.onStreamRead') || stack.includes('internal/stream_base_commons');
 }
 
 /**

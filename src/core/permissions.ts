@@ -72,6 +72,21 @@ function patternSpecificity(pattern: string): number {
  */
 export type AccountLookup = (nick: string) => string | null | undefined;
 
+/** Runtime shape check for a persisted user record. */
+function isUserRecord(value: unknown): value is UserRecord {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  if (typeof v.handle !== 'string') return false;
+  if (!Array.isArray(v.hostmasks) || !v.hostmasks.every((h) => typeof h === 'string')) return false;
+  if (typeof v.global !== 'string') return false;
+  if (typeof v.channels !== 'object' || v.channels === null) return false;
+  for (const flags of Object.values(v.channels as Record<string, unknown>)) {
+    if (typeof flags !== 'string') return false;
+  }
+  if (v.password_hash !== undefined && typeof v.password_hash !== 'string') return false;
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Permissions class
 // ---------------------------------------------------------------------------
@@ -457,13 +472,8 @@ export class Permissions {
     for (const row of rows) {
       try {
         const parsed: unknown = JSON.parse(row.value);
-        if (
-          typeof parsed === 'object' &&
-          parsed !== null &&
-          typeof (parsed as { handle?: unknown }).handle === 'string'
-        ) {
-          const record = parsed as UserRecord;
-          this.users.set(record.handle.toLowerCase(), record);
+        if (isUserRecord(parsed)) {
+          this.users.set(parsed.handle.toLowerCase(), parsed);
           /* v8 ignore next 3 */
         } else {
           this.logger?.error(`Invalid user record shape: ${row.key}`);

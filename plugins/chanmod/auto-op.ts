@@ -3,8 +3,8 @@ import type { PluginAPI, PublicUserRecord } from '../../src/types';
 import type { ProbeState } from './chanserv-notice';
 import { markProbePending } from './chanserv-notice';
 import { botCanHalfop, botHasOps, hasAnyFlag } from './helpers';
-import type { BackendAccess } from './protection-backend';
 import type { ProtectionChain } from './protection-backend';
+import { toBackendAccess } from './protection-backend';
 import type { ChanmodConfig, SharedState } from './state';
 
 /** Desired prefix mode for a user based on their flags, or null for nothing. */
@@ -180,11 +180,7 @@ export function setupAutoOp(
 
       // Set and verify ChanServ access level for the protection chain
       if (chain) {
-        const accessStr = api.channelSettings.getString(channel, 'chanserv_access');
-        const validLevels = new Set(['none', 'op', 'superop', 'founder']);
-        const access: BackendAccess = validLevels.has(accessStr)
-          ? (accessStr as BackendAccess)
-          : 'none';
+        const access = toBackendAccess(api.channelSettings.getString(channel, 'chanserv_access'));
         if (access !== 'none') {
           for (const b of chain.getBackends()) {
             b.setAccess(channel, access);

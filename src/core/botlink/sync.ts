@@ -92,12 +92,16 @@ export class PermissionSyncer {
       case 'SETFLAGS': {
         const handle = String(frame.handle ?? '');
         if (!handle) return;
-        const hostmasks = Array.isArray(frame.hostmasks) ? (frame.hostmasks as string[]) : [];
+        const hostmasks = Array.isArray(frame.hostmasks)
+          ? frame.hostmasks.filter((h): h is string => typeof h === 'string')
+          : [];
         const globalFlags = String(frame.globalFlags ?? '');
-        const channelFlags =
-          frame.channelFlags && typeof frame.channelFlags === 'object'
-            ? (frame.channelFlags as Record<string, string>)
-            : {};
+        const channelFlags: Record<string, string> = {};
+        if (frame.channelFlags && typeof frame.channelFlags === 'object') {
+          for (const [ch, flags] of Object.entries(frame.channelFlags as Record<string, unknown>)) {
+            if (typeof flags === 'string') channelFlags[ch] = flags;
+          }
+        }
         permissions.syncUser(handle, hostmasks, globalFlags, channelFlags, 'botlink-sync');
         break;
       }

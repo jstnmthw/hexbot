@@ -107,20 +107,20 @@ export class STSStore {
     }
     /* v8 ignore next */
     if (typeof parsed !== 'object' || parsed === null) return null;
-    const record = parsed as Partial<STSRecord>;
+    const v = parsed as Record<string, unknown>;
     /* v8 ignore next */
-    if (typeof record.expiresAt !== 'number' || typeof record.duration !== 'number') return null;
-    if (record.expiresAt <= now) {
+    if (typeof v.expiresAt !== 'number' || typeof v.duration !== 'number') return null;
+    if (v.expiresAt <= now) {
       // Expired — prune lazily so we stop returning it.
       this.db.del(STS_DB_NAMESPACE, key);
       return null;
     }
     const result: STSRecord = {
       host: key,
-      duration: record.duration,
-      expiresAt: record.expiresAt,
+      duration: v.duration,
+      expiresAt: v.expiresAt,
     };
-    if (typeof record.port === 'number') result.port = record.port;
+    if (typeof v.port === 'number') result.port = v.port;
     return result;
   }
 

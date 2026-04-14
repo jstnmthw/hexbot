@@ -21,6 +21,15 @@ function isValidMask(mask: string): boolean {
   return mask.includes('!') && mask.includes('@') && mask !== '*!*@*';
 }
 
+/** Runtime type guard: is `value` a well-formed {@link BanEntry}? */
+function isBanEntry(value: unknown): value is BanEntry {
+  if (typeof value !== 'object' || value === null) return false;
+  const rec = value as Record<string, unknown>;
+  return (
+    typeof rec.mask === 'string' && typeof rec.setBy === 'string' && typeof rec.setAt === 'number'
+  );
+}
+
 /** Per-channel mask list (bans or exempts). */
 class MaskList {
   private entries: Map<string, BanEntry[]> = new Map();
@@ -144,16 +153,7 @@ export class BanListSyncer {
 
     switch (frame.type) {
       case 'CHAN_BAN_SYNC': {
-        const bans = Array.isArray(frame.bans)
-          ? frame.bans.filter(
-              (b): b is BanEntry =>
-                typeof b === 'object' &&
-                b !== null &&
-                typeof (b as BanEntry).mask === 'string' &&
-                typeof (b as BanEntry).setBy === 'string' &&
-                typeof (b as BanEntry).setAt === 'number',
-            )
-          : [];
+        const bans = Array.isArray(frame.bans) ? frame.bans.filter(isBanEntry) : [];
         banList.syncBans(
           channel,
           bans.filter((b) => isValidMask(b.mask)),
@@ -182,16 +182,7 @@ export class BanListSyncer {
       }
 
       case 'CHAN_EXEMPT_SYNC': {
-        const exempts = Array.isArray(frame.exempts)
-          ? frame.exempts.filter(
-              (e): e is BanEntry =>
-                typeof e === 'object' &&
-                e !== null &&
-                typeof (e as BanEntry).mask === 'string' &&
-                typeof (e as BanEntry).setBy === 'string' &&
-                typeof (e as BanEntry).setAt === 'number',
-            )
-          : [];
+        const exempts = Array.isArray(frame.exempts) ? frame.exempts.filter(isBanEntry) : [];
         banList.syncExempts(
           channel,
           exempts.filter((e) => isValidMask(e.mask)),

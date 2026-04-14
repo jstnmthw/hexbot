@@ -24,6 +24,14 @@ import {
 } from './feed-store';
 import { type ResolvedAddress, validateFeedUrl } from './url-validator';
 
+/**
+ * Narrow custom-field shape so `result.items` doesn't widen to `any`. The
+ * plugin does not register any custom RSS fields, so an empty record is
+ * the tightest possible generic.
+ */
+type RssCustomFields = Record<string, never>;
+type RssParser = Parser<RssCustomFields, RssCustomFields>;
+
 export const DEFAULT_MAX_FEED_BYTES = 5 * 1024 * 1024; // 5 MiB
 const MAX_REDIRECTS = 5;
 const DOCTYPE_SCAN_WINDOW = 4096;
@@ -58,7 +66,7 @@ export type PollMode = 'silent' | 'announce' | 'seedPreview';
 
 export async function pollFeed(
   api: PluginAPI,
-  parser: Parser,
+  parser: RssParser,
   feed: FeedConfig,
   mode: PollMode,
   maxPerPoll: number,
@@ -69,7 +77,14 @@ export async function pollFeed(
   const newItems: FeedItem[] = [];
   let previewCaptured = false;
 
-  for (const item of result.items) {
+  for (const parsed of result.items) {
+    // Project down to the plugin's FeedItem shape so downstream callers
+    // never see the wider `Parser.Item & RssCustomFields` union.
+    const item: FeedItem = {
+      guid: parsed.guid,
+      title: parsed.title,
+      link: parsed.link,
+    };
     const hash = hashItem(item);
     if (hasSeen(api, feed.id, hash)) continue;
     markSeen(api, feed.id, hash);

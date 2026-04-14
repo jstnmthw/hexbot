@@ -11,7 +11,7 @@ import { setupJoinRecovery } from './join-recovery';
 import type { ThreatCallback } from './mode-enforce';
 import { setupModeEnforce } from './mode-enforce';
 import { setupProtection } from './protection';
-import { ProtectionChain } from './protection-backend';
+import { ProtectionChain, toBackendAccess } from './protection-backend';
 import { PENDING_STATE_TTL_MS, createState, pruneExpiredState, readConfig } from './state';
 import { setupStickyBans } from './sticky';
 import { assessThreat } from './takeover-detect';
@@ -183,11 +183,7 @@ export function init(api: PluginAPI): void {
   // --- Sync chanserv_access setting to backend access levels ---
   api.channelSettings.onChange((channel: string, key: string) => {
     if (key === 'chanserv_access') {
-      const access = api.channelSettings.getString(channel, 'chanserv_access') as
-        | 'none'
-        | 'op'
-        | 'superop'
-        | 'founder';
+      const access = toBackendAccess(api.channelSettings.getString(channel, 'chanserv_access'));
       for (const b of chain.getBackends()) {
         b.setAccess(channel, access);
       }
@@ -199,11 +195,7 @@ export function init(api: PluginAPI): void {
   // for help on channels the bot hasn't joined yet (the join handler in auto-op
   // normally syncs this, but the bot can't join if it's banned/+i/+k).
   for (const ch of api.botConfig.irc.channels) {
-    const access = api.channelSettings.getString(ch, 'chanserv_access') as
-      | 'none'
-      | 'op'
-      | 'superop'
-      | 'founder';
+    const access = toBackendAccess(api.channelSettings.getString(ch, 'chanserv_access'));
     if (access !== 'none') {
       for (const b of chain.getBackends()) {
         b.setAccess(ch, access);

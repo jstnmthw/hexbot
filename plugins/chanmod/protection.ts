@@ -23,6 +23,13 @@ interface RejoinRecord {
   windowStart: number;
 }
 
+/** Structural guard for ban-attempt records persisted in `api.db`. */
+function isRejoinRecord(value: unknown): value is RejoinRecord {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.count === 'number' && typeof v.windowStart === 'number';
+}
+
 /** Extract the kicker's nick from kick ctx.args ("reason (by Nick)" or "by Nick"). */
 function parseKicker(args: string): string {
   const m = args.match(/\(by ([^)]+)\)$/) ?? args.match(/^by (.+)$/);
@@ -92,7 +99,10 @@ export function setupProtection(
     let record: RejoinRecord = { count: 0, windowStart: now };
     try {
       const stored = api.db.get(dbKey);
-      if (stored) record = JSON.parse(stored) as RejoinRecord;
+      if (stored) {
+        const parsed: unknown = JSON.parse(stored);
+        if (isRejoinRecord(parsed)) record = parsed;
+      }
     } catch {
       /* corrupt entry — start fresh */
     }

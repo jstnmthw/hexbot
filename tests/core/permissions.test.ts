@@ -667,6 +667,8 @@ describe('Permissions', () => {
     it('should skip corrupt records when loading from db', () => {
       // Manually insert a corrupt JSON record into the _permissions namespace
       db.set('_permissions', 'corrupt', '{not valid json!!!');
+      // JSON-valid but shape-invalid rows are also rejected by isUserRecord
+      db.set('_permissions', 'wrongshape', JSON.stringify({ handle: 'wrongshape' }));
       // Also insert a valid record
       db.set(
         '_permissions',
@@ -682,8 +684,9 @@ describe('Permissions', () => {
       const p = new Permissions(db);
       p.loadFromDb();
 
-      // The corrupt record should be skipped, but the valid one loaded
+      // Corrupt and malformed records are skipped, valid one loaded.
       expect(p.getUser('corrupt')).toBeNull();
+      expect(p.getUser('wrongshape')).toBeNull();
       expect(p.getUser('valid')).not.toBeNull();
       expect(p.getUser('valid')!.global).toBe('o');
     });

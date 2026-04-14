@@ -290,5 +290,17 @@ describe('BanStore', () => {
       const count = store.migrateFromPluginNamespace(emptyDb);
       expect(count).toBe(0);
     });
+
+    it('skips unparseable and malformed JSON but still cleans up the old namespace', () => {
+      db.set('chanmod', 'ban:#test:broken', 'not-json{');
+      db.set('chanmod', 'ban:#test:wrongshape', JSON.stringify({ mask: 1, channel: '#test' }));
+      db.set('chanmod', 'ban:#test:nullrow', JSON.stringify(null));
+
+      const count = store.migrateFromPluginNamespace(makeChanmodDb());
+      expect(count).toBe(0);
+      expect(db.get('chanmod', 'ban:#test:broken')).toBeNull();
+      expect(db.get('chanmod', 'ban:#test:wrongshape')).toBeNull();
+      expect(db.get('chanmod', 'ban:#test:nullrow')).toBeNull();
+    });
   });
 });

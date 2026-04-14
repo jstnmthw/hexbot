@@ -15,7 +15,7 @@ import { createInterface as createReadline } from 'node:readline';
 import type { CommandExecutor } from '../../command-handler';
 import type { BotDatabase } from '../../database';
 import type { BindRegistrar } from '../../dispatcher';
-import type { BotEventBus } from '../../event-bus';
+import type { BotEventBus, BotEvents } from '../../event-bus';
 import type { LogRecord, LogSink, LoggerLike } from '../../logger';
 import { Logger as LoggerClass } from '../../logger';
 import type { DccConfig, HandlerContext, PluginServices, UserRecord } from '../../types';
@@ -845,6 +845,22 @@ export class DCCSession implements DCCSessionEntry {
 const PENDING_TIMEOUT_MS = 30_000;
 const PLUGIN_ID = 'core:dcc';
 
+/**
+ * Remove a listener from `bus` without re-declaring its per-event signature.
+ * `BotEventBus.off`'s typed overload forces the listener's args tuple to
+ * match the event name, but we store heterogeneous listeners in a single
+ * array; all `off` actually needs is the original function reference.
+ * The single cast is encapsulated here so grepping for listener-removal
+ * casts in the DCC layer produces exactly one hit.
+ */
+function offBusListener(
+  bus: BotEventBus,
+  event: keyof BotEvents,
+  fn: (...args: never[]) => void,
+): void {
+  (bus as unknown as { off: (e: string, f: (...args: never[]) => void) => void }).off(event, fn);
+}
+
 export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   private client: DCCIRCClient;
   private dispatcher: BindRegistrar;
@@ -857,10 +873,15 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   private getStatsFn: (() => BannerStats) | null;
   private db: BotDatabase | null;
   private eventBus: BotEventBus | null;
-  // Store as `unknown` functions — the typed `BotEvents` signatures collide
-  // with `BotEventBus.off`'s constrained generic, so we widen at storage
-  // and keep the narrowing at listener-construction time in attach().
-  private eventBusListeners: Array<{ event: string; fn: (...args: never[]) => void }> = [];
+  // The typed `BotEvents` signatures collide with `BotEventBus.off`'s
+  // constrained generic when storing heterogeneous handlers in one array,
+  // so the stored function type is `(...args: never[]) => void` — any
+  // concrete handler assigns into it via contravariance. Removal happens
+  // through `offBusListener` which owns the single bridging cast.
+  private eventBusListeners: Array<{
+    event: keyof BotEvents;
+    fn: (...args: never[]) => void;
+  }> = [];
 
   private readonly sessions: Map<string, DCCSessionEntry>;
   private readonly portAllocator: PortAllocator;
@@ -998,14 +1019,8 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
       this.eventBus.on('user:passwordChanged', onPasswordChanged);
       this.eventBus.on('user:removed', onUserRemoved);
       this.eventBusListeners.push(
-        {
-          event: 'user:passwordChanged',
-          fn: onPasswordChanged as unknown as (...args: never[]) => void,
-        },
-        {
-          event: 'user:removed',
-          fn: onUserRemoved as unknown as (...args: never[]) => void,
-        },
+        { event: 'user:passwordChanged', fn: onPasswordChanged },
+        { event: 'user:removed', fn: onUserRemoved },
       );
     }
 
@@ -1048,14 +1063,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     this.ircListeners = [];
     if (this.eventBus) {
       for (const { event, fn } of this.eventBusListeners) {
-        // Cast is safe: we only ever push listeners we registered on this
-        // bus via `.on()` with the same pair, and `.off()` wants the
-        // matching narrowed signature back.
-        (
-          this.eventBus as unknown as {
-            off: (e: string, f: (...args: never[]) => void) => void;
-          }
-        ).off(event, fn);
+        offBusListener(this.eventBus, event, fn);
       }
     }
     this.eventBusListeners = [];

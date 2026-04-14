@@ -335,28 +335,46 @@ function ingestSTSDirective(deps: ConnectionLifecycleDeps): void {
 
 /** Log TLS cipher info from the underlying socket. */
 function logTlsCipher(client: LifecycleIRCClient, logger: LoggerLike): void {
-  // irc-framework does not expose the underlying socket in its public types, so
-  // we walk the private connection/transport chain via `unknown`. Double-cast
-  // would be needed because `LifecycleIRCClient` and `InternalClient` are
-  // structurally unrelated; going through `unknown` keeps it honest.
-  interface TlsCipherSocket {
-    getCipher(): { name: string; version: string };
+  const tlsSocket = getInternalTlsSocket(client);
+  if (hasGetCipher(tlsSocket)) {
+    const cipher = tlsSocket.getCipher();
+    if (
+      cipher &&
+      typeof cipher === 'object' &&
+      typeof (cipher as { name?: unknown }).name === 'string' &&
+      typeof (cipher as { version?: unknown }).version === 'string'
+    ) {
+      logger.info(
+        `TLS connected — ${(cipher as { name: string }).name} (${(cipher as { version: string }).version})`,
+      );
+      return;
+    }
   }
+  logger.info('TLS connected');
+}
+
+/**
+ * irc-framework does not expose the underlying socket in its public types, so
+ * we walk the private connection/transport chain via `unknown`. The intermediate
+ * `as unknown as InternalClient` is load-bearing: `LifecycleIRCClient` and
+ * `InternalClient` are structurally unrelated, and routing through `unknown`
+ * documents that we deliberately discarded the public type.
+ */
+function getInternalTlsSocket(client: LifecycleIRCClient): unknown {
   interface InternalClient {
     connection?: { transport?: { socket?: unknown } };
   }
-  const tlsSocket = (client as unknown as InternalClient).connection?.transport?.socket;
-  if (
-    tlsSocket !== null &&
-    typeof tlsSocket === 'object' &&
-    'getCipher' in tlsSocket &&
-    typeof (tlsSocket as TlsCipherSocket).getCipher === 'function'
-  ) {
-    const cipher = (tlsSocket as TlsCipherSocket).getCipher();
-    logger.info(`TLS connected — ${cipher.name} (${cipher.version})`);
-  } else {
-    logger.info('TLS connected');
-  }
+  return (client as unknown as InternalClient).connection?.transport?.socket;
+}
+
+/** Type guard: does the value quack like a `tls.TLSSocket` with `getCipher`? */
+function hasGetCipher(value: unknown): value is { getCipher(): unknown } {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    'getCipher' in value &&
+    typeof (value as { getCipher: unknown }).getCipher === 'function'
+  );
 }
 
 /** Register listeners for IRC join-error numerics (irc error + unknown command). */

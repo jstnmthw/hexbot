@@ -55,11 +55,15 @@ export const description = 'Polls RSS/Atom feeds and announces new items to conf
 
 // Mutable feed map: merged config + runtime feeds. Keyed by feed id.
 let activeFeeds = new Map<string, FeedConfig>();
-let parser: Parser;
+// Parametrize the parser to an empty extension so its `Item` type stays
+// narrow — the default generic widens custom fields to `any`, contaminating
+// every downstream `result.items` read.
+type RssCustomFields = Record<string, never>;
+let parser: Parser<RssCustomFields, RssCustomFields>;
 
 export async function init(api: PluginAPI): Promise<void> {
   const cfg = loadConfig(api);
-  parser = new Parser({ timeout: cfg.request_timeout_ms });
+  parser = new Parser<RssCustomFields, RssCustomFields>({ timeout: cfg.request_timeout_ms });
 
   // Merge config-file feeds with runtime-added feeds from KV
   activeFeeds = new Map<string, FeedConfig>();

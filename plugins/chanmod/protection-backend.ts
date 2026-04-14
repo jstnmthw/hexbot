@@ -8,6 +8,19 @@ import type { PluginAPI } from '../../src/types';
 /** ChanServ access tier — determines which commands the bot can use. */
 export type BackendAccess = 'none' | 'op' | 'superop' | 'founder';
 
+/** Runtime list of valid {@link BackendAccess} values — the single source of truth. */
+export const BACKEND_ACCESS_VALUES = ['none', 'op', 'superop', 'founder'] as const;
+
+/** Type guard for {@link BackendAccess} — replaces ad-hoc `as BackendAccess` casts. */
+export function isBackendAccess(value: unknown): value is BackendAccess {
+  return typeof value === 'string' && (BACKEND_ACCESS_VALUES as readonly string[]).includes(value);
+}
+
+/** Narrow an untrusted string (e.g. from channelSettings) to a {@link BackendAccess}. */
+export function toBackendAccess(value: unknown): BackendAccess {
+  return isBackendAccess(value) ? value : 'none';
+}
+
 /** Ordered access tiers for comparison. */
 const ACCESS_ORDER: Record<BackendAccess, number> = {
   none: 0,

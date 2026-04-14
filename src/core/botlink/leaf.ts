@@ -342,13 +342,11 @@ export class BotLinkLeaf {
     // Resolve pending PARTY_WHOM requests
     if (frame.type === 'PARTY_WHOM_REPLY') {
       const users = Array.isArray(frame.users)
-        ? frame.users.filter(
-            (u): u is PartyLineUser =>
-              typeof u === 'object' &&
-              u !== null &&
-              typeof (u as PartyLineUser).handle === 'string' &&
-              typeof (u as PartyLineUser).botname === 'string',
-          )
+        ? frame.users.filter((u): u is PartyLineUser => {
+            if (typeof u !== 'object' || u === null) return false;
+            const rec = u as Record<string, unknown>;
+            return typeof rec.handle === 'string' && typeof rec.botname === 'string';
+          })
         : [];
       if (this.pendingWhom.resolve(String(frame.ref ?? ''), users)) return;
     }

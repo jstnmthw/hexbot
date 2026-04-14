@@ -64,8 +64,7 @@ import { BotEventBus } from './event-bus';
 import { IRCBridge } from './irc-bridge';
 import { type LoggerLike, createLogger } from './logger';
 import { PluginLoader } from './plugin-loader';
-import type { Casemapping } from './types';
-import type { BotConfig } from './types';
+import type { BotConfig, Casemapping, ChannelEntry } from './types';
 import { toEventObject } from './utils/irc-event';
 import { sanitize } from './utils/sanitize';
 import { buildSocksOptions } from './utils/socks';
@@ -132,7 +131,7 @@ export class Bot {
     return this._botLinkLeaf;
   }
   private startTime: number = Date.now();
-  private configuredChannels: Array<{ name: string; key?: string }> = [];
+  private configuredChannels: ChannelEntry[] = [];
 
   constructor(configPath?: string) {
     const cfgPath = resolve(configPath ?? './config/bot.json');
@@ -187,7 +186,7 @@ export class Bot {
     dispatcher: EventDispatcher;
     commandHandler: CommandHandler;
     client: InstanceType<typeof IrcClient>;
-    configuredChannels: Array<{ name: string; key?: string }>;
+    configuredChannels: ChannelEntry[];
     channelState: ChannelState;
     ircCommands: IRCCommands;
     messageQueue: MessageQueue;

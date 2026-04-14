@@ -259,10 +259,46 @@ export interface ChanmodConfig {
   invite: boolean;
 }
 
-/** Read a typed value from the plugin config, falling back to a default. Single cast site. */
-function cfg<T>(c: Record<string, unknown>, key: string, fallback: T): T {
+/** Read a boolean config value, validating the stored JSON value really is a boolean. */
+function cfgBool(
+  c: Record<string, unknown>,
+  key: string,
+  fallback: boolean,
+  log: (msg: string) => void,
+): boolean {
   const val = c[key];
-  return val !== undefined ? (val as T) : fallback;
+  if (val === undefined) return fallback;
+  if (typeof val === 'boolean') return val;
+  log(`Invalid ${key}: ${JSON.stringify(val)} — expected boolean, using default ${fallback}`);
+  return fallback;
+}
+
+/** Read a string config value, validating the stored JSON value really is a string. */
+function cfgString(
+  c: Record<string, unknown>,
+  key: string,
+  fallback: string,
+  log: (msg: string) => void,
+): string {
+  const val = c[key];
+  if (val === undefined) return fallback;
+  if (typeof val === 'string') return val;
+  log(`Invalid ${key}: ${JSON.stringify(val)} — expected string, using default`);
+  return fallback;
+}
+
+/** Read a string-array config value, validating each entry. */
+function cfgStringArray(
+  c: Record<string, unknown>,
+  key: string,
+  fallback: string[],
+  log: (msg: string) => void,
+): string[] {
+  const val = c[key];
+  if (val === undefined) return fallback;
+  if (Array.isArray(val) && val.every((v): v is string => typeof v === 'string')) return val;
+  log(`Invalid ${key}: ${JSON.stringify(val)} — expected string[], using default`);
+  return fallback;
 }
 
 /** Read a numeric config value, validating it is a finite non-negative number. */
@@ -292,7 +328,10 @@ function cfgEnum<T extends string>(
 ): T {
   const val = c[key];
   if (val === undefined) return fallback;
-  if (typeof val === 'string' && (allowed as readonly string[]).includes(val)) return val as T;
+  if (typeof val === 'string' && (allowed as readonly string[]).includes(val)) {
+    // Safe: the `includes` guard above proves `val` is one of the `T` literals.
+    return val as T;
+  }
   log(`Invalid ${key}: ${JSON.stringify(val)} — using default "${fallback}"`);
   return fallback;
 }
@@ -302,43 +341,43 @@ export function readConfig(api: PluginAPI): ChanmodConfig {
   const log = (msg: string) => api.log(msg);
 
   const config: ChanmodConfig = {
-    auto_op: cfg(c, 'auto_op', true),
-    op_flags: cfg<string[]>(c, 'op_flags', ['n', 'm', 'o']),
-    halfop_flags: cfg<string[]>(c, 'halfop_flags', []),
-    voice_flags: cfg<string[]>(c, 'voice_flags', ['v']),
-    notify_on_fail: cfg(c, 'notify_on_fail', false),
-    enforce_modes: cfg(c, 'enforce_modes', false),
+    auto_op: cfgBool(c, 'auto_op', true, log),
+    op_flags: cfgStringArray(c, 'op_flags', ['n', 'm', 'o'], log),
+    halfop_flags: cfgStringArray(c, 'halfop_flags', [], log),
+    voice_flags: cfgStringArray(c, 'voice_flags', ['v'], log),
+    notify_on_fail: cfgBool(c, 'notify_on_fail', false, log),
+    enforce_modes: cfgBool(c, 'enforce_modes', false, log),
     enforce_delay_ms: cfgNum(c, 'enforce_delay_ms', 500, log),
-    nodesynch_nicks: cfg<string[]>(c, 'nodesynch_nicks', ['ChanServ']),
-    enforce_channel_modes: cfg(c, 'enforce_channel_modes', ''),
-    enforce_channel_key: cfg(c, 'enforce_channel_key', ''),
+    nodesynch_nicks: cfgStringArray(c, 'nodesynch_nicks', ['ChanServ'], log),
+    enforce_channel_modes: cfgString(c, 'enforce_channel_modes', '', log),
+    enforce_channel_key: cfgString(c, 'enforce_channel_key', '', log),
     enforce_channel_limit: cfgNum(c, 'enforce_channel_limit', 0, log),
-    cycle_on_deop: cfg(c, 'cycle_on_deop', false),
+    cycle_on_deop: cfgBool(c, 'cycle_on_deop', false, log),
     cycle_delay_ms: cfgNum(c, 'cycle_delay_ms', 5000, log),
-    default_kick_reason: cfg(c, 'default_kick_reason', 'Requested'),
+    default_kick_reason: cfgString(c, 'default_kick_reason', 'Requested', log),
     default_ban_duration: cfgNum(c, 'default_ban_duration', 120, log),
     default_ban_type: cfgNum(c, 'default_ban_type', 3, log),
-    rejoin_on_kick: cfg(c, 'rejoin_on_kick', true),
+    rejoin_on_kick: cfgBool(c, 'rejoin_on_kick', true, log),
     rejoin_delay_ms: cfgNum(c, 'rejoin_delay_ms', 5000, log),
     max_rejoin_attempts: cfgNum(c, 'max_rejoin_attempts', 3, log),
     rejoin_attempt_window_ms: cfgNum(c, 'rejoin_attempt_window_ms', 300_000, log),
-    revenge_on_kick: cfg(c, 'revenge_on_kick', false),
+    revenge_on_kick: cfgBool(c, 'revenge_on_kick', false, log),
     revenge_action: cfgEnum(c, 'revenge_action', ['deop', 'kick', 'kickban'], 'deop', log),
     revenge_delay_ms: cfgNum(c, 'revenge_delay_ms', 3000, log),
-    revenge_kick_reason: cfg(c, 'revenge_kick_reason', "Don't kick me."),
-    revenge_exempt_flags: cfg(c, 'revenge_exempt_flags', 'nm'),
-    bitch: cfg(c, 'bitch', false),
-    punish_deop: cfg(c, 'punish_deop', false),
+    revenge_kick_reason: cfgString(c, 'revenge_kick_reason', "Don't kick me.", log),
+    revenge_exempt_flags: cfgString(c, 'revenge_exempt_flags', 'nm', log),
+    bitch: cfgBool(c, 'bitch', false, log),
+    punish_deop: cfgBool(c, 'punish_deop', false, log),
     punish_action: cfgEnum(c, 'punish_action', ['kick', 'kickban'], 'kick', log),
-    punish_kick_reason: cfg(c, 'punish_kick_reason', "Don't deop my friends."),
-    enforcebans: cfg(c, 'enforcebans', false),
-    nick_recovery: cfg(c, 'nick_recovery', true),
-    nick_recovery_ghost: cfg(c, 'nick_recovery_ghost', false),
+    punish_kick_reason: cfgString(c, 'punish_kick_reason', "Don't deop my friends.", log),
+    enforcebans: cfgBool(c, 'enforcebans', false, log),
+    nick_recovery: cfgBool(c, 'nick_recovery', true, log),
+    nick_recovery_ghost: cfgBool(c, 'nick_recovery_ghost', false, log),
     // Password read from bot.json (not plugins.json) per SECURITY.md §6
     nick_recovery_password: api.botConfig.chanmod?.nick_recovery_password ?? '',
     stopnethack_mode: cfgNum(c, 'stopnethack_mode', 0, log),
     split_timeout_ms: cfgNum(c, 'split_timeout_ms', 300_000, log),
-    chanserv_nick: cfg(c, 'chanserv_nick', 'ChanServ'),
+    chanserv_nick: cfgString(c, 'chanserv_nick', 'ChanServ', log),
     chanserv_op_delay_ms: cfgNum(c, 'chanserv_op_delay_ms', 1000, log),
     chanserv_services_type: cfgEnum(
       c,
@@ -356,7 +395,7 @@ export function readConfig(api: PluginAPI): ChanmodConfig {
     takeover_level_2_threshold: cfgNum(c, 'takeover_level_2_threshold', 6, log),
     takeover_level_3_threshold: cfgNum(c, 'takeover_level_3_threshold', 10, log),
     takeover_response_delay_ms: cfgNum(c, 'takeover_response_delay_ms', 0, log),
-    invite: cfg(c, 'invite', false),
+    invite: cfgBool(c, 'invite', false, log),
   };
 
   // Validate threshold ordering

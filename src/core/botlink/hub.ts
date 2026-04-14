@@ -6,7 +6,7 @@ import { createServer } from 'node:net';
 import type { Server as NetServer, Socket } from 'node:net';
 
 import type { BotDatabase } from '../../database';
-import type { BotEventBus } from '../../event-bus';
+import type { BotEventBus, BotEvents } from '../../event-bus';
 import type { LoggerLike } from '../../logger';
 import type { BotlinkConfig } from '../../types';
 import type { Permissions } from '../permissions';
@@ -40,6 +40,22 @@ interface LeafConnection {
   pingSeq: number;
 }
 
+/**
+ * Remove a listener from `bus` without re-declaring its per-event signature.
+ * `BotEventBus.off`'s typed overload forces the listener's args tuple to
+ * match the event name, but we store heterogeneous listeners in a single
+ * array; all `off` actually needs is the original function reference.
+ * The single cast is encapsulated here so grepping for listener-removal
+ * casts across botlink produces one hit instead of two.
+ */
+function offBusListener(
+  bus: BotEventBus,
+  event: keyof BotEvents,
+  fn: (...args: never[]) => void,
+): void {
+  (bus as unknown as { off: (e: string, f: (...args: never[]) => void) => void }).off(event, fn);
+}
+
 // ---------------------------------------------------------------------------
 // BotLinkHub
 // ---------------------------------------------------------------------------
@@ -51,7 +67,16 @@ export class BotLinkHub {
   readonly routes: BotLinkRelayRouter;
   /** Pending commands sent by the hub itself (from .bot). Key: ref. */
   private pendingCmds = new PendingRequestMap<string[]>();
-  private eventBusListeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
+  /**
+   * Listeners we registered on `eventBus` so we can undo them on rewire /
+   * close. Stored with the widened Node EventEmitter listener signature —
+   * the original per-event types are preserved at the registration site;
+   * detach only needs the shape that `EventEmitter.off` expects.
+   */
+  private eventBusListeners: Array<{
+    event: keyof BotEvents;
+    fn: (...args: never[]) => void;
+  }> = [];
   private cmdRefCounter = 0;
   private config: BotlinkConfig;
   private version: string;
@@ -162,7 +187,7 @@ export class BotLinkHub {
     // don't stack duplicate broadcasts on re-wire.
     if (this.eventBusListeners.length > 0 && this.eventBus) {
       for (const { event, fn } of this.eventBusListeners) {
-        (this.eventBus.off as (event: string, fn: (...args: unknown[]) => void) => void)(event, fn);
+        offBusListener(this.eventBus, event, fn);
       }
       this.eventBusListeners = [];
     }
@@ -171,12 +196,10 @@ export class BotLinkHub {
     this.cmdPermissions = permissions;
 
     // Subscribe to permission mutation events — broadcast to all leaves.
-    // Handlers accept unknown[] and narrow at runtime so they can be stored
-    // in a single heterogeneous listener array without casts.
-    const broadcastUserSync = (...args: unknown[]): void => {
-      const handle = args[0];
-      /* v8 ignore next -- defensive narrow: eventBus always emits string handle */
-      if (typeof handle !== 'string') return;
+    // Each handler takes the typed per-event payload; they are stored in a
+    // single heterogeneous listener array via the variance trick in
+    // `eventBusListeners` (see the field declaration).
+    const broadcastUserSync = (handle: string): void => {
       const user = permissions.getUser(handle);
       if (user) {
         const frame = PermissionSyncer.buildSyncFrames(permissions).find(
@@ -186,26 +209,16 @@ export class BotLinkHub {
       }
     };
 
-    const onRemoved = (...args: unknown[]): void => {
-      const handle = args[0];
-      /* v8 ignore next -- defensive narrow: eventBus always emits string handle */
-      if (typeof handle !== 'string') return;
+    const onRemoved = (handle: string): void => {
       this.broadcast({ type: 'DELUSER', handle });
     };
 
-    const onFlagsChanged = (...args: unknown[]): void => {
-      const handle = args[0];
-      const globalFlags = args[1];
-      const channelFlagsIn = args[2];
-      /* v8 ignore start -- defensive narrows: eventBus always emits well-typed args */
-      if (typeof handle !== 'string' || typeof globalFlags !== 'string') return;
-      if (!channelFlagsIn || typeof channelFlagsIn !== 'object') return;
-      /* v8 ignore stop */
-      const channelFlags: Record<string, string> = {};
-      for (const [ch, flags] of Object.entries(channelFlagsIn as Record<string, unknown>)) {
-        /* v8 ignore next -- defensive filter: flag values are always strings */
-        if (typeof flags === 'string') channelFlags[ch] = flags;
-      }
+    const onFlagsChanged = (
+      handle: string,
+      globalFlags: string,
+      channelFlagsIn: Record<string, string>,
+    ): void => {
+      const channelFlags: Record<string, string> = { ...channelFlagsIn };
       const user = permissions.getUser(handle);
       if (user) {
         this.broadcast({
@@ -409,7 +422,7 @@ export class BotLinkHub {
     // Remove eventBus listeners
     if (this.eventBus) {
       for (const { event, fn } of this.eventBusListeners) {
-        (this.eventBus.off as (event: string, fn: (...args: unknown[]) => void) => void)(event, fn);
+        offBusListener(this.eventBus, event, fn);
       }
       this.eventBusListeners = [];
     }

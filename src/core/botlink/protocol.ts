@@ -224,7 +224,9 @@ export class BotLinkProtocol {
     // or plugin-emitted message that landed in our local state with
     // formatting still in it could ride out across the link and
     // poison a peer's audit log on the other side.
-    sanitizeFrame(frame as unknown as Record<string, unknown>);
+    // `LinkFrame` declares `[key: string]: unknown`, so it is directly
+    // assignable to `Record<string, unknown>` — no cast required.
+    sanitizeFrame(frame);
 
     const json = JSON.stringify(frame);
     if (Buffer.byteLength(json, 'utf8') > MAX_FRAME_SIZE) {

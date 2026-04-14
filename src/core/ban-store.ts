@@ -11,6 +11,22 @@ export type { BanRecord } from '../types';
 // ---------------------------------------------------------------------------
 
 const NAMESPACE = '_bans';
+
+/** Runtime shape check — the JSON we load from the legacy plugin namespace is
+ *  untrusted, so every field is validated before the record is persisted
+ *  into the core namespace. */
+function isBanRecord(value: unknown): value is BanRecord {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.mask === 'string' &&
+    typeof v.channel === 'string' &&
+    typeof v.by === 'string' &&
+    typeof v.ts === 'number' &&
+    typeof v.expires === 'number' &&
+    (v.sticky === undefined || typeof v.sticky === 'boolean')
+  );
+}
 /** Grace window after an expired ban passes its deadline before we drop the
  *  record even if the bot can't actually lift it on IRC (no ops, or the bot
  *  no longer sits in the channel). Prevents the record from persisting
@@ -127,9 +143,19 @@ export class BanStore {
     for (const { key, value } of oldRecords) {
       // Only migrate if the key doesn't already exist in _bans
       if (!this.store.has(key)) {
-        const record = JSON.parse(value) as BanRecord;
-        this.store.set(record);
-        migrated++;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(value);
+        } catch {
+          // Skip unparseable rows — they'll still get deleted below so the
+          // stale namespace is fully cleaned up.
+          pluginDb.del(key);
+          continue;
+        }
+        if (isBanRecord(parsed)) {
+          this.store.set(parsed);
+          migrated++;
+        }
       }
       // Delete from old namespace regardless (idempotent cleanup)
       pluginDb.del(key);

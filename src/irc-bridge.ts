@@ -90,8 +90,8 @@ function extractAccountTag(event: Record<string, unknown>): string | null | unde
   if (typeof direct === 'string' && direct.length > 0) return direct;
 
   const tags = event.tags;
-  if (tags && typeof tags === 'object') {
-    const tagAccount = (tags as Record<string, unknown>).account;
+  if (tags !== null && typeof tags === 'object' && 'account' in tags) {
+    const tagAccount = tags.account;
     if (tagAccount === '*' || tagAccount === null) return null;
     if (typeof tagAccount === 'string' && tagAccount.length > 0) return tagAccount;
   }
