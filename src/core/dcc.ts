@@ -1180,13 +1180,6 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   onPartyJoin: ((handle: string, nick: string) => void) | null = null;
   /** Callback: local DCC session closed. */
   onPartyPart: ((handle: string, nick: string) => void) | null = null;
-  /**
-   * Callback: mirrored service notice/privmsg line (after local fanout).
-   * Wired by bot.ts to forward the same line through any active virtual
-   * relay sessions so hub→leaf relayed users see service replies in their
-   * remote DCC console. Local sessions are already handled by announce().
-   */
-  onMirror: ((line: string) => void) | null = null;
 
   /**
    * Forward a raw IRC notice to all DCC sessions, skipping channel notices
@@ -1201,9 +1194,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     const message = String(e.message ?? '');
     if (/^[#&]/.test(target)) return;
     if (this.services.isNickServVerificationReply(nick, message)) return;
-    const line = `-${sanitize(nick)}- ${sanitize(message)}`;
-    this.announce(line);
-    this.onMirror?.(line);
+    this.announce(`-${sanitize(nick)}- ${sanitize(message)}`);
   }
 
   /** Forward a raw IRC PRIVMSG to all DCC sessions, skipping channel messages. */
@@ -1213,9 +1204,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     const target = String(e.target ?? '');
     const message = String(e.message ?? '');
     if (/^[#&]/.test(target)) return;
-    const line = `<${sanitize(nick)}> ${sanitize(message)}`;
-    this.announce(line);
-    this.onMirror?.(line);
+    this.announce(`<${sanitize(nick)}> ${sanitize(message)}`);
   }
 
   /** Send a message to all sessions except the one with the given handle. */

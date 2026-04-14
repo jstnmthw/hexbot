@@ -61,6 +61,8 @@ import { type Logger, createLogger } from './logger';
 import { PluginLoader } from './plugin-loader';
 import type { Casemapping } from './types';
 import type { BotConfig } from './types';
+import { toEventObject } from './utils/irc-event';
+import { sanitize } from './utils/sanitize';
 import { buildSocksOptions } from './utils/socks';
 import { stripFormatting } from './utils/strip-formatting';
 import { requiresVerificationForFlags } from './utils/verify-flags';
@@ -350,16 +352,6 @@ export class Bot {
         }),
       });
       this._dccManager.attach();
-      // Fan mirrored service lines (NickServ/ChanServ/MemoServ/etc.) out to
-      // every user currently relayed IN to this bot, so their remote DCC
-      // console sees the same output local sessions get. Without this,
-      // relayed users miss asynchronous service replies that arrive after
-      // the command returns.
-      this._dccManager.onMirror = (line) => {
-        for (const vs of this._relayVirtualSessions.values()) {
-          vs.sendOutput(line);
-        }
-      };
       registerDccConsoleCommands(this.commandHandler, this._dccManager, this.db);
       this.eventBus.on('user:removed', (handle: string) => {
         this.db.del('dcc', `console_flags:${handle}`);
@@ -454,6 +446,11 @@ export class Bot {
         this._botLinkLeaf.connect();
         this.botLogger.info('Bot link leaf connecting to hub');
       }
+      // Forward service NOTICE/PRIVMSG replies (NickServ, ChanServ, MemoServ…)
+      // into any active virtual relay sessions on this bot. Independent of DCC
+      // so leaves with DCC disabled still surface async service replies back
+      // to the relay origin.
+      this.attachRelayServiceMirror();
     }
     // Clean up orphaned relay virtual sessions when a linked bot disconnects.
     // Hoisted to a named field so shutdown() can remove it — if any code path
@@ -541,6 +538,11 @@ export class Bot {
       this._botLinkLeaf.disconnect();
       this._botLinkLeaf = null;
     }
+
+    for (const { event, fn } of this._relayMirrorListeners) {
+      this.client.removeListener(event, fn);
+    }
+    this._relayMirrorListeners = [];
 
     if (this._dccManager) {
       this._dccManager.detach('Bot shutting down.');
@@ -908,6 +910,43 @@ export class Bot {
   private get _relayLogger(): Logger {
     this._relayLoggerCache ??= this.logger.child('botlink:relay');
     return this._relayLoggerCache;
+  }
+
+  /** IRC listeners that fan service notices/privmsgs out to virtual relay sessions. */
+  private _relayMirrorListeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
+
+  /**
+   * Install IRC-client listeners that mirror incoming private NOTICE / PRIVMSG
+   * lines to every active virtual relay session. Runs whether or not DCC is
+   * enabled so leaf bots without a local console still relay service replies.
+   */
+  private attachRelayServiceMirror(): void {
+    const forward = (line: string): void => {
+      for (const vs of this._relayVirtualSessions.values()) {
+        vs.sendOutput(line);
+      }
+    };
+    const onNotice = (...args: unknown[]): void => {
+      const e = toEventObject(args[0]);
+      const nick = String(e.nick ?? '');
+      const target = String(e.target ?? '');
+      const message = String(e.message ?? '');
+      if (/^[#&]/.test(target)) return;
+      if (this.services.isNickServVerificationReply(nick, message)) return;
+      forward(`-${sanitize(nick)}- ${sanitize(message)}`);
+    };
+    const onPrivmsg = (...args: unknown[]): void => {
+      const e = toEventObject(args[0]);
+      const nick = String(e.nick ?? '');
+      const target = String(e.target ?? '');
+      const message = String(e.message ?? '');
+      if (/^[#&]/.test(target)) return;
+      forward(`<${sanitize(nick)}> ${sanitize(message)}`);
+    };
+    this.client.on('notice', onNotice);
+    this.client.on('privmsg', onPrivmsg);
+    this._relayMirrorListeners.push({ event: 'notice', fn: onNotice });
+    this._relayMirrorListeners.push({ event: 'privmsg', fn: onPrivmsg });
   }
 
   /** Handle incoming PROTECT_* frames — delegates to extracted handler with permission guards. */
