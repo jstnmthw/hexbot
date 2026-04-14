@@ -7,17 +7,16 @@ import type { Socket } from 'node:net';
 import type { CommandContext } from '../../command-handler';
 import type { LoggerLike } from '../../logger';
 import type { BotlinkConfig } from '../../types';
+import { executeCmdFrame } from './cmd-exec.js';
 import { PendingRequestMap } from './pending';
-import {
-  BotLinkProtocol,
-  type CommandRelay,
-  type LinkFrame,
-  type LinkPermissions,
-  type PartyLineUser,
-  type SocketFactory,
-  executeCmdFrame,
-  hashPassword,
-} from './protocol';
+import { BotLinkProtocol, hashPassword } from './protocol';
+import type {
+  CommandRelay,
+  LinkFrame,
+  LinkPermissions,
+  PartyLineUser,
+  SocketFactory,
+} from './types.js';
 
 // ---------------------------------------------------------------------------
 // BotLinkLeaf
@@ -35,7 +34,7 @@ export class BotLinkLeaf {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelay: number;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
-  private lastMessageAt = 0;
+  private lastHeartbeatAt = 0;
   private hubBotname = '';
   private pingSeq = 0;
   private pingIntervalMs: number;
@@ -278,7 +277,7 @@ export class BotLinkLeaf {
         this.hubBotname = String(frame.botname ?? '');
         this.connected = true;
         this.reconnectDelay = this.reconnectDelayMs; // Reset backoff
-        this.lastMessageAt = Date.now();
+        this.lastHeartbeatAt = Date.now();
 
         // Switch to steady state
         if (this.protocol) this.protocol.onFrame = (f) => this.onSteadyState(f);
@@ -324,7 +323,7 @@ export class BotLinkLeaf {
   // -----------------------------------------------------------------------
 
   private onSteadyState(frame: LinkFrame): void {
-    this.lastMessageAt = Date.now();
+    this.lastHeartbeatAt = Date.now();
 
     if (frame.type === 'PING') {
       this.protocol?.send({ type: 'PONG', seq: frame.seq });
@@ -393,7 +392,7 @@ export class BotLinkLeaf {
 
   private startHeartbeat(): void {
     this.pingTimer = setInterval(() => {
-      if (Date.now() - this.lastMessageAt > this.linkTimeoutMs) {
+      if (Date.now() - this.lastHeartbeatAt > this.linkTimeoutMs) {
         this.logger?.warn('Hub timed out');
         this.protocol?.close();
         return;

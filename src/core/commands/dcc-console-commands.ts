@@ -104,23 +104,39 @@ function replyWithCurrentFlags(ctx: CommandContext, session: DCCSessionEntry): v
   ctx.reply(`Default: +${DEFAULT_CONSOLE_FLAGS}. Use .console +x / -x to toggle.`);
 }
 
+/**
+ * Apply a `+flags`/`-flags` mutation to a stored flag string and return the
+ * before/after canonical forms, or an error message if the mutation didn't
+ * parse. Shared by both the own-flag and cross-handle paths so canonical
+ * formatting is computed in exactly one place.
+ */
+function applyFlagMutation(
+  stored: string,
+  mutation: string,
+):
+  | { before: string; after: string; flags: Set<import('../dcc').ConsoleFlagLetter> }
+  | { error: string } {
+  const current = parseCanonicalFlags(stored);
+  const before = formatFlags(current);
+  const result = parseFlagsMutation(mutation, current);
+  if ('error' in result) return { error: result.error };
+  return { before, after: formatFlags(result.flags), flags: result.flags };
+}
+
 function mutateOwnFlags(
   input: string,
   ctx: CommandContext,
   session: DCCSessionEntry,
   db: BotDatabase | null,
 ): void {
-  const before = formatFlags(parseCanonicalFlags(session.getConsoleFlags()));
-  const current = parseCanonicalFlags(session.getConsoleFlags());
-  const result = parseFlagsMutation(input, current);
+  const result = applyFlagMutation(session.getConsoleFlags(), input);
   if ('error' in result) {
     ctx.reply(result.error);
     return;
   }
   session.setConsoleFlags(result.flags);
-  const canonical = formatFlags(result.flags);
-  ctx.reply(`Console flags: ${canonical.length > 0 ? `+${canonical}` : '+-'}`);
-  recordConsoleAudit(db, ctx, session.handle, before, canonical);
+  ctx.reply(`Console flags: ${result.after.length > 0 ? `+${result.after}` : '+-'}`);
+  recordConsoleAudit(db, ctx, session.handle, result.before, result.after);
 }
 
 function mutateOtherHandleFlags(
@@ -146,15 +162,13 @@ function mutateOtherHandleFlags(
   }
 
   const store = dccManager.getConsoleFlagStore();
-  const before = formatFlags(parseCanonicalFlags(store.get(handle) ?? DEFAULT_CONSOLE_FLAGS));
-  const current = parseCanonicalFlags(store.get(handle) ?? DEFAULT_CONSOLE_FLAGS);
-  const result = parseFlagsMutation(mutation, current);
+  const stored = store.get(handle) ?? DEFAULT_CONSOLE_FLAGS;
+  const result = applyFlagMutation(stored, mutation);
   if ('error' in result) {
     ctx.reply(result.error);
     return;
   }
-  const canonical = formatFlags(result.flags);
-  store.set(handle, canonical);
-  ctx.reply(`Console flags for ${handle}: ${canonical.length > 0 ? `+${canonical}` : '+-'}`);
-  recordConsoleAudit(db, ctx, handle, before, canonical);
+  store.set(handle, result.after);
+  ctx.reply(`Console flags for ${handle}: ${result.after.length > 0 ? `+${result.after}` : '+-'}`);
+  recordConsoleAudit(db, ctx, handle, result.before, result.after);
 }

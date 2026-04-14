@@ -11,19 +11,14 @@ import type { LoggerLike } from '../../logger';
 import type { BotlinkConfig } from '../../types';
 import type { Permissions } from '../permissions';
 import { type AuthBanEntry, BotLinkAuthManager } from './auth';
+import { executeCmdFrame } from './cmd-exec.js';
+import { FrameType } from './frame-types.js';
 import { PendingRequestMap } from './pending';
-import {
-  BotLinkProtocol,
-  type CommandRelay,
-  HUB_ONLY_FRAMES,
-  type LinkFrame,
-  type LinkPermissions,
-  type PartyLineUser,
-  RateCounter,
-  executeCmdFrame,
-} from './protocol';
+import { BotLinkProtocol, HUB_ONLY_FRAMES } from './protocol';
+import { RateCounter } from './rate-counter.js';
 import { BotLinkRelayRouter } from './relay-router';
 import { PermissionSyncer } from './sync';
+import type { CommandRelay, LinkFrame, LinkPermissions, PartyLineUser } from './types.js';
 
 // Re-export auth helpers/types so existing imports from './hub' keep working.
 export { isValidIP, isWhitelisted } from './auth';
@@ -96,7 +91,7 @@ export class BotLinkHub {
       botname: config.botname,
       logger: this.logger,
       send: (botname, frame) => this.send(botname, frame),
-      sendOrDeliver: (botname, frame) => this.sendOrDeliver(botname, frame),
+      deliverLocal: (frame) => this.onLeafFrame?.(this.config.botname, frame),
       hasLeaf: (botname) => this.leaves.has(botname),
       getLocalPartyUsers: () => this.getLocalPartyUsers?.() ?? [],
     });
@@ -358,18 +353,6 @@ export class BotLinkHub {
     this.routes.unregisterHubRelay(handle);
   }
 
-  /**
-   * Send a frame to a bot. If the target is the hub itself, deliver the frame
-   * locally via onLeafFrame instead of trying to look it up in the leaves map.
-   */
-  private sendOrDeliver(botname: string, frame: LinkFrame): boolean {
-    if (botname === this.config.botname) {
-      this.onLeafFrame?.(botname, frame);
-      return true;
-    }
-    return this.send(botname, frame);
-  }
-
   /** Forcibly disconnect a single leaf by botname. Returns true if the leaf was found and disconnected. */
   disconnectLeaf(botname: string, reason = 'Disconnected by admin'): boolean {
     const conn = this.leaves.get(botname);
@@ -477,50 +460,76 @@ export class BotLinkHub {
       socket.destroy();
       return;
     }
-    const whitelisted = admission.whitelisted;
 
     // Past the early-reject gates — create the protocol wrapper (readline, frame parsing)
     const protocol = new BotLinkProtocol(socket, this.logger);
-    let authenticated = false;
+    this.beginHandshake(protocol, ip, admission.whitelisted);
+  }
 
+  /**
+   * Drive the HELLO handshake for a freshly-admitted connection. All three
+   * tear-down paths (timeout, protocol error, remote close) feed through a
+   * single `finish()` closure so the timer clear and the `releasePending`
+   * call live in one place instead of being sprinkled across three closures.
+   */
+  private beginHandshake(protocol: BotLinkProtocol, ip: string, whitelisted: boolean): void {
     // Handshake timeout — configurable, default 10s (was 30s)
     const timeoutMs = this.config.handshake_timeout_ms ?? 10_000;
-    const timer = setTimeout(() => {
+
+    // Single-source-of-truth for handshake cleanup. `finish('ok')` is called
+    // when HELLO arrives and the leaf is accepted; the other reasons are
+    // tear-down paths that clear the timer and free the pending slot. After
+    // the first call it's a no-op — makes double-dispatch from an onClose
+    // racing the timer harmless.
+    let done = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const finish = (reason: 'ok' | 'timeout' | 'protocol-error' | 'closed'): void => {
+      if (done) return;
+      done = true;
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+      if (reason !== 'ok') this.auth.releasePending(ip, whitelisted);
+    };
+
+    timer = setTimeout(() => {
       /* v8 ignore next -- timer fires after fast handshake completes in tests; guards real-network timeouts */
-      if (!authenticated) {
-        this.logger?.warn(`Handshake timeout from ${ip}`);
-        protocol.send({ type: 'ERROR', code: 'TIMEOUT', message: 'Handshake timeout' });
-        protocol.close();
-        this.auth.releasePending(ip, whitelisted);
-      }
+      if (done) return;
+      this.logger?.warn(`Handshake timeout from ${ip}`);
+      protocol.send({ type: 'ERROR', code: 'TIMEOUT', message: 'Handshake timeout' });
+      protocol.close();
+      finish('timeout');
     }, timeoutMs);
 
     protocol.onFrame = (frame) => {
       /* v8 ignore next -- after HELLO is processed, onFrame is immediately replaced; second frame can't reach here */
-      if (authenticated) return;
+      if (done) return;
 
       if (frame.type !== 'HELLO') {
         protocol.send({ type: 'ERROR', code: 'PROTOCOL', message: 'Expected HELLO' });
         protocol.close();
-        clearTimeout(timer);
-        this.auth.releasePending(ip, whitelisted);
+        finish('protocol-error');
         return;
       }
 
-      clearTimeout(timer);
-      authenticated = true;
+      // HELLO arrived — release the pending slot and either accept or reject.
+      // We mark the handshake "done" _before_ verify/accept so any callback
+      // firing re-entrantly (e.g. protocol.close() inside rejectHandshake
+      // triggering onClose) sees `done === true` and skips.
+      finish('ok');
       this.auth.releasePending(ip, whitelisted);
-      this.handleHello(protocol, frame, ip, whitelisted);
+      this.acceptHandshake(protocol, frame, ip, whitelisted);
     };
 
-    protocol.onClose = () => {
-      clearTimeout(timer);
-      if (!authenticated) this.auth.releasePending(ip, whitelisted);
-    };
+    protocol.onClose = () => finish('closed');
     protocol.onError = () => {};
   }
 
-  private handleHello(
+  /**
+   * Validate a HELLO frame and, on success, install the leaf as a connected
+   * peer. Split out of the handshake driver so the accept/reject logic is
+   * linear and doesn't have to re-thread the timer-cleanup state.
+   */
+  private acceptHandshake(
     protocol: BotLinkProtocol,
     frame: LinkFrame,
     ip: string,
@@ -570,7 +579,12 @@ export class BotLinkHub {
     // Notify existing leaves
     this.broadcast({ type: 'BOTJOIN', botname });
 
-    // Create connection record
+    // Create connection record.
+    // Rate-limit windows: CMD 10/s (bursty admin use), PARTY_CHAT 5/s
+    // (conversation), PROTECT_* 20/s (mass-deop recovery). Overflow is
+    // dropped either with an ERROR frame (CMD) or silently. These are
+    // intentionally per-leaf hot-path numbers — move to config only if we
+    // start wanting per-deployment tuning.
     const conn: LeafConnection = {
       botname,
       protocol,
@@ -616,25 +630,25 @@ export class BotLinkHub {
     if ('fromBot' in frame) frame.fromBot = botname;
 
     // Heartbeat
-    if (frame.type === 'PONG') return;
-    if (frame.type === 'PING') {
-      conn.protocol.send({ type: 'PONG', seq: frame.seq });
+    if (frame.type === FrameType.PONG) return;
+    if (frame.type === FrameType.PING) {
+      conn.protocol.send({ type: FrameType.PONG, seq: frame.seq });
       return;
     }
 
     // Rate limiting
-    if (frame.type === 'CMD' && !conn.cmdRate.check()) {
+    if (frame.type === FrameType.CMD && !conn.cmdRate.check()) {
       conn.protocol.send({
-        type: 'ERROR',
+        type: FrameType.ERROR,
         code: 'RATE_LIMITED',
         message: 'CMD rate limit exceeded',
       });
       return;
     }
-    if (frame.type === 'PARTY_CHAT' && !conn.partyRate.check()) {
+    if (frame.type === FrameType.PARTY_CHAT && !conn.partyRate.check()) {
       return; // Silently drop
     }
-    if (frame.type.startsWith('PROTECT_') && frame.type !== 'PROTECT_ACK') {
+    if (frame.type.startsWith('PROTECT_') && frame.type !== FrameType.PROTECT_ACK) {
       if (!conn.protectRate.check()) return; // Silently drop
     }
 
@@ -645,7 +659,7 @@ export class BotLinkHub {
 
     // Dispatch by frame type
     switch (frame.type) {
-      case 'CMD_RESULT': {
+      case FrameType.CMD_RESULT: {
         const ref = String(frame.ref ?? '');
         const output = Array.isArray(frame.output)
           ? frame.output.filter((s): s is string => typeof s === 'string')
@@ -659,32 +673,33 @@ export class BotLinkHub {
         break;
       }
 
-      case 'CMD':
+      case FrameType.CMD:
         if (this.cmdHandler) this.handleCmdRelay(botname, frame);
         break;
 
-      case 'BSAY':
+      case FrameType.BSAY:
         this.handleBsay(botname, frame);
         break;
 
-      case 'PARTY_JOIN':
+      case FrameType.PARTY_JOIN:
         this.routes.trackPartyJoin(botname, frame);
         break;
 
-      case 'PARTY_PART':
+      case FrameType.PARTY_PART:
         this.routes.trackPartyPart(frame);
         break;
 
-      case 'PARTY_WHOM':
+      case FrameType.PARTY_WHOM:
         this.routes.handlePartyWhom(botname, String(frame.ref ?? ''));
         break;
 
-      case 'PROTECT_ACK':
+      case FrameType.PROTECT_ACK:
         this.routes.handleProtectAck(frame);
         break;
 
       default:
-        // PROTECT_* requests (not ACK)
+        // PROTECT_* requests (not ACK) — use raw startsWith since we don't
+        // enumerate each PROTECT_* variant in the switch.
         if (frame.type.startsWith('PROTECT_')) {
           if (frame.ref) this.routes.trackProtectRequest(String(frame.ref), botname);
         }
@@ -692,7 +707,7 @@ export class BotLinkHub {
     }
 
     // Relay routing applies to all RELAY_* frames. routeRelayFrame is
-    // authoritative: it delivers locally via sendOrDeliver → onLeafFrame when
+    // authoritative: it delivers locally via deliverLocal → onLeafFrame when
     // the hub itself is the relay origin/target, so skip the generic
     // notification below to avoid double-dispatching the same frame.
     if (frame.type.startsWith('RELAY_')) {

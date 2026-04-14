@@ -118,6 +118,10 @@ export class MemoManager {
     this.casemapping = cm;
   }
 
+  private lowerNick(nick: string): string {
+    return ircLower(nick, this.casemapping);
+  }
+
   /** Set or replace the DCC manager reference (wired after DCC init). */
   setDCCManager(dcc: MemoDCCManager): void {
     this.dccManager = dcc;
@@ -184,11 +188,7 @@ export class MemoManager {
         // Only private notices (not channel notices)
         if (ctx.channel) return;
         // Match sender nick against configured MemoServ nick
-        if (
-          ircLower(ctx.nick, this.casemapping) !==
-          ircLower(this.config.memoserv_nick, this.casemapping)
-        )
-          return;
+        if (this.lowerNick(ctx.nick) !== this.lowerNick(this.config.memoserv_nick)) return;
 
         this.handleMemoServNotice(ctx.text);
       },

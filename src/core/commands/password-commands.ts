@@ -6,6 +6,7 @@
 // rejected to keep plaintext passwords off the wire.
 import type { CommandContext, CommandHandler } from '../../command-handler';
 import type { BotDatabase } from '../../database';
+import { getAuditSource } from '../../utils/command-helpers';
 import { tryAudit } from '../audit';
 import { hashPassword } from '../password';
 import { OWNER_FLAG, type Permissions } from '../permissions';
@@ -141,7 +142,7 @@ export function registerPasswordCommands(deps: PasswordCommandDeps): void {
         return;
       }
 
-      const source = ctx.source === 'repl' ? 'REPL' : ctx.nick;
+      const source = getAuditSource(ctx);
       permissions.setPasswordHash(targetHandle, hash, source, ctx.source);
 
       if (isSelfRotation) {

@@ -16,6 +16,20 @@ function boldTrigger(usage: string): string {
   return `\x02${usage.slice(0, spaceIdx)}\x02${usage.slice(spaceIdx)}`;
 }
 
+/**
+ * Filter a list of help entries down to those the invoking user may see.
+ * Unflagged entries (`'-'`) are always visible; flagged entries pass through
+ * the permissions check. Used by both the list view and the category view
+ * so privileged commands never leak to unprivileged users.
+ */
+function filterByPermission(
+  api: PluginAPI,
+  entries: HelpEntry[],
+  ctx: HandlerContext,
+): HelpEntry[] {
+  return entries.filter((e) => e.flags === '-' || api.permissions.checkFlags(e.flags, ctx));
+}
+
 /** Valid `reply_type` config values. */
 type ReplyType = 'notice' | 'privmsg' | 'channel_notice';
 
@@ -79,10 +93,7 @@ export function init(api: PluginAPI): void {
       }
 
       // Priority 2: match as a category name (permission-filtered)
-      const allEntries = api.getHelpEntries();
-      const visible = allEntries.filter(
-        (e) => e.flags === '-' || api.permissions.checkFlags(e.flags, ctx),
-      );
+      const visible = filterByPermission(api, api.getHelpEntries(), ctx);
       const categoryEntries = visible.filter(
         (e) => (e.category ?? e.pluginId ?? '').toLowerCase() === normalized.toLowerCase(),
       );
@@ -119,10 +130,7 @@ export function init(api: PluginAPI): void {
     cooldowns.set(cooldownKey, now);
 
     // Filter entries by permission
-    const allEntries = api.getHelpEntries();
-    const visible = allEntries.filter(
-      (e) => e.flags === '-' || api.permissions.checkFlags(e.flags, ctx),
-    );
+    const visible = filterByPermission(api, api.getHelpEntries(), ctx);
 
     if (visible.length === 0) {
       send(ctx, 'No commands available.');

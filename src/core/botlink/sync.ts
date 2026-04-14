@@ -4,7 +4,7 @@
 import { isObjectArray } from '../../utils/irc-event';
 import type { ChannelState } from '../channel-state';
 import type { Permissions } from '../permissions';
-import type { LinkFrame } from './protocol';
+import type { LinkFrame } from './types.js';
 
 // ---------------------------------------------------------------------------
 // ChannelStateSyncer

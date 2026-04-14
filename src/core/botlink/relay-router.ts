@@ -6,7 +6,7 @@
 // `BotLinkHub` lets the hub focus on connection lifecycle while relay
 // bookkeeping (including the TTL sweep) lives in one place.
 import type { LoggerLike } from '../../logger';
-import type { LinkFrame, PartyLineUser } from './protocol';
+import type { LinkFrame, PartyLineUser } from './types.js';
 
 interface RelayEntry {
   originBot: string;
@@ -35,14 +35,15 @@ const MAX_PENDING_ROUTES = 4096;
 export interface RelayRouterDeps {
   botname: string;
   logger: LoggerLike | null;
+  /** Forward a frame to a connected leaf over TCP. */
   send: (botname: string, frame: LinkFrame) => boolean;
   /**
-   * Deliver a frame locally when the target is the hub itself, otherwise
-   * forward it over TCP to the matching leaf. Mirrors the behaviour of
-   * `BotLinkHub.sendOrDeliver` so relay end-state updates can reach both
-   * hub-originated and leaf-originated sessions.
+   * Deliver a frame locally on the hub side — used when the router is
+   * routing back to the hub's own `botname` (relay origin/target was the
+   * hub). The hub wires this to its `onLeafFrame` callback so the local
+   * DCC layer sees the frame as if it arrived from a leaf.
    */
-  sendOrDeliver: (botname: string, frame: LinkFrame) => boolean;
+  deliverLocal: (frame: LinkFrame) => void;
   hasLeaf: (botname: string) => boolean;
   getLocalPartyUsers: () => PartyLineUser[];
 }
@@ -58,6 +59,19 @@ export class BotLinkRelayRouter {
   readonly remotePartyUsers = new Map<string, PartyLineUser>();
 
   constructor(private readonly deps: RelayRouterDeps) {}
+
+  /**
+   * Route a frame whose target bot may be the hub itself. Inlined at every
+   * relay call site below so the hub-self branch is visible in the routing
+   * logic instead of being hidden behind a "sendOrDeliver" name.
+   */
+  private sendToBot(botname: string, frame: LinkFrame): void {
+    if (botname === this.deps.botname) {
+      this.deps.deliverLocal(frame);
+      return;
+    }
+    this.deps.send(botname, frame);
+  }
 
   // ---------------------------------------------------------------------
   // Public API used by the hub
@@ -169,7 +183,7 @@ export class BotLinkRelayRouter {
     if (frame.type === 'RELAY_REQUEST') {
       const targetBot = String(frame.toBot ?? '');
       if (!this.deps.hasLeaf(targetBot)) {
-        this.deps.sendOrDeliver(fromBot, {
+        this.sendToBot(fromBot, {
           type: 'RELAY_END',
           handle,
           reason: `Bot "${targetBot}" not connected`,
@@ -182,17 +196,31 @@ export class BotLinkRelayRouter {
     }
 
     const relay = this.activeRelays.get(handle);
-    if (!relay) return;
+    if (!relay) {
+      // Unified behaviour: if we don't know the relay any more (already ended,
+      // never existed, TTL-swept), echo a RELAY_END back to the sender so its
+      // state machine can clean up. Previously these three frame types
+      // silently dropped, leaving originators waiting on a dead session.
+      // Skip RELAY_END itself to avoid a ping-pong loop.
+      if (frame.type !== 'RELAY_END') {
+        this.sendToBot(fromBot, {
+          type: 'RELAY_END',
+          handle,
+          reason: `Relay "${handle}" not active`,
+        });
+      }
+      return;
+    }
 
     if (frame.type === 'RELAY_ACCEPT') {
-      this.deps.sendOrDeliver(relay.originBot, frame);
+      this.sendToBot(relay.originBot, frame);
     } else if (frame.type === 'RELAY_INPUT') {
-      this.deps.send(relay.targetBot, frame);
+      this.sendToBot(relay.targetBot, frame);
     } else if (frame.type === 'RELAY_OUTPUT') {
-      this.deps.sendOrDeliver(relay.originBot, frame);
+      this.sendToBot(relay.originBot, frame);
     } else if (frame.type === 'RELAY_END') {
       const otherBot = fromBot === relay.originBot ? relay.targetBot : relay.originBot;
-      this.deps.sendOrDeliver(otherBot, frame);
+      this.sendToBot(otherBot, frame);
       this.activeRelays.delete(handle);
     }
   }

@@ -246,14 +246,26 @@ export class IRCCommands {
     const segments = parseModeString(modeString);
     const caps = this.capabilities;
 
-    // Pre-count params needed so callers get a clear error before anything
-    // hits the wire. Counting `+o-v` correctly requires walking each segment
-    // with its own direction because type C modes depend on it.
+    // Single pass: pair each mode char with its param (or null when the
+    // mode takes none), accumulating by segment so direction is preserved.
+    interface PairedSegment {
+      dir: '+' | '-';
+      entries: Array<{ char: string; param: string | null }>;
+    }
+    const paired: PairedSegment[] = [];
     let paramsNeeded = 0;
+    let paramIdx = 0;
     for (const seg of segments) {
+      const entries: Array<{ char: string; param: string | null }> = [];
       for (const ch of seg.chars) {
-        if (caps.expectsParam(ch, seg.dir)) paramsNeeded++;
+        if (caps.expectsParam(ch, seg.dir)) {
+          paramsNeeded++;
+          entries.push({ char: ch, param: params[paramIdx++] ?? null });
+        } else {
+          entries.push({ char: ch, param: null });
+        }
       }
+      paired.push({ dir: seg.dir, entries });
     }
     if (paramsNeeded !== params.length) {
       throw new Error(
@@ -262,12 +274,11 @@ export class IRCCommands {
       );
     }
 
-    let paramIdx = 0;
-    for (const seg of segments) {
-      // Batch chars within the segment, respecting `modesPerLine` as the cap
-      // on total chars per line (conservative — real servers only count
-      // param-taking modes against MODES=, but the stricter rule is always
-      // legal and keeps the batcher simpler).
+    // Emit one MODE line per batch, respecting `modesPerLine` as the cap on
+    // total chars per line (conservative — real servers only count
+    // param-taking modes against MODES=, but the stricter rule is always
+    // legal and keeps the batcher simpler).
+    for (const seg of paired) {
       let batchChars: string[] = [];
       let batchParams: string[] = [];
       const flush = (): void => {
@@ -276,12 +287,9 @@ export class IRCCommands {
         batchChars = [];
         batchParams = [];
       };
-
-      for (const ch of seg.chars) {
-        batchChars.push(ch);
-        if (caps.expectsParam(ch, seg.dir)) {
-          batchParams.push(params[paramIdx++]);
-        }
+      for (const entry of seg.entries) {
+        batchChars.push(entry.char);
+        if (entry.param !== null) batchParams.push(entry.param);
         if (batchChars.length >= this.modesPerLine) flush();
       }
       flush();

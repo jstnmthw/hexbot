@@ -41,7 +41,7 @@ describe('.chpass', () => {
 
       const hash = perms.getPasswordHash('admin');
       expect(hash).not.toBeNull();
-      expect(await verifyPassword('secret!!', hash!)).toBe(true);
+      expect(await verifyPassword('secret!!', hash!)).toEqual({ ok: true });
     });
 
     it('REPL can rotate any user (no owner requirement)', async () => {
@@ -302,8 +302,8 @@ describe('.chpass', () => {
       const hash2 = perms.getPasswordHash('admin');
 
       expect(hash1).not.toBe(hash2);
-      expect(await verifyPassword('firstpass1', hash2!)).toBe(false);
-      expect(await verifyPassword('secondpass1', hash2!)).toBe(true);
+      expect(await verifyPassword('firstpass1', hash2!)).toEqual({ ok: false, reason: 'mismatch' });
+      expect(await verifyPassword('secondpass1', hash2!)).toEqual({ ok: true });
     });
   });
 

@@ -75,124 +75,124 @@ Worth doing, not urgent.
 
 ### Phase M1 — Orchestration / mixed concerns
 
-- [ ] **`src/bot.ts:75–256,258–500` — phase the constructor + `start()`.** The `Bot` class wires ~15 subsystems in one constructor and a 200+ line `start()`. Extract `createServices()`, `attachBridge()`, `registerCoreCommands()`, `startBotLink()` so each phase is readable and testable independently.
+- [x] **`src/bot.ts:75–256,258–500` — phase the constructor + `start()`.** The `Bot` class wires ~15 subsystems in one constructor and a 200+ line `start()`. Extract `createServices()`, `attachBridge()`, `registerCoreCommands()`, `startBotLink()` so each phase is readable and testable independently.
   - **Risk:** Medium.
 
-- [ ] **`src/irc-bridge.ts:210–300` — extract `parseCommand()` / `buildContext()` / `checkAccount()` helpers.** `onPrivmsg`, `onAction`, `onJoin` each repeat the same sanitize → command extract → context build → account check → flood check → dispatch sequence. A shared `dispatchMessage()` would eliminate the duplication and make the dispatch intent explicit.
+- [x] **`src/irc-bridge.ts:210–300` — extract `parseCommand()` / `buildContext()` / `checkAccount()` helpers.** `onPrivmsg`, `onAction`, `onJoin` each repeat the same sanitize → command extract → context build → account check → flood check → dispatch sequence. A shared `dispatchMessage()` would eliminate the duplication and make the dispatch intent explicit.
   - **Risk:** Low.
 
-- [ ] **`src/command-handler.ts:130–202` — extract `checkCommandPermissions()`.** Permission, transport (`ctx.source !== 'repl'`), and pre-execute-hook logic are interleaved in `execute()`. Split into a dedicated permission gate + a dispatch core.
+- [x] **`src/command-handler.ts:130–202` — extract `checkCommandPermissions()`.** Permission, transport (`ctx.source !== 'repl'`), and pre-execute-hook logic are interleaved in `execute()`. Split into a dedicated permission gate + a dispatch core.
   - **Risk:** Low.
 
-- [ ] **`src/core/channel-state.ts:379–445` — split `onMode()` into `processUserPrefixMode()` + `processChannelMode()`.** 66-line function with four-level nesting; the two mode classes share nesting structure but diverge in logic.
+- [x] **`src/core/channel-state.ts:379–445` — split `onMode()` into `processUserPrefixMode()` + `processChannelMode()`.** 66-line function with four-level nesting; the two mode classes share nesting structure but diverge in logic.
   - **Risk:** None. Pure extraction.
 
-- [ ] **`src/core/permissions.ts:285–301` — extract `matchesAccountPattern()` / `matchesHostmaskPattern()`.** The `$a:account` branch's silent `continue` at line 289 is easy to miss in the current mixed loop.
+- [x] **`src/core/permissions.ts:285–301` — extract `matchesAccountPattern()` / `matchesHostmaskPattern()`.** The `$a:account` branch's silent `continue` at line 289 is easy to miss in the current mixed loop.
   - **Risk:** None.
 
-- [ ] **`src/core/irc-commands.ts:234–283` — collapse `mode()` double-walk into a single pass.** Current code counts params, then allocates, then batches — same prefix lookups done twice. Build `{mode, param}` array in one pass.
+- [x] **`src/core/irc-commands.ts:234–283` — collapse `mode()` double-walk into a single pass.** Current code counts params, then allocates, then batches — same prefix lookups done twice. Build `{mode, param}` array in one pass.
   - **Risk:** Low.
 
-- [ ] **`src/core/dcc.ts:734–801` — replace relay boolean flags with an explicit state enum.** Three booleans (`_relayCallback`, `_relayConfirmed`, `_relayTimer`) encode a state machine; invalid combinations are reachable (callback null while timer still running, 760–768).
+- [x] **`src/core/dcc.ts:734–801` — replace relay boolean flags with an explicit state enum.** Three booleans (`_relayCallback`, `_relayConfirmed`, `_relayTimer`) encode a state machine; invalid combinations are reachable (callback null while timer still running, 760–768).
   - **Risk:** Low.
 
-- [ ] **`src/core/dcc.ts:322–692` — extract `BannerRenderer`.** The `showBanner()` body contains its own ordinal/pluralisation logic (`Intl.PluralRules` at 621–629), stat layout, mIRC colour coding, and uptime formatting. Move into its own file so banner tweaks don't require reading `DCCSession`.
+- [x] **`src/core/dcc.ts:322–692` — extract `BannerRenderer`.** The `showBanner()` body contains its own ordinal/pluralisation logic (`Intl.PluralRules` at 621–629), stat layout, mIRC colour coding, and uptime formatting. Move into its own file so banner tweaks don't require reading `DCCSession`.
   - **Risk:** Low.
 
 ### Phase M2 — Plugin state and command boilerplate
 
-- [ ] **`plugins/chanmod/state.ts` — partition `SharedState` by owner.** Nine modules currently read and mutate the same state record; no single file is "in charge" of any sub-field. As a first step, move `cycleTimers` behind a small `CycleState` API (`schedule(ms, fn)`, `clearAll()`) so the teardown story is centralised. `intentionalModeChanges`, `enforcementCooldown`, `threatScores`, `lastKnownModes` can follow the same pattern.
+- [x] **`plugins/chanmod/state.ts` — partition `SharedState` by owner.** Nine modules currently read and mutate the same state record; no single file is "in charge" of any sub-field. As a first step, move `cycleTimers` behind a small `CycleState` API (`schedule(ms, fn)`, `clearAll()`) so the teardown story is centralised. `intentionalModeChanges`, `enforcementCooldown`, `threatScores`, `lastKnownModes` can follow the same pattern.
   - **Risk:** Medium.
 
-- [ ] **`plugins/chanmod/mode-enforce.ts:147–216` — document the handler contract.** The orchestrator runs 7 sub-handlers in a fixed order; each returns `boolean` where `true` means "halt subsequent handlers". This is implicit. Add a `ModeHandler` interface and a doc comment listing the order (`reapply → remove-unauth → key → limit → self-deop → opped → bitch → bot-banned → enforcebans → user`). Collect the shared guards (`isNodesynch`, `canEnforce`) into a `ModeContext` object passed to each handler (reduces current 9-parameter signatures in `handleBotSelfDeop`).
+- [x] **`plugins/chanmod/mode-enforce.ts:147–216` — document the handler contract.** The orchestrator runs 7 sub-handlers in a fixed order; each returns `boolean` where `true` means "halt subsequent handlers". This is implicit. Add a `ModeHandler` interface and a doc comment listing the order (`reapply → remove-unauth → key → limit → self-deop → opped → bitch → bot-banned → enforcebans → user`). Collect the shared guards (`isNodesynch`, `canEnforce`) into a `ModeContext` object passed to each handler (reduces current 9-parameter signatures in `handleBotSelfDeop`).
   - **Risk:** Low.
 
-- [ ] **`plugins/chanmod/commands.ts` (414 lines) — extract ban commands.** Factory pattern already isolates the mode-command handlers (159–234); split `handleBan` / `handleUnban` / `handleKickban` / `handleBans` (265–398) out to a new `chanmod/ban-commands.ts`. Commands file shrinks to ~180 lines.
+- [x] **`plugins/chanmod/commands.ts` (414 lines) — extract ban commands.** Factory pattern already isolates the mode-command handlers (159–234); split `handleBan` / `handleUnban` / `handleKickban` / `handleBans` (265–398) out to a new `chanmod/ban-commands.ts`. Commands file shrinks to ~180 lines.
   - **Risk:** Low.
 
-- [ ] **Core command-handler duplication — extract small helpers.** Several patterns repeat across `src/core/commands/*`:
+- [x] **Core command-handler duplication — extract small helpers.** Several patterns repeat across `src/core/commands/*`:
   - `getAuditSource(ctx)` — `ctx.source === 'repl' ? 'REPL' : ctx.nick` appears in `permission-commands.ts:23,46,97`, `channel-commands.ts`, `plugin-commands.ts`, `password-commands.ts`.
   - `parseBanArgs(args)` / `validateChannel(arg)` — ban-commands `ban`/`unban`/`stick`/`unstick` and irc-commands-admin `join`/`part`/`invite` duplicate `args.trim().split(/\s+/)` → check `'#'` prefix → extract mask/channel.
   - `replyFailure(name, error)` — `plugin-commands.ts:61,91,123` all do `tryAudit(...)` + templated `ctx.reply(...)` on load/unload/reload failure.
   - **Risk:** Low.
 
-- [ ] **`src/core/commands/irc-commands-admin.ts:248–282` — merge `formatUptime` and `formatUptimeColored`.** 12 of 15 lines are copies. Collapse to one function with an optional `colorize: boolean`, or extract the colour-wrap as a decorator.
+- [x] **`src/core/commands/irc-commands-admin.ts:248–282` — merge `formatUptime` and `formatUptimeColored`.** 12 of 15 lines are copies. Collapse to one function with an optional `colorize: boolean`, or extract the colour-wrap as a decorator.
   - **Risk:** Low.
 
-- [ ] **`plugins/flood/index.ts:334,352,372,394` — move `isPrivileged()` check before `isFloodTriggered()`.** Exempt users still populate the counter today, which is wasted work and delays lockdown decisions for real offenders.
+- [x] **`plugins/flood/index.ts:334,352,372,394` — move `isPrivileged()` check before `isFloodTriggered()`.** Exempt users still populate the counter today, which is wasted work and delays lockdown decisions for real offenders.
   - **Risk:** Low.
 
-- [ ] **`plugins/rss/index.ts:445–448` — tighten `handleAdd` seed-failure reporting.** A failed initial poll is logged as `'ok'` with an "added but initial fetch failed" message; operators miss real problems. Return a result type from `pollFeed` or wrap the seed in try/catch before calling `saveRuntimeFeed`.
+- [x] **`plugins/rss/index.ts:445–448` — tighten `handleAdd` seed-failure reporting.** A failed initial poll is logged as `'ok'` with an "added but initial fetch failed" message; operators miss real problems. Return a result type from `pollFeed` or wrap the seed in try/catch before calling `saveRuntimeFeed`.
   - **Risk:** Low.
 
 ### Phase M3 — Minor subsystem cleanups
 
-- [ ] **`src/dispatcher.ts:163–204` — extract `_maybeSweep()` in `floodCheck`.** Lazy sweep mid-flood-check is correct but surprising; named helper clarifies intent.
+- [x] **`src/dispatcher.ts:163–204` — extract `_maybeSweep()` in `floodCheck`.** Lazy sweep mid-flood-check is correct but surprising; named helper clarifies intent.
   - **Risk:** None.
 
-- [ ] **`src/config.ts:254–310` — accept a `Logger` in `resolveSecrets()`.** `_env` warnings currently go to raw stdout and are lost in production log pipelines.
+- [x] **`src/config.ts:254–310` — accept a `Logger` in `resolveSecrets()`.** `_env` warnings currently go to raw stdout and are lost in production log pipelines.
   - **Risk:** None.
 
-- [ ] **`src/plugin-api-factory.ts:139–194` — revisit the `channelScope` `WeakMap` wrapper.** Only activates when a plugin defines `channelScope`; a simple `{handler, wrapped}` pair list would be easier to reason about and imposes the same cost.
+- [x] **`src/plugin-api-factory.ts:139–194` — revisit the `channelScope` `WeakMap` wrapper.** Only activates when a plugin defines `channelScope`; a simple `{handler, wrapped}` pair list would be easier to reason about and imposes the same cost.
   - **Risk:** Low.
 
-- [ ] **`src/core/services.ts:115–150` — use `AbortController` for pending verify timers.** Manual `clearTimeout` across a map is error-prone; `abort()` on an old signal is the cleaner cancellation idiom.
+- [x] **`src/core/services.ts:115–150` — use `AbortController` for pending verify timers.** Manual `clearTimeout` across a map is error-prone; `abort()` on an old signal is the cleaner cancellation idiom.
   - **Risk:** Low.
 
-- [ ] **`src/core/message-queue.ts:209–248` — rethink round-robin cursor.** Current code clamps `rrIndex` defensively in both `popNext()` and `removeTarget()`; tracking the current target _string_ instead of an index into `targetOrder[]` removes the clamping entirely. Add tests first — round-robin invariants are subtle.
+- [x] **`src/core/message-queue.ts:209–248` — rethink round-robin cursor.** Current code clamps `rrIndex` defensively in both `popNext()` and `removeTarget()`; tracking the current target _string_ instead of an index into `targetOrder[]` removes the clamping entirely. Add tests first — round-robin invariants are subtle.
   - **Risk:** Medium.
 
-- [ ] **`src/core/botlink-hub.ts:418–424` — rename `sendOrDeliver(botname, frame, isHub?)` → `sendToBot()` and inline the self-dispatch at the call sites.** The current method silently redirects to `onLeafFrame` when `botname === config.botname`; the intent is clearer when routing lives at the call site.
+- [x] **`src/core/botlink-hub.ts:418–424` — rename `sendOrDeliver(botname, frame, isHub?)` → `sendToBot()` and inline the self-dispatch at the call sites.** The current method silently redirects to `onLeafFrame` when `botname === config.botname`; the intent is clearer when routing lives at the call site.
   - **Risk:** Trivial.
 
-- [ ] **`src/core/botlink-hub.ts:534–596` — flatten the handshake callback chain.** Extract `performHandshake(protocol, frame, ip)` or a small state object so timer cleanup and auth release don't fragment across three closures.
+- [x] **`src/core/botlink-hub.ts:534–596` — flatten the handshake callback chain.** Extract `performHandshake(protocol, frame, ip)` or a small state object so timer cleanup and auth release don't fragment across three closures.
   - **Risk:** Medium.
 
-- [ ] **`src/core/botlink-hub.ts:378–412` — unify relay-not-found behaviour.** Line 384–390 sends `RELAY_END` on missing target; 396/402/408 silently drop. Pick one strategy and apply consistently.
+- [x] **`src/core/botlink-hub.ts:378–412` — unify relay-not-found behaviour.** Line 384–390 sends `RELAY_END` on missing target; 396/402/408 silently drop. Pick one strategy and apply consistently.
   - **Risk:** Medium.
 
-- [ ] **`src/core/botlink-protocol.ts:113–135,236–284` — move `RateCounter` and `executeCmdFrame()` out of the "protocol" file.** `RateCounter` is a hub concern; `executeCmdFrame` is command-execution glue used by hub and leaf. Both pollute what should be a framing-only module.
+- [x] **`src/core/botlink-protocol.ts:113–135,236–284` — move `RateCounter` and `executeCmdFrame()` out of the "protocol" file.** `RateCounter` is a hub concern; `executeCmdFrame` is command-execution glue used by hub and leaf. Both pollute what should be a framing-only module.
   - **Risk:** Low.
 
-- [ ] **Create `src/core/botlink-types.ts`.** Move `LinkPermissions`, `CommandRelay`, `LinkFrame`, `PartyLineUser` out of `botlink-protocol.ts` (currently 92–104). Importing types from a file called "protocol" is misleading.
+- [x] **Create `src/core/botlink-types.ts`.** Move `LinkPermissions`, `CommandRelay`, `LinkFrame`, `PartyLineUser` out of `botlink-protocol.ts` (currently 92–104). Importing types from a file called "protocol" is misleading.
   - **Risk:** Trivial.
 
 ---
 
 ## Low Priority / Cosmetic
 
-- [ ] `src/core/permissions.ts:18,30` — export `VALID_FLAGS`, `OWNER_FLAG`, `MASTER_FLAG` so callers stop hardcoding `'n'`/`'m'`.
-- [ ] `src/core/audit.ts:36–51` — add a JSDoc example showing `auditActor(ctx)` usage so command authors discover it.
-- [ ] `src/core/dcc.ts:471,530–531,1039` — compute `rateLimitKey` once in the `DCCSession` constructor and reuse.
-- [ ] `src/core/dcc.ts:912` — `verifyPassword()` should return `{ok:true}|{ok:false,reason}` so "bad password" and "scrypt error" can be distinguished for logging (safe to still reject both).
-- [ ] `src/core/dcc.ts:415–438` — add a comment on `DCCAuthTracker` sliding-window reset semantics; current logic is correct but subtle.
-- [ ] `src/core/dcc-console-commands.ts:112–148` — extract a helper shared between `mutateOwnFlags` and `mutateOtherHandleFlags` for the repeated `parseCanonicalFlags` / `formatFlags` calls.
-- [ ] `src/core/botlink-leaf.ts:37,371,460` — rename `lastMessageAt` → `lastHeartbeatAt`; current name overpromises.
-- [ ] `src/core/botlink-auth.ts:232–233` — the `TODO (security audit WARNING): switch to crypto.timingSafeEqual` comment should be a tracked issue, not an in-source TODO.
-- [ ] Magic numbers scattered in botlink — `botlink-auth.ts:330` (`ESCALATED_STALE_MS`), `botlink-hub.ts:654–656,860–862` (rate counters, TTLs). Move to config or a constants file when next touched.
-- [ ] Frame-type string literals across `botlink-*.ts` — define a `FrameType` const-map to catch typos in comparisons at compile time.
-- [ ] `src/command-handler.ts:187–190` — relay pre-hook wiring could move to a pre-hook handler so core execute() focuses on business logic.
-- [ ] `src/core/database.ts:249–313` — extract `validateModActionOptions()` to shorten `logModAction`.
-- [ ] `src/core/modlog-commands.ts:485–529` — `runNext`/`runPrev`/`runTop`/`runEnd` each repeat "fetch pager → update rows/pageStart/pageEnd/lastUsed → render"; minor `updatePagerState()` helper would dedupe.
-- [ ] `plugins/rss/index.ts:374–403,486–495` — `parseAddArgs()` helper for add/check command argument parsing.
-- [ ] `plugins/rss/index.ts:260` — inline trivial `delay()` wrapper or document why it's a named function.
-- [ ] `plugins/help/index.ts:74–76,113–116` — extract `filterByPermission(entries, ctx)` helper.
-- [ ] `plugins/greeter/index.ts:94,127,150,167` — extract `greetKey(handle)` so the `greet:` prefix isn't repeated in four places.
-- [ ] `plugins/chanmod/mode-enforce-recovery.ts:34–44` — 9-parameter handler signatures resolve naturally if M2's `ModeContext` extraction happens.
+- [x] `src/core/permissions.ts:18,30` — export `VALID_FLAGS`, `OWNER_FLAG`, `MASTER_FLAG` so callers stop hardcoding `'n'`/`'m'`.
+- [x] `src/core/audit.ts:36–51` — add a JSDoc example showing `auditActor(ctx)` usage so command authors discover it.
+- [x] `src/core/dcc.ts:471,530–531,1039` — compute `rateLimitKey` once in the `DCCSession` constructor and reuse.
+- [x] `src/core/dcc.ts:912` — `verifyPassword()` should return `{ok:true}|{ok:false,reason}` so "bad password" and "scrypt error" can be distinguished for logging (safe to still reject both).
+- [x] `src/core/dcc.ts:415–438` — add a comment on `DCCAuthTracker` sliding-window reset semantics; current logic is correct but subtle.
+- [x] `src/core/dcc-console-commands.ts:112–148` — extract a helper shared between `mutateOwnFlags` and `mutateOtherHandleFlags` for the repeated `parseCanonicalFlags` / `formatFlags` calls.
+- [x] `src/core/botlink-leaf.ts:37,371,460` — rename `lastMessageAt` → `lastHeartbeatAt`; current name overpromises.
+- [x] `src/core/botlink-auth.ts:232–233` — the `TODO (security audit WARNING): switch to crypto.timingSafeEqual` comment should be a tracked issue, not an in-source TODO.
+- [x] Magic numbers scattered in botlink — `botlink-auth.ts:330` (`ESCALATED_STALE_MS`), `botlink-hub.ts:654–656,860–862` (rate counters, TTLs). Move to config or a constants file when next touched.
+- [x] Frame-type string literals across `botlink-*.ts` — define a `FrameType` const-map to catch typos in comparisons at compile time.
+- [x] `src/command-handler.ts:187–190` — relay pre-hook wiring could move to a pre-hook handler so core execute() focuses on business logic.
+- [x] `src/core/database.ts:249–313` — extract `validateModActionOptions()` to shorten `logModAction`.
+- [x] `src/core/modlog-commands.ts:485–529` — `runNext`/`runPrev`/`runTop`/`runEnd` each repeat "fetch pager → update rows/pageStart/pageEnd/lastUsed → render"; minor `updatePagerState()` helper would dedupe.
+- [x] `plugins/rss/index.ts:374–403,486–495` — `parseAddArgs()` helper for add/check command argument parsing.
+- [x] `plugins/rss/index.ts:260` — inline trivial `delay()` wrapper or document why it's a named function.
+- [x] `plugins/help/index.ts:74–76,113–116` — extract `filterByPermission(entries, ctx)` helper.
+- [x] `plugins/greeter/index.ts:94,127,150,167` — extract `greetKey(handle)` so the `greet:` prefix isn't repeated in four places.
+- [x] `plugins/chanmod/mode-enforce-recovery.ts:34–44` — 9-parameter handler signatures resolve naturally if M2's `ModeContext` extraction happens.
 
 ---
 
 ## Patterns to address across the codebase
 
-- [ ] **Casemapping threading noise.** `ircLower(name, this.casemapping)` is called 29+ times across `channel-state.ts`, `permissions.ts`, `memo.ts`, etc. Add a private `lowerNick()` / `lowerChannel()` convenience on each class so the dominant pattern becomes `lowerNick(nick)`. One-liner wrappers, large readability win. **Risk:** Trivial.
+- [x] **Casemapping threading noise.** `ircLower(name, this.casemapping)` is called 29+ times across `channel-state.ts`, `permissions.ts`, `memo.ts`, etc. Add a private `lowerNick()` / `lowerChannel()` convenience on each class so the dominant pattern becomes `lowerNick(nick)`. One-liner wrappers, large readability win. **Risk:** Trivial.
 
-- [ ] **Event listener attach/detach boilerplate.** `channel-state.ts`, `services.ts`, `connection-lifecycle.ts` all store listeners in an array and attach/detach via a helper. A small `ListenerGroup` utility (or mixin) would remove this duplication and make the leak-safe pattern the default. **Risk:** Low.
+- [x] **Event listener attach/detach boilerplate.** `channel-state.ts`, `services.ts`, `connection-lifecycle.ts` all store listeners in an array and attach/detach via a helper. A small `ListenerGroup` utility (or mixin) would remove this duplication and make the leak-safe pattern the default. **Risk:** Low.
 
-- [ ] **`ModActor` threading is verbose.** Audit logging needs `actor: ModActor | undefined` threaded through `IRCCommands` methods. `src/core/audit.ts` has helpers (`auditActor`, `auditOptions`) but they're rarely used. Either enforce them in the core command template or document the usage in `CLAUDE.md`. **Risk:** None (convention change).
+- [x] **`ModActor` threading is verbose.** Audit logging needs `actor: ModActor | undefined` threaded through `IRCCommands` methods. `src/core/audit.ts` has helpers (`auditActor`, `auditOptions`) but they're rarely used. Either enforce them in the core command template or document the usage in `CLAUDE.md`. **Risk:** None (convention change).
 
-- [ ] **Command-handler boilerplate cluster.** The shared patterns flagged in Phase M2 (`getAuditSource`, `parseBanArgs`, `validateChannel`, `replyFailure`, uptime formatters) all point to a missing `src/utils/command-helpers.ts` (or extensions to `parse-args.ts`). Worth bundling into a single change so every command file benefits at once. **Risk:** Low.
+- [x] **Command-handler boilerplate cluster.** The shared patterns flagged in Phase M2 (`getAuditSource`, `parseBanArgs`, `validateChannel`, `replyFailure`, uptime formatters) all point to a missing `src/utils/command-helpers.ts` (or extensions to `parse-args.ts`). Worth bundling into a single change so every command file benefits at once. **Risk:** Low.
 
-- [ ] **Permission checks inline in command handlers (intentional exception).** `chpass`, `modlog`, `flags` do custom permission logic rather than rely on bind flags. This is intentional per design (nuanced policies); flag for the `modlog-commands.ts` comment that documents the exception so future code reviews don't churn on it. **Risk:** None (documentation).
+- [x] **Permission checks inline in command handlers (intentional exception).** `chpass`, `modlog`, `flags` do custom permission logic rather than rely on bind flags. This is intentional per design (nuanced policies); flag for the `modlog-commands.ts` comment that documents the exception so future code reviews don't churn on it. **Risk:** None (documentation).
 
 ---
 

@@ -15,13 +15,12 @@ import {
   hasAnyFlag,
   markIntentional,
 } from './helpers';
-import type { ThreatCallback } from './mode-enforce';
+import type { ModeContext, ThreatCallback } from './mode-enforce';
 import type { ProtectionChain } from './protection-backend';
 import {
   COOLDOWN_WINDOW_MS,
   type ChanmodConfig,
   MAX_ENFORCEMENTS,
-  PENDING_STATE_TTL_MS,
   type SharedState,
 } from './state';
 import { THREAT_ACTIVE, THREAT_ALERT, getThreatLevel, getThreatState } from './takeover-detect';
@@ -35,14 +34,11 @@ export function handleBotSelfDeop(
   api: PluginAPI,
   config: ChanmodConfig,
   state: SharedState,
-  channel: string,
-  setter: string,
-  modeStr: string,
-  target: string,
-  isNodesynch: boolean,
+  mctx: ModeContext,
   chain?: ProtectionChain,
   onThreat?: ThreatCallback,
 ): boolean {
+  const { channel, setter, modeStr, target, isNodesynch } = mctx;
   if (modeStr !== '-o' || !api.isBotNick(target)) return false;
 
   // Report to threat detection if not from a nodesynch nick
@@ -59,13 +55,14 @@ export function handleBotSelfDeop(
     api.log(
       `Requesting ops via ProtectionChain in ${channel}${csDelay === 0 ? ' (zero delay — elevated threat)' : ''}`,
     );
-    state.scheduleCycle(csDelay, () => {
+    state.cycles.schedule(csDelay, () => {
       chain.requestOp(channel);
     });
   }
 
-  if (config.cycle_on_deop && !state.cycleScheduled.has(api.ircLower(channel))) {
-    const cooldownKey = `${api.ircLower(channel)}:cycle`;
+  const cycleLockKey = api.ircLower(channel);
+  if (config.cycle_on_deop && !state.cycles.isLocked(cycleLockKey)) {
+    const cooldownKey = `${cycleLockKey}:cycle`;
     const now = Date.now();
     const cooldown = state.enforcementCooldown.get(cooldownKey);
     if (cooldown && now < cooldown.expiresAt) {
@@ -75,12 +72,11 @@ export function handleBotSelfDeop(
         const isInviteOnly = ch?.modes.includes('i');
         if (!isInviteOnly) {
           api.log(`Cycling ${channel} to regain ops`);
-          state.cycleScheduled.set(api.ircLower(channel), Date.now() + PENDING_STATE_TTL_MS);
-          state.scheduleCycle(config.cycle_delay_ms, () => {
+          state.cycles.scheduleWithLock(cycleLockKey, config.cycle_delay_ms, () => {
             api.part(channel, 'Cycling to regain ops');
-            state.scheduleCycle(2000, () => {
+            state.cycles.schedule(2000, () => {
               api.join(channel);
-              state.cycleScheduled.delete(api.ircLower(channel));
+              state.cycles.unlock(cycleLockKey);
               state.enforcementCooldown.delete(cooldownKey);
             });
           });
@@ -104,12 +100,10 @@ export function handleBotOpped(
   api: PluginAPI,
   config: ChanmodConfig,
   state: SharedState,
-  channel: string,
-  modeStr: string,
-  target: string,
+  mctx: ModeContext,
   chain?: ProtectionChain,
-  _onThreat?: ThreatCallback,
 ): boolean {
+  const { channel, modeStr, target } = mctx;
   if (modeStr !== '+o' || !api.isBotNick(target)) return false;
 
   const chanKey = api.ircLower(channel);

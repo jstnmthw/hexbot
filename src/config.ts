@@ -20,6 +20,7 @@
 // resolveSecrets() before the plugin's init() runs.
 import { z } from 'zod';
 
+import type { LoggerLike } from './logger';
 import type { BotConfig, BotConfigOnDisk } from './types';
 
 // ---------------------------------------------------------------------------
@@ -268,28 +269,38 @@ const ENV_SUFFIX_RE = /^(.+)_env$/;
  * - `_env` value is non-string (array/object/number): leave as-is, warn.
  * - Both `field` and `field_env` present: `_env` wins, warn (config drift).
  */
-export function resolveSecrets(obj: BotConfigOnDisk): BotConfig;
-export function resolveSecrets(obj: Record<string, unknown>): Record<string, unknown>;
-export function resolveSecrets<T>(obj: T): T;
-export function resolveSecrets(obj: unknown): unknown {
-  return resolveValue(obj);
+export function resolveSecrets(obj: BotConfigOnDisk, logger?: LoggerLike | null): BotConfig;
+export function resolveSecrets(
+  obj: Record<string, unknown>,
+  logger?: LoggerLike | null,
+): Record<string, unknown>;
+export function resolveSecrets<T>(obj: T, logger?: LoggerLike | null): T;
+export function resolveSecrets(obj: unknown, logger?: LoggerLike | null): unknown {
+  // When no logger is plumbed through (bot startup runs before logger is
+  // constructed because the log level lives in the config we're resolving),
+  // fall back to console.warn so warnings are not silently lost.
+  const warn = logger ? (msg: string) => logger.warn(msg) : (msg: string) => console.warn(msg);
+  return resolveValue(obj, warn);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function resolveValue(value: unknown): unknown {
+function resolveValue(value: unknown, warn: (msg: string) => void): unknown {
   if (Array.isArray(value)) {
-    return value.map((v) => resolveValue(v));
+    return value.map((v) => resolveValue(v, warn));
   }
   if (isRecord(value)) {
-    return resolveObject(value);
+    return resolveObject(value, warn);
   }
   return value;
 }
 
-function resolveObject(src: Record<string, unknown>): Record<string, unknown> {
+function resolveObject(
+  src: Record<string, unknown>,
+  warn: (msg: string) => void,
+): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   // Collect sibling keys that will be overridden by `_env` resolution. We still
   // visit keys in original insertion order so output order matches input (minus
@@ -306,14 +317,12 @@ function resolveObject(src: Record<string, unknown>): Record<string, unknown> {
       const siblingKey = match[1];
       const envVarName = src[key];
       if (typeof envVarName !== 'string') {
-        console.warn(
-          `[config] Ignoring "${key}": expected string env var name, got ${typeof envVarName}`,
-        );
-        out[key] = resolveValue(envVarName);
+        warn(`[config] Ignoring "${key}": expected string env var name, got ${typeof envVarName}`);
+        out[key] = resolveValue(envVarName, warn);
         continue;
       }
       if (siblingKey in src) {
-        console.warn(
+        warn(
           `[config] Both "${siblingKey}" and "${key}" present — using "${key}" (${envVarName}) and ignoring inline value`,
         );
       }
@@ -330,7 +339,7 @@ function resolveObject(src: Record<string, unknown>): Record<string, unknown> {
     if (envSiblings.has(key)) {
       continue;
     }
-    out[key] = resolveValue(src[key]);
+    out[key] = resolveValue(src[key], warn);
   }
   return out;
 }

@@ -62,6 +62,13 @@ export class DCCAuthTracker {
       tracker = { failures: 0, firstFailure: now, bannedUntil: 0, banCount: 0 };
       this.trackers.set(key, tracker);
     }
+    // Sliding-window reset semantics: we only reset on *new* failures that
+    // arrive after the window has elapsed, rather than sweeping windows on a
+    // timer. The effect is that `failures` can sit stale at a non-zero value
+    // between attacks, which is fine — `check()` reads `bannedUntil`, and
+    // `sweep()` is what actually purges idle trackers. The counter is reset
+    // to 0 (not 1) before incrementing so the returned `failures` field is
+    // consistent with the count seen by `check()` afterwards.
     if (now - tracker.firstFailure > this.windowMs) {
       tracker.failures = 0;
       tracker.firstFailure = now;

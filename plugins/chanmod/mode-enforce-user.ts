@@ -15,7 +15,7 @@ import {
   markIntentional,
   wasIntentional,
 } from './helpers';
-import type { ThreatCallback } from './mode-enforce';
+import type { ModeContext, ThreatCallback } from './mode-enforce';
 import {
   COOLDOWN_WINDOW_MS,
   type ChanmodConfig,
@@ -34,13 +34,10 @@ export function handleBitchMode(
   api: PluginAPI,
   config: ChanmodConfig,
   state: SharedState,
-  channel: string,
-  setter: string,
-  modeStr: string,
-  target: string,
-  isNodesynch: boolean,
+  mctx: ModeContext,
   onThreat?: ThreatCallback,
 ): boolean {
+  const { channel, setter, modeStr, target, isNodesynch } = mctx;
   const bitch = api.channelSettings.getFlag(channel, 'bitch');
   if (!bitch || (modeStr !== '+o' && modeStr !== '+h') || !target) return false;
 
@@ -75,14 +72,10 @@ export function handleUserModeEnforcement(
   api: PluginAPI,
   config: ChanmodConfig,
   state: SharedState,
-  channel: string,
-  setter: string,
-  modeStr: string,
-  target: string,
-  enforceModes: boolean,
-  isNodesynch: boolean,
+  mctx: ModeContext,
   onThreat?: ThreatCallback,
 ): void {
+  const { channel, setter, modeStr, target, enforceModes, isNodesynch } = mctx;
   if (modeStr !== '-o' && modeStr !== '-h' && modeStr !== '-v') return;
   if (api.isBotNick(setter)) return;
   if (wasIntentional(state, api, channel, target)) return;

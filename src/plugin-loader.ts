@@ -542,7 +542,7 @@ export class PluginLoader {
     // Resolve any `<field>_env` references from process.env so plugins see
     // fully-resolved config values and never touch process.env directly.
     // See docs/plans/config-secrets-env.md and docs/PLUGIN_API.md.
-    return resolveSecrets({ ...defaults, ...overrides });
+    return resolveSecrets({ ...defaults, ...overrides }, this.logger);
   }
 
   // -------------------------------------------------------------------------

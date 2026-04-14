@@ -7,6 +7,31 @@
 //   - mode-enforce-channel.ts    channel-wide mode enforcement + syncChannelModes
 //   - mode-enforce-user.ts       per-user enforcement (bitch mode, re-op, punish deop)
 //   - mode-enforce-recovery.ts   bot self-deop / bot opped / mass re-op / hostile response
+//
+// --- Handler contract ---
+//
+// The orchestrator runs the following sub-handlers per mode event, in order:
+//
+//   1. reapply         — re-apply a channel mode removed by an unauthorized setter
+//   2. remove-unauth   — strip a channel mode that should not be set
+//   3. key             — enforce +k / -k (channel key)
+//   4. limit           — enforce +l / -l (channel user limit)
+//   5. self-deop       — bot was deopped → ChanServ OP request + cycle fallback
+//   6. opped           — bot regained ops → post-RECOVER cleanup + mass re-op + hostile response
+//   7. bitch           — strip unauthorized +o / +h
+//   8. bot-banned      — threat report + immediate unban when +b matches bot's hostmask
+//   9. enforcebans     — kick channel members matching a new ban mask
+//  10. user            — per-user -o/-h/-v re-enforcement + punish-deop
+//
+// Handlers that return `boolean` follow the convention that `true` means "halt
+// subsequent handlers" — used by self-deop, opped, bitch, and enforcebans to
+// prevent the later bot-banned / user handlers from reinterpreting the same
+// event. Non-halting handlers (reapply, remove-unauth, key, limit, threat
+// probes) return void; the orchestrator simply falls through to the next one.
+//
+// Shared guards (isNodesynch, canEnforce, enforceModes) are collected into a
+// `ModeContext` object so handler signatures stay manageable — previously they
+// threaded up to 9 positional args each.
 import type { PluginAPI } from '../../src/types';
 import { wildcardMatch } from '../../src/utils/wildcard';
 import {
@@ -41,6 +66,30 @@ export type ThreatCallback = (
   target?: string,
 ) => void;
 
+/**
+ * Shared context object passed to every mode sub-handler. Collects the event
+ * fields and the pre-computed guards so handlers don't each recompute
+ * nodesynch/ops/isSetter-bot checks.
+ */
+export interface ModeContext {
+  channel: string;
+  setter: string;
+  modeStr: string;
+  target: string;
+  /** True if `setter` is in the configured nodesynch_nicks list. */
+  isNodesynch: boolean;
+  /** True if enforce_modes is on, bot has ops, setter isn't nodesynch or bot itself. */
+  canEnforce: boolean;
+  /** Raw enforce_modes setting (needed by user-mode handler to gate -h/-v). */
+  enforceModes: boolean;
+}
+
+/**
+ * A mode sub-handler. Returns `true` to halt subsequent halting handlers in
+ * the order, `false`/`void` to continue.
+ */
+export type ModeHandler = (ctx: ModeContext) => boolean | void;
+
 // ---------------------------------------------------------------------------
 // Local threat probes — too small to warrant their own file
 // ---------------------------------------------------------------------------
@@ -48,13 +97,10 @@ export type ThreatCallback = (
 /** Threat detection: mode lockdown (+i, +k, +s) by non-nodesynch. */
 function handleThreatModeLockdown(
   api: PluginAPI,
-  channel: string,
-  setter: string,
-  modeStr: string,
-  target: string,
-  isNodesynch: boolean,
+  mctx: ModeContext,
   onThreat?: ThreatCallback,
 ): void {
+  const { channel, setter, modeStr, target, isNodesynch } = mctx;
   if (onThreat && !isNodesynch && !api.isBotNick(setter)) {
     if (modeStr === '+i' || modeStr === '+s') {
       onThreat(channel, 'mode_locked', 1, setter);
@@ -67,14 +113,11 @@ function handleThreatModeLockdown(
 /** Threat detection + immediate unban: bot banned (+b matching bot's hostmask). */
 function handleBotBannedThreat(
   api: PluginAPI,
-  channel: string,
-  setter: string,
-  modeStr: string,
-  target: string,
-  isNodesynch: boolean,
+  mctx: ModeContext,
   chain?: ProtectionChain,
   onThreat?: ThreatCallback,
 ): void {
+  const { channel, setter, modeStr, target, isNodesynch } = mctx;
   if (modeStr !== '+b' || !target || isNodesynch || api.isBotNick(setter)) return;
 
   const botNick = getBotNick(api);
@@ -97,13 +140,8 @@ function handleBotBannedThreat(
  * Enforcebans: kick channel members matching a new ban mask.
  * Returns true if this event was handled (halts further processing).
  */
-function handleEnforceBans(
-  api: PluginAPI,
-  state: SharedState,
-  channel: string,
-  modeStr: string,
-  target: string,
-): boolean {
+function handleEnforceBans(api: PluginAPI, state: SharedState, mctx: ModeContext): boolean {
+  const { channel, modeStr, target } = mctx;
   const enforcebans = api.channelSettings.getFlag(channel, 'enforcebans');
   if (!enforcebans || modeStr !== '+b' || !target || !botHasOps(api, channel)) return false;
 
@@ -160,59 +198,31 @@ export function setupModeEnforce(
     const canEnforce =
       enforceModes && !isNodesynch && !api.isBotNick(setter) && botHasOps(api, channel);
 
-    handleThreatModeLockdown(api, channel, setter, modeStr, target, isNodesynch, onThreat);
-    handleReapplyRemovedModes(api, config, state, channel, setter, modeStr, parsed, canEnforce);
-    handleRemoveUnauthorizedModes(
-      api,
-      config,
-      state,
+    const mctx: ModeContext = {
       channel,
       setter,
       modeStr,
       target,
-      parsed,
-      canEnforce,
-    );
-    handleChannelKeyEnforcement(api, config, state, channel, setter, modeStr, target, canEnforce);
-    handleChannelLimitEnforcement(api, config, state, channel, setter, modeStr, target, canEnforce);
-
-    if (
-      handleBotSelfDeop(
-        api,
-        config,
-        state,
-        channel,
-        setter,
-        modeStr,
-        target,
-        isNodesynch,
-        chain,
-        onThreat,
-      )
-    )
-      return;
-    if (handleBotOpped(api, config, state, channel, modeStr, target, chain, onThreat)) return;
-    if (
-      handleBitchMode(api, config, state, channel, setter, modeStr, target, isNodesynch, onThreat)
-    )
-      return;
-
-    handleBotBannedThreat(api, channel, setter, modeStr, target, isNodesynch, chain, onThreat);
-
-    if (handleEnforceBans(api, state, channel, modeStr, target)) return;
-
-    handleUserModeEnforcement(
-      api,
-      config,
-      state,
-      channel,
-      setter,
-      modeStr,
-      target,
-      enforceModes,
       isNodesynch,
-      onThreat,
-    );
+      canEnforce,
+      enforceModes,
+    };
+
+    handleThreatModeLockdown(api, mctx, onThreat);
+    handleReapplyRemovedModes(api, config, state, mctx, parsed);
+    handleRemoveUnauthorizedModes(api, config, state, mctx, parsed);
+    handleChannelKeyEnforcement(api, config, state, mctx);
+    handleChannelLimitEnforcement(api, config, state, mctx);
+
+    if (handleBotSelfDeop(api, config, state, mctx, chain, onThreat)) return;
+    if (handleBotOpped(api, config, state, mctx, chain)) return;
+    if (handleBitchMode(api, config, state, mctx, onThreat)) return;
+
+    handleBotBannedThreat(api, mctx, chain, onThreat);
+
+    if (handleEnforceBans(api, state, mctx)) return;
+
+    handleUserModeEnforcement(api, config, state, mctx, onThreat);
   });
 
   // --- Immediate sync on .chanset changes ---
@@ -233,10 +243,8 @@ export function setupModeEnforce(
 
   return () => {
     for (const timer of state.enforcementTimers) clearTimeout(timer);
-    for (const timer of state.cycleTimers) clearTimeout(timer);
     state.enforcementTimers.clear();
-    state.cycleTimers.clear();
-    state.cycleScheduled.clear();
+    state.cycles.clearAll();
     state.intentionalModeChanges.clear();
     state.enforcementCooldown.clear();
   };

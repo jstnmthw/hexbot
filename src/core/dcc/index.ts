@@ -314,6 +314,8 @@ export class DCCSession implements DCCSessionEntry {
   /** Version / botNick captured from `start()` — needed by the deferred banner. */
   private versionForBanner = '';
   private botNickForBanner = '';
+  /** Cached `nick!ident@host` — stable for the life of the session. */
+  private readonly _rateLimitKey: string;
 
   constructor(opts: {
     manager: DCCSessionManager;
@@ -341,6 +343,7 @@ export class DCCSession implements DCCSessionEntry {
     this.connectedAt = Date.now();
     this.logger = opts.logger ?? null;
     this.consoleFlagStore = opts.consoleFlagStore ?? null;
+    this._rateLimitKey = `${opts.nick}!${opts.ident}@${opts.hostname}`;
 
     const stored = this.consoleFlagStore?.get(this.handle) ?? null;
     this.consoleFlags =
@@ -349,7 +352,7 @@ export class DCCSession implements DCCSessionEntry {
 
   /** Key used for rate-limit tracking — `nick!ident@host`. */
   get rateLimitKey(): string {
-    return `${this.nick}!${this.ident}@${this.hostname}`;
+    return this._rateLimitKey;
   }
 
   /**
@@ -545,13 +548,36 @@ export class DCCSession implements DCCSessionEntry {
     }
   }
 
-  /** Relay callback — when set, all input is forwarded here instead of processed locally. */
-  private _relayCallback: ((line: string) => void) | null = null;
-  private _relayTarget: string | null = null;
-  /** True once the target bot has ACKed the RELAY_REQUEST. */
-  private _relayConfirmed = false;
-  /** Pending-confirmation timer — cleared on confirm or exit. */
-  private _relayTimer: NodeJS.Timeout | null = null;
+  /**
+   * Relay state machine. Transitions only go through `setRelayState()` so
+   * invalid combinations (e.g. a pending timer while `Idle`) are unreachable.
+   *
+   *   Idle ──enterRelay(confirmed)──▶ Confirmed ──exitRelay()──▶ Idle
+   *   Idle ──enterRelay(pending)───▶ Pending   ──confirmRelay()──▶ Confirmed
+   *                                  Pending   ──timer fires──▶ Idle (with onTimeout)
+   *                                  Pending   ──exitRelay()──▶ Idle
+   */
+  private relay:
+    | { state: 'idle' }
+    | {
+        state: 'pending';
+        target: string;
+        callback: (line: string) => void;
+        timer: NodeJS.Timeout;
+        onTimeout: () => void;
+      }
+    | { state: 'confirmed'; target: string; callback: (line: string) => void } = { state: 'idle' };
+
+  /**
+   * Centralised relay-state transition. Clears any outstanding pending-timer
+   * when leaving the `pending` state so callers don't have to remember.
+   */
+  private setRelayState(next: typeof this.relay): void {
+    if (this.relay.state === 'pending') {
+      clearTimeout(this.relay.timer);
+    }
+    this.relay = next;
+  }
 
   /**
    * Put this session into relay mode. All input goes to the callback.
@@ -564,55 +590,51 @@ export class DCCSession implements DCCSessionEntry {
     callback: (line: string) => void,
     options?: RelayEnterOptions,
   ): void {
-    this._relayCallback = callback;
-    this._relayTarget = targetBot;
-    this._relayConfirmed = !options;
-    if (this._relayTimer) {
-      clearTimeout(this._relayTimer);
-      this._relayTimer = null;
+    if (!options) {
+      this.setRelayState({ state: 'confirmed', target: targetBot, callback });
+      return;
     }
-    if (options) {
-      this._relayTimer = setTimeout(() => {
-        this._relayTimer = null;
-        if (this._relayConfirmed) return;
-        const target = this._relayTarget;
-        this.exitRelay();
-        this.writeLine(`*** Relay request to ${target} timed out.`);
-        options.onTimeout();
-      }, options.timeoutMs);
-      this._relayTimer.unref?.();
-    }
+    const timer = setTimeout(() => {
+      // The timer only fires if we're still pending — confirmRelay() and
+      // exitRelay() both clear it via setRelayState().
+      /* v8 ignore next */
+      if (this.relay.state !== 'pending') return;
+      const target = this.relay.target;
+      const onTimeout = this.relay.onTimeout;
+      this.setRelayState({ state: 'idle' });
+      this.writeLine(`*** Relay request to ${target} timed out.`);
+      onTimeout();
+    }, options.timeoutMs);
+    timer.unref?.();
+    this.setRelayState({
+      state: 'pending',
+      target: targetBot,
+      callback,
+      timer,
+      onTimeout: options.onTimeout,
+    });
   }
 
   /** Promote a pending relay to confirmed. No-op if already confirmed or not relaying. */
   confirmRelay(): void {
-    if (!this._relayCallback || this._relayConfirmed) return;
-    this._relayConfirmed = true;
-    if (this._relayTimer) {
-      clearTimeout(this._relayTimer);
-      this._relayTimer = null;
-    }
-    this.writeLine(`*** Now relaying to ${this._relayTarget}. Type \x02.relay end\x02 to return.`);
+    if (this.relay.state !== 'pending') return;
+    const { target, callback } = this.relay;
+    this.setRelayState({ state: 'confirmed', target, callback });
+    this.writeLine(`*** Now relaying to ${target}. Type \x02.relay end\x02 to return.`);
   }
 
   /** Exit relay mode. */
   exitRelay(): void {
-    this._relayCallback = null;
-    this._relayTarget = null;
-    this._relayConfirmed = false;
-    if (this._relayTimer) {
-      clearTimeout(this._relayTimer);
-      this._relayTimer = null;
-    }
+    this.setRelayState({ state: 'idle' });
   }
 
   /** True if the session is currently relayed to a remote bot. */
   get isRelaying(): boolean {
-    return this._relayCallback !== null;
+    return this.relay.state !== 'idle';
   }
 
   get relayTarget(): string | null {
-    return this._relayTarget;
+    return this.relay.state === 'idle' ? null : this.relay.target;
   }
 
   private async onLine(line: string): Promise<void> {
@@ -632,17 +654,15 @@ export class DCCSession implements DCCSessionEntry {
     // Relay mode: forward input to remote bot.
     // Only `.relay end` exits — `.quit` is intentionally forwarded so the user
     // is not surprised by an early exit (the usage string documents `.relay end`).
-    if (this._relayCallback) {
+    if (this.relay.state !== 'idle') {
       if (trimmed === '.relay end') {
-        const target = this._relayTarget;
+        const target = this.relay.target;
         this.exitRelay();
         this.writeLine(`*** Relay ended. Back on ${this.manager.getBotName()}.`);
-        if (target !== null) {
-          this.manager.onRelayEnd?.(this.handle, target);
-        }
+        this.manager.onRelayEnd?.(this.handle, target);
         return;
       }
-      this._relayCallback(trimmed);
+      this.relay.callback(trimmed);
       return;
     }
 
@@ -733,23 +753,22 @@ export class DCCSession implements DCCSessionEntry {
       return;
     }
 
-    let ok: boolean;
-    try {
-      ok = await verifyPassword(candidate, this.passwordHash);
-      /* v8 ignore start -- verifyPassword only throws on scrypt OOM / invalid params; defensive */
-    } catch (err) {
-      this.logger?.error(`DCC password verification error for ${this.handle}: ${String(err)}`);
-      ok = false;
-    }
-    /* v8 ignore stop */
+    // verifyPassword is total: no try/catch needed — scrypt/storage errors
+    // surface as ok:false with a distinguishable reason for logging.
+    const result = await verifyPassword(candidate, this.passwordHash);
 
     if (this.closed) return; // session may have been closed while awaiting scrypt
 
-    if (!ok) {
-      this.logger?.warn(
-        `DCC CHAT: bad password from ${this.handle} (${this.nick}!${this.ident}@${this.hostname})`,
-      );
-      this.manager.onAuthFailure?.(this.rateLimitKey, this.handle);
+    if (!result.ok) {
+      /* v8 ignore next -- scrypt-error / malformed only reachable on corrupt DB rows */
+      if (result.reason !== 'mismatch') {
+        this.logger?.error(
+          `DCC password verification ${result.reason} for ${this.handle} (${this._rateLimitKey})`,
+        );
+      } else {
+        this.logger?.warn(`DCC CHAT: bad password from ${this.handle} (${this._rateLimitKey})`);
+      }
+      this.manager.onAuthFailure?.(this._rateLimitKey, this.handle);
       this.socket.write('DCC CHAT: bad password.\r\n');
       this.close('Authentication failed.');
       return;
@@ -778,12 +797,10 @@ export class DCCSession implements DCCSessionEntry {
     }
     // Defensive: close() may arrive while a pending relay is still awaiting
     // confirmation. The happy-path exitRelay() clears this timer first, so
-    // the branch only fires if the socket dies mid-handshake.
-    /* v8 ignore next 4 */
-    if (this._relayTimer !== null) {
-      clearTimeout(this._relayTimer);
-      this._relayTimer = null;
-    }
+    // the branch only fires if the socket dies mid-handshake. setRelayState()
+    // owns the clearTimeout — routing through it keeps the state consistent.
+    /* v8 ignore next */
+    if (this.relay.state === 'pending') this.setRelayState({ state: 'idle' });
   }
 
   /** Close the session gracefully. */

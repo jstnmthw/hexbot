@@ -54,6 +54,14 @@ Implement in this order (each step should be testable before moving to the next)
 20. Config files (`config/bot.example.json`, `config/plugins.example.json`)
 21. MVP plugins: `chanmod`, `greeter`, `seen`, `8ball`
 
+## Audit logging convention
+
+Core command handlers should call `auditActor(ctx)` from `src/core/audit.ts`
+when passing `actor` into mutating `IRCCommands` methods, and `tryAudit(db,
+ctx, ...)` for direct `mod_log` writes. Never hand-roll `{ by: ctx.nick,
+source: ctx.source }` — the single call-site-to-actor translation lives in
+`auditActor()` so audit reviews can grep for it.
+
 ## Security
 
 All IRC input is untrusted. Follow `docs/SECURITY.md` for the full guide. Key rules:

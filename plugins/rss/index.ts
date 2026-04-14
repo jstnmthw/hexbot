@@ -173,11 +173,14 @@ function loadConfig(api: PluginAPI): RssPluginConfig {
 // Admin command handlers (all respond via notice to invoking user)
 // ---------------------------------------------------------------------------
 
-type CmdOutcome = 'attempt' | 'rejected' | 'ok';
+type CmdOutcome = 'attempt' | 'rejected' | 'ok' | 'error';
 
-// Successes log at info, attempts and rejections at debug. Debug keeps
-// per-invocation noise out of the default log stream but preserves the full
-// audit trail when the operator flips the level during an incident.
+// Successes log at info, errors at error, attempts and rejections at debug.
+// Debug keeps per-invocation noise out of the default log stream but
+// preserves the full audit trail when the operator flips the level during
+// an incident. 'error' is reserved for post-validation failures (e.g. a
+// seed fetch that failed after the feed was accepted) so operators see
+// real problems even when the user-facing notice is already delivered.
 function logCmd(
   api: PluginAPI,
   ctx: ChannelHandlerContext,
@@ -188,6 +191,7 @@ function logCmd(
   const who = `${ctx.nick}!${ctx.ident}@${ctx.hostname}`;
   const msg = `!rss ${sub} by ${who} in ${ctx.channel} — ${outcome}${detail ? `: ${detail}` : ''}`;
   if (outcome === 'ok') api.log(msg);
+  else if (outcome === 'error') api.error(msg);
   else api.debug(msg);
 }
 
@@ -210,22 +214,28 @@ function handleList(api: PluginAPI, ctx: ChannelHandlerContext): void {
   logCmd(api, ctx, 'list', 'ok', `${activeFeeds.size} feeds`);
 }
 
-async function handleAdd(
-  api: PluginAPI,
-  ctx: ChannelHandlerContext,
-  args: string[],
-  cfg: RssPluginConfig,
-): Promise<void> {
-  // Grammar: !rss add <id> <url> [#channel] [interval]
-  // Both trailing args are optional and distinguished by prefix:
-  //   '#'-prefixed token → channel (falls back to invoking channel)
-  //   anything else      → interval (digits validated below)
-  // If this command ever gains a msg/REPL path, channel must become
-  // mandatory in that context since ctx.channel would be null.
+/**
+ * Shape-validate the tokens passed to `!rss add`. Returns an object describing
+ * the outcome: either a parsed `{ id, url, channel, interval }` tuple or a
+ * `reject` with the notice text and a short log detail. Kept as a pure
+ * function so the command handler stays a straight dispatch.
+ *
+ * Grammar: !rss add <id> <url> [#channel] [interval]
+ * Both trailing args are optional and distinguished by prefix:
+ *   '#'-prefixed token → channel (falls back to `defaultChannel`)
+ *   anything else      → interval (digits validated)
+ */
+type AddArgsResult =
+  | { ok: true; id: string; url: string; channel: string; interval: number }
+  | { ok: false; notice: string; detail: string };
+
+function parseAddArgs(args: string[], defaultChannel: string): AddArgsResult {
   if (args.length < 2) {
-    api.notice(ctx.nick, 'Usage: !rss add <id> <url> [#channel] [interval]');
-    logCmd(api, ctx, 'add', 'rejected', 'bad usage');
-    return;
+    return {
+      ok: false,
+      notice: 'Usage: !rss add <id> <url> [#channel] [interval]',
+      detail: 'bad usage',
+    };
   }
 
   const [id, url] = args;
@@ -235,14 +245,18 @@ async function handleAdd(
   // and `interval` sets a setTimeout; each needs to be a well-formed
   // primitive before we go any further.
   if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) {
-    api.notice(ctx.nick, 'Feed id must be 1–32 chars of [A-Za-z0-9_-].');
-    logCmd(api, ctx, 'add', 'rejected', `bad id: ${id}`);
-    return;
+    return {
+      ok: false,
+      notice: 'Feed id must be 1–32 chars of [A-Za-z0-9_-].',
+      detail: `bad id: ${id}`,
+    };
   }
   if (url.length === 0 || url.length > 2048) {
-    api.notice(ctx.nick, 'Feed URL must be 1–2048 chars.');
-    logCmd(api, ctx, 'add', 'rejected', 'bad url length');
-    return;
+    return {
+      ok: false,
+      notice: 'Feed URL must be 1–2048 chars.',
+      detail: 'bad url length',
+    };
   }
 
   let channel: string | undefined;
@@ -254,12 +268,14 @@ async function handleAdd(
       intervalStr = tok;
     }
   }
-  if (!channel) channel = ctx.channel;
+  if (!channel) channel = defaultChannel;
   // eslint-disable-next-line no-control-regex -- IRC channel names exclude BEL (0x07) per RFC 2812
   if (!/^#[^\s,\x07:]{1,49}$/.test(channel)) {
-    api.notice(ctx.nick, `Invalid channel: "${channel}"`);
-    logCmd(api, ctx, 'add', 'rejected', `bad channel: ${channel}`);
-    return;
+    return {
+      ok: false,
+      notice: `Invalid channel: "${channel}"`,
+      detail: `bad channel: ${channel}`,
+    };
   }
   // Strict integer parse — `parseInt("60abc")` returns 60, which silently
   // masks operator typos. Require the token to be digits-only.
@@ -269,15 +285,36 @@ async function handleAdd(
       : Number.NaN
     : 3600;
 
+  if (!Number.isInteger(interval) || interval < 60 || interval > 86400) {
+    return {
+      ok: false,
+      notice: 'Interval must be an integer between 60 and 86400 seconds.',
+      detail: 'bad interval',
+    };
+  }
+
+  return { ok: true, id, url, channel, interval };
+}
+
+async function handleAdd(
+  api: PluginAPI,
+  ctx: ChannelHandlerContext,
+  args: string[],
+  cfg: RssPluginConfig,
+): Promise<void> {
+  // If this command ever gains a msg/REPL path, channel must become
+  // mandatory in that context since ctx.channel would be null.
+  const parsed = parseAddArgs(args, ctx.channel);
+  if (!parsed.ok) {
+    api.notice(ctx.nick, parsed.notice);
+    logCmd(api, ctx, 'add', 'rejected', parsed.detail);
+    return;
+  }
+  const { id, url, channel, interval } = parsed;
+
   if (activeFeeds.has(id)) {
     api.notice(ctx.nick, `Feed "${id}" already exists.`);
     logCmd(api, ctx, 'add', 'rejected', `id collision: ${id}`);
-    return;
-  }
-
-  if (!Number.isInteger(interval) || interval < 60 || interval > 86400) {
-    api.notice(ctx.nick, 'Interval must be an integer between 60 and 86400 seconds.');
-    logCmd(api, ctx, 'add', 'rejected', 'bad interval');
     return;
   }
 
@@ -330,8 +367,11 @@ async function handleAdd(
     logCmd(api, ctx, 'add', 'ok', `id=${id} url=${url} chan=${channel} interval=${interval}s`);
   } catch (err) {
     const errMsg = errorMessage(err);
+    // Feed is persisted regardless — the next scheduled poll will retry.
+    // Log at error level so operators notice the failed seed even though
+    // the user-facing notice already explains the situation.
     api.notice(ctx.nick, `Feed "${id}" added but initial fetch failed: ${errMsg}`);
-    logCmd(api, ctx, 'add', 'ok', `id=${id} (seed failed: ${errMsg})`);
+    logCmd(api, ctx, 'add', 'error', `id=${id} url=${url} seed failed: ${errMsg}`);
   }
 }
 

@@ -5,6 +5,7 @@ import type { BotEventBus } from '../event-bus';
 import type { LoggerLike } from '../logger';
 import type { ServicesConfig, VerifyResult } from '../types';
 import { toEventObject } from '../utils/irc-event';
+import { ListenerGroup } from '../utils/listener-group';
 import { type Casemapping, ircLower } from '../utils/wildcard';
 import { tryLogModAction } from './audit';
 
@@ -24,7 +25,14 @@ export interface ServicesClient {
 interface PendingVerify {
   nick: string;
   resolve: (result: VerifyResult) => void;
-  timer: ReturnType<typeof setTimeout>;
+  /**
+   * Cancels the timeout timer and signals the pending verification to
+   * terminate. We use AbortController rather than a bare `clearTimeout`
+   * reference so callers (detach, cancel-on-reissue, resolveVerification)
+   * all route through the same `abort()` path — one way to tear down a
+   * pending verify means one way to leak it.
+   */
+  controller: AbortController;
   method: 'acc' | 'status';
 }
 
@@ -52,7 +60,7 @@ export class Services {
   private logger: LoggerLike | null;
   private db: BotDatabase | null;
   private pending: Map<string, PendingVerify> = new Map();
-  private noticeListener: ((...args: unknown[]) => void) | null = null;
+  private listeners: ListenerGroup;
   private casemapping: Casemapping = 'rfc1459';
 
   constructor(deps: ServicesDeps) {
@@ -61,6 +69,7 @@ export class Services {
     this.eventBus = deps.eventBus;
     this.logger = deps.logger?.child('services') ?? null;
     this.db = deps.db ?? null;
+    this.listeners = new ListenerGroup(deps.client);
   }
 
   setCasemapping(cm: Casemapping): void {
@@ -69,23 +78,19 @@ export class Services {
 
   /** Start listening for NickServ responses. */
   attach(): void {
-    this.noticeListener = (...args: unknown[]) => {
+    this.listeners.on('notice', (...args: unknown[]) => {
       this.onNotice(toEventObject(args[0]));
-    };
-    this.client.on('notice', this.noticeListener);
+    });
     this.logger?.info('Attached to IRC client');
   }
 
   /** Stop listening. */
   detach(): void {
-    if (this.noticeListener) {
-      this.client.removeListener('notice', this.noticeListener);
-      this.noticeListener = null;
-    }
-    // Clean up pending verifications
+    this.listeners.removeAll();
+    // Clean up pending verifications — abort() fires the signal handler
+    // which clears the setTimeout and resolves the awaiting promise.
     for (const p of this.pending.values()) {
-      clearTimeout(p.timer);
-      p.resolve({ verified: false, account: null });
+      p.controller.abort();
     }
     this.pending.clear();
     this.logger?.info('Detached from IRC client');
@@ -121,17 +126,22 @@ export class Services {
     const target = this.getNickServTarget();
     const lowerNick = ircLower(nick, this.casemapping);
 
-    // Cancel any existing pending verification for this nick
+    // Cancel any existing pending verification for this nick — the old
+    // promise will resolve to `{verified:false, account:null}` via the
+    // abort handler below.
     const existing = this.pending.get(lowerNick);
     if (existing) {
-      clearTimeout(existing.timer);
-      existing.resolve({ verified: false, account: null });
       this.pending.delete(lowerNick);
+      existing.controller.abort();
     }
 
+    const controller = new AbortController();
     return new Promise<VerifyResult>((resolve) => {
       const timer = setTimeout(() => {
-        this.pending.delete(lowerNick);
+        // Natural timeout path — audit and resolve as a timeout-failure.
+        if (this.pending.get(lowerNick)?.controller === controller) {
+          this.pending.delete(lowerNick);
+        }
         this.logger?.warn(`Verification timeout for ${nick}`);
         // Audit the silent failure mode — operators reviewing a denied
         // privileged action need to distinguish "user not identified" from
@@ -150,9 +160,22 @@ export class Services {
         resolve({ verified: false, account: null });
       }, timeoutMs);
 
+      // `abort()` is the single cancellation idiom for every teardown path
+      // (detach, re-issue for the same nick, resolveVerification success).
+      // Clearing the timer here ensures a cancelled verify never fires the
+      // timeout-audit above.
+      controller.signal.addEventListener(
+        'abort',
+        () => {
+          clearTimeout(timer);
+          resolve({ verified: false, account: null });
+        },
+        { once: true },
+      );
+
       // Send the verification command
       const method = this.servicesConfig.type === 'anope' ? 'status' : 'acc';
-      this.pending.set(lowerNick, { nick, resolve, timer, method });
+      this.pending.set(lowerNick, { nick, resolve, controller, method });
 
       if (method === 'status') {
         this.client.say(target, `STATUS ${nick}`);
@@ -285,14 +308,19 @@ export class Services {
     const pending = this.pending.get(lower);
     if (!pending) return;
 
-    clearTimeout(pending.timer);
     this.pending.delete(lower);
 
     if (verified && account !== null) {
       this.eventBus.emit('user:identified', nick, account);
     }
 
+    // Resolve with the real result *first* — then abort to cancel the
+    // pending setTimeout. The abort listener calls resolve() again with a
+    // failure result, but Promises are idempotent so the first resolve()
+    // wins. This keeps `abort()` the single cancellation idiom without
+    // losing the real verification result.
     pending.resolve({ verified, account });
+    pending.controller.abort();
   }
 
   // -------------------------------------------------------------------------

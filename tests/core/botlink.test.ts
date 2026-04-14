@@ -2158,7 +2158,7 @@ describe('BotLinkHub relay routing', () => {
 
   it('delivers hub-origin RELAY_ACCEPT locally exactly once', async () => {
     // Regression: with the hub as origin, routeRelayFrame used to deliver
-    // via sendOrDeliver → onLeafFrame, and then onSteadyState also dispatched
+    // via deliverLocal → onLeafFrame, and then onSteadyState also dispatched
     // the same frame to onLeafFrame a second time, producing doubled output.
     hub.registerRelay('admin', 'leaf2');
     const received: LinkFrame[] = [];
@@ -3415,7 +3415,7 @@ describe('BotLinkHub setCommandRelay event handler guards', () => {
 // ---------------------------------------------------------------------------
 
 describe('BotLinkHub relay routing with no active relay', () => {
-  it('RELAY_ACCEPT with unknown handle is silently dropped', async () => {
+  it('RELAY_ACCEPT with unknown handle echoes RELAY_END back so the sender can clean up', async () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
     const { socket: socket1, written: written1, duplex: duplex1 } = createMockSocket();
     hub.addConnection(socket1);
@@ -3426,12 +3426,12 @@ describe('BotLinkHub relay routing with no active relay', () => {
     pushFrame(duplex1, { type: 'RELAY_ACCEPT', handle: 'nobody' });
     await tick();
 
-    // No crash, no frames sent
-    expect(parseWritten(written1)).toEqual([]);
+    const frames = parseWritten(written1);
+    expect(frames.some((f) => f.type === 'RELAY_END' && f.handle === 'nobody')).toBe(true);
     hub.close();
   });
 
-  it('RELAY_INPUT with unknown handle is silently dropped', async () => {
+  it('RELAY_INPUT with unknown handle echoes RELAY_END back so the sender can clean up', async () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
     const { socket: socket1, written: written1, duplex: duplex1 } = createMockSocket();
     hub.addConnection(socket1);
@@ -3442,11 +3442,12 @@ describe('BotLinkHub relay routing with no active relay', () => {
     pushFrame(duplex1, { type: 'RELAY_INPUT', handle: 'nobody', data: 'test' });
     await tick();
 
-    expect(parseWritten(written1)).toEqual([]);
+    const frames = parseWritten(written1);
+    expect(frames.some((f) => f.type === 'RELAY_END' && f.handle === 'nobody')).toBe(true);
     hub.close();
   });
 
-  it('RELAY_OUTPUT with unknown handle is silently dropped', async () => {
+  it('RELAY_OUTPUT with unknown handle echoes RELAY_END back so the sender can clean up', async () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
     const { socket: socket1, written: written1, duplex: duplex1 } = createMockSocket();
     hub.addConnection(socket1);
@@ -3457,7 +3458,8 @@ describe('BotLinkHub relay routing with no active relay', () => {
     pushFrame(duplex1, { type: 'RELAY_OUTPUT', handle: 'nobody', data: 'test' });
     await tick();
 
-    expect(parseWritten(written1)).toEqual([]);
+    const frames = parseWritten(written1);
+    expect(frames.some((f) => f.type === 'RELAY_END' && f.handle === 'nobody')).toBe(true);
     hub.close();
   });
 

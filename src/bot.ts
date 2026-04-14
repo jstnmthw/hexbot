@@ -146,56 +146,132 @@ export class Bot {
     const dbDir = dirname(resolve(this.config.database));
     mkdirSync(dbDir, { recursive: true });
 
-    this.db = new BotDatabase(this.config.database, this.logger, {
+    // The field assignments below are split across orchestration helpers
+    // (createServices / wireDispatcher / createPluginLoader). Using
+    // intermediate locals keeps TypeScript's "definitely assigned" analysis
+    // happy for the class's `readonly` fields without weakening their types.
+    const services = this.createServices();
+    this.db = services.db;
+    this.eventBus = services.eventBus;
+    this.permissions = services.permissions;
+    this.dispatcher = services.dispatcher;
+    this.commandHandler = services.commandHandler;
+    this.client = services.client;
+    this.configuredChannels = services.configuredChannels;
+    this.channelState = services.channelState;
+    this.ircCommands = services.ircCommands;
+    this.messageQueue = services.messageQueue;
+    this.services = services.services;
+    this.helpRegistry = services.helpRegistry;
+    this.channelSettings = services.channelSettings;
+    this.banStore = services.banStore;
+    this.stsStore = services.stsStore;
+    this.memo = services.memo;
+
+    this.wireDispatcher();
+    this.pluginLoader = this.createPluginLoader();
+  }
+
+  /**
+   * Phase 1 of the constructor: instantiate the long-lived subsystems
+   * (database, dispatcher, services, channel state, etc.) and return them
+   * as a struct so the constructor can assign them to the class fields.
+   * Kept as a single method because the subsystems have mutual references
+   * (e.g. dispatcher needs permissions, memo needs dispatcher+commandHandler)
+   * that would require threading locals through multiple helpers.
+   */
+  private createServices(): {
+    db: BotDatabase;
+    eventBus: BotEventBus;
+    permissions: Permissions;
+    dispatcher: EventDispatcher;
+    commandHandler: CommandHandler;
+    client: InstanceType<typeof IrcClient>;
+    configuredChannels: Array<{ name: string; key?: string }>;
+    channelState: ChannelState;
+    ircCommands: IRCCommands;
+    messageQueue: MessageQueue;
+    services: Services;
+    helpRegistry: HelpRegistry;
+    channelSettings: ChannelSettings;
+    banStore: BanStore;
+    stsStore: STSStore;
+    memo: MemoManager;
+  } {
+    const db = new BotDatabase(this.config.database, this.logger, {
       modLogEnabled: this.config.logging.mod_actions,
       modLogRetentionDays: this.config.logging.mod_log_retention_days,
     });
-    this.eventBus = new BotEventBus();
-    this.db.setEventBus(this.eventBus);
-    this.permissions = new Permissions(this.db, this.logger, this.eventBus);
-    this.dispatcher = new EventDispatcher(this.permissions, this.logger);
-    this.commandHandler = new CommandHandler(this.permissions, this.config.command_prefix);
-    this.client = new IrcClient();
-    this.configuredChannels = this.config.irc.channels.map((entry) =>
+    const eventBus = new BotEventBus();
+    db.setEventBus(eventBus);
+    const permissions = new Permissions(db, this.logger, eventBus);
+    const dispatcher = new EventDispatcher(permissions, this.logger);
+    const commandHandler = new CommandHandler(permissions, this.config.command_prefix);
+    const client = new IrcClient();
+    const configuredChannels = this.config.irc.channels.map((entry) =>
       typeof entry === 'string' ? { name: entry } : { name: entry.name, key: entry.key },
     );
-    this.channelState = new ChannelState(this.client, this.eventBus, this.logger);
+    const channelState = new ChannelState(client, eventBus, this.logger);
     // Permissions can match account-based patterns (`$a:accountname`) once
     // we can ask channel-state for a nick's services account. Wire it now,
     // before any handler runs — plugins never call checkFlags before start().
-    this.permissions.setAccountLookup((nick) => this.channelState.getAccountForNick(nick));
-    this.ircCommands = new IRCCommands(this.client, this.db, undefined, this.logger);
-    this.messageQueue = new MessageQueue({
+    permissions.setAccountLookup((nick) => channelState.getAccountForNick(nick));
+    const ircCommands = new IRCCommands(client, db, undefined, this.logger);
+    const messageQueue = new MessageQueue({
       rate: this.config.queue?.rate,
       burst: this.config.queue?.burst,
       logger: this.logger,
     });
-    this.services = new Services({
-      client: this.client,
+    const services = new Services({
+      client,
       servicesConfig: this.config.services,
-      eventBus: this.eventBus,
+      eventBus,
       logger: this.logger,
-      db: this.db,
+      db,
     });
-    this.helpRegistry = new HelpRegistry();
-    this.channelSettings = new ChannelSettings(
-      this.db,
-      this.logger.child('channel-settings'),
-      (s) => ircLower(s, this.getCasemapping()),
+    const helpRegistry = new HelpRegistry();
+    const channelSettings = new ChannelSettings(db, this.logger.child('channel-settings'), (s) =>
+      ircLower(s, this.getCasemapping()),
     );
-    this.banStore = new BanStore(this.db, (s) => ircLower(s, this.getCasemapping()));
-    this.stsStore = new STSStore(this.db);
-    this.memo = new MemoManager({
+    const banStore = new BanStore(db, (s) => ircLower(s, this.getCasemapping()));
+    const stsStore = new STSStore(db);
+    const memo = new MemoManager({
       config: this.config.memo,
-      dispatcher: this.dispatcher,
-      commandHandler: this.commandHandler,
-      permissions: this.permissions,
-      channelState: this.channelState,
-      client: this.client,
+      dispatcher,
+      commandHandler,
+      permissions,
+      channelState,
+      client,
       logger: this.logger,
       hasRelayConsole: (handle) => this._relayVirtualSessions.has(handle),
     });
+    return {
+      db,
+      eventBus,
+      permissions,
+      dispatcher,
+      commandHandler,
+      client,
+      configuredChannels,
+      channelState,
+      ircCommands,
+      messageQueue,
+      services,
+      helpRegistry,
+      channelSettings,
+      banStore,
+      stsStore,
+      memo,
+    };
+  }
 
+  /**
+   * Phase 2: wire verification and flood-limiting policy onto the
+   * dispatcher. Separate from service creation because it consults
+   * `this.config` predicates (require_acc_for, flood) and installs
+   * callbacks that close over the class instance.
+   */
+  private wireDispatcher(): void {
     // Wire verification provider: gates privileged dispatch on NickServ identity.
     // Uses the live account map from account-notify/extended-join (fast path),
     // falling back to NickServ ACC queries when account state is unknown.
@@ -209,7 +285,6 @@ export class Bot {
       this.dispatcher.setVerification(verificationProvider);
     }
 
-    // Wire input flood limiter
     if (this.config.flood) {
       this.dispatcher.setFloodConfig(this.config.flood);
     }
@@ -218,8 +293,11 @@ export class Bot {
         this.messageQueue.enqueue(nick, () => this.client.notice(nick, msg));
       },
     });
+  }
 
-    this.pluginLoader = new PluginLoader({
+  /** Phase 3: build the plugin loader with all injected core dependencies. */
+  private createPluginLoader(): PluginLoader {
+    return new PluginLoader({
       pluginDir: this.config.pluginDir,
       dispatcher: this.dispatcher,
       eventBus: this.eventBus,
@@ -262,24 +340,51 @@ export class Bot {
 
   /** Start the bot: open DB, load permissions, connect to IRC, wire everything. */
   async start(): Promise<void> {
-    // Print startup banner
     this.printBanner();
 
-    // 1. Open database
     this.db.open();
     this.botLogger.info('Database opened');
-
-    // 2. Load permissions from DB
     this.permissions.loadFromDb();
 
-    // 3. Ensure the configured owner exists (and seed owner password if needed)
     await ensureOwner({
       config: this.config,
       permissions: this.permissions,
       logger: this.botLogger,
     });
 
-    // 4. Register commands
+    this.registerCoreCommands();
+
+    this.botLogger.info('Starting...');
+
+    // Attach listeners BEFORE connect so handlers are ready when the server
+    // starts sending events. DCC/memo slot in here because registerDccConsoleCommands
+    // depends on an attached DCCManager.
+    this.attachBridge();
+    this.attachDcc();
+    this.attachMemo();
+
+    await this.startBotLink();
+
+    this.registerPostLinkCommands();
+    this.wireMemoDccNotify();
+
+    // Load plugins (sets up binds before connection so all handlers are
+    // ready when the server starts sending JOIN/MODE/etc responses)
+    await this.pluginLoader.loadAll(
+      this.config.pluginsConfig ? resolve(this.config.pluginsConfig) : undefined,
+    );
+
+    // Connect to IRC (all handlers are registered — safe to receive events)
+    await this.connect();
+
+    // Authenticate with NickServ (non-SASL fallback, needs active connection)
+    this.services.identify();
+
+    this.startTime = Date.now();
+  }
+
+  /** Register the built-in core commands (permissions, dispatcher, admin, plugins, modlog). */
+  private registerCoreCommands(): void {
     registerPermissionCommands(this.commandHandler, this.permissions);
     registerPasswordCommands({
       handler: this.commandHandler,
@@ -312,11 +417,10 @@ export class Bot {
       permissions: this.permissions,
       eventBus: this.eventBus,
     });
+  }
 
-    this.botLogger.info('Starting...');
-
-    // 5. Attach bridge + core modules (register event listeners before connect
-    //    so handlers are ready when the server starts sending events)
+  /** Attach the IRC bridge, channel-state tracker, and services listener. */
+  private attachBridge(): void {
     this.bridge = new IRCBridge({
       client: this.client,
       dispatcher: this.dispatcher,
@@ -329,49 +433,54 @@ export class Bot {
     this.channelState.attach();
     this.channelState.setBotNick(this.config.irc.nick);
     this.services.attach();
+  }
 
-    // 6. Start DCC CHAT / botnet (if configured)
-    if (this.config.dcc?.enabled) {
-      this._dccManager = new DCCManager({
-        client: this.client,
-        dispatcher: this.dispatcher,
-        permissions: this.permissions,
-        services: this.services,
-        commandHandler: this.commandHandler,
-        config: this.config.dcc,
-        version: this.readPackageVersion(),
-        botNick: this.config.irc.nick,
-        logger: this.logger,
-        db: this.db,
-        eventBus: this.eventBus,
-        consoleFlagStore: {
-          get: (handle) => this.db.get('dcc', `console_flags:${handle}`),
-          set: (handle, flags) => this.db.set('dcc', `console_flags:${handle}`, flags),
-          delete: (handle) => this.db.del('dcc', `console_flags:${handle}`),
-        },
-        getStats: () => ({
-          channels: this.channelState.getAllChannels().map((ch) => ch.name),
-          pluginCount: this.pluginLoader.list().length,
-          bindCount: this.dispatcher.listBinds().length,
-          userCount: this.permissions.listUsers().length,
-          uptime: Date.now() - this.startTime,
-        }),
-      });
-      this._dccManager.attach();
-      registerDccConsoleCommands(this.commandHandler, this._dccManager, this.db);
-      this.eventBus.on('user:removed', (handle: string) => {
-        this.db.del('dcc', `console_flags:${handle}`);
-      });
-      this.botLogger.info('DCC CHAT enabled');
-    }
+  /** Start the DCC CHAT / botnet subsystem when enabled by config. */
+  private attachDcc(): void {
+    if (!this.config.dcc?.enabled) return;
+    this._dccManager = new DCCManager({
+      client: this.client,
+      dispatcher: this.dispatcher,
+      permissions: this.permissions,
+      services: this.services,
+      commandHandler: this.commandHandler,
+      config: this.config.dcc,
+      version: this.readPackageVersion(),
+      botNick: this.config.irc.nick,
+      logger: this.logger,
+      db: this.db,
+      eventBus: this.eventBus,
+      consoleFlagStore: {
+        get: (handle) => this.db.get('dcc', `console_flags:${handle}`),
+        set: (handle, flags) => this.db.set('dcc', `console_flags:${handle}`, flags),
+        delete: (handle) => this.db.del('dcc', `console_flags:${handle}`),
+      },
+      getStats: () => ({
+        channels: this.channelState.getAllChannels().map((ch) => ch.name),
+        pluginCount: this.pluginLoader.list().length,
+        bindCount: this.dispatcher.listBinds().length,
+        userCount: this.permissions.listUsers().length,
+        uptime: Date.now() - this.startTime,
+      }),
+    });
+    this._dccManager.attach();
+    registerDccConsoleCommands(this.commandHandler, this._dccManager, this.db);
+    this.eventBus.on('user:removed', (handle: string) => {
+      this.db.del('dcc', `console_flags:${handle}`);
+    });
+    this.botLogger.info('DCC CHAT enabled');
+  }
 
-    // 6b. Attach memo system (after DCC so it can deliver to console)
+  /** Attach the memo system — must run after attachDcc() so it can deliver to console. */
+  private attachMemo(): void {
     if (this._dccManager) {
       this.memo.setDCCManager(this._dccManager);
     }
     this.memo.attach();
+  }
 
-    // 7. Start bot link (if configured)
+  /** Start the bot-link hub or leaf, depending on config. */
+  private async startBotLink(): Promise<void> {
     if (this.config.botlink?.enabled) {
       const botlinkConfig = this.config.botlink;
       // Register the 'shared' per-channel setting for ban sync
@@ -471,7 +580,10 @@ export class Bot {
       }
     };
     this.eventBus.on('botlink:disconnected', this._onBotlinkDisconnectedCleanup);
+  }
 
+  /** Register commands that need to know whether botlink/DCC/ban-store are live. */
+  private registerPostLinkCommands(): void {
     registerBotlinkCommands(
       this.commandHandler,
       this._botLinkHub,
@@ -490,29 +602,16 @@ export class Bot {
       sharedBanList: this._sharedBanList,
       ircLower: (s: string) => ircLower(s, this.getCasemapping()),
     });
+  }
 
-    // 7b. Wire memo DCC-connect notification (after botlink may have set onPartyJoin)
-    if (this._dccManager) {
-      const prevOnPartyJoin = this._dccManager.onPartyJoin;
-      this._dccManager.onPartyJoin = (handle, nick) => {
-        prevOnPartyJoin?.(handle, nick);
-        this.memo.notifyOnDCCConnect(handle, nick);
-      };
-    }
-
-    // 8. Load plugins (sets up binds before connection so all handlers are
-    //    ready when the server starts sending JOIN/MODE/etc responses)
-    await this.pluginLoader.loadAll(
-      this.config.pluginsConfig ? resolve(this.config.pluginsConfig) : undefined,
-    );
-
-    // 8. Connect to IRC (all handlers are registered — safe to receive events)
-    await this.connect();
-
-    // 9. Authenticate with NickServ (non-SASL fallback, needs active connection)
-    this.services.identify();
-
-    this.startTime = Date.now();
+  /** Wire memo DCC-connect notification (must run after botlink may have set onPartyJoin). */
+  private wireMemoDccNotify(): void {
+    if (!this._dccManager) return;
+    const prevOnPartyJoin = this._dccManager.onPartyJoin;
+    this._dccManager.onPartyJoin = (handle, nick) => {
+      prevOnPartyJoin?.(handle, nick);
+      this.memo.notifyOnDCCConnect(handle, nick);
+    };
   }
 
   /** Graceful shutdown. */

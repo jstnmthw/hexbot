@@ -1,6 +1,7 @@
 // HexBot — Permission management commands
 // Registers .adduser, .deluser, .flags, .users with the command handler.
 import type { CommandHandler } from '../../command-handler';
+import { getAuditSource } from '../../utils/command-helpers';
 import { stripFormatting } from '../../utils/strip-formatting';
 import { formatTable } from '../../utils/table';
 import { OWNER_FLAG, type Permissions } from '../permissions';
@@ -50,7 +51,7 @@ export function registerPermissionCommands(
         return;
       }
 
-      const source = ctx.source === 'repl' ? 'REPL' : ctx.nick;
+      const source = getAuditSource(ctx);
       permissions.addUser(handle, hostmask, flags, source, ctx.source);
       ctx.reply(`User "${handle}" added with hostmask ${hostmask} and flags ${flags}`);
     },
@@ -89,7 +90,7 @@ export function registerPermissionCommands(
         }
       }
 
-      const source = ctx.source === 'repl' ? 'REPL' : ctx.nick;
+      const source = getAuditSource(ctx);
       permissions.removeUser(handle, source, ctx.source);
       ctx.reply(`User "${handle}" removed`);
     },
@@ -135,7 +136,7 @@ export function registerPermissionCommands(
 
       // Set mode
       const flagsArg = parts[1];
-      const source = ctx.source === 'repl' ? 'REPL' : ctx.nick;
+      const source = getAuditSource(ctx);
 
       // Guard: only owners can grant flags at master level (`m`) or higher.
       // A `+m` master was previously allowed to promote arbitrary users to

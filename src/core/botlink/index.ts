@@ -12,18 +12,19 @@ export {
   BotLinkProtocol,
   HUB_ONLY_FRAMES,
   MAX_FRAME_SIZE,
-  RateCounter,
-  executeCmdFrame,
   hashPassword,
   sanitizeFrame,
 } from './protocol';
+export { executeCmdFrame } from './cmd-exec.js';
+export { RateCounter } from './rate-counter.js';
+export { FrameType, type FrameTypeName } from './frame-types.js';
 export type {
   CommandRelay,
   LinkFrame,
   LinkPermissions,
   PartyLineUser,
   SocketFactory,
-} from './protocol';
+} from './types.js';
 export { BotLinkAuthManager, normalizeIP } from './auth';
 export type { AdmissionResult } from './auth';
 export { BotLinkRelayRouter } from './relay-router';

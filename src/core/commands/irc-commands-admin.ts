@@ -2,6 +2,7 @@
 // Registers .say, .join, .part, .invite, .status with the command handler.
 import type { CommandHandler } from '../../command-handler';
 import type { BotDatabase } from '../../database';
+import { validateChannel } from '../../utils/command-helpers';
 import { isValidCommandTarget, parseTargetMessage } from '../../utils/parse-args';
 import { sanitize } from '../../utils/sanitize';
 import { stripFormatting } from '../../utils/strip-formatting';
@@ -80,8 +81,8 @@ export function registerIRCAdminCommands(
       category: 'irc',
     },
     (_args, ctx) => {
-      const channel = _args.trim();
-      if (!channel || !channel.startsWith('#')) {
+      const channel = validateChannel(_args);
+      if (!channel) {
         ctx.reply('Usage: .join <#channel>');
         return;
       }
@@ -101,8 +102,8 @@ export function registerIRCAdminCommands(
     },
     (_args, ctx) => {
       const parts = _args.trim().split(/\s+/);
-      const channel = parts[0];
-      if (!channel || !channel.startsWith('#')) {
+      const channel = validateChannel(parts[0] ?? '');
+      if (!channel) {
         ctx.reply('Usage: .part <#channel> [message]');
         return;
       }
@@ -157,9 +158,9 @@ export function registerIRCAdminCommands(
         return;
       }
       const parts = _args.trim().split(/\s+/);
-      const channel = parts[0];
+      const channel = validateChannel(parts[0] ?? '');
       const nick = parts[1];
-      if (!channel || !channel.startsWith('#') || !nick) {
+      if (!channel || !nick) {
         ctx.reply('Usage: .invite <#channel> <nick>');
         return;
       }
@@ -246,38 +247,31 @@ function formatDelay(ms: number): string {
   return `${hours}h`;
 }
 
-function formatUptime(ms: number): string {
+/**
+ * Render a millisecond duration as `Nd Nh Nm Ns`, collapsing leading zero
+ * components. When `colorize` is true, each numeric component is wrapped
+ * in bold+red mIRC formatting (\x02\x0304N\x0F) so the digits pop while
+ * the unit letters stay plain — used by `.uptime` for a more scannable
+ * reply than `.status`, which wants an unstyled value it can paste into
+ * a labelled status block.
+ */
+function formatUptime(ms: number, colorize = false): string {
   const seconds = Math.floor(ms / 1000);
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const secs = seconds % 60;
 
+  const wrap = colorize ? (n: number) => `\x02\x0304${n}\x0F` : (n: number) => String(n);
   const parts: string[] = [];
-  if (days > 0) parts.push(`${days}d`);
-  if (hours > 0) parts.push(`${hours}h`);
-  if (minutes > 0) parts.push(`${minutes}m`);
-  parts.push(`${secs}s`);
+  if (days > 0) parts.push(`${wrap(days)}d`);
+  if (hours > 0) parts.push(`${wrap(hours)}h`);
+  if (minutes > 0) parts.push(`${wrap(minutes)}m`);
+  parts.push(`${wrap(secs)}s`);
   return parts.join(' ');
 }
 
-// mIRC formatting: \x02 bold, \x034 red, \x0F reset (same convention as src/core/dcc.ts)
-/**
- * Same output shape as formatUptime() but each numeric component is
- * wrapped in bold+red so the digits pop while unit letters stay plain.
- */
+/** Convenience alias for the colourised `.uptime` reply path. */
 export function formatUptimeColored(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = seconds % 60;
-
-  const redBold = (n: number) => `\x02\x0304${n}\x0F`;
-  const parts: string[] = [];
-  if (days > 0) parts.push(`${redBold(days)}d`);
-  if (hours > 0) parts.push(`${redBold(hours)}h`);
-  if (minutes > 0) parts.push(`${redBold(minutes)}m`);
-  parts.push(`${redBold(secs)}s`);
-  return parts.join(' ');
+  return formatUptime(ms, true);
 }

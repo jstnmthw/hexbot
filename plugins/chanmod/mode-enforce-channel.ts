@@ -6,6 +6,7 @@
 // configured desired state.
 import type { PluginAPI } from '../../src/types';
 import { botHasOps, getParamModes, hasParamModes, parseChannelModes } from './helpers';
+import type { ModeContext } from './mode-enforce';
 import type { ChanmodConfig, SharedState } from './state';
 
 /** Keys in channelSettings that should trigger a mode sync when changed. */
@@ -21,12 +22,10 @@ export function handleReapplyRemovedModes(
   api: PluginAPI,
   config: ChanmodConfig,
   state: SharedState,
-  channel: string,
-  setter: string,
-  modeStr: string,
+  mctx: ModeContext,
   parsed: { add: Set<string>; remove: Set<string> },
-  canEnforce: boolean,
 ): void {
+  const { channel, setter, modeStr, canEnforce } = mctx;
   if (parsed.add.size > 0 && modeStr.startsWith('-') && modeStr.length === 2 && canEnforce) {
     const modeChar = modeStr[1];
     if (parsed.add.has(modeChar)) {
@@ -48,13 +47,10 @@ export function handleRemoveUnauthorizedModes(
   api: PluginAPI,
   config: ChanmodConfig,
   state: SharedState,
-  channel: string,
-  setter: string,
-  modeStr: string,
-  target: string,
+  mctx: ModeContext,
   parsed: { add: Set<string>; remove: Set<string> },
-  canEnforce: boolean,
 ): void {
+  const { channel, setter, modeStr, target, canEnforce } = mctx;
   if (modeStr.startsWith('+') && modeStr.length === 2 && !target && canEnforce) {
     const modeChar = modeStr[1];
     if (parsed.remove.has(modeChar)) {
@@ -71,12 +67,9 @@ export function handleChannelKeyEnforcement(
   api: PluginAPI,
   config: ChanmodConfig,
   state: SharedState,
-  channel: string,
-  setter: string,
-  modeStr: string,
-  target: string,
-  canEnforce: boolean,
+  mctx: ModeContext,
 ): void {
+  const { channel, setter, modeStr, target, canEnforce } = mctx;
   const channelKey = api.channelSettings.getString(channel, 'channel_key');
   if (channelKey && canEnforce) {
     if (modeStr === '-k') {
@@ -106,12 +99,9 @@ export function handleChannelLimitEnforcement(
   api: PluginAPI,
   config: ChanmodConfig,
   state: SharedState,
-  channel: string,
-  setter: string,
-  modeStr: string,
-  target: string,
-  canEnforce: boolean,
+  mctx: ModeContext,
 ): void {
+  const { channel, setter, modeStr, target, canEnforce } = mctx;
   const channelLimit = api.channelSettings.getInt(channel, 'channel_limit');
   if (channelLimit > 0 && canEnforce) {
     const limitStr = String(channelLimit);

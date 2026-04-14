@@ -344,7 +344,12 @@ export class BotLinkAuthManager {
   private sweepStaleTrackers(): void {
     const now = Date.now();
     const windowMs = this.config.auth_window_ms ?? 60_000;
-    const ESCALATED_STALE_MS = 86_400_000; // 24 hours
+    // Keep ban escalation state for 24h past expiry so a repeat offender
+    // returning the next morning still lands on their escalated banCount
+    // rather than starting fresh. Intentionally not in config — this is the
+    // escalation memory horizon, a property of the ban algorithm, not per
+    // deployment tuning.
+    const ESCALATED_STALE_MS = 86_400_000;
     for (const [ip, tracker] of this.authTracker) {
       const banExpired = tracker.bannedUntil < now;
       const failureWindowExpired = now - tracker.firstFailure > windowMs;

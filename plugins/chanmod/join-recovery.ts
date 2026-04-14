@@ -92,7 +92,7 @@ export function setupJoinRecovery(opts: JoinRecoveryOptions): () => void {
       api.log(`Cannot join ${channel}: probing ChanServ access before recovery attempt`);
 
       // Retry the same join_error after the probe timeout (10s + 1s buffer)
-      state.scheduleCycle(PROBE_WAIT_MS, () => {
+      state.cycles.schedule(PROBE_WAIT_MS, () => {
         if (chain.getAccess(channel) !== 'none') {
           api.log(`ChanServ access detected for ${channel} — retrying join recovery`);
           dispatchRecovery(api, chain, state, recoveryState, channel, chanKey, error);
@@ -136,7 +136,7 @@ export function setupJoinRecovery(opts: JoinRecoveryOptions): () => void {
       api.debug(`Join recovery backoff reset for ${ctx.channel} (sustained presence)`);
     }, SUSTAINED_PRESENCE_MS);
     rs.resetTimer = timer;
-    state.cycleTimers.add(timer);
+    state.cycles.track(timer);
   });
 
   return () => {
@@ -215,7 +215,7 @@ function handleBanned(
 
   advanceBackoff(rs);
 
-  state.scheduleCycle(SERVICES_DELAY_MS, () => {
+  state.cycles.schedule(SERVICES_DELAY_MS, () => {
     api.join(channel, api.getChannelKey(channel));
   });
 }
@@ -245,7 +245,7 @@ function handleInviteOnly(
   chain.requestInvite(channel);
   advanceBackoff(rs);
 
-  state.scheduleCycle(SERVICES_DELAY_MS, () => {
+  state.cycles.schedule(SERVICES_DELAY_MS, () => {
     api.join(channel, api.getChannelKey(channel));
   });
 }
@@ -274,7 +274,7 @@ function handleBadKey(
     if (chain.canInvite(channel)) chain.requestInvite(channel);
     advanceBackoff(rs);
 
-    state.scheduleCycle(SERVICES_DELAY_MS, () => {
+    state.cycles.schedule(SERVICES_DELAY_MS, () => {
       api.join(channel, api.getChannelKey(channel));
     });
     return;
@@ -293,7 +293,7 @@ function handleBadKey(
   api.log(`Cannot join ${channel}: bad key — retrying with configured key`);
   advanceBackoff(rs);
 
-  state.scheduleCycle(KEY_RETRY_DELAY_MS, () => {
+  state.cycles.schedule(KEY_RETRY_DELAY_MS, () => {
     api.join(channel, key);
   });
 }
@@ -326,7 +326,7 @@ function handleFull(
   chain.requestInvite(channel);
   advanceBackoff(rs);
 
-  state.scheduleCycle(SERVICES_DELAY_MS, () => {
+  state.cycles.schedule(SERVICES_DELAY_MS, () => {
     api.join(channel, api.getChannelKey(channel));
   });
 }

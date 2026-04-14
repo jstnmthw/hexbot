@@ -383,6 +383,112 @@ describe('MessageQueue', () => {
       q.stop();
     });
 
+    it('handles a single-target queue without cursor churn', () => {
+      // One target, many messages — round-robin degenerates to a simple FIFO.
+      const q = new MessageQueue({ rate: 2, burst: 0 });
+      const sent: string[] = [];
+
+      q.enqueue('#solo', () => sent.push('a'));
+      q.enqueue('#solo', () => sent.push('b'));
+      q.enqueue('#solo', () => sent.push('c'));
+
+      vi.advanceTimersByTime(500);
+      vi.advanceTimersByTime(500);
+      vi.advanceTimersByTime(500);
+      expect(sent).toEqual(['a', 'b', 'c']);
+      q.stop();
+    });
+
+    it('re-resolves the cursor after a target removal mid-rotation', () => {
+      // Three targets in rotation; drain `#a` to empty (which removes it
+      // from targetOrder) and verify `#b` and `#c` keep rotating fairly.
+      const q = new MessageQueue({ rate: 2, burst: 0 });
+      const sent: string[] = [];
+
+      q.enqueue('#a', () => sent.push('a1'));
+      q.enqueue('#b', () => sent.push('b1'));
+      q.enqueue('#b', () => sent.push('b2'));
+      q.enqueue('#c', () => sent.push('c1'));
+      q.enqueue('#c', () => sent.push('c2'));
+
+      // Rotation: a1 (a empty, removed), b1, c1, b2, c2.
+      vi.advanceTimersByTime(500);
+      vi.advanceTimersByTime(500);
+      vi.advanceTimersByTime(500);
+      vi.advanceTimersByTime(500);
+      vi.advanceTimersByTime(500);
+      expect(sent).toEqual(['a1', 'b1', 'c1', 'b2', 'c2']);
+      q.stop();
+    });
+
+    it('adds a new target to the tail of the rotation mid-drain', () => {
+      // Drain partway through `#a`/`#b`, then a new `#c` appears — it should
+      // slot in at the end of the rotation and not jump the queue.
+      const q = new MessageQueue({ rate: 2, burst: 0 });
+      const sent: string[] = [];
+
+      q.enqueue('#a', () => sent.push('a1'));
+      q.enqueue('#a', () => sent.push('a2'));
+      q.enqueue('#b', () => sent.push('b1'));
+      q.enqueue('#b', () => sent.push('b2'));
+
+      // Drain the first two: a1, b1.
+      vi.advanceTimersByTime(500);
+      vi.advanceTimersByTime(500);
+      expect(sent).toEqual(['a1', 'b1']);
+
+      // Now add a third target while `#a` is the next target in rotation.
+      q.enqueue('#c', () => sent.push('c1'));
+
+      // Rotation continues: a2, b2, c1.
+      vi.advanceTimersByTime(500);
+      vi.advanceTimersByTime(500);
+      vi.advanceTimersByTime(500);
+      expect(sent).toEqual(['a1', 'b1', 'a2', 'b2', 'c1']);
+      q.stop();
+    });
+
+    it('returns to an empty rotation cleanly and re-starts from target 0', () => {
+      // Drain everything, then enqueue fresh messages — new rotation must
+      // begin at the freshly-added target without stale cursor state.
+      const q = new MessageQueue({ rate: 2, burst: 0 });
+      const sent: string[] = [];
+
+      q.enqueue('#a', () => sent.push('a1'));
+      q.enqueue('#b', () => sent.push('b1'));
+
+      q.flush();
+      expect(sent).toEqual(['a1', 'b1']);
+      expect(q.pending).toBe(0);
+
+      // Fresh batch — the cursor should not remember the prior rotation.
+      q.enqueue('#x', () => sent.push('x1'));
+      q.enqueue('#y', () => sent.push('y1'));
+      q.enqueue('#x', () => sent.push('x2'));
+
+      vi.advanceTimersByTime(500);
+      vi.advanceTimersByTime(500);
+      vi.advanceTimersByTime(500);
+      expect(sent.slice(2)).toEqual(['x1', 'y1', 'x2']);
+      q.stop();
+    });
+
+    it('flush() drains fairly across targets, not target-by-target', () => {
+      // `flush()` shares the round-robin path — verify it produces the same
+      // interleaving a slow drain would.
+      const q = new MessageQueue({ rate: 1, burst: 0 });
+      const sent: string[] = [];
+
+      q.enqueue('#a', () => sent.push('a1'));
+      q.enqueue('#a', () => sent.push('a2'));
+      q.enqueue('#b', () => sent.push('b1'));
+      q.enqueue('#b', () => sent.push('b2'));
+
+      q.flush();
+      expect(sent).toEqual(['a1', 'b1', 'a2', 'b2']);
+      q.stop();
+    });
+
     it('untargeted sends share the empty-string bucket', () => {
       const q = new MessageQueue({ rate: 2, burst: 0 });
       const sent: string[] = [];

@@ -70,8 +70,13 @@ export class MessageQueue {
   private readonly subQueues: Map<string, Array<() => void>> = new Map();
   /** Insertion-ordered list of targets with pending messages. Drives round-robin. */
   private readonly targetOrder: string[] = [];
-  /** Round-robin cursor — next `drain()` call will pop from `targetOrder[rrIndex]`. */
-  private rrIndex = 0;
+  /**
+   * Round-robin cursor — the target to drain next. `null` means "start at
+   * targetOrder[0]". Tracking a target *name* rather than an index keeps
+   * the cursor stable across `removeTarget()` splices: removal can never
+   * corrupt the cursor because the cursor isn't an array offset.
+   */
+  private nextTarget: string | null = null;
   /** Total messages pending across all sub-queues (cheap to maintain; avoids iterating every size() call). */
   private totalPending = 0;
 
@@ -152,7 +157,7 @@ export class MessageQueue {
     const dropped = this.totalPending;
     this.subQueues.clear();
     this.targetOrder.length = 0;
-    this.rrIndex = 0;
+    this.nextTarget = null;
     this.totalPending = 0;
     this.budgetMs = this.capacityMs;
     this.lastRefill = Date.now();
@@ -203,36 +208,49 @@ export class MessageQueue {
   /**
    * Pop the next message in round-robin order. Returns the send closure
    * (caller is responsible for invoking it and paying the cost) or
-   * undefined when every sub-queue is empty. Advances `rrIndex` so each
-   * drain visits the next target.
+   * undefined when every sub-queue is empty. Advances the cursor to the
+   * target *after* the one we drained so each call visits a different
+   * target when more than one has work.
    */
   private popNext(): (() => void) | undefined {
     if (this.targetOrder.length === 0) return undefined;
 
-    // `rrIndex` may be stale after a removal; clamp into range.
-    if (this.rrIndex >= this.targetOrder.length) this.rrIndex = 0;
-
-    const key = this.targetOrder[this.rrIndex];
+    // Resolve the current target. If `nextTarget` is unset or names a
+    // target that's since been removed, restart from index 0. No
+    // defensive clamping needed — the cursor is a name, not an offset.
+    let currentIdx = this.nextTarget === null ? 0 : this.targetOrder.indexOf(this.nextTarget);
+    if (currentIdx === -1) currentIdx = 0;
+    const key = this.targetOrder[currentIdx];
     const queue = this.subQueues.get(key);
-    /* v8 ignore next -- invariant: targetOrder entries always have a sub-queue */
-    if (!queue || queue.length === 0) {
-      // Defensive: drop the stale entry and try again on the next tick.
-      this.removeTarget(key);
-      return this.popNext();
-    }
+    /* v8 ignore next -- invariant: targetOrder entries always have a non-empty sub-queue */
+    if (!queue || queue.length === 0) return undefined;
 
     const fn = queue.shift();
     /* v8 ignore next -- guarded by the length check above */
     if (!fn) return undefined;
     this.totalPending--;
 
+    // Pick the target to drain next *before* potentially removing the
+    // current one: the "peer after me" is always targetOrder[currentIdx+1]
+    // (wrapping) regardless of whether we end up splicing the current slot.
+    const peerIdx = (currentIdx + 1) % this.targetOrder.length;
+    const nextAfter = this.targetOrder[peerIdx];
+
     if (queue.length === 0) {
       this.removeTarget(key);
+    }
+
+    // If the queue we just drained is the only one left, nextTarget is
+    // effectively itself — re-point to nextAfter unless it's the target
+    // we just removed. Null when nothing is left keeps the "start at 0"
+    // invariant tidy.
+    if (this.targetOrder.length === 0) {
+      this.nextTarget = null;
+    } else if (nextAfter === key && queue.length === 0) {
+      // Removed the only target we had; fall back to whatever is now at 0.
+      this.nextTarget = this.targetOrder[0];
     } else {
-      // Only advance when this target still has work — keeps fairness
-      // without oscillating through empty slots.
-      this.rrIndex++;
-      if (this.rrIndex >= this.targetOrder.length) this.rrIndex = 0;
+      this.nextTarget = nextAfter;
     }
 
     return fn;
@@ -241,12 +259,10 @@ export class MessageQueue {
   private removeTarget(key: string): void {
     this.subQueues.delete(key);
     const idx = this.targetOrder.indexOf(key);
-    if (idx === -1) return;
-    this.targetOrder.splice(idx, 1);
-    // After removal `rrIndex` may now point one past the slot that was
-    // shifted down — clamp back into range so the next pop stays fair.
-    if (this.rrIndex > idx) this.rrIndex--;
-    if (this.rrIndex >= this.targetOrder.length) this.rrIndex = 0;
+    if (idx !== -1) this.targetOrder.splice(idx, 1);
+    // `nextTarget` is a name — if the caller removed a target that happened
+    // to be the cursor, `popNext()` will re-resolve from the name on the
+    // next call and transparently fall back to index 0 if not found.
   }
 
   // -------------------------------------------------------------------------

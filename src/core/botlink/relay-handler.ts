@@ -5,7 +5,7 @@ import type { CommandContext } from '../../command-handler';
 import type { LoggerLike } from '../../logger';
 import type { stripFormatting as StripFormattingFn } from '../../utils/strip-formatting';
 import type { DCCSessionEntry } from '../dcc';
-import type { LinkFrame } from './protocol';
+import type { LinkFrame } from './types.js';
 
 /** Minimal command executor — just the .execute() method. */
 export interface RelayCommandExecutor {

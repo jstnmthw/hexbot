@@ -9,6 +9,16 @@ export const description = 'Greets users when they join; lets registered users s
 const FLAG_ORDER = 'nmov';
 const MAX_GREET_LEN = 200;
 
+/**
+ * KV key for a user's custom greet, namespaced by their permission handle.
+ * Kept as a helper so the `greet:` prefix lives in exactly one place — any
+ * future schema change (versioning, per-channel greets, etc.) only needs to
+ * edit this function.
+ */
+function greetKey(handle: string): string {
+  return `greet:${handle}`;
+}
+
 /** Read a string-typed config entry, returning `fallback` when absent or wrong-typed. */
 function cfgString(config: Record<string, unknown>, key: string, fallback: string): string {
   const v = config[key];
@@ -100,7 +110,7 @@ export function init(api: PluginAPI): void {
     const hostmask = api.buildHostmask(ctx);
     const record = api.permissions.findByHostmask(hostmask);
     if (record) {
-      const custom = api.db.get(`greet:${record.handle}`);
+      const custom = api.db.get(greetKey(record.handle));
       if (custom !== undefined) greeting = custom;
     }
 
@@ -134,7 +144,7 @@ export function init(api: PluginAPI): void {
         ctx.replyPrivate('No custom greet set.');
         return;
       }
-      const current = api.db.get(`greet:${record.handle}`);
+      const current = api.db.get(greetKey(record.handle));
       ctx.replyPrivate(current !== undefined ? `Your greet: ${current}` : 'No custom greet set.');
       return;
     }
@@ -163,7 +173,7 @@ export function init(api: PluginAPI): void {
         .stripFormatting(rawMsg)
         .replace(/[\r\n\0]/g, '')
         .slice(0, MAX_GREET_LEN);
-      api.db.set(`greet:${record.handle}`, sanitized);
+      api.db.set(greetKey(record.handle), sanitized);
       ctx.replyPrivate('Custom greet set.');
       return;
     }
@@ -180,7 +190,7 @@ export function init(api: PluginAPI): void {
         ctx.replyPrivate(`You need at least +${minFlag} to remove a custom greet.`);
         return;
       }
-      api.db.del(`greet:${record.handle}`);
+      api.db.del(greetKey(record.handle));
       ctx.replyPrivate('Custom greet removed.');
       return;
     }

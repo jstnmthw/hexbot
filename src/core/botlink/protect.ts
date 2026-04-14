@@ -13,7 +13,7 @@ import { ircLower } from '../../utils/wildcard';
 import type { ChannelState } from '../channel-state';
 import type { IRCCommands } from '../irc-commands';
 import type { Permissions } from '../permissions';
-import type { LinkFrame } from './protocol';
+import type { LinkFrame } from './types.js';
 
 export interface ProtectHandlerDeps {
   channelState: ChannelState;

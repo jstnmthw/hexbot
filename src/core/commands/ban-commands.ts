@@ -2,6 +2,7 @@
 // Registers .bans, .ban, .unban, .stick, .unstick with the command handler.
 import type { CommandHandler } from '../../command-handler';
 import type { BotDatabase } from '../../database';
+import { parseBanArgs } from '../../utils/command-helpers';
 import { formatDuration, parseDuration } from '../../utils/duration';
 import { tryAudit } from '../audit';
 import type { BanStore } from '../ban-store';
@@ -93,24 +94,23 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
       category: 'moderation',
     },
     (args, ctx) => {
-      const parts = args.trim().split(/\s+/);
-      const channel = parts[0];
-      const mask = parts[1];
-      if (!channel || !channel.startsWith('#') || !mask) {
+      const parsed = parseBanArgs(args);
+      if (!parsed) {
         ctx.reply('Usage: .ban #channel <mask> [duration] [reason...]');
         return;
       }
+      const { channel, mask } = parsed;
       if (mask.length > 200) {
         ctx.reply('Ban mask too long (max 200 characters).');
         return;
       }
 
       let durationMs = 0; // default: permanent
-      let rest = parts.slice(2);
+      let rest = parsed.rest;
       if (rest.length > 0) {
-        const parsed = parseDuration(rest[0]);
-        if (parsed !== null) {
-          durationMs = parsed;
+        const parsedDuration = parseDuration(rest[0]);
+        if (parsedDuration !== null) {
+          durationMs = parsedDuration;
           rest = rest.slice(1);
         }
       }
@@ -155,13 +155,12 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
       category: 'moderation',
     },
     (args, ctx) => {
-      const parts = args.trim().split(/\s+/);
-      const channel = parts[0];
-      const mask = parts[1];
-      if (!channel || !channel.startsWith('#') || !mask) {
+      const parsed = parseBanArgs(args);
+      if (!parsed) {
         ctx.reply('Usage: .unban #channel <mask>');
         return;
       }
+      const { channel, mask } = parsed;
 
       banStore.removeBan(channel, mask);
       ircCommands.unban(channel, mask);
@@ -188,13 +187,12 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
       category: 'moderation',
     },
     (args, ctx) => {
-      const parts = args.trim().split(/\s+/);
-      const channel = parts[0];
-      const mask = parts[1];
-      if (!channel || !channel.startsWith('#') || !mask) {
+      const parsed = parseBanArgs(args);
+      if (!parsed) {
         ctx.reply('Usage: .stick #channel <mask>');
         return;
       }
+      const { channel, mask } = parsed;
 
       if (!banStore.setSticky(channel, mask, true)) {
         ctx.reply(`No tracked ban for ${mask} in ${channel}.`);
@@ -218,13 +216,12 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
       category: 'moderation',
     },
     (args, ctx) => {
-      const parts = args.trim().split(/\s+/);
-      const channel = parts[0];
-      const mask = parts[1];
-      if (!channel || !channel.startsWith('#') || !mask) {
+      const parsed = parseBanArgs(args);
+      if (!parsed) {
         ctx.reply('Usage: .unstick #channel <mask>');
         return;
       }
+      const { channel, mask } = parsed;
 
       if (!banStore.setSticky(channel, mask, false)) {
         ctx.reply(`No tracked ban for ${mask} in ${channel}.`);

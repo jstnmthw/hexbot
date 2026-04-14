@@ -4,6 +4,13 @@
 // audit data out of public scrollback and to avoid flood-kicks from the
 // page-size echo.
 //
+// Permission model note: `chpass`, `modlog`, and `flags` deliberately do
+// their permission checks inline instead of relying on bind-flag gating.
+// The policy for each is transport- or argument-sensitive (e.g. `chpass`
+// self-rotation is allowed for any caller; `modlog` source filtering is
+// owner-only) and doesn't fit the coarse `flags: '+X'` gate. Do not
+// "simplify" these back to bind flags without re-reading DESIGN.md §12.
+//
 // State model:
 //   • Each session carries one `PagerState` keyed by `dcc:<handle>` or
 //     `'repl'`. The state holds the current filter, cursor, and the total
@@ -483,6 +490,18 @@ function beginQuery(filter: ModLogFilter, db: BotDatabase): PagerState {
   };
 }
 
+/**
+ * Swap `state.rows` in-place, recompute the 1-based `pageStart`/`pageEnd`
+ * bounds from `nextStart`, and refresh `lastUsed`. Centralises the
+ * "update rows + bounds + lastUsed" trio that every pager verb needs.
+ */
+function updatePagerState(state: PagerState, rows: ModLogEntry[], nextStart: number): void {
+  state.rows = rows;
+  state.pageStart = rows.length === 0 ? 0 : nextStart;
+  state.pageEnd = rows.length === 0 ? 0 : nextStart + rows.length - 1;
+  state.lastUsed = Date.now();
+}
+
 function runNext(ctx: CommandContext, key: string, db: BotDatabase): void {
   const state = pagers.get(key);
   if (!state) {
@@ -500,10 +519,7 @@ function runNext(ctx: CommandContext, key: string, db: BotDatabase): void {
     return;
   }
   state.pageStack.push({ firstId: state.rows[0].id, lastId });
-  state.rows = next;
-  state.pageStart = state.pageEnd + 1;
-  state.pageEnd = state.pageStart + next.length - 1;
-  state.lastUsed = Date.now();
+  updatePagerState(state, next, state.pageEnd + 1);
   reply(ctx, renderPage(state, db));
 }
 
@@ -522,10 +538,7 @@ function runPrev(ctx: CommandContext, key: string, db: BotDatabase): void {
   // for that page is `prev.firstId + 1` (use beforeId one greater so the
   // first row reappears).
   const rows = db.getModLog({ ...state.filter, beforeId: prev.firstId + 1, limit: PAGE_SIZE });
-  state.rows = rows;
-  state.pageStart = Math.max(1, state.pageStart - PAGE_SIZE);
-  state.pageEnd = state.pageStart + rows.length - 1;
-  state.lastUsed = Date.now();
+  updatePagerState(state, rows, Math.max(1, state.pageStart - PAGE_SIZE));
   reply(ctx, renderPage(state, db));
 }
 
@@ -557,11 +570,8 @@ function runEnd(ctx: CommandContext, key: string, db: BotDatabase): void {
     const next = db.getModLog({ ...state.filter, beforeId: lastId, limit: PAGE_SIZE });
     if (next.length === 0) break;
     state.pageStack.push({ firstId: state.rows[0].id, lastId });
-    state.rows = next;
-    state.pageStart = state.pageEnd + 1;
-    state.pageEnd = state.pageStart + next.length - 1;
+    updatePagerState(state, next, state.pageEnd + 1);
   }
-  state.lastUsed = Date.now();
   reply(ctx, renderPage(state, db));
 }
 

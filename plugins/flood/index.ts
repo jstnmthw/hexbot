@@ -139,9 +139,12 @@ function handleJoinFlood(ctx: JoinContext): void {
   const { channel } = ctx;
   if (api.isBotNick(ctx.nick)) return;
   const hostmask = api.buildHostmask(ctx);
+  // Check privilege BEFORE rate-limiting so exempt users don't populate the
+  // counter — otherwise a flapping op would delay lockdown decisions for
+  // real offenders.
+  if (isPrivileged(ctx.nick, channel, hostmask, ctx.account)) return;
   const key = `join:${api.ircLower(hostmask)}`;
   if (!rateLimits.check('join', key)) return;
-  if (isPrivileged(ctx.nick, channel, hostmask, ctx.account)) return;
   const action = enforcement.recordOffence(key);
   lockdown.record(channel, hostmask);
   enforcement.apply(
@@ -156,10 +159,12 @@ function handlePartFlood(ctx: PartContext): void {
   const { channel } = ctx;
   if (api.isBotNick(ctx.nick)) return;
   const hostmask = api.buildHostmask(ctx);
+  // Check privilege BEFORE rate-limiting so exempt users don't populate the
+  // counter. Pass hostmask directly — user has already left channel state by
+  // the time the part bind fires.
+  if (isPrivileged(ctx.nick, channel, hostmask, ctx.account)) return;
   const key = `part:${api.ircLower(hostmask)}`;
   if (!rateLimits.check('part', key)) return;
-  // Pass hostmask directly — user has already left channel state by the time the part bind fires
-  if (isPrivileged(ctx.nick, channel, hostmask, ctx.account)) return;
   const action = enforcement.recordOffence(key);
   lockdown.record(channel, hostmask);
   enforcement.apply(
@@ -174,12 +179,9 @@ function handleNickFlood(ctx: NickContext): void {
   const { ident, hostname } = ctx;
   if (!ident && !hostname) return; // Incomplete hostmask data — skip
   const hostmask = api.buildHostmask(ctx);
-  const key = `nick:${api.ircLower(hostmask)}`;
-  if (!rateLimits.check('nick', key)) return;
-  // Use the new nick (ctx.args) for channel lookup and punishment — the old nick is gone
-  const newNick = ctx.args;
 
-  // Resolve privilege once globally — nick changes are a network-wide event
+  // Resolve privilege once globally BEFORE the rate-limit check so exempt
+  // users don't populate the counter. Nick changes are a network-wide event
   // and the user's permission record does not vary channel-to-channel. The
   // old code rescanned per channel, which cost the bot a permissions lookup
   // for every configured channel on every nick change and would let an
@@ -189,6 +191,11 @@ function handleNickFlood(ctx: NickContext): void {
     const user = api.permissions.findByHostmask(hostmask, ctx.account);
     if (user && /[nmo]/.test(user.global)) return;
   }
+
+  const key = `nick:${api.ircLower(hostmask)}`;
+  if (!rateLimits.check('nick', key)) return;
+  // Use the new nick (ctx.args) for channel lookup and punishment — the old nick is gone
+  const newNick = ctx.args;
 
   for (const channel of api.botConfig.irc.channels) {
     if (!botHasOps(channel)) continue;

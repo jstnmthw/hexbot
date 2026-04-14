@@ -5,7 +5,7 @@ import { type ServerCapabilities, defaultServerCapabilities } from './core/isupp
 import type { MessageQueue } from './core/message-queue';
 import type { EventDispatcher } from './dispatcher';
 import type { LoggerLike } from './logger';
-import type { HandlerContext } from './types';
+import type { BindType, HandlerContext } from './types';
 import { isModeArray, parseHostmask, toEventObject } from './utils/irc-event';
 import { sanitize } from './utils/sanitize';
 import { SlidingWindowCounter } from './utils/sliding-window';
@@ -217,25 +217,8 @@ export class IRCBridge {
 
     const isChannel = this.isValidChannel(target);
     const channel = isChannel ? target : null;
-
-    // IRCv3 account-tag: irc-framework surfaces the raw `account=<name>` tag
-    // value as `event.account` on every PRIVMSG from a user whose network
-    // supports the cap. A missing/undefined value means the tag wasn't
-    // present on this message — NOT that the user is unidentified.
-    const account = extractAccountTag(event);
-    if (account !== undefined && nick && this.channelState?.setAccountForNick) {
-      // Feed the dispatcher's verification fast-path so `n`/`m`-flagged
-      // commands stop needing a round-trip NickServ ACC query on every hit.
-      this.channelState.setAccountForNick(nick, account);
-    }
-
-    // Parse command and args from the message text
-    const stripped = stripFormatting(message);
-    const spaceIdx = stripped.indexOf(' ');
-    const command = spaceIdx === -1 ? stripped : stripped.substring(0, spaceIdx);
-    // Preserve IRC formatting in args — extract from the original unstripped message
-    const firstSpace = message.indexOf(' ');
-    const args = firstSpace === -1 ? '' : message.substring(firstSpace + 1).trim();
+    const account = this.checkAccount(event, nick);
+    const { command, args } = this.parseCommand(message);
 
     const ctx = this.buildContext({
       nick,
@@ -248,21 +231,10 @@ export class IRCBridge {
     });
     if (account !== undefined) ctx.account = account;
 
-    // Build flood key: prefer full hostmask for accuracy, fall back to nick
-    const floodKey = ident && hostname ? `${nick}!${ident}@${hostname}` : nick;
-
     if (isChannel) {
-      const flood = this.dispatcher.floodCheck('pub', floodKey, ctx);
-      if (flood.blocked) return;
-      // Dispatch pub (exact command) and pubm (wildcard on full text)
-      this.dispatcher.dispatch('pub', ctx).catch(this.dispatchError('pub'));
-      this.dispatcher.dispatch('pubm', ctx).catch(this.dispatchError('pubm'));
+      this.dispatchMessage('pub', { nick, ident, hostname, ctx }, ['pub', 'pubm']);
     } else {
-      const flood = this.dispatcher.floodCheck('msg', floodKey, ctx);
-      if (flood.blocked) return;
-      // Private message
-      this.dispatcher.dispatch('msg', ctx).catch(this.dispatchError('msg'));
-      this.dispatcher.dispatch('msgm', ctx).catch(this.dispatchError('msgm'));
+      this.dispatchMessage('msg', { nick, ident, hostname, ctx }, ['msg', 'msgm']);
     }
   }
 
@@ -289,15 +261,10 @@ export class IRCBridge {
     // CTCP ACTION is the same primitive as PRIVMSG from the spam/flood
     // perspective — one inbound frame counts against the same bucket so an
     // attacker can't just spam `/me` to bypass the pub/msg flood limit.
-    const floodKey = ident && hostname ? `${nick}!${ident}@${hostname}` : nick;
     if (isChannel) {
-      const flood = this.dispatcher.floodCheck('pub', floodKey, ctx);
-      if (flood.blocked) return;
-      this.dispatcher.dispatch('pubm', ctx).catch(this.dispatchError('pubm'));
+      this.dispatchMessage('pub', { nick, ident, hostname, ctx }, ['pubm']);
     } else {
-      const flood = this.dispatcher.floodCheck('msg', floodKey, ctx);
-      if (flood.blocked) return;
-      this.dispatcher.dispatch('msgm', ctx).catch(this.dispatchError('msgm'));
+      this.dispatchMessage('msg', { nick, ident, hostname, ctx }, ['msgm']);
     }
   }
 
@@ -313,10 +280,7 @@ export class IRCBridge {
     // prime the dispatcher's fast path and stamp the ctx so flag-gated binds
     // (and auto-op specifically) can skip a NickServ ACC round-trip when the
     // server has already vouched for the joiner.
-    const account = extractAccountTag(event);
-    if (account !== undefined && nick && this.channelState?.setAccountForNick) {
-      this.channelState.setAccountForNick(nick, account);
-    }
+    const account = this.checkAccount(event, nick);
 
     const ctx = this.buildContext({
       nick,
@@ -449,10 +413,7 @@ export class IRCBridge {
     // a NOTICE message." Hexbot parses commands only in onPrivmsg — this
     // path never dispatches to pub/msg binds, only to notice/rawlog binds.
     // Keep it that way when refactoring.
-    const account = extractAccountTag(event);
-    if (account !== undefined && nick && this.channelState?.setAccountForNick) {
-      this.channelState.setAccountForNick(nick, account);
-    }
+    const account = this.checkAccount(event, nick);
 
     const ctx = this.buildContext({
       nick,
@@ -642,6 +603,55 @@ export class IRCBridge {
     this.listeners.push({ event, fn });
   }
 
+  /**
+   * Extract the IRCv3 `account-tag` from an event and prime the
+   * channel-state fast path with it. Returns the raw tag value so callers
+   * can stamp it onto the dispatched `HandlerContext` unchanged.
+   */
+  private checkAccount(event: Record<string, unknown>, nick: string): string | null | undefined {
+    const account = extractAccountTag(event);
+    if (account !== undefined && nick && this.channelState?.setAccountForNick) {
+      // Feed the dispatcher's verification fast-path so `n`/`m`-flagged
+      // commands stop needing a round-trip NickServ ACC query on every hit.
+      this.channelState.setAccountForNick(nick, account);
+    }
+    return account;
+  }
+
+  /**
+   * Split an incoming PRIVMSG body into `command` and `args`. The command
+   * token is taken from the formatting-stripped text (so `\x02.foo\x02`
+   * parses as `.foo`), while `args` is sliced from the original message to
+   * preserve embedded formatting for downstream handlers.
+   */
+  private parseCommand(message: string): { command: string; args: string } {
+    const stripped = stripFormatting(message);
+    const spaceIdx = stripped.indexOf(' ');
+    const command = spaceIdx === -1 ? stripped : stripped.substring(0, spaceIdx);
+    const firstSpace = message.indexOf(' ');
+    const args = firstSpace === -1 ? '' : message.substring(firstSpace + 1).trim();
+    return { command, args };
+  }
+
+  /**
+   * Flood-check a PRIVMSG/ACTION and fan it out to one or more dispatcher
+   * event types. The flood key prefers the full hostmask for accuracy and
+   * falls back to the bare nick when ident/host are missing.
+   */
+  private dispatchMessage(
+    floodType: 'pub' | 'msg',
+    source: { nick: string; ident: string; hostname: string; ctx: HandlerContext },
+    dispatchTypes: BindType[],
+  ): void {
+    const { nick, ident, hostname, ctx } = source;
+    const floodKey = ident && hostname ? `${nick}!${ident}@${hostname}` : nick;
+    const flood = this.dispatcher.floodCheck(floodType, floodKey, ctx);
+    if (flood.blocked) return;
+    for (const type of dispatchTypes) {
+      this.dispatcher.dispatch(type, ctx).catch(this.dispatchError(type));
+    }
+  }
+
   private buildContext(fields: {
     nick: string;
     ident: string;
@@ -676,7 +686,7 @@ export class IRCBridge {
     };
   }
 
-  private dispatchError(type: string): (err: unknown) => void {
+  private dispatchError(type: BindType): (err: unknown) => void {
     return (err) => {
       this.logger?.error(`Dispatch error (${type}):`, err);
     };

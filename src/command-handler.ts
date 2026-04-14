@@ -163,45 +163,10 @@ export class CommandHandler {
       return;
     }
 
-    // Check permission flags (skip for REPL and botlink — botlink checks on the hub side)
-    if (
-      ctx.source !== 'repl' &&
-      ctx.source !== 'botlink' &&
-      entry.options.flags !== '-' &&
-      entry.options.flags !== ''
-    ) {
-      if (!this.permissions) {
-        ctx.reply('Permission denied.');
-        return;
-      }
-      const handlerCtx: HandlerContext = {
-        nick: ctx.nick,
-        ident: ctx.ident ?? '',
-        hostname: ctx.hostname ?? '',
-        channel: ctx.channel,
-        text: '',
-        command: commandName,
-        args,
-        reply: ctx.reply,
-        replyPrivate: ctx.reply,
-      };
-      // Thread the inbound account-tag through to the flag check so `$a:`
-      // patterns resolve on the first command after a nick change, before
-      // channel-state has received a fresh account-notify for the new nick.
-      if (ctx.account !== undefined) handlerCtx.account = ctx.account;
-      if (!this.permissions.checkFlags(entry.options.flags, handlerCtx)) {
-        ctx.reply('Permission denied.');
-        return;
-      }
-    }
+    if (!this.checkCommandPermissions(entry, commandName, args, ctx)) return;
 
-    // Pre-execute hook: relay to hub if configured
-    if (entry.options.relayToHub && this.preExecuteHook) {
-      const handled = await this.preExecuteHook(entry, args, ctx);
-      if (handled) return;
-    }
+    if (await this.runPreExecuteHook(entry, args, ctx)) return;
 
-    // Execute the handler
     try {
       const result = entry.handler(args, ctx);
       if (result instanceof Promise) {
@@ -211,6 +176,61 @@ export class CommandHandler {
       const message = err instanceof Error ? err.message : String(err);
       ctx.reply(`Error: ${message}`);
     }
+  }
+
+  /**
+   * Gate a command on its flag string. Returns `true` if execution should
+   * proceed, `false` if the caller already replied with a denial. REPL and
+   * botlink transports bypass the check entirely: REPL is trusted locally
+   * and botlink commands are re-checked on the hub side.
+   */
+  private checkCommandPermissions(
+    entry: CommandEntry,
+    commandName: string,
+    args: string,
+    ctx: CommandContext,
+  ): boolean {
+    if (ctx.source === 'repl' || ctx.source === 'botlink') return true;
+    if (entry.options.flags === '-' || entry.options.flags === '') return true;
+
+    if (!this.permissions) {
+      ctx.reply('Permission denied.');
+      return false;
+    }
+    const handlerCtx: HandlerContext = {
+      nick: ctx.nick,
+      ident: ctx.ident ?? '',
+      hostname: ctx.hostname ?? '',
+      channel: ctx.channel,
+      text: '',
+      command: commandName,
+      args,
+      reply: ctx.reply,
+      replyPrivate: ctx.reply,
+    };
+    // Thread the inbound account-tag through to the flag check so `$a:`
+    // patterns resolve on the first command after a nick change, before
+    // channel-state has received a fresh account-notify for the new nick.
+    if (ctx.account !== undefined) handlerCtx.account = ctx.account;
+    if (!this.permissions.checkFlags(entry.options.flags, handlerCtx)) {
+      ctx.reply('Permission denied.');
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Relay the command to the hub when the leaf has a hook installed and the
+   * command is flagged `relayToHub`. Returns `true` when the hook absorbed the
+   * command and execution should short-circuit locally.
+   */
+  private async runPreExecuteHook(
+    entry: CommandEntry,
+    args: string,
+    ctx: CommandContext,
+  ): Promise<boolean> {
+    if (!entry.options.relayToHub || !this.preExecuteHook) return false;
+    return this.preExecuteHook(entry, args, ctx);
   }
 
   /** Get all registered commands. */

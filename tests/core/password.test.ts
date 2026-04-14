@@ -11,29 +11,38 @@ describe('password', () => {
   describe('hashPassword / verifyPassword round-trip', () => {
     it('verifies a correct password', async () => {
       const stored = await hashPassword('correcthorse');
-      expect(await verifyPassword('correcthorse', stored)).toBe(true);
+      expect(await verifyPassword('correcthorse', stored)).toEqual({ ok: true });
     });
 
     it('rejects a wrong password', async () => {
       const stored = await hashPassword('correcthorse');
-      expect(await verifyPassword('wronghorse!', stored)).toBe(false);
+      expect(await verifyPassword('wronghorse!', stored)).toEqual({
+        ok: false,
+        reason: 'mismatch',
+      });
     });
 
     it('rejects a password with extra trailing characters', async () => {
       const stored = await hashPassword('correcthorse');
-      expect(await verifyPassword('correcthorse ', stored)).toBe(false);
+      expect(await verifyPassword('correcthorse ', stored)).toEqual({
+        ok: false,
+        reason: 'mismatch',
+      });
     });
 
     it('is case-sensitive', async () => {
       const stored = await hashPassword('Password1');
-      expect(await verifyPassword('password1', stored)).toBe(false);
-      expect(await verifyPassword('Password1', stored)).toBe(true);
+      expect(await verifyPassword('password1', stored)).toEqual({
+        ok: false,
+        reason: 'mismatch',
+      });
+      expect(await verifyPassword('Password1', stored)).toEqual({ ok: true });
     });
 
     it('handles unicode and multibyte passwords', async () => {
       const stored = await hashPassword('пароль123🔑');
-      expect(await verifyPassword('пароль123🔑', stored)).toBe(true);
-      expect(await verifyPassword('пароль123', stored)).toBe(false);
+      expect(await verifyPassword('пароль123🔑', stored)).toEqual({ ok: true });
+      expect(await verifyPassword('пароль123', stored)).toEqual({ ok: false, reason: 'mismatch' });
     });
   });
 
@@ -47,8 +56,8 @@ describe('password', () => {
     it('still round-trips after independent hashes', async () => {
       const a = await hashPassword('samepassword');
       const b = await hashPassword('samepassword');
-      expect(await verifyPassword('samepassword', a)).toBe(true);
-      expect(await verifyPassword('samepassword', b)).toBe(true);
+      expect(await verifyPassword('samepassword', a)).toEqual({ ok: true });
+      expect(await verifyPassword('samepassword', b)).toEqual({ ok: true });
     });
   });
 
@@ -60,7 +69,7 @@ describe('password', () => {
     it('accepts a password at the minimum length', async () => {
       const pw = 'a'.repeat(MIN_PASSWORD_LENGTH);
       const stored = await hashPassword(pw);
-      expect(await verifyPassword(pw, stored)).toBe(true);
+      expect(await verifyPassword(pw, stored)).toEqual({ ok: true });
     });
 
     it('rejects non-string input', async () => {
@@ -116,14 +125,20 @@ describe('password', () => {
   });
 
   describe('verifyPassword on malformed stored values', () => {
-    it('returns false for a non-parseable stored hash', async () => {
-      expect(await verifyPassword('anything', 'notahash')).toBe(false);
+    it('returns malformed reason for a non-parseable stored hash', async () => {
+      expect(await verifyPassword('anything', 'notahash')).toEqual({
+        ok: false,
+        reason: 'malformed',
+      });
     });
 
-    it('returns false for a valid-format but altered hash', async () => {
+    it('returns mismatch reason for a valid-format but altered hash', async () => {
       const stored = await hashPassword('correctpassword');
       const tampered = stored.slice(0, -2) + (stored.slice(-2) === 'aa' ? 'bb' : 'aa');
-      expect(await verifyPassword('correctpassword', tampered)).toBe(false);
+      expect(await verifyPassword('correctpassword', tampered)).toEqual({
+        ok: false,
+        reason: 'mismatch',
+      });
     });
   });
 });

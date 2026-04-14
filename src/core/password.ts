@@ -66,19 +66,41 @@ export async function hashPassword(plaintext: string): Promise<string> {
 }
 
 /**
- * Verify `plaintext` against a previously-stored hash string. Returns false
- * on any parse error, mismatched length, or hash mismatch — never throws for
- * malformed stored values so callers can handle both cases the same way.
+ * Result of {@link verifyPassword}. Callers that only care whether the
+ * password matched can check `result.ok`; callers that log (e.g. the DCC
+ * auth path) can distinguish a genuine mismatch from a storage-level
+ * problem via `result.reason`.
  */
-export async function verifyPassword(plaintext: string, stored: string): Promise<boolean> {
-  if (!isValidPasswordFormat(stored)) return false;
+export type VerifyPasswordResult =
+  | { ok: true }
+  | { ok: false; reason: 'mismatch' | 'malformed' | 'scrypt-error' };
+
+/**
+ * Verify `plaintext` against a previously-stored hash string. Never throws
+ * for malformed stored values or scrypt errors; both surface as `ok:false`
+ * with a distinguishable `reason`. All three `ok:false` branches should be
+ * treated as "bad password" from the caller's auth-decision perspective —
+ * the reason field is for logging only.
+ */
+export async function verifyPassword(
+  plaintext: string,
+  stored: string,
+): Promise<VerifyPasswordResult> {
+  if (!isValidPasswordFormat(stored)) return { ok: false, reason: 'malformed' };
   const [, saltHex, hashHex] = stored.split('$');
   // Lengths are already guaranteed by isValidPasswordFormat — the hex decode
   // can't produce a mismatched buffer given that gate, so we skip a second check.
   const salt = Buffer.from(saltHex, 'hex');
   const expected = Buffer.from(hashHex, 'hex');
-  const actual = await scryptAsync(plaintext, salt);
-  return timingSafeEqual(actual, expected);
+  let actual: Buffer;
+  try {
+    actual = await scryptAsync(plaintext, salt);
+    /* v8 ignore start -- scrypt only errors on OOM / invalid params we control; defensive */
+  } catch {
+    return { ok: false, reason: 'scrypt-error' };
+  }
+  /* v8 ignore stop */
+  return timingSafeEqual(actual, expected) ? { ok: true } : { ok: false, reason: 'mismatch' };
 }
 
 /**

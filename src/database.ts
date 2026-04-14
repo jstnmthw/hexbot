@@ -43,6 +43,24 @@ const WRITE_SOURCES: ReadonlySet<ModLogSource> = new Set([
   'system',
 ]);
 
+function validateModActionOptions(
+  source: ModLogSource,
+  plugin: string | null | undefined,
+  outcome: ModLogOutcome,
+): void {
+  if (!WRITE_SOURCES.has(source)) {
+    throw new Error(`logModAction: invalid source "${source}"`);
+  }
+  if ((source === 'plugin') !== (plugin != null)) {
+    throw new Error(
+      `logModAction: plugin must be set iff source === 'plugin' (got source="${source}", plugin=${plugin == null ? 'null' : `"${plugin}"`})`,
+    );
+  }
+  if (outcome !== 'success' && outcome !== 'failure') {
+    throw new Error(`logModAction: invalid outcome "${outcome}"`);
+  }
+}
+
 /** Options object accepted by {@link BotDatabase.logModAction}. */
 export interface LogModActionOptions {
   /** Short action name — `kick`, `ban`, `chanset-set`, `auth-fail`, ... */
@@ -290,17 +308,7 @@ export class BotDatabase {
       metadata = null,
     } = options;
 
-    if (!WRITE_SOURCES.has(source)) {
-      throw new Error(`logModAction: invalid source "${source}"`);
-    }
-    if ((source === 'plugin') !== (plugin != null)) {
-      throw new Error(
-        `logModAction: plugin must be set iff source === 'plugin' (got source="${source}", plugin=${plugin == null ? 'null' : `"${plugin}"`})`,
-      );
-    }
-    if (outcome !== 'success' && outcome !== 'failure') {
-      throw new Error(`logModAction: invalid outcome "${outcome}"`);
-    }
+    validateModActionOptions(source, plugin, outcome);
 
     // Scrub every display-bound text field on write. SQL injection is not
     // possible (parameters are bound), but a crafted nick that embeds

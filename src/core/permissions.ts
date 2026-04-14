@@ -94,6 +94,10 @@ export class Permissions {
     this.casemapping = cm;
   }
 
+  private lowerChannel(name: string): string {
+    return ircLower(name, this.casemapping);
+  }
+
   /**
    * Wire up the account lookup so `$a:` patterns can resolve a nick to its
    * services account. Without this, account patterns are inert and only
@@ -290,7 +294,7 @@ export class Permissions {
       throw new Error(`User "${handle}" not found`);
     }
 
-    const normalizedChannel = ircLower(channel, this.casemapping);
+    const normalizedChannel = this.lowerChannel(channel);
     const normalized = this.normalizeFlags(flags);
     if (normalized === '') {
       delete record.channels[normalizedChannel];
@@ -342,28 +346,42 @@ export class Permissions {
     let best: { record: UserRecord; score: number } | null = null;
     for (const record of this.users.values()) {
       for (const pattern of record.hostmasks) {
-        let matched = false;
-        let score = 0;
-        if (pattern.startsWith(ACCOUNT_PATTERN_PREFIX)) {
-          if (account == null) continue;
-          const accountPattern = pattern.substring(ACCOUNT_PATTERN_PREFIX.length);
-          if (accountPattern.length === 0) continue;
-          if (wildcardMatch(accountPattern, account, true, this.casemapping)) {
-            matched = true;
-            // $a: patterns are authoritative from services — prefer them over
-            // hostmask matches by scoring them at a higher tier.
-            score = 1_000_000 + patternSpecificity(accountPattern);
-          }
-        } else if (wildcardMatch(pattern, fullHostmask, true, this.casemapping)) {
-          matched = true;
-          score = patternSpecificity(pattern);
-        }
-        if (matched && (best === null || score > best.score)) {
+        const score = pattern.startsWith(ACCOUNT_PATTERN_PREFIX)
+          ? this.matchesAccountPattern(pattern, account)
+          : this.matchesHostmaskPattern(pattern, fullHostmask);
+        if (score !== null && (best === null || score > best.score)) {
           best = { record, score };
         }
       }
     }
     return best?.record ?? null;
+  }
+
+  /**
+   * Score a `$a:<accountpattern>` pattern against the caller's services
+   * account. Returns the specificity score when matched, or `null` when the
+   * pattern doesn't apply (no account available, empty pattern, or miss).
+   * Authoritative account matches are scored in a higher tier than any
+   * hostmask match.
+   */
+  private matchesAccountPattern(
+    pattern: string,
+    account: string | null | undefined,
+  ): number | null {
+    if (account == null) return null;
+    const accountPattern = pattern.substring(ACCOUNT_PATTERN_PREFIX.length);
+    if (accountPattern.length === 0) return null;
+    if (!wildcardMatch(accountPattern, account, true, this.casemapping)) return null;
+    return 1_000_000 + patternSpecificity(accountPattern);
+  }
+
+  /**
+   * Score a hostmask wildcard pattern against the caller's full hostmask.
+   * Returns the specificity score on match, or `null` on miss.
+   */
+  private matchesHostmaskPattern(pattern: string, fullHostmask: string): number | null {
+    if (!wildcardMatch(pattern, fullHostmask, true, this.casemapping)) return null;
+    return patternSpecificity(pattern);
   }
 
   // -------------------------------------------------------------------------
@@ -498,7 +516,7 @@ export class Permissions {
 
     // Check channel-specific flags
     if (channel) {
-      const channelFlags = record.channels[ircLower(channel, this.casemapping)];
+      const channelFlags = record.channels[this.lowerChannel(channel)];
       if (channelFlags) {
         // Owner in channel implies all flags for that channel
         if (channelFlags.includes(OWNER_FLAG)) return true;

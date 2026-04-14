@@ -42,10 +42,6 @@ export function formatItem(
   return `\x02[${feedName}]\x02 ${title}${link ? ` \u2014 ${link}` : ''}`;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 export async function announceItems(
   api: PluginAPI,
   feed: FeedConfig,
@@ -62,7 +58,9 @@ export async function announceItems(
     for (const channel of feed.channels) {
       api.say(channel, line);
     }
-    if (i < items.length - 1) await delay(500);
+    // Drip-feed at 500ms per item so a burst doesn't flood the channel or
+    // trip the server's own rate limiter.
+    if (i < items.length - 1) await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
   api.log(`Announced ${items.length} item(s) from "${feed.id}" to ${feed.channels.join(', ')}`);

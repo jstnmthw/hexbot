@@ -22,14 +22,18 @@ type ParsedFeed = { items: Array<{ guid?: string; title?: string; link?: string 
 
 // mockParseURL models what the test harness expects back from a feed poll.
 // The real flow now fetches XML via httpLayer.fetchFeedXml (which we stub to
-// a fake string) and hands it to parser.parseString — we stitch both ends to
-// the same mock so existing test bodies keep driving per-feed items.
+// a plain sentinel string) and hands it to parser.parseString — we stitch
+// both ends to the same mock so existing test bodies keep driving per-feed
+// items. The sentinel is a bare prefix rather than a fake HTML comment to
+// avoid tripping HTML-sanitization linters on what is really a test-only
+// round-trip encoding.
 const mockParseURL = vi.fn<(url: string) => Promise<ParsedFeed>>();
+const TEST_URL_SENTINEL = 'RSS_TEST_URL:';
 
 vi.mock('rss-parser', () => ({
   default: class MockParser {
     parseString = async (xml: string): Promise<ParsedFeed> => {
-      const url = xml.replace(/^<!--url:|-->$/g, '');
+      const url = xml.startsWith(TEST_URL_SENTINEL) ? xml.slice(TEST_URL_SENTINEL.length) : xml;
       return mockParseURL(url);
     };
   },
@@ -38,7 +42,7 @@ vi.mock('rss-parser', () => ({
 // Route fetchFeedXml to a sentinel that encodes the source URL so parseString
 // can thread the mock response back. validateFeedUrl never runs in this path.
 const originalFetchFeedXml = httpLayer.fetchFeedXml;
-httpLayer.fetchFeedXml = async (url: string): Promise<string> => `<!--url:${url}-->`;
+httpLayer.fetchFeedXml = async (url: string): Promise<string> => `${TEST_URL_SENTINEL}${url}`;
 void originalFetchFeedXml;
 
 // handleAdd also calls validateFeedUrl directly to block SSRF before saving a

@@ -124,7 +124,7 @@ describe('ensureOwner — password seeding', () => {
     const hash = permissions.getPasswordHash('admin');
     expect(hash).not.toBeNull();
     expect(hash).toMatch(/^scrypt\$/);
-    expect(await verifyPassword('seededpass1', hash!)).toBe(true);
+    expect(await verifyPassword('seededpass1', hash!)).toEqual({ ok: true });
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('Seeded owner password'));
   });
 

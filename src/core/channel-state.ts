@@ -4,6 +4,7 @@
 import type { BotEventBus } from '../event-bus';
 import type { LoggerLike } from '../logger';
 import { isModeArray, isObjectArray, toEventObject } from '../utils/irc-event';
+import { ListenerGroup } from '../utils/listener-group';
 import { type Casemapping, ircLower } from '../utils/wildcard';
 import { type ServerCapabilities, defaultServerCapabilities } from './isupport';
 
@@ -58,7 +59,7 @@ export class ChannelState {
   private client: ChannelStateClient;
   private eventBus: BotEventBus;
   private logger: LoggerLike | null;
-  private listeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
+  private listeners: ListenerGroup;
   private botNick = '';
   private casemapping: Casemapping = 'rfc1459';
   private capabilities: ServerCapabilities = defaultServerCapabilities();
@@ -67,6 +68,7 @@ export class ChannelState {
     this.client = client;
     this.eventBus = eventBus;
     this.logger = logger?.child('channel-state') ?? null;
+    this.listeners = new ListenerGroup(client);
   }
 
   /** Set the bot's own nick (used to detect self-PART/KICK for channel cleanup). */
@@ -110,10 +112,7 @@ export class ChannelState {
 
   /** Stop listening. */
   detach(): void {
-    for (const { event, fn } of this.listeners) {
-      this.client.removeListener(event, fn);
-    }
-    this.listeners = [];
+    this.listeners.removeAll();
     this.logger?.info('Detached from IRC client');
   }
 
@@ -122,7 +121,7 @@ export class ChannelState {
   // -------------------------------------------------------------------------
 
   getChannel(name: string): ChannelInfo | undefined {
-    return this.channels.get(ircLower(name, this.casemapping));
+    return this.channels.get(this.lowerChannel(name));
   }
 
   /** Return all tracked channels (used by bot-link sync). */
@@ -150,7 +149,7 @@ export class ChannelState {
     ch.users.clear();
 
     for (const u of data.users) {
-      ch.users.set(ircLower(u.nick, this.casemapping), {
+      ch.users.set(this.lowerNick(u.nick), {
         nick: u.nick,
         ident: u.ident,
         hostname: u.hostname,
@@ -162,9 +161,9 @@ export class ChannelState {
   }
 
   getUser(channel: string, nick: string): UserInfo | undefined {
-    const ch = this.channels.get(ircLower(channel, this.casemapping));
+    const ch = this.channels.get(this.lowerChannel(channel));
     if (!ch) return undefined;
-    return ch.users.get(ircLower(nick, this.casemapping));
+    return ch.users.get(this.lowerNick(nick));
   }
 
   getUserHostmask(channel: string, nick: string): string | undefined {
@@ -184,7 +183,7 @@ export class ChannelState {
    * - `undefined` — no account-notify/extended-join data received yet for this nick
    */
   getAccountForNick(nick: string): string | null | undefined {
-    const lower = ircLower(nick, this.casemapping);
+    const lower = this.lowerNick(nick);
     if (!this.networkAccounts.has(lower)) return undefined;
     return this.networkAccounts.get(lower);
   }
@@ -231,7 +230,7 @@ export class ChannelState {
    * delivered the account data.
    */
   setAccountForNick(nick: string, account: string | null): void {
-    const lower = ircLower(nick, this.casemapping);
+    const lower = this.lowerNick(nick);
     const previous = this.networkAccounts.get(lower);
     if (previous === account) return;
     this.networkAccounts.set(lower, account);
@@ -264,7 +263,7 @@ export class ChannelState {
     if ('account' in event) {
       accountName =
         event.account === false || event.account === null ? null : String(event.account);
-      this.networkAccounts.set(ircLower(nick, this.casemapping), accountName);
+      this.networkAccounts.set(this.lowerNick(nick), accountName);
     }
 
     const ch = this.ensureChannel(channel);
@@ -277,7 +276,7 @@ export class ChannelState {
       joinedAt: new Date(),
       accountName,
     };
-    ch.users.set(ircLower(nick, this.casemapping), user);
+    ch.users.set(this.lowerNick(nick), user);
 
     this.eventBus.emit('channel:userJoined', channel, nick);
   }
@@ -285,18 +284,15 @@ export class ChannelState {
   private onPart(event: Record<string, unknown>): void {
     const nick = String(event.nick ?? '');
     const channel = String(event.channel ?? '');
-    const lower = ircLower(channel, this.casemapping);
+    const lower = this.lowerChannel(channel);
 
     const ch = this.channels.get(lower);
     if (ch) {
-      ch.users.delete(ircLower(nick, this.casemapping));
+      ch.users.delete(this.lowerNick(nick));
     }
 
     // Bot left the channel — remove the entire channel entry
-    if (
-      this.botNick &&
-      ircLower(nick, this.casemapping) === ircLower(this.botNick, this.casemapping)
-    ) {
+    if (this.botNick && this.lowerNick(nick) === this.lowerNick(this.botNick)) {
       this.channels.delete(lower);
     }
 
@@ -305,11 +301,8 @@ export class ChannelState {
     // stays consistent with the rest of the file — a raw `!==` would
     // incorrectly treat `Bot` and `bot` as different nicks on RFC1459
     // casemapping networks.
-    if (
-      !this.botNick ||
-      ircLower(nick, this.casemapping) !== ircLower(this.botNick, this.casemapping)
-    ) {
-      const nickLower = ircLower(nick, this.casemapping);
+    if (!this.botNick || this.lowerNick(nick) !== this.lowerNick(this.botNick)) {
+      const nickLower = this.lowerNick(nick);
       if (this.networkAccounts.has(nickLower)) {
         let stillPresent = false;
         for (const ch of this.channels.values()) {
@@ -328,7 +321,7 @@ export class ChannelState {
   private onQuit(event: Record<string, unknown>): void {
     const nick = String(event.nick ?? '');
 
-    const lower = ircLower(nick, this.casemapping);
+    const lower = this.lowerNick(nick);
     for (const ch of this.channels.values()) {
       ch.users.delete(lower);
     }
@@ -340,18 +333,15 @@ export class ChannelState {
   private onKick(event: Record<string, unknown>): void {
     const kicked = String(event.kicked ?? '');
     const channel = String(event.channel ?? '');
-    const lower = ircLower(channel, this.casemapping);
+    const lower = this.lowerChannel(channel);
 
     const ch = this.channels.get(lower);
     if (ch) {
-      ch.users.delete(ircLower(kicked, this.casemapping));
+      ch.users.delete(this.lowerNick(kicked));
     }
 
     // Bot was kicked — remove the entire channel entry
-    if (
-      this.botNick &&
-      ircLower(kicked, this.casemapping) === ircLower(this.botNick, this.casemapping)
-    ) {
+    if (this.botNick && this.lowerNick(kicked) === this.lowerNick(this.botNick)) {
       this.channels.delete(lower);
     }
 
@@ -362,8 +352,8 @@ export class ChannelState {
     const oldNick = String(event.nick);
     const newNick = String(event.new_nick);
 
-    const oldLower = ircLower(oldNick, this.casemapping);
-    const newLower = ircLower(newNick, this.casemapping);
+    const oldLower = this.lowerNick(oldNick);
+    const newLower = this.lowerNick(newNick);
 
     // Carry account info forward to the new nick
     if (this.networkAccounts.has(oldLower)) {
@@ -389,7 +379,7 @@ export class ChannelState {
     if (!isModeArray(event.modes)) return;
     const modes = event.modes;
 
-    const ch = this.channels.get(ircLower(target, this.casemapping));
+    const ch = this.channels.get(this.lowerChannel(target));
     if (!ch) return;
 
     for (const m of modes) {
@@ -401,54 +391,76 @@ export class ChannelState {
       // networks with non-standard prefixes (e.g. InspIRCd halfop-only
       // `PREFIX=(oh)@%`) get tracked correctly.
       if (param && mode.length === 2 && this.capabilities.prefixSet.has(mode.charAt(1))) {
-        const user = ch.users.get(ircLower(param, this.casemapping));
-        if (user) {
-          const modeChar = mode.charAt(1); // 'o', 'v', etc.
-          if (mode.charAt(0) === '+') {
-            if (!user.modes.includes(modeChar)) {
-              user.modes.push(modeChar);
-            }
-          } else {
-            user.modes = user.modes.filter((m) => m !== modeChar);
-          }
-          this.eventBus.emit('channel:modeChanged', target, param, mode);
-        }
-        continue;
-      }
-
-      // Channel modes: update ch.modes, ch.key, ch.limit
-      const adding = mode.charAt(0) === '+';
-      const modeChar = mode.charAt(1);
-
-      if (modeChar === 'k') {
-        if (adding) {
-          ch.key = param;
-          if (!ch.modes.includes('k')) ch.modes += 'k';
-        } else {
-          ch.key = '';
-          ch.modes = ch.modes.replace('k', '');
-        }
-      } else if (modeChar === 'l') {
-        if (adding) {
-          const parsed = parseInt(param, 10);
-          ch.limit = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
-          if (!ch.modes.includes('l')) ch.modes += 'l';
-        } else {
-          ch.limit = 0;
-          ch.modes = ch.modes.replace('l', '');
-        }
-      } else if (this.capabilities.chanmodesA.has(modeChar)) {
-        // Type A list modes (b/e/I by default) — we don't track the lists
-        // themselves in ch.modes because they represent per-mask state, not
-        // a flag. Consumers that need ban-list tracking subscribe to RPL_BANLIST.
+        this.processUserPrefixMode(ch, target, mode, param);
       } else {
-        // Simple channel mode flag (i, m, n, p, s, t, etc.)
-        if (adding) {
-          if (!ch.modes.includes(modeChar)) ch.modes += modeChar;
-        } else {
-          ch.modes = ch.modes.replace(modeChar, '');
-        }
+        this.processChannelMode(ch, mode, param);
       }
+    }
+  }
+
+  /**
+   * Apply a `+o alice` / `-v bob` style prefix-mode change to a user record.
+   * Emits `channel:modeChanged` only when the target nick is currently tracked.
+   */
+  private processUserPrefixMode(
+    ch: ChannelInfo,
+    target: string,
+    mode: string,
+    param: string,
+  ): void {
+    const user = ch.users.get(this.lowerNick(param));
+    if (!user) return;
+    const modeChar = mode.charAt(1);
+    if (mode.charAt(0) === '+') {
+      if (!user.modes.includes(modeChar)) {
+        user.modes.push(modeChar);
+      }
+    } else {
+      user.modes = user.modes.filter((m) => m !== modeChar);
+    }
+    this.eventBus.emit('channel:modeChanged', target, param, mode);
+  }
+
+  /**
+   * Apply a channel-mode flag change (`k`, `l`, type-D flags). Type-A list
+   * modes are skipped because their per-mask state isn't tracked in `ch.modes`.
+   */
+  private processChannelMode(ch: ChannelInfo, mode: string, param: string): void {
+    const adding = mode.charAt(0) === '+';
+    const modeChar = mode.charAt(1);
+
+    if (modeChar === 'k') {
+      if (adding) {
+        ch.key = param;
+        if (!ch.modes.includes('k')) ch.modes += 'k';
+      } else {
+        ch.key = '';
+        ch.modes = ch.modes.replace('k', '');
+      }
+      return;
+    }
+
+    if (modeChar === 'l') {
+      if (adding) {
+        const parsed = parseInt(param, 10);
+        ch.limit = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+        if (!ch.modes.includes('l')) ch.modes += 'l';
+      } else {
+        ch.limit = 0;
+        ch.modes = ch.modes.replace('l', '');
+      }
+      return;
+    }
+
+    // Type A list modes (b/e/I by default) represent per-mask state, not a
+    // flag; consumers that need ban-list tracking subscribe to RPL_BANLIST.
+    if (this.capabilities.chanmodesA.has(modeChar)) return;
+
+    // Simple channel mode flag (i, m, n, p, s, t, etc.)
+    if (adding) {
+      if (!ch.modes.includes(modeChar)) ch.modes += modeChar;
+    } else {
+      ch.modes = ch.modes.replace(modeChar, '');
     }
   }
 
@@ -466,10 +478,10 @@ export class ChannelState {
       const modes = this.parseUserlistModes(u.modes);
 
       // Only add if not already present (join event may have fired first)
-      const lowerNick = ircLower(nick, this.casemapping);
-      const existing = ch.users.get(lowerNick);
+      const nickKey = this.lowerNick(nick);
+      const existing = ch.users.get(nickKey);
       if (!existing) {
-        ch.users.set(lowerNick, {
+        ch.users.set(nickKey, {
           nick,
           ident,
           hostname,
@@ -499,10 +511,10 @@ export class ChannelState {
       const hostname = String(u.hostname ?? '');
       const channel = String(u.channel ?? '');
 
-      const ch = this.channels.get(ircLower(channel, this.casemapping));
+      const ch = this.channels.get(this.lowerChannel(channel));
       if (!ch) continue;
 
-      const user = ch.users.get(ircLower(nick, this.casemapping));
+      const user = ch.users.get(this.lowerNick(nick));
       if (user) {
         user.ident = ident;
         user.hostname = hostname;
@@ -560,7 +572,7 @@ export class ChannelState {
     const accountName: string | null =
       event.account === false || event.account === null ? null : String(event.account);
 
-    const lower = ircLower(nick, this.casemapping);
+    const lower = this.lowerNick(nick);
     this.networkAccounts.set(lower, accountName);
 
     // Update accountName on all per-channel UserInfo objects for this nick
@@ -588,7 +600,7 @@ export class ChannelState {
     const nick = String(event.nick ?? '');
     if (!nick) return;
     const message = typeof event.message === 'string' ? event.message : '';
-    const lower = ircLower(nick, this.casemapping);
+    const lower = this.lowerNick(nick);
 
     let touched = false;
     for (const ch of this.channels.values()) {
@@ -611,7 +623,7 @@ export class ChannelState {
     const newIdent = event.new_ident !== undefined ? String(event.new_ident) : undefined;
     const newHostname = event.new_hostname !== undefined ? String(event.new_hostname) : undefined;
 
-    const lower = ircLower(nick, this.casemapping);
+    const lower = this.lowerNick(nick);
     for (const ch of this.channels.values()) {
       const user = ch.users.get(lower);
       if (user) {
@@ -626,8 +638,16 @@ export class ChannelState {
   // Helpers
   // -------------------------------------------------------------------------
 
+  private lowerNick(nick: string): string {
+    return ircLower(nick, this.casemapping);
+  }
+
+  private lowerChannel(name: string): string {
+    return ircLower(name, this.casemapping);
+  }
+
   private ensureChannel(name: string): ChannelInfo {
-    const lower = ircLower(name, this.casemapping);
+    const lower = this.lowerChannel(name);
     let ch = this.channels.get(lower);
     if (!ch) {
       ch = { name, topic: '', modes: '', key: '', limit: 0, users: new Map() };
@@ -637,9 +657,7 @@ export class ChannelState {
   }
 
   private listen(event: string, handler: (event: Record<string, unknown>) => void): void {
-    const fn = (...args: unknown[]) => handler(toEventObject(args[0]));
-    this.client.on(event, fn);
-    this.listeners.push({ event, fn });
+    this.listeners.on(event, (...args: unknown[]) => handler(toEventObject(args[0])));
   }
 
   /**

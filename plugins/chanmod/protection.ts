@@ -117,21 +117,21 @@ export function setupProtection(
     const rejoinDelay = useBackendDelay ? SERVICES_PROCESSING_MS : config.rejoin_delay_ms;
 
     // Schedule rejoin
-    state.scheduleCycle(rejoinDelay, () => {
+    state.cycles.schedule(rejoinDelay, () => {
       api.join(channel, api.getChannelKey(channel));
       api.log(`Rejoining ${channel} after being kicked`);
 
       // Schedule a backup retry in case the first rejoin fails (still banned).
       // If the bot is back in the channel by then, the join is harmless (server ignores it).
       if (useBackendDelay && record.count < config.max_rejoin_attempts) {
-        state.scheduleCycle(config.chanserv_unban_retry_ms, () => {
+        state.cycles.schedule(config.chanserv_unban_retry_ms, () => {
           // Only retry if we're not in the channel yet
           if (!api.getChannel(channel)) {
             api.log(`Retry rejoin for ${channel} (first attempt may have failed due to ban)`);
             if (chain!.canUnban(channel)) {
               chain!.requestUnban(channel);
             }
-            state.scheduleCycle(SERVICES_PROCESSING_MS, () => {
+            state.cycles.schedule(SERVICES_PROCESSING_MS, () => {
               api.join(channel, api.getChannelKey(channel));
             });
           }
@@ -151,7 +151,7 @@ export function setupProtection(
       const revenge = api.channelSettings.getFlag(channel, 'revenge');
       if (!revenge || !kickerNick) return;
 
-      state.scheduleCycle(config.revenge_delay_ms, () => {
+      state.cycles.schedule(config.revenge_delay_ms, () => {
         // Verify kicker is still in the channel
         const rch = api.getChannel(channel);
         if (!rch) return;
@@ -222,7 +222,7 @@ export function setupProtection(
       if (config.nick_recovery_ghost && config.nick_recovery_password) {
         // GHOST via NickServ — password is never logged
         api.say('NickServ', `GHOST ${desiredNick} ${config.nick_recovery_password}`);
-        state.scheduleCycle(2000, () => {
+        state.cycles.schedule(2000, () => {
           api.changeNick(desiredNick);
         });
       } else {
@@ -247,7 +247,6 @@ export function setupProtection(
   setupStopnethack(api, config, state);
 
   return () => {
-    for (const timer of state.cycleTimers) clearTimeout(timer);
-    state.cycleTimers.clear();
+    state.cycles.clearAll();
   };
 }

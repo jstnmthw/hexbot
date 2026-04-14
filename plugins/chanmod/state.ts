@@ -20,12 +20,53 @@ export interface ThreatState {
   windowStart: number;
 }
 
+/**
+ * Cycle timer owner — centralises scheduling, tracking, and teardown of all
+ * "part/rejoin/defer" timers that mode-enforce, protection, and join-recovery
+ * use. Callers never touch the backing Set directly — every path goes through
+ * this API so teardown is guaranteed complete on plugin unload.
+ *
+ * Two scheduling flavours:
+ *   - schedule(ms, fn)           — one-shot, auto-removes on fire
+ *   - scheduleWithLock(k, ms, fn) — keyed schedule guarded by a deduplication
+ *                                   lock; caller is responsible for unlock()
+ *                                   when the expected follow-up event arrives.
+ *                                   Locks are TTL-pruned if the follow-up is
+ *                                   lost to a services outage or similar.
+ */
+export interface CycleState {
+  /** Schedule a one-shot callback. Auto-removes the timer on fire. */
+  schedule(delayMs: number, fn: () => void): void;
+  /**
+   * Schedule a callback guarded by a dedup lock keyed by `key`. Returns true
+   * if the lock was taken and the timer scheduled, false if already locked.
+   * Caller owns calling `unlock(key)` when the follow-up completes; the
+   * lock is TTL-pruned by `pruneExpired()` after `PENDING_STATE_TTL_MS`.
+   */
+  scheduleWithLock(key: string, delayMs: number, fn: () => void): boolean;
+  /** True if `key` is currently locked. */
+  isLocked(key: string): boolean;
+  /** Release a dedup lock taken by `scheduleWithLock`. */
+  unlock(key: string): void;
+  /**
+   * Register an externally-created timer so it is cancelled on teardown.
+   * Used where the caller must retain the timer reference for its own
+   * cancellation logic (join-recovery's sustained-presence reset timer).
+   */
+  track(timer: ReturnType<typeof setTimeout>): void;
+  /** Clear all tracked timers and dedup locks. Called from teardown. */
+  clearAll(): void;
+  /** TTL-prune stale dedup locks — keeps state tidy when follow-up events drop. */
+  pruneExpired(now: number, ttlMs: number): void;
+  /** Number of currently tracked timers (for tests and diagnostics). */
+  readonly size: number;
+}
+
 export interface SharedState {
   intentionalModeChanges: Map<string, number>;
   enforcementCooldown: Map<string, { count: number; expiresAt: number }>;
-  cycleTimers: Set<ReturnType<typeof setTimeout>>;
-  /** Value is expiresAt (ms). Entries are TTL-pruned if the expected follow-up event never arrives. */
-  cycleScheduled: Map<string, number>;
+  /** Cycle timer owner — see `CycleState` docs. */
+  cycles: CycleState;
   enforcementTimers: Set<ReturnType<typeof setTimeout>>;
   startupTimer: ReturnType<typeof setTimeout> | null;
   // Stopnethack
@@ -51,14 +92,60 @@ export interface SharedState {
 
   /** Schedule a callback on `enforcementTimers` — wraps setTimeout + add, auto-removes on fire. */
   scheduleEnforcement(delayMs: number, fn: () => void): void;
-  /** Schedule a callback on `cycleTimers` — wraps setTimeout + add, auto-removes on fire. */
-  scheduleCycle(delayMs: number, fn: () => void): void;
+}
+
+function createCycleState(): CycleState {
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  // Value is expiresAt (ms). Entries are TTL-pruned if the expected follow-up
+  // event never arrives (services outage, split, etc.).
+  const locks = new Map<string, number>();
+
+  const cycle: CycleState = {
+    schedule(delayMs: number, fn: () => void): void {
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        fn();
+      }, delayMs);
+      timers.add(timer);
+    },
+    scheduleWithLock(key: string, delayMs: number, fn: () => void): boolean {
+      if (locks.has(key)) return false;
+      locks.set(key, Date.now() + PENDING_STATE_TTL_MS);
+      cycle.schedule(delayMs, fn);
+      return true;
+    },
+    isLocked(key: string): boolean {
+      return locks.has(key);
+    },
+    unlock(key: string): void {
+      locks.delete(key);
+    },
+    track(timer: ReturnType<typeof setTimeout>): void {
+      timers.add(timer);
+    },
+    clearAll(): void {
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+      locks.clear();
+    },
+    pruneExpired(now: number, ttlMs: number): void {
+      // ttlMs is accepted for API symmetry; lock expiry is set at insert time.
+      void ttlMs;
+      for (const [key, expiresAt] of locks) {
+        if (now >= expiresAt) locks.delete(key);
+      }
+    },
+    get size(): number {
+      return timers.size;
+    },
+  };
+  return cycle;
 }
 
 export const INTENTIONAL_TTL_MS = 5000;
 export const COOLDOWN_WINDOW_MS = 10_000;
 export const MAX_ENFORCEMENTS = 3;
-/** How long a `pendingRecoverCleanup`/`unbanRequested`/`cycleScheduled` entry
+/** How long a `pendingRecoverCleanup`/`unbanRequested`/cycle dedup lock
  *  can live waiting for its expected follow-up event before it's pruned. */
 export const PENDING_STATE_TTL_MS = 5 * 60_000;
 
@@ -66,8 +153,7 @@ export function createState(): SharedState {
   const state: SharedState = {
     intentionalModeChanges: new Map(),
     enforcementCooldown: new Map(),
-    cycleTimers: new Set(),
-    cycleScheduled: new Map(),
+    cycles: createCycleState(),
     enforcementTimers: new Set(),
     startupTimer: null,
     splitActive: false,
@@ -88,19 +174,12 @@ export function createState(): SharedState {
       }, delayMs);
       state.enforcementTimers.add(timer);
     },
-    scheduleCycle(delayMs: number, fn: () => void): void {
-      const timer = setTimeout(() => {
-        state.cycleTimers.delete(timer);
-        fn();
-      }, delayMs);
-      state.cycleTimers.add(timer);
-    },
   };
   return state;
 }
 
 /** Prune expired entries from intentionalModeChanges and enforcementCooldown,
- *  plus TTL-based cleanup of pendingRecoverCleanup/unbanRequested/cycleScheduled
+ *  plus TTL-based cleanup of pendingRecoverCleanup/unbanRequested/cycle locks
  *  so a dropped follow-up event (services outage, etc.) doesn't leak entries. */
 export function pruneExpiredState(state: SharedState): void {
   const now = Date.now();
@@ -116,9 +195,7 @@ export function pruneExpiredState(state: SharedState): void {
   for (const [key, expiresAt] of state.unbanRequested) {
     if (now >= expiresAt) state.unbanRequested.delete(key);
   }
-  for (const [key, expiresAt] of state.cycleScheduled) {
-    if (now >= expiresAt) state.cycleScheduled.delete(key);
-  }
+  state.cycles.pruneExpired(now, PENDING_STATE_TTL_MS);
 }
 
 // ---------------------------------------------------------------------------

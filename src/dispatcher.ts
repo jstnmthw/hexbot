@@ -161,16 +161,7 @@ export class EventDispatcher {
    *   when a `FloodNoticeProvider` is attached)
    */
   floodCheck(floodType: 'pub' | 'msg', key: string, ctx: HandlerContext): FloodCheckResult {
-    // Lazy sweep: prune stale keys from flood counters every 5 minutes
-    const now = Date.now();
-    if (now - this.lastFloodSweep > 300_000) {
-      this.lastFloodSweep = now;
-      if (this.floodConfig) {
-        this.pubFlood.sweep(this.floodConfig.pub.window * 1000);
-        this.msgFlood.sweep(this.floodConfig.msg.window * 1000);
-      }
-      this.floodWarned.clear();
-    }
+    this._maybeSweep();
 
     if (!this.floodConfig) return { blocked: false, firstBlock: false };
 
@@ -201,6 +192,23 @@ export class EventDispatcher {
     }
 
     return { blocked: true, firstBlock: false };
+  }
+
+  /**
+   * Prune stale keys from the flood counters and clear the one-time warning
+   * set every 5 minutes. Cheap when invoked from the hot path because we
+   * short-circuit on the timestamp check; extracted from `floodCheck` so the
+   * caller reads top-to-bottom without a mid-function maintenance block.
+   */
+  private _maybeSweep(): void {
+    const now = Date.now();
+    if (now - this.lastFloodSweep <= 300_000) return;
+    this.lastFloodSweep = now;
+    if (this.floodConfig) {
+      this.pubFlood.sweep(this.floodConfig.pub.window * 1000);
+      this.msgFlood.sweep(this.floodConfig.msg.window * 1000);
+    }
+    this.floodWarned.clear();
   }
 
   /**

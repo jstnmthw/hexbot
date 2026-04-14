@@ -1,14 +1,16 @@
 // HexBot — Bot Link Protocol Layer
-// Frame serialization, socket wrapper, authentication helpers, rate limiting.
+// Frame serialization, socket wrapper, and authentication helpers.
 // Shared by both BotLinkHub and BotLinkLeaf.
+//
+// Type declarations live in `./types.ts`. Rate limiting lives in
+// `./rate-counter.ts`. Command-execution glue lives in `./cmd-exec.ts`.
 import { scryptSync } from 'node:crypto';
 import type { Socket } from 'node:net';
 import { createInterface as createReadline } from 'node:readline';
 
-import type { CommandContext, CommandEntry, PreExecuteHook } from '../../command-handler';
 import type { LoggerLike } from '../../logger';
-import type { UserRecord } from '../../types';
 import { sanitize } from '../../utils/sanitize';
+import type { LinkFrame } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -145,70 +147,6 @@ export function sanitizeFrame(obj: Record<string, unknown>, depth = 0): void {
 }
 
 // ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-/** A link protocol frame — JSON object with a `type` discriminator. */
-export interface LinkFrame {
-  type: string;
-  [key: string]: unknown;
-}
-
-/** A user on the cross-bot party line (used in PARTY_WHOM_REPLY). */
-export interface PartyLineUser {
-  handle: string;
-  nick: string;
-  botname: string;
-  connectedAt: number;
-  idle: number;
-}
-
-/** Minimal permissions interface needed by BotLink for command relay flag checks. */
-export interface LinkPermissions {
-  getUser(handle: string): UserRecord | null;
-  findByHostmask(fullHostmask: string): UserRecord | null;
-  checkFlagsByHandle(requiredFlags: string, handle: string, channel: string | null): boolean;
-}
-
-/** Minimal command handler interface needed by BotLink for command relay. */
-export interface CommandRelay {
-  execute(commandString: string, ctx: CommandContext): Promise<void>;
-  getCommand(name: string): CommandEntry | undefined;
-  setPreExecuteHook(hook: PreExecuteHook | null): void;
-}
-
-/** Factory for creating TCP connections (override in tests). */
-export type SocketFactory = (port: number, host: string) => Socket;
-
-// ---------------------------------------------------------------------------
-// RateCounter — sliding window rate limiter
-// ---------------------------------------------------------------------------
-
-export class RateCounter {
-  private timestamps: number[] = [];
-  private limit: number;
-  private windowMs: number;
-
-  constructor(limit: number, windowMs: number) {
-    this.limit = limit;
-    this.windowMs = windowMs;
-  }
-
-  /** Returns true if the action is allowed (under the rate limit). */
-  check(): boolean {
-    const now = Date.now();
-    this.timestamps = this.timestamps.filter((t) => t > now - this.windowMs);
-    if (this.timestamps.length >= this.limit) return false;
-    this.timestamps.push(now);
-    return true;
-  }
-
-  reset(): void {
-    this.timestamps = [];
-  }
-}
-
-// ---------------------------------------------------------------------------
 // BotLinkProtocol — socket wrapper with JSON frame serialization
 // ---------------------------------------------------------------------------
 
@@ -313,63 +251,4 @@ export class BotLinkProtocol {
   get remoteAddress(): string | undefined {
     return this.socket.remoteAddress;
   }
-}
-
-// ---------------------------------------------------------------------------
-// Shared command execution helper
-// ---------------------------------------------------------------------------
-
-/**
- * Execute an incoming CMD frame and return the output via a callback.
- * Shared between BotLinkHub.handleCmdRelay and BotLinkLeaf.handleIncomingCmd
- * to avoid duplicating the parse→lookup→check→execute→respond pattern.
- */
-export function executeCmdFrame(
-  frame: LinkFrame,
-  cmdHandler: CommandRelay,
-  permissions: LinkPermissions,
-  sendResult: (ref: string, output: string[]) => void,
-): void {
-  const handle = String(frame.fromHandle ?? '');
-  const ref = String(frame.ref ?? '');
-  const command = String(frame.command ?? '');
-  const args = String(frame.args ?? '');
-  const channel =
-    frame.channel !== null && frame.channel !== undefined ? String(frame.channel) : null;
-
-  const entry = cmdHandler.getCommand(command);
-  if (!entry) {
-    sendResult(ref, [`Unknown command: .${command}`]);
-    return;
-  }
-
-  if (!permissions.checkFlagsByHandle(entry.options.flags, handle, channel)) {
-    sendResult(ref, ['Permission denied.']);
-    return;
-  }
-
-  const output: string[] = [];
-  const ctx: CommandContext = {
-    source: 'botlink',
-    nick: handle,
-    ident: 'botlink',
-    hostname: 'botlink',
-    channel,
-    reply: (msg: string) => {
-      for (const line of msg.split('\n')) {
-        output.push(line);
-      }
-    },
-  };
-
-  cmdHandler
-    .execute(`.${command} ${args}`.trim(), ctx)
-    .then(() => {
-      sendResult(ref, output);
-    })
-    /* v8 ignore start -- .catch only fires if command handler throws */
-    .catch((err) => {
-      sendResult(ref, [`Error: ${err instanceof Error ? err.message : String(err)}`]);
-    });
-  /* v8 ignore stop */
 }

@@ -209,7 +209,7 @@ export function setupAutoOp(
       if (takeoverOn && !accessExplicit) {
         const channelKey = api.ircLower(channel);
         // Check after 5s — by then the probe should have completed or timed out
-        _state.scheduleCycle(5000, () => {
+        _state.cycles.schedule(5000, () => {
           const access = chain?.getAccess(channel) ?? 'none';
           if (access === 'none' && !_state.takeoverWarnedChannels.has(channelKey)) {
             _state.takeoverWarnedChannels.add(channelKey);

@@ -32,6 +32,14 @@ export interface ModActor {
  * fallback logic needed. Use this instead of hand-rolling `{ by: ctx.nick,
  * source: ... }` so an audit review can grep for the helper as the single
  * call-site-to-actor translation.
+ *
+ * @example
+ * handler.registerCommand('op', opts, (args, ctx) => {
+ *   const [channel, nick] = args.split(/\s+/);
+ *   // Pass ctx-derived actor to IRCCommands so mod_log gets `by`/`source` populated
+ *   // automatically — no hand-rolled `{ by: ctx.nick, source: ctx.source }` required.
+ *   ircCommands.op(channel, nick, auditActor(ctx));
+ * });
  */
 export function auditActor(ctx: CommandContext): ModActor {
   return { by: ctx.nick, source: ctx.source };

@@ -7,6 +7,7 @@ import type { LoggerLike } from '../logger';
 import type { BotConfig, Casemapping } from '../types';
 import type { BindHandler, BindType } from '../types';
 import { toEventObject } from '../utils/irc-event';
+import { ListenerGroup } from '../utils/listener-group';
 import { ircLower } from '../utils/wildcard';
 import { type ReconnectPolicy, classifyCloseReason } from './close-reason-classifier';
 import { type ServerCapabilities, parseISupport } from './isupport';
@@ -142,16 +143,11 @@ export function registerConnectionEvents(
   // stalled connections wait for TCP timeout (~2.5 min) before retrying.
   let registrationTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const listeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
-
-  function listen(event: string, fn: (...args: unknown[]) => void): void {
-    client.on(event, fn);
-    listeners.push({ event, fn });
-  }
+  const listeners = new ListenerGroup(client);
 
   // One-time listeners — registered before any connection events fire so they
   // are never stacked by reconnects.
-  registerJoinErrorListeners(client, logger, listeners);
+  registerJoinErrorListeners(logger, listeners);
   bindCoreInviteHandler(deps);
 
   const onConnecting = (): void => {
@@ -246,11 +242,11 @@ export function registerConnectionEvents(
     // Note: no reject() — the driver will retry on the subsequent 'close'.
   };
 
-  listen('registered', onRegistered);
-  listen('connecting', onConnecting);
-  listen('irc error', onIrcError);
-  listen('close', onClose);
-  listen('socket error', onSocketError);
+  listeners.on('registered', onRegistered);
+  listeners.on('connecting', onConnecting);
+  listeners.on('irc error', onIrcError);
+  listeners.on('close', onClose);
+  listeners.on('socket error', onSocketError);
 
   return {
     stopPresenceCheck(): void {
@@ -260,10 +256,7 @@ export function registerConnectionEvents(
       }
     },
     removeListeners(): void {
-      for (const { event, fn } of listeners) {
-        client.removeListener(event, fn);
-      }
-      listeners.length = 0;
+      listeners.removeAll();
       // Also clear any pending registration timeout
       if (registrationTimer !== null) {
         clearTimeout(registrationTimer);
@@ -367,37 +360,29 @@ function logTlsCipher(client: LifecycleIRCClient, logger: LoggerLike): void {
 }
 
 /** Register listeners for IRC join-error numerics (irc error + unknown command). */
-function registerJoinErrorListeners(
-  client: LifecycleIRCClient,
-  logger: LoggerLike,
-  listeners: Array<{ event: string; fn: (...args: unknown[]) => void }>,
-): void {
+function registerJoinErrorListeners(logger: LoggerLike, listeners: ListenerGroup): void {
   const JOIN_ERROR_NAMES: Record<string, string> = {
     channel_is_full: 'channel is full (+l)',
     invite_only_channel: 'invite only (+i)',
     banned_from_channel: 'banned from channel (+b)',
     bad_channel_key: 'bad channel key (+k)',
   };
-  const onJoinIrcError = (event: unknown): void => {
-    const e = toEventObject(event);
+  listeners.on('irc error', (...args: unknown[]) => {
+    const e = toEventObject(args[0]);
     const reason = JOIN_ERROR_NAMES[String(e.error ?? '')];
     if (reason) {
       logger.warn(`Cannot join ${String(e.channel ?? '')}: ${reason}`);
     }
-  };
-  client.on('irc error', onJoinIrcError);
-  listeners.push({ event: 'irc error', fn: onJoinIrcError });
+  });
 
   // 477 (need to register nick) is unknown to irc-framework — catch it via raw numeric.
-  const onUnknownCommand = (event: unknown): void => {
-    const e = toEventObject(event);
+  listeners.on('unknown command', (...args: unknown[]) => {
+    const e = toEventObject(args[0]);
     if (String(e.command ?? '') === '477') {
       const params = Array.isArray(e.params) ? (e.params as unknown[]) : [];
       logger.warn(`Cannot join ${String(params[1] ?? '')}: need to register nick (+r)`);
     }
-  };
-  client.on('unknown command', onUnknownCommand);
-  listeners.push({ event: 'unknown command', fn: onUnknownCommand });
+  });
 }
 
 /**

@@ -133,10 +133,19 @@ export function createPluginApi(
 
   // Track the wrapped handler for each (handler, type, mask) triple so
   // api.unbind() can find the real bound handler in the dispatcher
-  // (dispatcher matches by reference identity). Keyed on handler for GC,
-  // then on "type|mask" so the same handler can be reused across binds.
-  // Only populated when a channel scope is active.
-  const wrappedHandlers = new WeakMap<BindHandler, Map<string, BindHandler>>();
+  // (dispatcher matches by reference identity). Populated only when a
+  // channel scope is active. A plain array beats a WeakMap-of-Maps here:
+  // the list is bounded by this plugin's bind count, entries live exactly
+  // as long as the plugin API instance does, and unbind() is the only
+  // lookup path — O(n) scan is negligible in practice and the data shape
+  // is far easier to reason about than the nested-map version.
+  interface WrappedEntry {
+    handler: BindHandler;
+    type: BindType;
+    mask: string;
+    wrapped: BindHandler;
+  }
+  const wrappedHandlers: WrappedEntry[] = [];
 
   // Build plugin-facing bot config (password omitted; filesystem paths omitted).
   //
@@ -185,12 +194,7 @@ export function createPluginApi(
           }
           return widenedHandler(ctx);
         };
-        let perHandler = wrappedHandlers.get(widenedHandler);
-        if (!perHandler) {
-          perHandler = new Map();
-          wrappedHandlers.set(widenedHandler, perHandler);
-        }
-        perHandler.set(`${type}|${mask}`, wrapped);
+        wrappedHandlers.push({ handler: widenedHandler, type, mask, wrapped });
         dispatcher.bind(type, flags, mask, wrapped, pluginId);
       } else {
         dispatcher.bind(type, flags, mask, widenedHandler, pluginId);
@@ -198,11 +202,12 @@ export function createPluginApi(
     },
     unbind<T extends BindType>(type: T, mask: string, handler: BindHandler<T>): void {
       const widenedHandler = handler as BindHandler;
-      const key = `${type}|${mask}`;
-      const perHandler = wrappedHandlers.get(widenedHandler);
-      const actual = perHandler?.get(key) ?? widenedHandler;
+      const idx = wrappedHandlers.findIndex(
+        (e) => e.handler === widenedHandler && e.type === type && e.mask === mask,
+      );
+      const actual = idx === -1 ? widenedHandler : wrappedHandlers[idx].wrapped;
       dispatcher.unbind(type, mask, actual);
-      perHandler?.delete(key);
+      if (idx !== -1) wrappedHandlers.splice(idx, 1);
     },
     ...createPluginIrcActionsApi(deps.ircClient, deps.messageQueue, deps.ircCommands, pluginId),
     ...createPluginChannelStateApi(

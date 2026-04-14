@@ -35,10 +35,13 @@ A plugin that turns the hexbot into a classic "now playing" IRC radio announcer 
 
 - Spotify Jam **creation** or discovery via API — Spotify does not expose it; the operator pastes a pre-made share link.
 - Multi-host OAuth flow, per-user token storage, HTTP callback listener.
-- Any playback control (`!radio skip`, `!radio next`, `!radio queue`), listener count, stats, or history.
+- Playback control that needs the `user-modify-playback-state` scope (`!radio skip`, `!radio next`, direct Spotify-side queue insertion). MVP is strictly read-only. A post-MVP phase may opt in by re-running `spotify:auth` with an expanded scope.
+- Spotify-side listener count — no public API exposes it. Channel userlist size is not the same thing.
 - Re-streaming audio — forbidden by Spotify TOS. The bot is metadata only.
 - Reverse-engineering private Spotify endpoints (Friend Activity, Jam session state). Public Web API only.
 - State persistence across bot restarts — a restart ends the session. Documented, intentional.
+
+**Moved to Post-MVP (below):** eye-catching color styling for announcements, public `!request` intake, host queue management, auto-mark-played with requester attribution, and a backlog of polish features.
 
 ## Phases
 
@@ -510,3 +513,363 @@ These are things that would benefit from a user decision before building, but th
 5. **Retry-After clamping.** Spotify's `Retry-After` is usually small (seconds) but spec-wise can be anything. Should the poller clamp it to e.g. 5 minutes max so a buggy or hostile response can't pause the session indefinitely? Default: yes, clamp to `min(retryAfterSec, 300)`. **Confirm?**
 
 None of these are blockers for Phase 1 (auth script) or Phase 2 (skeleton). They only need answers before Phase 5 (commands) or Phase 6 (poll loop). Raise them with the operator when we get there if the defaults don't feel right.
+
+## Post-MVP roadmap
+
+Everything in this section ships after Phases 1–7 are green. Each phase here is independently buildable on top of the MVP code, introduces no new npm dependencies, and — critically — **introduces no new Spotify OAuth scopes**. The Web API `search` and `tracks` endpoints accept any valid user access token, so the existing `user-read-currently-playing user-read-playback-state` token minted in Phase 1 is sufficient for every feature below.
+
+**Design decisions locked during planning (do not revisit without cause):**
+
+- **Queue integration model:** logical queue only. Bot tracks requests in memory; the host plays them manually in their Spotify client and the existing poll loop auto-detects the play. No `user-modify-playback-state` scope is added, so the bot cannot and does not push tracks into Spotify's own queue. Safer, simpler, and Jam-compatible.
+- **Queue persistence:** in-memory. Dies on reload, teardown, and `!radio off` — same lifecycle as `RadioSession`. No DB schema.
+- **Request matching:** accept either a canonical `open.spotify.com/track/<id>` URL (deterministic) or free text (top Spotify `search` hit). No confirmation loop.
+- **Announcement style:** bold prefix plus accent colors. No background-color maximalism.
+
+### Phase 8: Eye-catching announcement styling
+
+**Goal:** Replace the plain `[radio] Now playing: …` line with a bold, accent-colored announcement so track transitions stand out from normal channel chatter without color-bombing the channel.
+
+**Why this phase ships first in the post-MVP run.** It is cosmetic-only, has no dependency on queue or request code, and every later phase reuses the shared formatter. Locking the visual language here means Phases 9–11 don't each reinvent it.
+
+**Color palette (mIRC codes):**
+
+| Element              | Code          | Notes                                |
+| -------------------- | ------------- | ------------------------------------ |
+| Prefix `[radio]`     | `\x02`…`\x02` | Bold, no color — matches rss plugin  |
+| Label `Now playing:` | `\x0311`      | Light cyan — leading accent          |
+| Track title          | `\x02\x0308`  | Bold yellow — the focal element      |
+| Separator `—`        | `\x0315`      | Light grey — recedes                 |
+| Artist               | `\x0307`      | Orange                               |
+| Track URL            | `\x0314`      | Grey — informational, deprioritized  |
+| Requester suffix     | `\x0313`      | Pink — added in Phase 11             |
+| Reset                | `\x0F`        | Explicitly closes every colored span |
+
+Every colored span is terminated with `\x0F`. This is defence against clients that render unterminated color state across the rest of the line — an unterminated color in one segment should not bleed into the next.
+
+**Helper module:** `plugins/spotify-radio/format.ts` (plugin-local, pure, no `api` dependency).
+
+```typescript
+export function formatNowPlaying(opts: {
+  prefix: string;
+  title: string;
+  artist: string;
+  url: string;
+  requestedBy?: string; // added in Phase 11
+}): string;
+
+export function formatOpening(prefix: string, jamUrl: string): string;
+export function formatSessionEnded(prefix: string, reason: 'manual' | 'ttl' | 'error'): string;
+export function formatQueued(
+  prefix: string,
+  title: string,
+  artist: string,
+  nick: string,
+  position: number,
+): string; // Phase 9
+export function formatQueueLine(index: number, req: QueuedRequest): string; // Phase 10
+export function formatHistoryLine(index: number, req: QueuedRequest): string; // Phase 10
+export function formatSessionSummary(
+  prefix: string,
+  played: number,
+  requested: number,
+  durationMs: number,
+): string; // Phase 11
+```
+
+Every format function owns its own color codes; the poll-loop and command code should never hand-splice ANSI. This keeps tests focused on one module and call sites readable.
+
+**Safety rules (non-negotiable):**
+
+- Every string that originates from Spotify (`title`, `artist`, `album`) or from a requester (`nick`) **must** pass through `api.stripFormatting()` at the call site **before** being handed to the formatter. Otherwise a maliciously-named track could inject its own color codes and break the layout.
+- The formatter applies `slice(0, N)` length caps (120 chars title, 80 chars artist, 16 chars nick) **after** `stripFormatting` so caps count visible characters, not hidden control bytes.
+- The formatter is pure: no `api.*`, no logging, no `Date.now()`. Every output is deterministic given its inputs.
+
+**Tasks:**
+
+- [ ] Create `plugins/spotify-radio/format.ts` with `formatNowPlaying`, `formatOpening`, `formatSessionEnded` (the Phase 9/10/11 formatters land in their own phases).
+- [ ] Rewire Phase 6 `announceTrack` to call `formatNowPlaying`.
+- [ ] Rewire Phase 5 `handleRadioOn` opening line to call `formatOpening`.
+- [ ] Rewire Phase 5 `handleRadioOff` to call `formatSessionEnded`.
+- [ ] Unit tests in `tests/plugins/spotify-radio/format.test.ts`:
+  - Byte-exact snapshot per formatter variant.
+  - Title/artist containing `\x02`, `\x03,04`, `\x0F` (post-`stripFormatting` shouldn't reach the formatter — but test what happens if it does, so injection can't cross layers silently).
+  - Length caps count visible characters.
+  - Every colored segment is terminated (grep the output for unbalanced `\x03` without a following `\x0F`).
+
+### Phase 9: Public `!request` intake
+
+**Goal:** Any user in the channel can run `!request <text-or-url>` while a session is active. The bot resolves the input to a Spotify track and appends it to an in-memory queue for the host to play.
+
+**Preconditions enforced by the handler (in order):**
+
+1. A session must be active. Otherwise → notice `Requests are only open while radio is on.`
+2. `cfg.requests_enabled` must be `true`. Operator kill switch without needing to unload the plugin.
+3. `session.requestsMuted` (introduced in Phase 10) must be `false`. Per-session kill switch for the host.
+
+**New config fields (`plugins/spotify-radio/config.json`):**
+
+```json
+{
+  "requests_enabled": true,
+  "max_queue_size": 50,
+  "max_pending_per_nick": 3,
+  "request_cooldown_sec": 60
+}
+```
+
+All four are overridable from `plugins.json`. `loadConfig` validates ranges (`max_queue_size` ∈ [1, 500], `max_pending_per_nick` ∈ [1, 20], `request_cooldown_sec` ∈ [0, 3600]).
+
+**Queue state (module-level, reset in `teardown()` and on every `handleRadioOff`):**
+
+```typescript
+interface QueuedRequest {
+  id: number; // monotonic, starts at 1 per session
+  trackId: string; // bare Spotify track id (no spotify:track: prefix)
+  title: string;
+  artist: string;
+  url: string; // https://open.spotify.com/track/<id>
+  requestedBy: string; // nick at request time
+  requestedAt: number; // ms epoch
+  status: 'pending' | 'played' | 'removed';
+  playedAt?: number;
+}
+
+let requestQueue: QueuedRequest[] = [];
+let nextRequestId = 1;
+let lastRequestAt = new Map<string, number>(); // nick → ms epoch
+```
+
+Single list filtered by `status`. `!radio history` (Phase 10) walks the same array filtered to `played`. Simpler than maintaining parallel pending/history arrays.
+
+**Spotify client extensions.** Add two methods to the Phase 3 `SpotifyClient`:
+
+```typescript
+interface SpotifyClient {
+  getCurrentlyPlaying(): Promise<CurrentlyPlaying | null>;
+  getTrack(id: string): Promise<TrackSummary | null>; // GET /v1/tracks/<id>
+  searchTrack(query: string): Promise<TrackSummary | null>; // GET /v1/search?type=track&limit=1&q=...
+}
+
+interface TrackSummary {
+  trackId: string;
+  title: string;
+  artist: string;
+  url: string;
+}
+```
+
+Both methods share the existing token cache and error classes. 401 retry logic, 429 `Retry-After` handling, network-error wrapping — all reused. The same "never log secrets" rule applies.
+
+**Resolution pipeline (`resolveRequestInput`, in `plugins/spotify-radio/request.ts`):**
+
+1. Trim; reject empty → `{ error: 'usage' }`.
+2. Cap at 200 chars. Strip `\r`, `\n`, `\0`.
+3. If the input matches `/^https:\/\/open\.spotify\.com\/track\/([A-Za-z0-9]{22})(\?.*)?$/`, capture the id and call `client.getTrack(id)`.
+4. Otherwise call `client.searchTrack(cleaned)`.
+5. `null` result → `{ error: 'no_match', query: cleaned }`.
+6. Otherwise return the `TrackSummary` — note that every field in the returned record comes from Spotify's response, so no requester-controlled string ends up in the queue, the announcement, or the logs.
+
+**Queue insertion (`enqueueRequest`, pure synchronous function on the module state):**
+
+- Queue full? `requestQueue.filter(r => r.status === 'pending').length >= cfg.max_queue_size` → `{ error: 'full' }`.
+- Nick on cooldown? `Date.now() - (lastRequestAt.get(nick) ?? 0) < cfg.request_cooldown_sec * 1000` → `{ error: 'cooldown', remainingSec }`.
+- Nick at pending cap? More than `cfg.max_pending_per_nick` pending from this nick → `{ error: 'pending_cap' }`.
+- Duplicate pending trackId? → `{ error: 'duplicate', existingPosition }`.
+- All checks pass → push, stamp `lastRequestAt`, return `{ ok: true, request, position }`.
+
+Dedupe is pending-only. Once a track plays, someone can request it again (encouraging rotation).
+
+**Channel confirmation line (`formatQueued`, lands in Phase 9 so the formatter grows here):**
+
+```
+\x02[radio]\x02 \x0309Queued:\x0F \x02\x0308Still D.R.E\x0F \x0315—\x0F \x0207Dr. Dre\x0F \x0315(#3, requested by \x0313nick\x0F\x0315)\x0F
+```
+
+Channel-visible (not a notice) so other listeners see queue activity in real time.
+
+**Tasks:**
+
+- [ ] Extend `SpotifyClient` with `getTrack` and `searchTrack`; unit tests mirror the Phase 3 pattern.
+- [ ] Add new config fields to `config.json` and `PluginConfig`; extend `loadConfig` with range checks.
+- [ ] Extend module-level state and `teardown()`.
+- [ ] Create `plugins/spotify-radio/request.ts` with `resolveRequestInput` and `enqueueRequest`.
+- [ ] Register `pub '-' '!request'` bind; handler composes resolve + enqueue + announce.
+- [ ] Add `formatQueued` to `format.ts`.
+- [ ] `api.registerHelp` entry for `!request`.
+- [ ] Tests: see the post-MVP test plan below.
+
+### Phase 10: Host queue management and listener peek commands
+
+**Goal:** Host can inspect, curate, and pause the queue; listeners get lightweight public peek commands.
+
+**Session extension (add one field to `RadioSession`):**
+
+```typescript
+requestsMuted: boolean; // defaults to false; set via !radio requests off/on
+```
+
+**New commands (all registered via the existing single `pub '-' '!radio'` dispatcher from Phase 5, plus two new top-level binds for the public aliases):**
+
+| Command               | Flags | Visibility     | Behavior                                                                                  |
+| --------------------- | ----- | -------------- | ----------------------------------------------------------------------------------------- |
+| `!radio queue`        | —     | notice invoker | Top 10 pending with `#id  title — artist  (nick)`. Readable by anyone — it's just a peek. |
+| `!radio played <id>`  | `n`   | notice invoker | Mark a pending request as `played` (fallback when auto-detect missed it).                 |
+| `!radio drop <id>`    | `n`   | notice invoker | Mark a pending request as `removed`.                                                      |
+| `!radio clear`        | `n`   | notice invoker | Mark all pending requests as `removed`; played history is preserved.                      |
+| `!radio requests off` | `n`   | notice invoker | Set `session.requestsMuted = true`.                                                       |
+| `!radio requests on`  | `n`   | notice invoker | Clear `session.requestsMuted`.                                                            |
+| `!radio history`      | —     | notice invoker | Last 10 played tracks with requester attribution where present.                           |
+| `!queue`              | —     | **channel**    | Public alias; prints top 5 to the channel so everyone sees what's coming.                 |
+| `!np`                 | —     | **channel**    | Channel-visible "now playing" (different from bare `!radio`, which notices the invoker).  |
+
+**Tasks:**
+
+- [ ] Extend the Phase 5 `!radio` subcommand dispatcher with the seven new subcommands.
+- [ ] Register `pub '-' '!queue'` and `pub '-' '!np'` binds.
+- [ ] Add `formatQueueLine` and `formatHistoryLine` to `format.ts` (dim `#id` in grey, title in bold yellow, artist in orange, nick in pink).
+- [ ] Register `api.registerHelp` entries for every new command.
+- [ ] Tests: see the post-MVP test plan below.
+
+### Phase 11: Auto-mark-played and requester attribution
+
+**Goal:** When the host plays a queued track, the poll loop auto-marks that request as `played` and the channel announcement credits the requester.
+
+**Match rules (extend the Phase 6 tick handler, right after the `current.trackId !== session.lastTrackId` check):**
+
+1. Find the oldest `requestQueue` entry with `status === 'pending'` and `trackId === current.trackId`.
+2. If found: mutate `req.status = 'played'`, `req.playedAt = Date.now()`; pass `req.requestedBy` to `announceTrack`.
+3. If not found: announce with no attribution (host is DJing off-list, which is expected and fine).
+
+**Announcement signature change.** `announceTrack(api, session, current, requestedBy?)`. The optional `requestedBy` forwards to `formatNowPlaying`; when present, the formatter appends the pink-accent attribution segment.
+
+**Session-end summary.** `handleRadioOff` now posts a final summary line via `formatSessionSummary(prefix, playedCount, requestedCount, durationMs)`:
+
+```
+\x02[radio]\x02 \x0312Session ended.\x0F \x0315Played\x0F \x0208 42\x0F \x0315tracks over\x0F \x0208 2h14m\x0F\x0315, 12 requested.\x0F
+```
+
+Counts come from `requestQueue.filter(r => r.status === 'played')`; duration from `Date.now() - session.startedAt`.
+
+**Edge cases (documented and handled):**
+
+- **Two pending requests for the same track (different nicks).** Oldest wins this attribution. The second stays pending — if the host plays the same track again later in the session, the second gets attributed on the second play; otherwise it sits until `!radio off` or a manual drop.
+- **Host plays a track that's in played history but not currently pending.** Not a match (only `status === 'pending'` counts). Regular announcement, no attribution.
+- **Poll missed the play entirely** (the track finished during a 429 backoff window). Request stays pending. Host can recover with `!radio played <id>`.
+- **Host plays an entirely unrelated track.** No match, no attribution, regular colored announcement.
+
+**Tasks:**
+
+- [ ] Extend `announceTrack` signature with the optional `requestedBy` parameter.
+- [ ] Extend the poll-loop tick handler with the pending-request lookup and status mutation.
+- [ ] Extend `handleRadioOff` to post the session summary line.
+- [ ] Add `formatSessionSummary` to `format.ts`.
+- [ ] Tests: see the post-MVP test plan below.
+
+### Phase 12: Backlog (not committed)
+
+Nice-to-haves to revisit after Phases 8–11 ship and operators report real-world feedback. Each item is small enough to be its own PR. Listed here so they aren't forgotten, not as a commitment.
+
+- **`!lastplayed <nick>`** — show the most recent track `<nick>` requested that actually played. Good for "what was that song" recovery.
+- **`!skip` vote.** Listeners run `!skip`; at a threshold the bot notices the host to advance. The bot can't actually skip (would need the elevated scope) — this is a social signal, not playback control.
+- **Top artists / top requesters (session only).** `!radio top` aggregates from the queue history.
+- **Banned-term list.** Config-driven keyword blocklist for `!request` plus host-side `!radio ban <term>` / `!radio unban` (session-only overrides). Cleans up noisy channels.
+- **Clean-mode filter.** Skip tracks whose Spotify metadata has `explicit: true`. Config flag, off by default.
+- **DJ shoutouts.** `!radio shoutout <msg>` (host-only) posts a one-off colored line to the channel. Pure cosmetic.
+- **Low-confidence confirm flow.** If `searchTrack` returns a weak match, notice the requester with `Did you mean "<X>"? Reply !yes within 30s.` — stateful per-nick conversation, opt-in per config.
+- **Session persistence across restarts.** Write `requestQueue` and `RadioSession` to SQLite so reloads don't nuke an in-progress show. Non-trivial — defer until someone actually asks.
+- **Per-channel concurrent sessions.** Sibling of MVP open question #1. Real design work (session map, dispatcher scoping, poll loop fan-out), not drop-in.
+- **Web dashboard / REST.** Explicitly ruled out — hexbot is an IRC bot. Listed only to make the refusal visible.
+- **Expanded-scope opt-in.** Re-run `spotify:auth` with `user-modify-playback-state` added; unlock a real `!radio skip` and optional "push requests into host's Spotify queue" mode. Gated behind a config flag that defaults off. The logical queue from Phase 9 remains the source of truth.
+
+### Post-MVP test plan
+
+All tests follow the MVP conventions: Vitest, no real network, mocked `SpotifyClient`, no real Spotify traffic. Test files live under `tests/plugins/spotify-radio/`.
+
+**`format.test.ts`** (Phase 8)
+
+- Byte-exact snapshot of `formatNowPlaying`, `formatOpening`, `formatSessionEnded('manual'|'ttl'|'error')`, `formatSessionSummary`, `formatQueued`, `formatQueueLine`, `formatHistoryLine`.
+- `formatNowPlaying` with `requestedBy` appends the attribution segment; without it, no trailing segment.
+- Every colored span is terminated with `\x0F` (scan output for unbalanced color starts).
+- Title/artist/nick with embedded `\x02`, `\x03,04`, `\x0F` does not bleed into later segments — the reset tokens hold.
+- Length caps (120 title, 80 artist, 16 nick) count visible characters, not control bytes.
+
+**`spotify-client.test.ts`** (Phase 9 extensions — extends the Phase 3 test file)
+
+- `searchTrack` with a result → returns a populated `TrackSummary`.
+- `searchTrack` with an empty `tracks.items` → returns `null`.
+- `getTrack` with 200 → returns a populated `TrackSummary`.
+- `getTrack` with 404 → returns `null`.
+- Both methods reuse the token cache (no extra mint on back-to-back calls).
+- 429 on `searchTrack` → `SpotifyRateLimitError` with `retryAfterSec`.
+- Secret-redaction assertion: test refresh token, client secret, and access token never appear in any logged argument across any of the new tests.
+
+**`request.test.ts`** (Phase 9)
+
+- `resolveRequestInput` with a canonical `open.spotify.com/track/<22>` URL → calls `getTrack`, returns canonical metadata.
+- `resolveRequestInput` with free text → calls `searchTrack`, returns the top hit.
+- `resolveRequestInput` with empty input → `{ error: 'usage' }`.
+- `resolveRequestInput` with 250-char input → truncates to 200, proceeds.
+- `resolveRequestInput` with `\r\n\0` injected → characters stripped before search.
+- `resolveRequestInput` with zero results → `{ error: 'no_match', query }`.
+- `enqueueRequest` inserts and returns position; duplicate trackId returns `{ error: 'duplicate', existingPosition }`; cooldown returns `{ error: 'cooldown', remainingSec }`; full queue returns `{ error: 'full' }`; pending cap returns `{ error: 'pending_cap' }`.
+- `enqueueRequest` after a played entry with the same trackId: no longer a duplicate (dedupe is pending-only).
+- `lastRequestAt` map is populated on successful enqueue and does **not** advance on failed enqueue.
+
+**`queue-commands.test.ts`** (Phase 10)
+
+- `!radio queue` with 3 pending → 3 notice lines to invoker.
+- `!radio queue` with 0 pending → notice `Queue is empty.`.
+- `!radio played <id>` as owner with matching pending → marks played, notice confirms.
+- `!radio played <id>` as non-owner → rejected.
+- `!radio played <id>` with nonexistent id → `No such request.`
+- `!radio drop <id>` as owner → marks removed; subsequent `!radio queue` omits it.
+- `!radio clear` as owner with 5 pending → all 5 marked removed, notice includes count.
+- `!radio requests off` then `!request` → rejected with `Requests are paused.`.
+- `!radio requests on` → requests work again.
+- `!queue` with 5 pending → prints top 5 to the channel (not notice).
+- `!np` with active session and a current track → prints to channel.
+- `!np` with no session → prints `Radio is off.` to channel.
+
+**`auto-mark-played.test.ts`** (Phase 11 — extends the MVP `poll-loop.test.ts`)
+
+- Pending request for track A + poll returns track A → announcement includes `(requested by nick)`, request transitions to `played`, `playedAt` stamped.
+- Pending request for track A + poll returns track B → request stays pending, announcement has no attribution.
+- Two pending requests for track A from different nicks + poll returns track A → first-requested wins, second remains pending.
+- Sequence: track A (pending) → B → A again → first A attributed, second A has no attribution (no more pending A).
+- Session-end summary with 10 played, 6 requested, duration 1h23m → output matches `formatSessionSummary` byte-exact.
+- Plugin reload mid-session (extends MVP test): `teardown()` clears `requestQueue`, `nextRequestId`, `lastRequestAt`, `session`; `init()` starts clean.
+
+## Post-MVP config changes (cumulative)
+
+### New fields in `plugins/spotify-radio/config.json`
+
+```json
+{
+  "requests_enabled": true,
+  "max_queue_size": 50,
+  "max_pending_per_nick": 3,
+  "request_cooldown_sec": 60
+}
+```
+
+### `plugins.json` override example (post-MVP)
+
+```json
+{
+  "spotify-radio": {
+    "enabled": true,
+    "channels": ["#radio"],
+    "config": {
+      "poll_interval_sec": 10,
+      "requests_enabled": true,
+      "max_queue_size": 30,
+      "max_pending_per_nick": 2,
+      "request_cooldown_sec": 45
+    }
+  }
+}
+```
+
+## Post-MVP database changes
+
+**Still none.** The queue, per-nick cooldowns, and session summary all live in module state and die with the session. Persistence is explicitly deferred to the Phase 12 backlog and requires its own planning round.
