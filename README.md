@@ -9,9 +9,11 @@ HexBot is a modular Internet Relay Chat bot for Node.js, written in TypeScript. 
 - **Event bind system** — register handlers for IRC events with `bind(type, flags, mask, handler)`.
 - **Flag-based permissions** — owner/master/op/voice flags with hostmask and IRCv3 account-tag matching
 - **Hot-reloadable plugins** — load, unload, and reload plugins at runtime without restarting the bot
-- **DCC CHAT console** — remote admin party line with per-user scrypt passwords (Eggdrop-style auth)
+- **DCC CHAT console** — remote admin party line with per-user scrypt passwords (Eggdrop-style auth) and per-session log-stream flags
 - **Bot linking** — hub-and-leaf multi-bot networking with permission sync, command relay, and ban sharing
+- **Audit log** — every privileged action lands in `mod_log` with structured filters via `.modlog` / `.audit-tail`
 - **Flood protection** — token-bucket outgoing queue and per-user input rate limiting
+- **IRCv3 ready** — ISUPPORT-driven mode/prefix handling, `extended-join`/`account-notify`/`away-notify`/`account-tag` consumption, and Strict Transport Security enforcement
 - **Docker-ready** — multi-stage build, healthcheck, bind-mount config and plugins
 
 ## Quick start
@@ -80,6 +82,7 @@ Plugins live in `plugins/<name>/` and are auto-discovered on startup. Any plugin
 | **flood**   | _(automatic)_                                                                                                | Inbound flood protection: rate limiting, join/part spam, nick-change spam; escalating enforcement                        |
 | **greeter** | _(automatic)_                                                                                                | Greets users on channel join                                                                                             |
 | **help**    | `!help [command]`                                                                                            | Lists available commands or shows help for a specific command                                                            |
+| **rss**     | `!rss list`, `!rss add`, `!rss remove`, `!rss check`                                                         | Polls RSS/Atom feeds and announces new items to configured channels                                                      |
 | **seen**    | `!seen <nick>`                                                                                               | Tracks when a user was last active                                                                                       |
 | **topic**   | `!topic <theme> <text>`, `!topic preview <theme> <text>`, `!topics`                                          | Set channel topics with IRC color-coded theme borders                                                                    |
 
@@ -95,6 +98,7 @@ The bot's dot-commands (`.` prefix) provide administration via the REPL, IRC, or
 | -------------------------------------- | -------- | ------------------------------------------- |
 | `.help [cmd]`                          | `-`      | List commands or show help for one          |
 | `.status`                              | `+o`     | Connection info, uptime, bind/user counts   |
+| `.uptime`                              | `+o`     | One-line uptime with bold-red digits        |
 | `.say <target> <msg>`                  | `+o`     | Send a message to a channel or user         |
 | `.msg <target> <msg>`                  | `+o`     | Send a PRIVMSG to any target                |
 | `.join <channel>`                      | `+o`     | Join a channel                              |
@@ -108,6 +112,7 @@ The bot's dot-commands (`.` prefix) provide administration via the REPL, IRC, or
 | `.chanset <#chan> [key] [value]`       | `+m`     | View or set per-channel plugin settings     |
 | `.chaninfo <#chan>`                    | `+o`     | Show all per-channel settings for a channel |
 | `.binds [plugin]`                      | `+o`     | List active event binds                     |
+| `.modlog [filters]`                    | `+m`     | Page the audit log (DCC-only; see AUDIT.md) |
 | `.plugins`                             | `-`      | List loaded plugins                         |
 | `.load <name>`                         | `+n`     | Load a plugin                               |
 | `.unload <name>`                       | `+n`     | Unload a plugin                             |
@@ -132,10 +137,13 @@ Available when bot linking is enabled in `bot.json`. See [docs/BOTLINK.md](docs/
 
 Available inside a DCC CHAT session. See [docs/DCC.md](docs/DCC.md) for setup.
 
-| Command    | Description                     |
-| ---------- | ------------------------------- |
-| `.console` | Show who is on the console      |
-| `.quit`    | Disconnect from the DCC session |
+| Command                      | Description                                              |
+| ---------------------------- | -------------------------------------------------------- |
+| `.who`                       | Show who is on the console                               |
+| `.console [+flags\|-flags]`  | Show or set per-session log-stream flags (Eggdrop-style) |
+| `.modlog [filters]`          | Page the audit log with cursor-based pagination          |
+| `.audit-tail [filters\|off]` | Stream audit-log rows live as they are written           |
+| `.quit`                      | Disconnect from the DCC session                          |
 
 ## Permission flags
 
