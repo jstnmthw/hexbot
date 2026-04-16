@@ -28,6 +28,7 @@ export default defineConfig({
         'src/bot.ts',
         'plugins/topic/themes.ts',
         'plugins/*/tsup.config.ts',
+        'plugins/ai-chat/index.ts',
       ],
       // Thresholds set to the current floor with a small ~0.3 pt buffer.
       // Lowered from {stmt:96, br:92, fn:97, ln:97} on 2026-04-14 after

@@ -76,7 +76,7 @@ describe('ai-chat admin commands', () => {
   let permissions: Permissions;
 
   async function loadPlugin(pluginsConfig?: PluginsConfig): Promise<void> {
-    const result = await loader.load(resolve('./plugins/ai-chat/index.ts'), pluginsConfig);
+    const result = await loader.load(resolve('./plugins/ai-chat/dist/index.js'), pluginsConfig);
     expect(result.status).toBe('ok');
   }
 
@@ -271,7 +271,7 @@ describe('ai-chat without a provider', () => {
       botConfig: BOT_CONFIG,
       ircClient: null,
     });
-    const result = await loader.load(resolve('./plugins/ai-chat/index.ts'));
+    const result = await loader.load(resolve('./plugins/ai-chat/dist/index.js'));
     expect(result.status).toBe('ok');
   });
 
@@ -308,7 +308,7 @@ describe('ai-chat sessions disabled', () => {
       botConfig: BOT_CONFIG,
       ircClient: null,
     });
-    const result = await loader.load(resolve('./plugins/ai-chat/index.ts'), {
+    const result = await loader.load(resolve('./plugins/ai-chat/dist/index.js'), {
       'ai-chat': { config: { sessions: { enabled: false } } },
     });
     expect(result.status).toBe('ok');
@@ -362,7 +362,7 @@ describe('ai-chat budget/session edge paths', () => {
       ircClient: null,
     });
     // Tiny per-user budget to force budget_exceeded
-    await loader.load(resolve('./plugins/ai-chat/index.ts'), {
+    await loader.load(resolve('./plugins/ai-chat/dist/index.js'), {
       'ai-chat': { config: { token_budgets: { per_user_daily: 1, global_daily: 100 } } },
     });
   });
@@ -409,7 +409,7 @@ describe('ai-chat play subcommand edge cases', () => {
       botConfig: BOT_CONFIG,
       ircClient: null,
     });
-    await loader.load(resolve('./plugins/ai-chat/index.ts'));
+    await loader.load(resolve('./plugins/ai-chat/dist/index.js'));
   });
 
   afterEach(async () => {
@@ -447,7 +447,7 @@ describe('ai-chat channel_personalities', () => {
       botConfig: BOT_CONFIG,
       ircClient: null,
     });
-    const result = await loader.load(resolve('./plugins/ai-chat/index.ts'), {
+    const result = await loader.load(resolve('./plugins/ai-chat/dist/index.js'), {
       'ai-chat': {
         config: {
           channel_personalities: {

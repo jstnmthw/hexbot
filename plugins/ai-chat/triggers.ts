@@ -6,14 +6,13 @@ export interface TriggerConfig {
   directAddress: boolean;
   command: boolean;
   commandPrefix: string;
-  pm: boolean;
   keywords: string[];
   randomChance: number;
 }
 
 /** The kind of trigger that matched, plus the user's actual question/text. */
 export interface TriggerMatch {
-  kind: 'direct' | 'command' | 'pm' | 'keyword' | 'random';
+  kind: 'direct' | 'command' | 'keyword' | 'random';
   /** The user's message with trigger prefix (nick/command) stripped. */
   prompt: string;
 }
@@ -65,28 +64,21 @@ function hostmaskMatches(hostmask: string, pattern: string): boolean {
 }
 
 /**
- * Detect whether a channel or PM message should trigger a response.
+ * Detect whether a channel message should trigger a response.
  *
  * @param text     — raw message text
- * @param isPm     — true if this arrived as a private message
  * @param botNick  — bot's current nick
  * @param config   — active trigger config
  * @param rng      — random source for randomChance (0..1)
  */
 export function detectTrigger(
   text: string,
-  isPm: boolean,
   botNick: string,
   config: TriggerConfig,
   rng: () => number = Math.random,
 ): TriggerMatch | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
-
-  if (isPm) {
-    if (!config.pm) return null;
-    return { kind: 'pm', prompt: trimmed };
-  }
 
   // Command trigger: e.g. "!ai what's up"
   if (config.command && config.commandPrefix) {

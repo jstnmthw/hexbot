@@ -14,8 +14,6 @@ export interface ContextEntry {
 export interface ContextManagerConfig {
   /** Max messages to keep per channel buffer. */
   maxMessages: number;
-  /** Max messages to keep per PM buffer. */
-  pmMaxMessages: number;
   /** Target token budget for serialized context (heuristic, chars/4). */
   maxTokens: number;
   /** Messages older than this are pruned on access. */
@@ -26,7 +24,7 @@ export interface ContextManagerConfig {
 const CHARS_PER_TOKEN = 4;
 
 /**
- * Per-channel and per-user sliding-window message buffers.
+ * Per-channel sliding-window message buffers.
  *
  * Serializes entries into an AIMessage[] with role 'user' for humans and
  * 'assistant' for the bot, annotated with the speaker's nick so the model
@@ -34,7 +32,6 @@ const CHARS_PER_TOKEN = 4;
  */
 export class ContextManager {
   private channels = new Map<string, ContextEntry[]>();
-  private pms = new Map<string, ContextEntry[]>();
 
   constructor(
     private config: ContextManagerConfig,
@@ -48,34 +45,33 @@ export class ContextManager {
 
   /**
    * Record a message.
-   * @param channel  — channel name, or null for PM (then nick is the buffer key)
+   * @param channel  — channel name (required — PM support removed)
    * @param nick     — speaker
    * @param text     — message content
    * @param isBot    — true if this was a message sent by the bot
    */
   addMessage(channel: string | null, nick: string, text: string, isBot: boolean): void {
+    if (channel === null) return; // PM removed — silently ignore
     const entry: ContextEntry = { nick, text, isBot, timestamp: this.now() };
-    const map = channel === null ? this.pms : this.channels;
-    const key = channel === null ? nick.toLowerCase() : channel.toLowerCase();
-    const maxCount = channel === null ? this.config.pmMaxMessages : this.config.maxMessages;
+    const key = channel.toLowerCase();
 
-    let buf = map.get(key);
+    let buf = this.channels.get(key);
     if (!buf) {
       buf = [];
-      map.set(key, buf);
+      this.channels.set(key, buf);
     }
     buf.push(entry);
-    if (buf.length > maxCount) buf.splice(0, buf.length - maxCount);
+    if (buf.length > this.config.maxMessages) buf.splice(0, buf.length - this.config.maxMessages);
   }
 
   /**
-   * Build the AI-facing messages array for a channel (or nick for PM).
+   * Build the AI-facing messages array for a channel.
    * The oldest messages are dropped until the serialized length fits the token budget.
    */
-  getContext(channel: string | null, nick: string): AIMessage[] {
-    const map = channel === null ? this.pms : this.channels;
-    const key = channel === null ? nick.toLowerCase() : channel.toLowerCase();
-    const buf = this.pruneAndGet(map, key);
+  getContext(channel: string | null, _nick: string): AIMessage[] {
+    if (channel === null) return []; // PM removed
+    const key = channel.toLowerCase();
+    const buf = this.pruneAndGet(key);
     if (buf.length === 0) return [];
 
     // Build messages newest-first, then reverse — lets us stop as soon as we exceed budget.
@@ -92,38 +88,30 @@ export class ContextManager {
     return messages.reverse();
   }
 
-  /** Drop the buffer for a channel (or nick for PM). */
-  clearContext(channel: string | null, nick?: string): void {
-    if (channel === null) {
-      if (nick) this.pms.delete(nick.toLowerCase());
-      else this.pms.clear();
-    } else {
-      this.channels.delete(channel.toLowerCase());
-    }
+  /** Drop the buffer for a channel. */
+  clearContext(channel: string): void {
+    this.channels.delete(channel.toLowerCase());
   }
 
-  /** Return the number of messages currently buffered for a target. */
-  size(channel: string | null, nick: string): number {
-    const map = channel === null ? this.pms : this.channels;
-    const key = channel === null ? nick.toLowerCase() : channel.toLowerCase();
-    return map.get(key)?.length ?? 0;
+  /** Return the number of messages currently buffered for a channel. */
+  size(channel: string): number {
+    return this.channels.get(channel.toLowerCase())?.length ?? 0;
   }
 
   /** Evict entries older than the configured TTL (idempotent). */
   pruneAll(): void {
-    for (const key of this.channels.keys()) this.pruneAndGet(this.channels, key);
-    for (const key of this.pms.keys()) this.pruneAndGet(this.pms, key);
+    for (const key of this.channels.keys()) this.pruneAndGet(key);
   }
 
-  private pruneAndGet(map: Map<string, ContextEntry[]>, key: string): ContextEntry[] {
-    const buf = map.get(key);
+  private pruneAndGet(key: string): ContextEntry[] {
+    const buf = this.channels.get(key);
     if (!buf) return [];
     const cutoff = this.now() - this.config.ttlMs;
     // Find first entry still within the TTL window.
     let drop = 0;
     while (drop < buf.length && buf[drop].timestamp < cutoff) drop++;
     if (drop > 0) buf.splice(0, drop);
-    if (buf.length === 0) map.delete(key);
+    if (buf.length === 0) this.channels.delete(key);
     return buf;
   }
 }

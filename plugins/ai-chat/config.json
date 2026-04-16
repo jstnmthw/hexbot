@@ -8,7 +8,6 @@
     "direct_address": true,
     "command": true,
     "command_prefix": "!ai",
-    "pm": true,
     "keywords": [],
     "random_chance": 0
   },
@@ -25,7 +24,6 @@
   "context": {
     "max_messages": 50,
     "max_tokens": 4000,
-    "pm_max_messages": 20,
     "ttl_minutes": 60
   },
 
@@ -54,6 +52,13 @@
     "ignore_list": [],
     "ignore_bots": true,
     "bot_nick_patterns": ["*bot", "*Bot", "*BOT"]
+  },
+
+  "security": {
+    "privilege_gating": false,
+    "privileged_mode_threshold": "h",
+    "privileged_required_flag": "m",
+    "disable_when_privileged": false
   },
 
   "sessions": {

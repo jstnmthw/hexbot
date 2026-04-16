@@ -59,7 +59,6 @@ function makeDeps(providerOverride?: AIProvider) {
     tokenTracker: new TokenTracker(makeDb(), { perUserDaily: 10_000, globalDaily: 100_000 }),
     contextManager: new ContextManager({
       maxMessages: 10,
-      pmMaxMessages: 5,
       maxTokens: 1000,
       ttlMs: 60_000,
     }),

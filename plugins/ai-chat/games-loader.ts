@@ -3,10 +3,13 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** Resolve the plugin's games directory, relative to this module file. */
+/** Resolve the plugin's games directory, relative to the plugin root.
+ *  When bundled to dist/index.js, go up one level to reach the plugin root. */
 export function resolveGamesDir(relative = 'games'): string {
   const here = dirname(fileURLToPath(import.meta.url));
-  return resolve(here, relative);
+  // If we're inside a dist/ directory (bundled), go up to the plugin root.
+  const pluginRoot = here.endsWith('/dist') || here.endsWith('\\dist') ? resolve(here, '..') : here;
+  return resolve(pluginRoot, relative);
 }
 
 /** List game names (without `.txt` extension) found in the games dir. */

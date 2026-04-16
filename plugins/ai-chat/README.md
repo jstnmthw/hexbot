@@ -35,9 +35,10 @@ No key? The plugin loads in degraded mode (every trigger replies with "AI chat i
 | ---------------- | ------------------------------ |
 | Direct address   | `hexbot: what's up?`           |
 | Command          | `!ai tell me a joke`           |
-| Private message  | `/msg hexbot hey`              |
 | Keyword (opt-in) | any configured substring match |
 | Random (opt-in)  | small % chance on any message  |
+
+Private messaging is not supported — the bot responds only in channels. This is intentional: PMs are a reconnaissance vector for testing prompt injection without channel visibility.
 
 The bot ignores its own messages, likely-bot nicks (pattern match), users in the ignore list, users without the required flag, and users mid-cooldown.
 
@@ -116,11 +117,28 @@ The provider is wrapped in a retry + circuit-breaker layer:
 
 ## Security — ChanServ fantasy-command defense
 
-Any channel message starting with `.`, `!`, or `/` can be parsed by IRC services (Atheme ChanServ, Anope BotServ, etc.) as a **fantasy command** and executed against the **sender's** ACL. Since the bot typically has ChanServ op access (for auto-op and takeover recovery), a prompt-injected LLM emitting `.deop admin` would have ChanServ deop the admin on the bot's behalf.
+Any channel message starting with `.`, `!`, `/`, `~`, `@`, `%`, `$`, `&`, or `+` can be parsed by IRC services (Atheme ChanServ, Anope BotServ, etc.) as a **fantasy command** and executed against the **sender's** ACL. Since the bot typically has ChanServ op access (for auto-op and takeover recovery), a prompt-injected LLM emitting `.deop admin` would have ChanServ deop the admin on the bot's behalf.
 
-**Defense (automatic):** `output-formatter.ts` prepends a single leading space to any output line that begins with `.`, `!`, or `/`. The leading space is invisible in IRC clients but breaks services' fantasy parsers (which check byte 0 of the message). Every line is checked after splitting. The plugin also logs a WARNING when neutralization fires, since it likely indicates a jailbreak attempt. See `docs/audits/ai-chat-llm-injection-2026-04-05.md` for details.
+**Defense (automatic):** `output-formatter.ts` scans every line of the LLM response for fantasy-command prefixes. If **any** line starts with one, the **entire response is dropped** and a WARNING is logged. This is intentionally aggressive — if the LLM produced a fantasy prefix, the response is considered compromised. Unicode format characters (`\p{Cf}`) are stripped before the check to prevent invisible character smuggling.
 
-**Operator note:** Do not grant this bot `founder` access on any channel where ai-chat runs unless your network's services have fantasy commands disabled. The defense above is robust against the standard fantasy prefixes, but a determined attacker who could trick the LLM into emitting non-standard services commands could still abuse elevated access tiers.
+See `docs/audits/security-ai-injection-threat-2026-04-16.md` for the full security audit.
+
+**Privilege gating (opt-in):** When the bot has elevated channel modes (half-op or above), you can restrict AI responses to users with a specific bot flag:
+
+```json
+{
+  "security": {
+    "privilege_gating": true,
+    "privileged_mode_threshold": "h",
+    "privileged_required_flag": "m",
+    "disable_when_privileged": false
+  }
+}
+```
+
+Set `disable_when_privileged: true` to disable AI responses entirely when the bot has ops.
+
+**Operator note:** Do not grant this bot `founder` access on any channel where ai-chat runs. Ops-level access limits the blast radius to kicks/bans/deops — damaging but recoverable. Founder loss is not. For maximum isolation, run an unprivileged AI bot alongside a separate chanmod/ops bot.
 
 ## Privacy
 

@@ -1,7 +1,7 @@
 // Transforms LLM text into IRC-safe, properly-split messages.
 // Strips markdown, normalizes whitespace, splits at sentence/word boundaries,
-// truncates to a maximum number of lines, and neutralizes ChanServ fantasy
-// command prefixes (see docs/audits/ai-chat-llm-injection-2026-04-05.md).
+// truncates to a maximum number of lines, and detects ChanServ fantasy command
+// prefixes (see docs/audits/security-ai-injection-threat-2026-04-16.md).
 
 /**
  * Characters that, when they appear at position 0 of a channel PRIVMSG, can be
@@ -10,15 +10,19 @@
  * would otherwise have ChanServ act on the bot's behalf.
  *
  * The set covers the prefixes used by Atheme (`.`, `!`), Anope BotServ (`!`),
- * and slash-style fantasy on some networks (`/`). Prepending a single leading
- * space breaks the parser (services check byte 0) without changing visible
- * content in any IRC client we target.
+ * slash-style fantasy (`/`), and non-standard triggers used by various networks
+ * (`~`, `@`, `%`, `$`, `&`, `+`).
+ *
+ * NOTE: The previous defence (prepending a space) was found to be ineffective
+ * against Atheme's `strtok(msg, " ")` parser, which skips leading spaces.
+ * The fix is to drop the entire response if any line matches.
+ * See docs/audits/security-ai-injection-threat-2026-04-16.md.
  */
-const FANTASY_PREFIXES = /^[.!/]/;
+const FANTASY_PREFIXES = /^[.!/~@%$&+]/;
 
-/** Prepend a space if a line starts with a character that services parse as a command prefix. */
-export function neutralizeFantasyPrefix(line: string): string {
-  return FANTASY_PREFIXES.test(line) ? ` ${line}` : line;
+/** Check if a line would be parsed as a fantasy command by IRC services. */
+export function isFantasyLine(line: string): boolean {
+  return FANTASY_PREFIXES.test(line);
 }
 
 /** Strip characters that could inject IRC protocol lines or IRC formatting control codes. */
@@ -36,9 +40,9 @@ function stripProtocolUnsafe(text: string): string {
     .replace(/\r/g, '')
     .replace(/\n{2,}/g, '\n')
     // Strip Unicode format characters (Cf): ZWSP, ZWJ, ZWNJ, BOM, bidi overrides,
-    // soft hyphen, word joiner, etc. These are invisible but can hide a trailing
-    // fantasy-command prefix (e.g. `\u200b.deop admin`) from the position-0 check
-    // in neutralizeFantasyPrefix(). Stripping them makes the first VISIBLE
+    // soft hyphen, word joiner, etc. These are invisible but can hide a
+    // fantasy-command prefix (e.g. `\u200b.deop admin`) from the position-0
+    // check in isFantasyLine(). Stripping them makes the first VISIBLE
     // character also the first byte inspected.
     .replace(/\p{Cf}/gu, '');
   /* eslint-enable no-control-regex */
@@ -129,11 +133,24 @@ export function formatResponse(text: string, maxLines: number, maxLineLength: nu
     const line = collapseWhitespace(raw);
     if (!line) continue;
     for (const chunk of splitLongLine(line, maxLineLength)) {
-      if (chunk) lines.push(neutralizeFantasyPrefix(chunk));
+      if (chunk) lines.push(chunk);
     }
   }
 
   if (lines.length === 0) return [];
+
+  // SECURITY: If ANY line starts with a fantasy-command prefix, drop the entire
+  // response. A single fantasy line means the LLM output is compromised (likely
+  // prompt injection). Dropping the whole response is intentionally aggressive —
+  // partial responses from a compromised generation are not trustworthy.
+  const fantasyIdx = lines.findIndex((l) => isFantasyLine(l));
+  if (fantasyIdx !== -1) {
+    console.warn(
+      `[ai-chat] WARNING: dropped response containing fantasy-prefix ` +
+        `line ${fantasyIdx}: ${JSON.stringify(lines[fantasyIdx].slice(0, 80))}`,
+    );
+    return [];
+  }
 
   if (lines.length > maxLines) {
     const truncated = lines.slice(0, maxLines);

@@ -61,7 +61,7 @@ interface AiChatConfig {
   personalities: Record<string, string>;
   channelPersonalities: Record<string, string | { personality?: string; language?: string }>;
   triggers: TriggerConfig;
-  context: { maxMessages: number; maxTokens: number; pmMaxMessages: number; ttlMs: number };
+  context: { maxMessages: number; maxTokens: number; ttlMs: number };
   rateLimits: {
     userCooldownSeconds: number;
     channelCooldownSeconds: number;
@@ -77,6 +77,12 @@ interface AiChatConfig {
     botNickPatterns: string[];
   };
   output: { maxLines: number; maxLineLength: number; interLineDelayMs: number; stripUrls: boolean };
+  security: {
+    privilegeGating: boolean;
+    privilegedModeThreshold: string;
+    privilegedRequiredFlag: string;
+    disableWhenPrivileged: boolean;
+  };
   sessions: { enabled: boolean; inactivityMs: number; gamesDir: string };
 }
 
@@ -106,14 +112,12 @@ export function parseConfig(raw: Record<string, unknown>): AiChatConfig {
       directAddress: asBool(triggers.direct_address, true),
       command: asBool(triggers.command, true),
       commandPrefix: asString(triggers.command_prefix, '!ai'),
-      pm: asBool(triggers.pm, true),
       keywords: asStringArr(triggers.keywords, []),
       randomChance: asNum(triggers.random_chance, 0),
     },
     context: {
       maxMessages: asNum(context.max_messages, 50),
       maxTokens: asNum(context.max_tokens, 4000),
-      pmMaxMessages: asNum(context.pm_max_messages, 20),
       ttlMs: asNum(context.ttl_minutes, 60) * 60_000,
     },
     rateLimits: {
@@ -138,6 +142,12 @@ export function parseConfig(raw: Record<string, unknown>): AiChatConfig {
       maxLineLength: asNum(output.max_line_length, 440),
       interLineDelayMs: asNum(output.inter_line_delay_ms, 500),
       stripUrls: asBool(output.strip_urls, false),
+    },
+    security: {
+      privilegeGating: asBool(asRecord(raw.security).privilege_gating, false),
+      privilegedModeThreshold: asString(asRecord(raw.security).privileged_mode_threshold, 'h'),
+      privilegedRequiredFlag: asString(asRecord(raw.security).privileged_required_flag, 'm'),
+      disableWhenPrivileged: asBool(asRecord(raw.security).disable_when_privileged, false),
     },
     sessions: {
       enabled: asBool(asRecord(raw.sessions).enabled, true),
@@ -174,9 +184,40 @@ export interface ShouldRespondCtx {
   channel: string | null;
   botNick: string;
   hasRequiredFlag: boolean;
+  /** Does the user have the privilege-gating flag (e.g. +m)? */
+  hasPrivilegedFlag: boolean;
+  /** Bot's channel modes (e.g. 'o', 'ov') or undefined if unknown. */
+  botChannelModes: string | undefined;
   config: AiChatConfig;
   /** Dynamic ignore list (from DB) merged with config.permissions.ignoreList. */
   dynamicIgnoreList: string[];
+}
+
+/**
+ * Check whether the bot's privilege level in the channel restricts AI responses.
+ *
+ * When `security.privilege_gating` is enabled and the bot has elevated channel
+ * modes (half-op or above), either:
+ * - `disable_when_privileged`: block all responses
+ * - Otherwise: require the user to have the configured bot flag (default +m)
+ */
+function isPrivilegeRestricted(ctx: ShouldRespondCtx): boolean {
+  const sec = ctx.config.security;
+  if (!sec.privilegeGating || !ctx.channel) return false;
+
+  const botModes = ctx.botChannelModes;
+  if (!botModes) return false;
+
+  // Check if bot has any elevated mode at or above threshold
+  const elevated = ['q', 'a', 'o', 'h']; // founder, admin, op, halfop
+  const threshIdx = elevated.indexOf(sec.privilegedModeThreshold);
+  if (threshIdx === -1) return false;
+  const eligibleModes = elevated.slice(0, threshIdx + 1);
+  if (!eligibleModes.some((m) => botModes.includes(m))) return false;
+
+  // Bot is privileged. Disable entirely or gate by flag.
+  if (sec.disableWhenPrivileged) return true;
+  return !ctx.hasPrivilegedFlag;
 }
 
 export function shouldRespond(ctx: ShouldRespondCtx): boolean {
@@ -191,7 +232,22 @@ export function shouldRespond(ctx: ShouldRespondCtx): boolean {
   const fullIgnore = [...ctx.config.permissions.ignoreList, ...ctx.dynamicIgnoreList];
   if (isIgnored(nick, hostmask, fullIgnore)) return false;
   if (ctx.config.permissions.requiredFlag !== '-' && !ctx.hasRequiredFlag) return false;
+  if (isPrivilegeRestricted(ctx)) return false;
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers: build ShouldRespondCtx with privilege info
+// ---------------------------------------------------------------------------
+
+function getBotChannelModes(api: PluginAPI, channel: string | null): string | undefined {
+  if (!channel) return undefined;
+  const ch = api.getChannel(channel);
+  if (!ch) return undefined;
+  for (const u of ch.users.values()) {
+    if (api.isBotNick(u.nick)) return u.modes;
+  }
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -249,7 +305,6 @@ export async function init(api: PluginAPI): Promise<void> {
   tokenTracker = new TokenTracker(api.db, cfg.tokenBudgets);
   contextManager = new ContextManager({
     maxMessages: cfg.context.maxMessages,
-    pmMaxMessages: cfg.context.pmMaxMessages,
     maxTokens: cfg.context.maxTokens,
     ttlMs: cfg.context.ttlMs,
   });
@@ -264,7 +319,10 @@ export async function init(api: PluginAPI): Promise<void> {
     api.log(`Using injected provider for testing: ${provider.name}`);
   } else {
     const apiKey =
-      process.env.HEX_GEMINI_API_KEY ?? process.env.GEMINI_API_KEY ?? process.env.AI_CHAT_API_KEY ?? '';
+      process.env.HEX_GEMINI_API_KEY ??
+      process.env.GEMINI_API_KEY ??
+      process.env.AI_CHAT_API_KEY ??
+      '';
     if (!apiKey) {
       api.warn(
         'No API key found in HEX_GEMINI_API_KEY — ai-chat plugin is in degraded mode (no LLM calls).',
@@ -305,7 +363,7 @@ export async function init(api: PluginAPI): Promise<void> {
 
   api.log(
     `Loaded ai-chat v${version} provider=${cfg.provider} model=${cfg.model} ` +
-      `(triggers direct:${cfg.triggers.directAddress} cmd:${cfg.triggers.command} pm:${cfg.triggers.pm})`,
+      `(triggers direct:${cfg.triggers.directAddress} cmd:${cfg.triggers.command})`,
   );
 
   // -----------------------------------------------------------------------
@@ -343,6 +401,8 @@ export async function init(api: PluginAPI): Promise<void> {
           channel: ctx.channel,
           botNick: botNick(),
           hasRequiredFlag: api.permissions.checkFlags(cfg.permissions.requiredFlag, ctx),
+          hasPrivilegedFlag: api.permissions.checkFlags(cfg.security.privilegedRequiredFlag, ctx),
+          botChannelModes: getBotChannelModes(api, ctx.channel),
           config: cfg,
           dynamicIgnoreList: getDynamicIgnoreList(api),
         })
@@ -353,7 +413,7 @@ export async function init(api: PluginAPI): Promise<void> {
       return;
     }
 
-    const match = detectTrigger(ctx.text, false, botNick(), cfg.triggers);
+    const match = detectTrigger(ctx.text, botNick(), cfg.triggers);
     if (!match) return;
     if (match.kind === 'command') return;
 
@@ -365,6 +425,8 @@ export async function init(api: PluginAPI): Promise<void> {
         channel: ctx.channel,
         botNick: botNick(),
         hasRequiredFlag: api.permissions.checkFlags(cfg.permissions.requiredFlag, ctx),
+        hasPrivilegedFlag: api.permissions.checkFlags(cfg.security.privilegedRequiredFlag, ctx),
+        botChannelModes: getBotChannelModes(api, ctx.channel),
         config: cfg,
         dynamicIgnoreList: getDynamicIgnoreList(api),
       })
@@ -405,6 +467,8 @@ export async function init(api: PluginAPI): Promise<void> {
             channel: ctx.channel,
             botNick: botNick(),
             hasRequiredFlag: true,
+            hasPrivilegedFlag: api.permissions.checkFlags(cfg.security.privilegedRequiredFlag, ctx),
+            botChannelModes: getBotChannelModes(api, ctx.channel),
             config: cfg,
             dynamicIgnoreList: getDynamicIgnoreList(api),
           })
@@ -414,78 +478,6 @@ export async function init(api: PluginAPI): Promise<void> {
         await runPipeline(api, cfg, ctx, prompt, botNick(), network(), true);
       },
     );
-  }
-
-  // -----------------------------------------------------------------------
-  // msgm * — PM conversation
-  // -----------------------------------------------------------------------
-  if (cfg.triggers.pm) {
-    // Dedicated msg !ai bind so admin/game subcommands work in PM too.
-    api.bind(
-      'msg',
-      cfg.permissions.requiredFlag,
-      cfg.triggers.commandPrefix,
-      async (ctx: HandlerContext) => {
-        if (ctx.channel !== null) return;
-        const args = ctx.args.trim();
-        if (await handleSubcommand(api, cfg, ctx, args)) return;
-        const prompt = args;
-        if (!prompt) {
-          ctx.reply(`Usage: ${cfg.triggers.commandPrefix} <message>`);
-          return;
-        }
-        if (
-          !shouldRespond({
-            nick: ctx.nick,
-            ident: ctx.ident,
-            hostname: ctx.hostname,
-            channel: null,
-            botNick: botNick(),
-            hasRequiredFlag: true,
-            config: cfg,
-            dynamicIgnoreList: getDynamicIgnoreList(api),
-          })
-        ) {
-          return;
-        }
-        await runPipeline(api, cfg, ctx, prompt, botNick(), network(), true);
-      },
-    );
-
-    api.bind('msgm', cfg.permissions.requiredFlag, '*', async (ctx: HandlerContext) => {
-      if (ctx.channel !== null) return;
-      contextManager!.addMessage(null, ctx.nick, ctx.text, false);
-
-      // Defer to the dedicated `msg !ai` handler for commands.
-      const cmdPrefix = cfg.triggers.commandPrefix.toLowerCase();
-      const lowerText = ctx.text.trim().toLowerCase();
-      if (lowerText === cmdPrefix || lowerText.startsWith(cmdPrefix + ' ')) return;
-
-      if (
-        !shouldRespond({
-          nick: ctx.nick,
-          ident: ctx.ident,
-          hostname: ctx.hostname,
-          channel: null,
-          botNick: botNick(),
-          hasRequiredFlag: true,
-          config: cfg,
-          dynamicIgnoreList: getDynamicIgnoreList(api),
-        })
-      ) {
-        return;
-      }
-
-      // Session routing takes precedence in PM as well.
-      if (sessionManager?.isInSession(ctx.nick, null)) {
-        await runSessionPipeline(api, cfg, ctx, ctx.text, botNick(), network());
-        return;
-      }
-
-      const match = detectTrigger(ctx.text, true, botNick(), cfg.triggers);
-      if (!match) return;
-      await runPipeline(api, cfg, ctx, match.prompt, botNick(), network(), false);
-    });
   }
 }
 
@@ -567,17 +559,9 @@ async function runPipeline(
       api.debug('empty LLM response — nothing to send');
       return;
     case 'ok': {
-      // Detect and log fantasy-prefix neutralization — a likely jailbreak attempt.
-      const neutralized = result.lines.filter((l) => l.startsWith(' ')).length;
-      if (neutralized > 0) {
-        api.warn(
-          `neutralized ${neutralized} fantasy-command prefix(es) in response to ${ctx.nick} ` +
-            `channel=${ctx.channel ?? '(pm)'} — possible prompt-injection attempt`,
-        );
-      }
       contextManager.addMessage(ctx.channel, botNick, result.lines.join(' '), true);
       api.log(
-        `response sent channel=${ctx.channel ?? '(pm)'} nick=${ctx.nick} ` +
+        `response sent channel=${ctx.channel ?? '(unknown)'} nick=${ctx.nick} ` +
           `lines=${result.lines.length} in=${result.tokensIn} out=${result.tokensOut}`,
       );
       await sendLines(result.lines, (line) => ctx.reply(line), cfg.output.interLineDelayMs);

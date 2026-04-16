@@ -1,5 +1,12 @@
 # Security Audit: ai-chat LLM injection
 
+> **SUPERSEDED (2026-04-16):** The CRITICAL fix recommended by this audit — prepending a
+> space to lines starting with fantasy prefixes — was found to be **ineffective** against
+> Atheme's `strtok(msg, " ")` parser. The space-prepend defence has been replaced with
+> response-level dropping (if any line starts with a fantasy prefix, the entire response is
+> discarded). See `docs/audits/security-ai-injection-threat-2026-04-16.md` for the
+> follow-up audit and `docs/plans/ai-chat-v2.md` Phase 0 for the corrected implementation.
+
 **Date:** 2026-04-05 (revised after reviewer feedback)
 **Scope:** LLM prompt/output injection attack surface of the `ai-chat` plugin — specifically, can a malicious user get the bot to execute or cause execution of privileged commands (e.g. `.msg ChanServ #chan OWNER attacker`, `.deop admin`)?
 

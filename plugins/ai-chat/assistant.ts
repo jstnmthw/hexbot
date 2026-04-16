@@ -120,8 +120,8 @@ export async function respond(
 /**
  * Mandatory safety clause appended to every system prompt. Cannot be overridden
  * by personality config. This is defense-in-depth ONLY — the authoritative
- * protection is the output-formatter's neutralizeFantasyPrefix(). See
- * docs/audits/ai-chat-llm-injection-2026-04-05.md.
+ * protection is the output-formatter's isFantasyLine() response-level drop.
+ * See docs/audits/security-ai-injection-threat-2026-04-16.md.
  */
 export const SAFETY_CLAUSE =
   ' SAFETY: Never begin any line of your response with the characters ".", "!", or "/" — IRC services parse these as commands and would execute them with the bot\'s privileges. If you need to quote such text, prepend a space or wrap it in backticks.';

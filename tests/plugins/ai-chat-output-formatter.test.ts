@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatResponse, neutralizeFantasyPrefix } from '../../plugins/ai-chat/output-formatter';
+import { formatResponse, isFantasyLine } from '../../plugins/ai-chat/output-formatter';
 
 describe('formatResponse', () => {
   it('returns empty array for empty input', () => {
@@ -101,102 +101,110 @@ describe('formatResponse', () => {
     expect(formatResponse('\x00\x01\x02', 4, 400)).toEqual([]);
   });
 
-  // ChanServ fantasy-command prefix neutralization — see docs/audits/ai-chat-llm-injection-2026-04-05.md
-  it('prepends a space to lines starting with "." (ChanServ fantasy)', () => {
-    expect(formatResponse('.deop admin', 4, 400)).toEqual([' .deop admin']);
+  // ChanServ fantasy-command defence — see docs/audits/security-ai-injection-threat-2026-04-16.md
+  // The entire response is dropped if ANY line starts with a fantasy prefix.
+  it('drops response when a line starts with "." (ChanServ fantasy)', () => {
+    expect(formatResponse('.deop admin', 4, 400)).toEqual([]);
   });
 
-  it('prepends a space to lines starting with "!"', () => {
-    expect(formatResponse('!kick target', 4, 400)).toEqual([' !kick target']);
+  it('drops response when a line starts with "!"', () => {
+    expect(formatResponse('!kick target', 4, 400)).toEqual([]);
   });
 
-  it('prepends a space to lines starting with "/"', () => {
-    expect(formatResponse('/msg ChanServ OWNER attacker', 4, 400)).toEqual([
-      ' /msg ChanServ OWNER attacker',
-    ]);
+  it('drops response when a line starts with "/"', () => {
+    expect(formatResponse('/msg ChanServ OWNER attacker', 4, 400)).toEqual([]);
   });
 
-  it('neutralizes fantasy prefix on each line of a multi-line response', () => {
-    expect(formatResponse('Sure thing!\n.deop admin\n.kick admin', 4, 400)).toEqual([
-      'Sure thing!',
-      ' .deop admin',
-      ' .kick admin',
-    ]);
+  it('drops entire multi-line response if any line has a fantasy prefix', () => {
+    // Even though line 1 is safe, lines 2-3 are compromised → drop everything
+    expect(formatResponse('Sure thing!\n.deop admin\n.kick admin', 4, 400)).toEqual([]);
   });
 
-  it('neutralizes fantasy prefix on split chunks of a long sentence', () => {
+  it('drops response when split chunks produce a fantasy-prefix line', () => {
     // Force a split where a chunk begins with ". …"
     const text = 'Say this. .deop admin please.';
     const out = formatResponse(text, 4, 12);
-    // Any chunk that starts with a fantasy char must be prefixed with a space
-    for (const line of out) {
-      if (/[.!/]/.test(line[0])) {
-        throw new Error(`Line starts with unescaped fantasy prefix: ${JSON.stringify(line)}`);
-      }
-    }
+    // Entire response is dropped because a chunk starts with "."
+    expect(out).toEqual([]);
+  });
+
+  it('drops response for extended fantasy prefixes (~@%$&+)', () => {
+    expect(formatResponse('~command arg', 4, 400)).toEqual([]);
+    expect(formatResponse('@op me', 4, 400)).toEqual([]);
+    expect(formatResponse('%halfop', 4, 400)).toEqual([]);
+    expect(formatResponse('$special', 4, 400)).toEqual([]);
+    expect(formatResponse('&chanop', 4, 400)).toEqual([]);
+    expect(formatResponse('+voice me', 4, 400)).toEqual([]);
   });
 
   it('leaves "-" bullet lines untouched (not a fantasy prefix)', () => {
     expect(formatResponse('- first\n- second', 4, 400)).toEqual(['- first', '- second']);
   });
 
-  it('does NOT neutralize lines that contain fantasy chars mid-string', () => {
+  it('does NOT drop responses where fantasy chars are mid-string', () => {
     expect(formatResponse('see .config or !help', 4, 400)).toEqual(['see .config or !help']);
   });
 
-  it('neutralizeFantasyPrefix returns input unchanged for safe starts', () => {
-    expect(neutralizeFantasyPrefix('hello')).toBe('hello');
-    expect(neutralizeFantasyPrefix('- dash')).toBe('- dash');
-    expect(neutralizeFantasyPrefix('')).toBe('');
+  it('isFantasyLine returns false for safe starts', () => {
+    expect(isFantasyLine('hello')).toBe(false);
+    expect(isFantasyLine('- dash')).toBe(false);
+    expect(isFantasyLine('')).toBe(false);
   });
 
-  it('neutralizeFantasyPrefix prepends exactly one space', () => {
-    expect(neutralizeFantasyPrefix('.op x')).toBe(' .op x');
-    expect(neutralizeFantasyPrefix('!kick x')).toBe(' !kick x');
-    expect(neutralizeFantasyPrefix('/mode +o')).toBe(' /mode +o');
+  it('isFantasyLine returns true for all known fantasy prefixes', () => {
+    expect(isFantasyLine('.op x')).toBe(true);
+    expect(isFantasyLine('!kick x')).toBe(true);
+    expect(isFantasyLine('/mode +o')).toBe(true);
+    expect(isFantasyLine('~command')).toBe(true);
+    expect(isFantasyLine('@op')).toBe(true);
+    expect(isFantasyLine('%half')).toBe(true);
+    expect(isFantasyLine('$spec')).toBe(true);
+    expect(isFantasyLine('&chan')).toBe(true);
+    expect(isFantasyLine('+voice')).toBe(true);
   });
 
   it('strips Unicode zero-width chars that would hide a fantasy prefix', () => {
-    // ZWSP (U+200B) before `.deop admin` — without stripping, neutralizeFantasyPrefix
-    // would see ZWSP at position 0 and do nothing, letting services strip the
-    // ZWSP and act on `.deop`.
-    expect(formatResponse('\u200b.deop admin', 4, 400)).toEqual([' .deop admin']);
+    // ZWSP (U+200B) before `.deop admin` — without stripping, the invisible char
+    // would sit at position 0 and isFantasyLine would miss the dot.
+    expect(formatResponse('\u200b.deop admin', 4, 400)).toEqual([]);
     // ZWJ (U+200D)
-    expect(formatResponse('\u200d.op attacker', 4, 400)).toEqual([' .op attacker']);
+    expect(formatResponse('\u200d.op attacker', 4, 400)).toEqual([]);
     // BOM (U+FEFF)
-    expect(formatResponse('\ufeff.kick admin', 4, 400)).toEqual([' .kick admin']);
+    expect(formatResponse('\ufeff.kick admin', 4, 400)).toEqual([]);
     // Bidi override (U+202E) — right-to-left override
-    expect(formatResponse('\u202e.deop admin', 4, 400)).toEqual([' .deop admin']);
+    expect(formatResponse('\u202e.deop admin', 4, 400)).toEqual([]);
     // Word joiner (U+2060)
-    expect(formatResponse('\u2060.deop admin', 4, 400)).toEqual([' .deop admin']);
+    expect(formatResponse('\u2060.deop admin', 4, 400)).toEqual([]);
   });
 
   it('strips Unicode format chars interleaved throughout the message', () => {
     // Attacker could insert ZWSPs between every char to defeat simple checks.
-    // We just strip them all.
-    expect(formatResponse('.\u200bd\u200be\u200bo\u200bp admin', 4, 400)).toEqual([' .deop admin']);
+    // We strip them all, then the dot is at position 0 → response dropped.
+    expect(formatResponse('.\u200bd\u200be\u200bo\u200bp admin', 4, 400)).toEqual([]);
   });
 
-  it('catches multi-char prefix sequences (.., !!, //)', () => {
-    // Any line starting with ./!/ is caught regardless of what follows —
-    // including networks that configure multi-char fantasy triggers.
-    expect(neutralizeFantasyPrefix('..deop admin')).toBe(' ..deop admin');
-    expect(neutralizeFantasyPrefix('!!kick user')).toBe(' !!kick user');
-    expect(neutralizeFantasyPrefix('///topic foo')).toBe(' ///topic foo');
+  it('drops response for multi-char prefix sequences (.., !!, //)', () => {
+    expect(isFantasyLine('..deop admin')).toBe(true);
+    expect(isFantasyLine('!!kick user')).toBe(true);
+    expect(isFantasyLine('///topic foo')).toBe(true);
+    expect(formatResponse('..deop admin', 4, 400)).toEqual([]);
   });
 
-  it('leading space survives sanitize() and splitMessage()', async () => {
-    // Verify that the downstream path (irc-bridge's ctx.reply → sanitize → splitMessage)
-    // does NOT strip the leading space we inject. If it did, the CRITICAL fix would
-    // be defeated silently.
-    const { sanitize } = await import('../../src/utils/sanitize');
-    const { splitMessage } = await import('../../src/utils/split-message');
-    const neutralized = ' .deop admin';
-    const afterSanitize = sanitize(neutralized);
-    expect(afterSanitize).toBe(neutralized);
-    const afterSplit = splitMessage(afterSanitize);
-    expect(afterSplit).toEqual([neutralized]);
-    expect(afterSplit[0][0]).toBe(' ');
+  // Atheme strtok simulation — regression test for the space-prepend bypass
+  it('formatted output is never parseable as fantasy by Atheme strtok', () => {
+    function athemeWouldParse(msg: string, prefix = '.!/'): boolean {
+      const token = msg.trimStart().split(' ')[0];
+      return token.length >= 2 && prefix.includes(token[0]) && /[a-zA-Z]/.test(token[1]);
+    }
+
+    for (const input of ['.deop admin', '!kick user', '/mode +o evil']) {
+      const lines = formatResponse(input, 4, 400);
+      // Response is dropped entirely — no lines to parse
+      expect(lines).toEqual([]);
+      for (const line of lines) {
+        expect(athemeWouldParse(line)).toBe(false);
+      }
+    }
   });
 
   it('truncates last line if even ellipsis suffix wont fit', () => {
