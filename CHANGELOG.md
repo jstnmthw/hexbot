@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.1] - 2026-04-16
+
+### Fixed
+
+- **Shell command injection in plugin build script** (`scripts/build-plugins.ts`): switched from `execSync` with string interpolation to `execFileSync` with an argument array so paths with spaces or shell metacharacters cannot alter the command
+- **Polynomial ReDoS in RSS HTML tag stripper** (`plugins/rss/feed-formatter.ts`): replaced the `/<[^>]*>/g` regex (O(n²) on pathological input) with a single-pass O(n) character scanner that buffers after `<` and flushes unclosed tags
+
 ## [0.4.0] - 2026-04-16
 
 ### Changed
