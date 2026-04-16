@@ -5,26 +5,29 @@
 import type { PluginAPI } from '../../src/types';
 import type { FeedConfig, FeedItem } from './feed-store';
 
-/**
- * Strip HTML tags from a string by running the tag regex to a fixed point.
- *
- * A single-pass `replace(/<[^>]*>/g, '')` is flagged by CodeQL as
- * "incomplete multi-character sanitization" because cleverly-nested input
- * can leave tag-like fragments behind that would have been caught by a
- * second pass. The output here goes to IRC (which doesn't render HTML) so
- * the practical XSS risk is nil, but we still want clean-looking titles
- * and we don't want this pattern to appear in future audits. Looping until
- * the string stabilises is the canonical fix; it terminates because every
- * non-terminal iteration strictly shortens the string.
- */
+/** Strip HTML tags from a string in a single O(n) pass. */
 export function stripHtmlTags(input: string): string {
-  let prev: string;
-  let curr = input;
-  do {
-    prev = curr;
-    curr = curr.replace(/<[^>]*>/g, '');
-  } while (curr !== prev);
-  return curr;
+  let result = '';
+  let buf = '';
+  let inTag = false;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (ch === '<') {
+      if (!inTag) inTag = true;
+      buf += ch;
+    } else if (ch === '>' && inTag) {
+      // Complete tag — discard buf (the tag content) and this '>'
+      inTag = false;
+      buf = '';
+    } else if (inTag) {
+      buf += ch;
+    } else {
+      result += ch;
+    }
+  }
+  // Unclosed '<' at end of string was not a tag — emit the buffered text
+  if (inTag) result += buf;
+  return result;
 }
 
 export function formatItem(

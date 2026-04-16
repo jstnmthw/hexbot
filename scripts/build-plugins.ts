@@ -1,5 +1,5 @@
 // scripts/build-plugins.ts — Discover and build all plugins with tsup configs.
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
@@ -38,7 +38,7 @@ for (const name of pluginDirs) {
   const outDir = join(pluginsDir, name, 'dist');
   console.log(`  ${name} ...`);
   try {
-    execSync(`pnpm exec tsup --config ${configPath} --outDir ${outDir}`, {
+    execFileSync('pnpm', ['exec', 'tsup', '--config', configPath, '--outDir', outDir], {
       cwd: join(pluginsDir, name),
       stdio: 'pipe',
     });
