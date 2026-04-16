@@ -232,7 +232,7 @@ describe('topic plugin', () => {
       simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!topic lock');
       await tick();
 
-      expect(bot.channelSettings.get('#test', 'protect_topic')).toBe(true);
+      expect(bot.channelSettings.get('#test', 'topic_lock')).toBe(true);
       expect(bot.channelSettings.get('#test', 'topic_text')).toBe('Welcome to #test!');
 
       const reply = bot.client.messages.find(
@@ -246,7 +246,7 @@ describe('topic plugin', () => {
       simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!topic lock');
       await tick();
 
-      expect(bot.channelSettings.get('#test', 'protect_topic')).toBe(false);
+      expect(bot.channelSettings.get('#test', 'topic_lock')).toBe(false);
       const reply = bot.client.messages.find(
         (m) => m.type === 'notice' && m.message?.includes('Cannot lock'),
       );
@@ -259,7 +259,7 @@ describe('topic plugin', () => {
       simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!topic lock');
       await tick();
 
-      expect(bot.channelSettings.get('#test', 'protect_topic')).toBe(true);
+      expect(bot.channelSettings.get('#test', 'topic_lock')).toBe(true);
       expect(bot.channelSettings.get('#test', 'topic_text')).toBe(longTopic);
       const warning = bot.client.messages.find(
         (m) => m.type === 'notice' && m.message?.includes('Warning'),
@@ -270,13 +270,13 @@ describe('topic plugin', () => {
 
   describe('!topic unlock', () => {
     it('disables topic protection', async () => {
-      bot.channelSettings.set('#test', 'protect_topic', true);
+      bot.channelSettings.set('#test', 'topic_lock', true);
       bot.channelSettings.set('#test', 'topic_text', 'some locked topic');
 
       simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!topic unlock');
       await tick();
 
-      expect(bot.channelSettings.get('#test', 'protect_topic')).toBe(false);
+      expect(bot.channelSettings.get('#test', 'topic_lock')).toBe(false);
       expect(bot.channelSettings.get('#test', 'topic_text')).toBe('');
       const reply = bot.client.messages.find(
         (m) => m.type === 'notice' && m.message?.includes('disabled'),
@@ -305,9 +305,9 @@ describe('topic plugin', () => {
       });
     }
 
-    it('protect_topic enabled but no topic_text stored → no restore', async () => {
-      // protect_topic is on but topic_text is empty — guard returns early
-      bot.channelSettings.set('#test', 'protect_topic', true);
+    it('topic_lock enabled but no topic_text stored → no restore', async () => {
+      // topic_lock is on but topic_text is empty — guard returns early
+      bot.channelSettings.set('#test', 'topic_lock', true);
       // do NOT set topic_text — it stays as '' (falsy)
       await advancePastGrace();
       bot.client.clearMessages();
@@ -327,7 +327,7 @@ describe('topic plugin', () => {
       ).toBeUndefined();
 
       // Cleanup
-      bot.channelSettings.set('#test', 'protect_topic', false);
+      bot.channelSettings.set('#test', 'topic_lock', false);
     });
 
     it('non-op change after lock → bot restores enforced topic', async () => {
@@ -384,7 +384,7 @@ describe('topic plugin', () => {
     });
 
     it('non-op change after unlock → bot does NOT restore', async () => {
-      bot.channelSettings.set('#test', 'protect_topic', true);
+      bot.channelSettings.set('#test', 'topic_lock', true);
       bot.channelSettings.set('#test', 'topic_text', 'was locked');
 
       simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!topic unlock');
@@ -422,7 +422,7 @@ describe('topic plugin', () => {
     it("bot's own TOPIC echo (matching enforced text) does not trigger another TOPIC command", async () => {
       // Set up channel state with a locked topic
       bot.channelSettings.set('#test', 'topic_text', 'locked text');
-      bot.channelSettings.set('#test', 'protect_topic', true);
+      bot.channelSettings.set('#test', 'topic_lock', true);
 
       await advancePastGrace();
       bot.client.clearMessages();
@@ -445,7 +445,7 @@ describe('topic plugin', () => {
 
     it('unauthorized topic change (different text) triggers one restore', async () => {
       bot.channelSettings.set('#test', 'topic_text', 'locked text');
-      bot.channelSettings.set('#test', 'protect_topic', true);
+      bot.channelSettings.set('#test', 'topic_lock', true);
 
       await advancePastGrace();
       bot.client.clearMessages();

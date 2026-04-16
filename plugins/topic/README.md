@@ -43,9 +43,9 @@ To stop protecting:
 The protection state is also readable and writable via the REPL:
 
 ```
-.chaninfo #channel          — shows protect_topic and topic_text
-.chanset #channel +protect_topic   — enable protection (does not set topic_text)
-.chanset #channel -protect_topic   — disable protection
+.chaninfo #channel          — shows topic_lock and topic_text
+.chanset #channel +topic_lock   — enable protection (does not set topic_text)
+.chanset #channel -topic_lock   — disable protection
 ```
 
 > **Note**: `!settopic` was removed in v2.1.0. Use `!topic <theme> <text>` followed by

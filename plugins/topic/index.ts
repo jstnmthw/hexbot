@@ -20,7 +20,7 @@ export function init(api: PluginAPI): void {
   // Register per-channel settings for topic protection
   api.channelSettings.register([
     {
-      key: 'protect_topic',
+      key: 'topic_lock',
       type: 'flag',
       default: false,
       description: 'Restore topic if changed; use !topic unlock (+o) to allow changes',
@@ -107,7 +107,7 @@ export function init(api: PluginAPI): void {
         );
       }
       api.channelSettings.set(ctx.channel, 'topic_text', live);
-      api.channelSettings.set(ctx.channel, 'protect_topic', true);
+      api.channelSettings.set(ctx.channel, 'topic_lock', true);
       api.notice(ctx.nick, 'Topic locked.');
       // The factory forces by=pluginId; record the operator nick + the
       // locked text in metadata so audit queries can attribute the lock.
@@ -121,7 +121,7 @@ export function init(api: PluginAPI): void {
 
     // Handle unlock subcommand
     if (firstArg === 'unlock') {
-      api.channelSettings.set(ctx.channel, 'protect_topic', false);
+      api.channelSettings.set(ctx.channel, 'topic_lock', false);
       api.channelSettings.set(ctx.channel, 'topic_text', '');
       api.notice(ctx.nick, 'Topic protection disabled.');
       api.audit.log('topic-unlock', {
@@ -232,7 +232,7 @@ export function init(api: PluginAPI): void {
   api.bind('topic', '-', '*', (ctx) => {
     const { channel } = ctx;
 
-    const protect = api.channelSettings.getFlag(channel, 'protect_topic');
+    const protect = api.channelSettings.getFlag(channel, 'topic_lock');
     if (!protect) return;
 
     const enforced = api.channelSettings.getString(channel, 'topic_text');
