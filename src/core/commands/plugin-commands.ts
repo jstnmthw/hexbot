@@ -65,7 +65,7 @@ export function registerPluginCommands(
       }
       if (!validatePluginName(ctx, name)) return;
 
-      const pluginPath = `${pluginDir}/${name}/index.ts`;
+      const pluginPath = `${pluginDir}/${name}/dist/index.js`;
       const result = await pluginLoader.load(pluginPath);
 
       if (result.status === 'ok') {

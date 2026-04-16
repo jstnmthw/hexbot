@@ -1,8 +1,8 @@
 // HexBot — Plugin loader
 // Discovers, loads, unloads, and hot-reloads plugins. Each plugin gets a scoped API.
 // The shape of that API (and the per-plugin wrappers) lives in plugin-api-factory.ts.
-import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, resolve, sep } from 'node:path';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { resolveSecrets } from './config';
@@ -164,41 +164,15 @@ export class PluginLoader {
     return this.botConfig;
   }
 
-  /** Delete any orphaned .reload-*.ts temp files left by a previous crashed process. */
-  cleanupOrphanedTempFiles(): void {
-    try {
-      const entries = readdirSync(this.pluginDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const pluginDir = join(this.pluginDir, entry.name);
-        try {
-          for (const file of readdirSync(pluginDir)) {
-            /* v8 ignore start -- orphaned temp files only exist after interrupted reloads; TRUE branch unreachable in tests */
-            if (/^\.reload-\d+-[^/]+\.ts$/.test(file)) {
-              unlinkSync(join(pluginDir, file));
-              this.logger?.debug(`Cleaned orphaned temp file: ${entry.name}/${file}`);
-            }
-            /* v8 ignore stop */
-          }
-        } catch {
-          /* plugin dir may not be readable */
-        }
-      }
-    } catch {
-      /* plugin dir may not exist yet */
-    }
-  }
-
   /** Load all enabled plugins from the plugins config + auto-discovered plugins. */
   async loadAll(pluginsConfigPath?: string): Promise<LoadResult[]> {
-    this.cleanupOrphanedTempFiles();
     /* v8 ignore next -- ?? fallback: tests always pass an explicit path; default production path unreachable */
     const cfgPath = pluginsConfigPath ?? resolve('./config/plugins.json');
     const pluginsConfig = this.readPluginsConfig(cfgPath) ?? {};
 
     // Build the full set of plugin names: configured plugins first, then
     // auto-discovered plugins from the plugins directory that aren't listed.
-    // Keys from `plugins.json` pass through `join(pluginDir, name, 'index.ts')`
+    // Keys from `plugins.json` pass through `join(pluginDir, name, 'dist', 'index.js')`
     // below, so any entry whose name fails SAFE_NAME_RE is a path-traversal
     // attempt and is dropped with a loud warning instead of being imported.
     const pluginNames = new Set<string>();
@@ -214,7 +188,7 @@ export class PluginLoader {
     try {
       for (const entry of readdirSync(this.pluginDir, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
-        if (existsSync(join(this.pluginDir, entry.name, 'index.ts'))) {
+        if (existsSync(join(this.pluginDir, entry.name, 'dist', 'index.js'))) {
           pluginNames.add(entry.name);
         }
       }
@@ -231,7 +205,7 @@ export class PluginLoader {
         continue;
       }
 
-      const pluginPath = join(this.pluginDir, name, 'index.ts');
+      const pluginPath = join(this.pluginDir, name, 'dist', 'index.js');
       const result = await this.load(pluginPath, pluginsConfig);
       results.push(result);
     }
@@ -268,8 +242,9 @@ export class PluginLoader {
     }
 
     // Validate the directory name against SAFE_NAME_RE before import. The
-    // inferred name is the immediate parent directory of `index.ts`; it
-    // must match the same character set we enforce on `mod.name`.
+    // inferred name is the plugin directory (two levels up from
+    // `dist/index.js`); it must match the same character set we enforce
+    // on `mod.name`.
     const inferredName = this.inferPluginName(absPath);
     if (!SAFE_NAME_RE.test(inferredName)) {
       return {
@@ -594,8 +569,9 @@ export class PluginLoader {
     pluginFilePath: string,
     pluginsConfig?: PluginsConfig,
   ): Record<string, unknown> {
-    // Read plugin's own config.json defaults
-    const pluginDir = resolve(pluginFilePath, '..');
+    // Read plugin's own config.json defaults (pluginFilePath is
+    // plugins/<name>/dist/index.js — go up two levels to the plugin root)
+    const pluginDir = resolve(pluginFilePath, '..', '..');
     const pluginConfigPath = join(pluginDir, 'config.json');
     let defaults: Record<string, unknown> = {};
 
@@ -636,139 +612,24 @@ export class PluginLoader {
     }
   }
 
-  /** Import a plugin module with cache busting for all local dependencies. */
+  /** Import a plugin bundle with cache busting. */
   private async importWithCacheBust(absPath: string): Promise<Record<string, unknown>> {
-    // First load of this file in this process: nothing is cached yet, so skip the
-    // cache-busting dance entirely. This lets bots run with a read-only plugins/
-    // mount as long as they don't hot-reload.
     if (!this.importedOnce.has(absPath)) {
       this.importedOnce.add(absPath);
       return (await import(pathToFileURL(absPath).href)) as Record<string, unknown>;
     }
-
     const ts = Date.now();
-    const dir = dirname(absPath);
-
-    // Discover all local .ts files reachable from this plugin entry
-    const allFiles = new Map<string, string>(); // abs path -> source
-    this.collectLocalModules(absPath, dir, allFiles);
-
-    /* v8 ignore next -- FALSE branch: process.env.VITEST is always set in tests; multi-file non-test path unreachable */
-    if (allFiles.size === 1 || process.env.VITEST) {
-      // Single-file plugins or test environments (where hot-reload isn't needed):
-      // simple query-string cache-bust so V8 coverage can track original file paths.
-      const fileUrl = pathToFileURL(absPath).href + `?t=${ts}`;
-      return (await import(fileUrl)) as Record<string, unknown>;
-    }
-
-    /* v8 ignore start -- multi-file plugin reload: writes temp files and imports them; guarded by process.env.VITEST check above */
-    // Multi-file plugin: create uniquely-named temp copies so Node treats each
-    // as a new module, bypassing its module cache.
-    const nameRemap = this.buildNameRemap(allFiles, ts);
-    const { tmpFiles, entryTmpPath } = this.writeRewrittenFiles(dir, absPath, allFiles, nameRemap);
-    try {
-      const fileUrl = pathToFileURL(entryTmpPath).href;
-      return (await import(fileUrl)) as Record<string, unknown>;
-    } finally {
-      for (const f of tmpFiles) {
-        try {
-          unlinkSync(f);
-        } catch {
-          /* ignore cleanup errors */
-        }
-      }
-    }
-    /* v8 ignore stop */
-  }
-
-  /**
-   * Build a mapping from each file's base name (no ext) to a unique temp base name.
-   * Used to rewrite intra-plugin imports so Node sees each reload as a fresh module.
-   */
-  /* v8 ignore next -- only called from multi-file production reload path above */
-  private buildNameRemap(allFiles: Map<string, string>, ts: number): Map<string, string> {
-    /* v8 ignore start -- only called from multi-file production reload path above */
-    const nameRemap = new Map<string, string>();
-    for (const origPath of allFiles.keys()) {
-      const base = basename(origPath, '.ts');
-      nameRemap.set(base, `.reload-${ts}-${base}`);
-    }
-    return nameRemap;
-    /* v8 ignore stop */
-  }
-
-  /**
-   * Write temp copies of all plugin files with intra-plugin imports rewritten
-   * to point to the corresponding temp file names.
-   * Returns the list of temp file paths and the entry temp path.
-   */
-  /* v8 ignore next -- only called from multi-file production reload path above */
-  private writeRewrittenFiles(
-    dir: string,
-    entryPath: string,
-    allFiles: Map<string, string>,
-    nameRemap: Map<string, string>,
-  ): { tmpFiles: string[]; entryTmpPath: string } {
-    /* v8 ignore start -- only called from multi-file production reload path above */
-    const tmpFiles: string[] = [];
-    let entryTmpPath = '';
-    for (const [origPath, source] of allFiles) {
-      const base = basename(origPath, '.ts');
-      const remappedBase = nameRemap.get(base);
-      if (remappedBase === undefined) continue;
-      const tmpPath = join(dir, `${remappedBase}.ts`);
-
-      // Rewrite same-directory imports to point to their corresponding temp files
-      const rewritten = source.replace(
-        /(from\s+['"])(\.\/[^?'"]+)(['"])/g,
-        (match, pre: string, spec: string, post: string) => {
-          const specBase = basename(spec.replace(/\.(ts|js)$/, ''));
-          const remapped = nameRemap.get(specBase);
-          return remapped ? `${pre}./${remapped}${post}` : match;
-        },
-      );
-
-      writeFileSync(tmpPath, rewritten, 'utf-8');
-      tmpFiles.push(tmpPath);
-      if (origPath === entryPath) entryTmpPath = tmpPath;
-    }
-    return { tmpFiles, entryTmpPath };
-    /* v8 ignore stop */
-  }
-
-  /** Recursively collect all local .ts module files reachable from a plugin entry. */
-  private collectLocalModules(absPath: string, pluginDir: string, seen: Map<string, string>): void {
-    if (seen.has(absPath)) return;
-
-    let source: string;
-    try {
-      source = readFileSync(absPath, 'utf-8');
-    } catch {
-      return;
-    }
-
-    seen.set(absPath, source);
-
-    // Find all static import specifiers (including type-only; they're erased at runtime)
-    const importRe = /from\s+['"](\.[^?'"]+)['"]/g;
-    let m: RegExpExecArray | null;
-    while ((m = importRe.exec(source)) !== null) {
-      const spec = m[1];
-      if (!spec.startsWith('./')) continue; // skip parent-dir imports (e.g. ../../src/types)
-      const resolved = resolve(join(dirname(absPath), spec.replace(/\.(ts|js)$/, '') + '.ts'));
-      if (resolved.startsWith(pluginDir + '/') && existsSync(resolved)) {
-        this.collectLocalModules(resolved, pluginDir, seen);
-      }
-    }
+    const fileUrl = pathToFileURL(absPath).href + `?t=${ts}`;
+    return (await import(fileUrl)) as Record<string, unknown>;
   }
 
   /** Infer a plugin name from its file path. */
   private inferPluginName(filePath: string): string {
-    // Try to get the parent directory name
+    // Path is plugins/<name>/dist/index.js — name is two levels above the file
     const parts = filePath.split('/');
-    const indexIdx = parts.lastIndexOf('index.ts');
-    if (indexIdx > 0) {
-      return parts[indexIdx - 1];
+    const indexIdx = parts.lastIndexOf('index.js');
+    if (indexIdx > 1) {
+      return parts[indexIdx - 2];
     }
     // Fallback: filename without extension
     const last = parts[parts.length - 1];

@@ -10,10 +10,14 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile --ignore-scripts && pnpm rebuild better-sqlite3
 
-# Copy source and plugin code
+# Copy source, scripts, and plugin code
 COPY tsconfig.json ./
 COPY src/ ./src/
+COPY scripts/ ./scripts/
 COPY plugins/ ./plugins/
+
+# Build bundled plugins (installs plugin-local deps, runs tsup)
+RUN pnpm build:plugins
 
 # Typecheck at build time (catches errors before deploy)
 RUN pnpm exec tsc --noEmit

@@ -71,7 +71,7 @@ describe('plugin-commands', () => {
 
       await bot.commandHandler.execute('.load my-plugin', ctx);
 
-      expect(bot.pluginLoader.load).toHaveBeenCalledWith('./plugins/my-plugin/index.ts');
+      expect(bot.pluginLoader.load).toHaveBeenCalledWith('./plugins/my-plugin/dist/index.js');
       expect(ctx.reply).toHaveBeenCalledWith('Plugin "my-plugin" loaded successfully.');
     });
 

@@ -127,7 +127,7 @@ Inspired by Eggdrop's C modules vs Tcl scripts:
 
 **Core modules** (`src/core/`) ship with the bot and are always loaded. They provide the foundational services that plugins build on. Core modules can depend on each other (e.g., permissions depends on services for NickServ ACC verification). They are NOT hot-reloadable — they're part of the bot's runtime.
 
-**Plugins** (`plugins/`) are optional, user-installable, and hot-reloadable. Each plugin is a directory with an `index.ts` that exports `{ name, version, description, init(api), teardown() }`. Plugins depend on core modules (via the plugin API) but never on other plugins. A plugin can be loaded, unloaded, and reloaded without restarting the bot.
+**Plugins** (`plugins/`) are optional, user-installable, and hot-reloadable. Each plugin is a directory with an `index.ts` source file and a `tsup.config.ts` build config. Plugins bundle via tsup to `dist/index.js` and export `{ name, version, description, init(api), teardown() }`. Plugins depend on core modules (via the plugin API) but never on other plugins. A plugin can be loaded, unloaded, and reloaded without restarting the bot.
 
 ### 2.3 Event dispatcher (the bind system)
 
@@ -321,14 +321,14 @@ export function teardown(): void {
 
 Responsibilities:
 
-- Discover plugins in the plugin directory (each subdirectory with `index.ts`, or standalone `.ts` files)
-- Load: dynamic `import()` with cache-busting query string for ESM (imports compiled `.js` output)
+- Discover plugins in the plugin directory (each subdirectory with `dist/index.js`)
+- Load: dynamic `import()` with cache-busting query string for ESM (imports bundled `dist/index.js` output via tsup)
 - Unload: call `teardown()`, then `dispatcher.unbindAll(pluginId)`, unregister help, channel settings, event listeners
 - Reload: unload then load from disk
 - Provide scoped API to each plugin's `init()`
 - Partial init safety: if `init()` throws, the loader calls `teardown()` and performs the same cleanup as unload before re-throwing
 
-Hot-reload works because ESM's `import()` can be cache-busted with `?t=Date.now()`. The loader clears the old plugin's binds, calls teardown, then imports the fresh code and re-initializes.
+All plugins bundle via tsup to a single `dist/index.js`. `pnpm build:plugins` builds all plugins. Hot-reload works because ESM's `import()` can be cache-busted with `?t=Date.now()`. The loader clears the old plugin's binds, calls teardown, then imports the rebuilt bundle and re-initializes.
 
 ### 2.6 Permissions (core module)
 
@@ -760,10 +760,9 @@ pnpm run dev        # with --repl (uses tsx)
 mkdir plugins/my-plugin
 ```
 
-Minimum viable plugin:
+Minimum viable plugin (`plugins/my-plugin/index.ts`):
 
 ```typescript
-// plugins/my-plugin/index.ts
 import type { PluginAPI } from '../../src/types';
 
 export const name = 'my-plugin';
@@ -777,11 +776,28 @@ export function init(api: PluginAPI): void {
 }
 ```
 
+Build config (`plugins/my-plugin/tsup.config.ts`):
+
+```typescript
+import { defineConfig } from 'tsup';
+
+export default defineConfig({
+  entry: ['index.ts'],
+  format: ['esm'],
+  platform: 'node',
+  bundle: true,
+  noExternal: [/.*/],
+  external: [/^node:/, 'better-sqlite3'],
+  outExtension: () => ({ js: '.js' }),
+});
+```
+
 ### Hot-reload workflow
 
-1. Edit plugin code
-2. In REPL or IRC: `.reload my-plugin`
-3. Changes are live immediately — no bot restart needed
+1. Edit plugin source code
+2. Rebuild: `pnpm build:plugins` (esbuild bundling is <100ms per plugin)
+3. In REPL or IRC: `.reload my-plugin`
+4. Changes are live — no bot restart needed
 
 ### Testing against a local IRC server
 

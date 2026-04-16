@@ -3,6 +3,8 @@ node_modules/
 
 # Build output
 dist/
+plugins/*/dist/
+plugins/*/node_modules/
 *.tsbuildinfo
 
 # Runtime data
@@ -40,9 +42,6 @@ Thumbs.db
 # Environment / secrets
 .env
 .env.*
-
-# Plugin hot-reload temp files (created transiently during .reload; deleted after import)
-.reload-*.ts
 
 # Logs
 *.log

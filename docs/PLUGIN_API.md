@@ -6,7 +6,14 @@ This documents the full API surface available to HexBot plugins. Every plugin's 
 
 ## Plugin structure
 
-A plugin is a directory under `plugins/` containing an `index.ts` that exports the following:
+A plugin is a directory under `plugins/` containing:
+
+- `index.ts` — source code with required exports
+- `tsup.config.ts` — build config (bundles to `dist/index.js`)
+- `config.json` — optional default config values
+- `package.json` — optional, only if the plugin has its own npm dependencies
+
+The plugin's `index.ts` exports:
 
 ```typescript
 import type { HandlerContext, PluginAPI } from '../../src/types.js';
@@ -27,7 +34,13 @@ export function teardown(): void | Promise<void> {
 }
 ```
 
-A plugin may also include a `config.json` with default config values. These are merged with (and overridden by) the plugin's entry in `config/plugins.json`. Plugins are auto-discovered from the `plugins/` directory — they do not need an entry in `plugins.json` to be loaded. To disable a plugin, set `"enabled": false` in `plugins.json`.
+### Building plugins
+
+All plugins bundle via tsup to a single `dist/index.js`. Run `pnpm build:plugins` to build all plugins. The loader imports `dist/index.js` at runtime — source `.ts` files are never imported directly.
+
+Plugins with their own `package.json` (e.g., rss with `rss-parser`) have their npm dependencies installed automatically by the build script and inlined into the bundle.
+
+Config values (`config.json`) are merged with (and overridden by) the plugin's entry in `config/plugins.json`. Plugins are auto-discovered from the `plugins/` directory by checking for `dist/index.js` — they do not need an entry in `plugins.json` to be loaded. To disable a plugin, set `"enabled": false` in `plugins.json`.
 
 ### Channel scoping
 

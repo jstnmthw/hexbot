@@ -37,9 +37,9 @@ function makeTempDir(): string {
 }
 
 function writePlugin(dir: string, name: string, code: string): string {
-  const pluginDir = join(dir, name);
-  mkdirSync(pluginDir, { recursive: true });
-  const filePath = join(pluginDir, 'index.ts');
+  const distDir = join(dir, name, 'dist');
+  mkdirSync(distDir, { recursive: true });
+  const filePath = join(distDir, 'index.js');
   writeFileSync(filePath, code, 'utf-8');
   return filePath;
 }
@@ -383,7 +383,7 @@ describe('PluginLoader', () => {
 
     it('should return error for non-existent file', async () => {
       const { loader } = createLoader(tempDir);
-      const result = await loader.load(join(tempDir, 'ghost', 'index.ts'));
+      const result = await loader.load(join(tempDir, 'ghost', 'dist', 'index.js'));
 
       expect(result.status).toBe('error');
       expect(result.error).toContain('not found');
@@ -1309,19 +1309,19 @@ describe('PluginLoader', () => {
   });
 
   describe('inferPluginName edge cases', () => {
-    it('should use filename when path is not an index.ts pattern', async () => {
+    it('should use filename when path is not a dist/index.js pattern', async () => {
       const { loader } = createLoader(tempDir);
-      // A path like /some/dir/myplugin.ts (not index.ts) should infer "myplugin"
+      // A path like /some/dir/myplugin.ts (not index.js) should infer "myplugin"
       const result = await loader.load(join(tempDir, 'myplugin.ts'));
 
       expect(result.status).toBe('error');
       expect(result.name).toBe('myplugin');
     });
 
-    it('should use parent dir name for index.ts pattern', async () => {
+    it('should infer plugin name from dist/index.js path (two levels up)', async () => {
       const { loader } = createLoader(tempDir);
-      // A path like /some/my-plugin/index.ts should infer "my-plugin"
-      const result = await loader.load(join(tempDir, 'my-plugin', 'index.ts'));
+      // A path like /some/my-plugin/dist/index.js should infer "my-plugin"
+      const result = await loader.load(join(tempDir, 'my-plugin', 'dist', 'index.js'));
 
       expect(result.status).toBe('error');
       expect(result.name).toBe('my-plugin');
@@ -1635,54 +1635,6 @@ describe('PluginLoader', () => {
       api.channelSettings.set('#test', 'greeting', 'howdy');
       expect(api.channelSettings.get('#test', 'greeting')).toBe('howdy');
       expect(api.channelSettings.isSet('#test', 'greeting')).toBe(true);
-    });
-  });
-
-  describe('collectLocalModules — import to non-existent file', () => {
-    it('should skip imports that resolve to non-existent files', async () => {
-      const pluginPath = writePlugin(
-        tempDir,
-        'bad-import',
-        `
-        import { helper } from './does-not-exist';
-        export const name = 'bad-import';
-        export const version = '1.0.0';
-        export function init() {}
-        `,
-      );
-      const { loader } = createLoader(tempDir);
-      // collectLocalModules scans this import but does not find the file — the false
-      // branch of existsSync is hit. The plugin still loads because the import is
-      // only scanned for multi-file reload discovery, not actually required at runtime.
-      const result = await loader.load(pluginPath);
-      expect(result.status).toBe('ok');
-    });
-
-    it('should handle readFileSync failure for existing but unreadable files', async () => {
-      const { chmodSync } = await import('node:fs');
-      const pluginPath = writePlugin(
-        tempDir,
-        'unreadable-import',
-        `
-        import { helper } from './secret';
-        export const name = 'unreadable-import';
-        export const version = '1.0.0';
-        export function init() {}
-        `,
-      );
-      // Create the imported file, then make it unreadable
-      const secretPath = join(join(tempDir, 'unreadable-import'), 'secret.ts');
-      writeFileSync(secretPath, 'export const helper = 1;', 'utf-8');
-      chmodSync(secretPath, 0o000);
-
-      const { loader } = createLoader(tempDir);
-      // collectLocalModules finds the file (existsSync → true) but readFileSync
-      // throws EACCES. The catch block returns silently — plugin still loads.
-      const result = await loader.load(pluginPath);
-      expect(result.status).toBe('ok');
-
-      // Restore permissions for cleanup
-      chmodSync(secretPath, 0o644);
     });
   });
 
