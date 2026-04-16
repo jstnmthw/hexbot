@@ -210,8 +210,9 @@ describe('AmbientEngine', () => {
 describe('RateLimiter ambient budget', () => {
   it('allows ambient messages within budget', () => {
     const rl = new RateLimiter({
-      userCooldownSeconds: 0,
-      channelCooldownSeconds: 0,
+      userBurst: 0,
+      userRefillSeconds: 12,
+      rpmBackpressurePct: 80,
       globalRpm: 100,
       globalRpd: 1000,
       ambientPerChannelPerHour: 5,
@@ -224,8 +225,9 @@ describe('RateLimiter ambient budget', () => {
 
   it('blocks when per-channel ambient budget is exhausted', () => {
     const rl = new RateLimiter({
-      userCooldownSeconds: 0,
-      channelCooldownSeconds: 0,
+      userBurst: 0,
+      userRefillSeconds: 12,
+      rpmBackpressurePct: 80,
       globalRpm: 100,
       globalRpd: 1000,
       ambientPerChannelPerHour: 2,
@@ -239,8 +241,9 @@ describe('RateLimiter ambient budget', () => {
 
   it('blocks when global ambient budget is exhausted', () => {
     const rl = new RateLimiter({
-      userCooldownSeconds: 0,
-      channelCooldownSeconds: 0,
+      userBurst: 0,
+      userRefillSeconds: 12,
+      rpmBackpressurePct: 80,
       globalRpm: 100,
       globalRpd: 1000,
       ambientPerChannelPerHour: 100,
@@ -254,8 +257,9 @@ describe('RateLimiter ambient budget', () => {
 
   it('reset clears ambient state', () => {
     const rl = new RateLimiter({
-      userCooldownSeconds: 0,
-      channelCooldownSeconds: 0,
+      userBurst: 0,
+      userRefillSeconds: 12,
+      rpmBackpressurePct: 80,
       globalRpm: 100,
       globalRpd: 1000,
       ambientPerChannelPerHour: 1,

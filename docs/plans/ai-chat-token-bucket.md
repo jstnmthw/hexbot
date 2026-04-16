@@ -12,7 +12,18 @@ breaking config change — the pre-release plugin drops `user_cooldown_seconds`
 and `channel_cooldown_seconds`, replacing them with `user_burst`,
 `user_refill_seconds`, and `rpm_backpressure_pct`.
 
-See `docs/ai-chat-rate-limiting.md` for the full analysis and rationale.
+## Why token bucket
+
+The current rate limiter uses four layers: per-user cooldown (30s), per-channel cooldown (10s), global RPM (10/min), global RPD (800/day). IRC conversation is **bursty** — a user asks a question, the bot answers, the user follows up, the bot should answer again. This exchange might produce 4-5 bot responses in 2 minutes then nothing for 20 minutes. The flat 30s cooldown forces 27-second dead spots between follow-ups even when global headroom is plentiful, which kills the conversation. With two users the per-channel cooldown compounds — alice's conversation blocks bob's unrelated question.
+
+A token bucket with burst capacity 3 and refill rate 1 per 12s lets the first three exchanges flow naturally, then degrades to a sustained rate faster than the current 30s flat cooldown. Bucket-per-user drops the per-channel coupling entirely — alice and bob are independent. The bucket pattern is already proven in this codebase (`src/core/message-queue.ts` uses it for outgoing IRC flood protection), and the RPM backpressure knob prevents burst storms when several users burst at once.
+
+Alternatives considered and rejected:
+
+- **Per-channel conversation slots** (one active conversation at a time, others queued). Over-engineered: the context manager already interleaves `[alice]`/`[bob]` prefixes cleanly; the LLM handles multi-user chat fine. Slot-based rate limiting just creates "the bot is ignoring me" UX.
+- **Hybrid burst + conversation-aware mode** (relax the bucket while the user is actively engaged, tighten when background). Non-trivial state machine for marginal benefit over a plain bucket sized to typical conversation length.
+
+Pick a plain per-user bucket with RPM backpressure — matches IRC conversation rhythm, minimal state, mirrors a pattern already used elsewhere in the codebase.
 
 ## Feasibility
 
@@ -46,34 +57,34 @@ phase is self-contained — the module and its tests can be verified in isolatio
 
 #### 1a: Update interfaces
 
-- [ ] In `plugins/ai-chat/rate-limiter.ts`, replace `RateLimiterConfig`:
+- [x] In `plugins/ai-chat/rate-limiter.ts`, replace `RateLimiterConfig`:
   - Drop: `userCooldownSeconds`, `channelCooldownSeconds`
   - Add: `userBurst` (number, default 3), `userRefillSeconds` (number, default
     12), `rpmBackpressurePct` (number, default 80)
   - Keep: `globalRpm`, `globalRpd`, `ambientPerChannelPerHour`,
     `ambientGlobalPerHour`
-- [ ] In `RateCheckResult`, drop `'channel'` from `limitedBy` union:
+- [x] In `RateCheckResult`, drop `'channel'` from `limitedBy` union:
       `'user' | 'rpm' | 'rpd'`
 
 #### 1b: Rewrite `RateLimiter` class internals
 
-- [ ] Add `UserBucket` interface: `{ tokens: number; lastRefill: number }`
-- [ ] Replace `userLastCall: Map<string, number>` with
+- [x] Add `UserBucket` interface: `{ tokens: number; lastRefill: number }`
+- [x] Replace `userLastCall: Map<string, number>` with
       `userBuckets: Map<string, UserBucket>`
-- [ ] Remove `channelLastCall: Map<string, number>` entirely
-- [ ] Add private `getOrCreateBucket(userKey, now)` method — returns existing
+- [x] Remove `channelLastCall: Map<string, number>` entirely
+- [x] Add private `getOrCreateBucket(userKey, now)` method — returns existing
       bucket or creates one at full burst capacity
-- [ ] Add private `refillBucket(bucket, now)` method — calculates tokens earned
+- [x] Add private `refillBucket(bucket, now)` method — calculates tokens earned
       since `lastRefill`, caps at `userBurst`, advances `lastRefill` by
       `newTokens * refillMs` to avoid drift (same pattern as `message-queue.ts`)
 
 #### 1c: Rewrite `check()` method
 
-- [ ] New signature: `check(userKey: string, now?: number): RateCheckResult`
+- [x] New signature: `check(userKey: string, now?: number): RateCheckResult`
       (drop `channelKey` parameter)
-- [ ] Order: RPD → RPM → per-user bucket (same precedence as before minus
+- [x] Order: RPD → RPM → per-user bucket (same precedence as before minus
       channel)
-- [ ] After RPM passes, compute backpressure:
+- [x] After RPM passes, compute backpressure:
   ```
   rpmPct = minuteWindow.length / globalRpm
   threshold = rpmBackpressurePct / 100
@@ -81,54 +92,54 @@ phase is self-contained — the module and its tests can be verified in isolatio
     ? max(1, floor(userBurst / 2))
     : userBurst
   ```
-- [ ] Cap `bucket.tokens` at `effectiveBurst` before checking
-- [ ] If `bucket.tokens < 1`: return blocked with `limitedBy: 'user'` and
+- [x] Cap `bucket.tokens` at `effectiveBurst` before checking
+- [x] If `bucket.tokens < 1`: return blocked with `limitedBy: 'user'` and
       `retryAfterMs` = time until next refill
-- [ ] If tokens available: return `{ allowed: true }`
+- [x] If tokens available: return `{ allowed: true }`
 
 #### 1d: Update `record()` method
 
-- [ ] New signature: `record(userKey: string, now?: number): void`
+- [x] New signature: `record(userKey: string, now?: number): void`
       (drop `channelKey` parameter)
-- [ ] Deduct 1 token from user's bucket (refill first, then deduct)
-- [ ] Push to `minuteWindow` and `dayWindow` as before
+- [x] Deduct 1 token from user's bucket (refill first, then deduct)
+- [x] Push to `minuteWindow` and `dayWindow` as before
 
 #### 1e: Update `reset()` method
 
-- [ ] Clear `userBuckets` instead of `userLastCall`
-- [ ] Remove `channelLastCall.clear()`
-- [ ] Keep all other clears (minuteWindow, dayWindow, ambient windows)
+- [x] Clear `userBuckets` instead of `userLastCall`
+- [x] Remove `channelLastCall.clear()`
+- [x] Keep all other clears (minuteWindow, dayWindow, ambient windows)
 
 #### 1f: Update `setConfig()` method
 
-- [ ] Accept new `RateLimiterConfig` shape (no code change needed — it just
+- [x] Accept new `RateLimiterConfig` shape (no code change needed — it just
       stores the config reference)
 
 #### 1g: Rewrite `tests/plugins/ai-chat-rate-limiter.test.ts`
 
-- [ ] Update `makeLimiter()` helper for new config shape (default: `userBurst: 3,
+- [x] Update `makeLimiter()` helper for new config shape (default: `userBurst: 3,
 userRefillSeconds: 12, globalRpm: 10, globalRpd: 100`)
-- [ ] **Burst tests**: first N calls (up to burst) are allowed with no delay
-- [ ] **Refill test**: after burst exhausted, wait `refillSeconds` and one more
+- [x] **Burst tests**: first N calls (up to burst) are allowed with no delay
+- [x] **Refill test**: after burst exhausted, wait `refillSeconds` and one more
       call is allowed
-- [ ] **Sustained rate test**: verify that after burst, calls are rate-limited to
+- [x] **Sustained rate test**: verify that after burst, calls are rate-limited to
       1 per refillSeconds
-- [ ] **Multi-user isolation**: alice and bob have independent buckets — alice
+- [x] **Multi-user isolation**: alice and bob have independent buckets — alice
       exhausting hers doesn't affect bob
-- [ ] **RPM still enforced**: RPM limit blocks when window is full
-- [ ] **RPD still enforced**: RPD limit blocks when window is full
-- [ ] **RPD before RPM precedence**: unchanged behavior
-- [ ] **Backpressure test**: when RPM usage > 80%, effective burst is halved
+- [x] **RPM still enforced**: RPM limit blocks when window is full
+- [x] **RPD still enforced**: RPD limit blocks when window is full
+- [x] **RPD before RPM precedence**: unchanged behavior
+- [x] **Backpressure test**: when RPM usage > 80%, effective burst is halved
       (e.g. burst 3 → 1)
-- [ ] **Backpressure recovery**: when RPM usage drops below threshold, full burst
+- [x] **Backpressure recovery**: when RPM usage drops below threshold, full burst
       is restored
-- [ ] **Zero-valued limits**: `userBurst: 0` disables per-user limiting;
+- [x] **Zero-valued limits**: `userBurst: 0` disables per-user limiting;
       `globalRpm: 0` disables RPM
-- [ ] **`checkGlobal()` unchanged**: still ignores per-user bucket, enforces
+- [x] **`checkGlobal()` unchanged**: still ignores per-user bucket, enforces
       RPM/RPD only
-- [ ] **`reset()` clears buckets**: verify full burst is available after reset
-- [ ] **`setConfig()` hot-reload**: config change takes effect on next check
-- [ ] **Verify**: `pnpm vitest run tests/plugins/ai-chat-rate-limiter.test.ts`
+- [x] **`reset()` clears buckets**: verify full burst is available after reset
+- [x] **`setConfig()` hot-reload**: config change takes effect on next check
+- [x] **Verify**: `pnpm vitest run tests/plugins/ai-chat-rate-limiter.test.ts`
       passes
 
 ### Phase 2: Update config layer and call sites
@@ -138,7 +149,7 @@ call sites.
 
 #### 2a: Config changes
 
-- [ ] In `plugins/ai-chat/config.json`, replace:
+- [x] In `plugins/ai-chat/config.json`, replace:
   ```json
   "rate_limits": {
     "user_burst": 3,
@@ -150,9 +161,9 @@ call sites.
     "ambient_global_per_hour": 20
   }
   ```
-- [ ] In `plugins/ai-chat/index.ts`, update `AiChatConfig.rateLimits` type to
+- [x] In `plugins/ai-chat/index.ts`, update `AiChatConfig.rateLimits` type to
       match new `RateLimiterConfig`
-- [ ] In `parseConfig()`, update the `rateLimits` block:
+- [x] In `parseConfig()`, update the `rateLimits` block:
   - Drop: `asNum(rl.user_cooldown_seconds, 30)`,
     `asNum(rl.channel_cooldown_seconds, 10)`
   - Add: `userBurst: asNum(rl.user_burst, 3)`,
@@ -161,41 +172,41 @@ call sites.
 
 #### 2b: Update `assistant.ts` call sites
 
-- [ ] `respond()` line ~72: drop `channelKey` variable (no longer needed)
-- [ ] Line ~77: `rateLimiter.check(userKey)` instead of
+- [x] `respond()` line ~72: drop `channelKey` variable (no longer needed)
+- [x] Line ~77: `rateLimiter.check(userKey)` instead of
       `rateLimiter.check(userKey, channelKey)`
-- [ ] Line ~127: `rateLimiter.record(userKey)` instead of
+- [x] Line ~127: `rateLimiter.record(userKey)` instead of
       `rateLimiter.record(userKey, channelKey)`
 
 #### 2c: Update `index.ts` call sites
 
-- [ ] Session handler (~line 831): `rateLimiter.record(userKey)` instead of
+- [x] Session handler (~line 831): `rateLimiter.record(userKey)` instead of
       `rateLimiter.record(userKey, channelKey)`
-- [ ] Drop `channelKey` variable in session handler if unused after this change
+- [x] Drop `channelKey` variable in session handler if unused after this change
 
 #### 2d: Update downstream tests
 
-- [ ] `tests/plugins/ai-chat-assistant.test.ts`: update any `RateLimiterConfig`
+- [x] `tests/plugins/ai-chat-assistant.test.ts`: update any `RateLimiterConfig`
       construction to use new fields; update `check()`/`record()` call assertions
       if mocked
-- [ ] `tests/plugins/ai-chat-plugin.test.ts`: update config fixtures for new
+- [x] `tests/plugins/ai-chat-plugin.test.ts`: update config fixtures for new
       `rateLimits` shape
-- [ ] `tests/plugins/ai-chat-admin.test.ts`: update config fixtures if present
-- [ ] `tests/plugins/ai-chat-ambient.test.ts`: ambient tests use
+- [x] `tests/plugins/ai-chat-admin.test.ts`: update config fixtures if present
+- [x] `tests/plugins/ai-chat-ambient.test.ts`: ambient tests use
       `checkAmbient()`/`recordAmbient()` — no signature change, but config
       fixtures may need updating
 
 #### 2e: Verify
 
-- [ ] Run `pnpm check` (build + typecheck + lint + tests) — all pass
+- [x] Run `pnpm check` (build + typecheck + lint + tests) — all pass
 
 ### Phase 3: Rebuild and verify
 
 **Goal:** Final verification that everything is clean.
 
-- [ ] Run `pnpm run build:plugins` to rebuild ai-chat dist
-- [ ] Run `pnpm check` — full pass (typecheck + lint + 3234+ tests)
-- [ ] Verify no type errors related to `'channel'` in `limitedBy` anywhere
+- [x] Run `pnpm run build:plugins` to rebuild ai-chat dist
+- [x] Run `pnpm check` — full pass (typecheck + lint + 3234+ tests)
+- [x] Verify no type errors related to `'channel'` in `limitedBy` anywhere
 
 ## Config changes
 

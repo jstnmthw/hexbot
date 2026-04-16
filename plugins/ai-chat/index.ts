@@ -74,10 +74,11 @@ interface AiChatConfig {
   triggers: TriggerConfig;
   context: { maxMessages: number; maxTokens: number; ttlMs: number };
   rateLimits: {
-    userCooldownSeconds: number;
-    channelCooldownSeconds: number;
+    userBurst: number;
+    userRefillSeconds: number;
     globalRpm: number;
     globalRpd: number;
+    rpmBackpressurePct: number;
     ambientPerChannelPerHour: number;
     ambientGlobalPerHour: number;
   };
@@ -143,10 +144,11 @@ export function parseConfig(raw: Record<string, unknown>): AiChatConfig {
       ttlMs: asNum(context.ttl_minutes, 60) * 60_000,
     },
     rateLimits: {
-      userCooldownSeconds: asNum(rl.user_cooldown_seconds, 30),
-      channelCooldownSeconds: asNum(rl.channel_cooldown_seconds, 10),
+      userBurst: asNum(rl.user_burst, 3),
+      userRefillSeconds: asNum(rl.user_refill_seconds, 12),
       globalRpm: asNum(rl.global_rpm, 10),
       globalRpd: asNum(rl.global_rpd, 800),
+      rpmBackpressurePct: asNum(rl.rpm_backpressure_pct, 80),
       ambientPerChannelPerHour: asNum(rl.ambient_per_channel_per_hour, 5),
       ambientGlobalPerHour: asNum(rl.ambient_global_per_hour, 20),
     },
@@ -808,8 +810,7 @@ async function runSessionPipeline(
   if (!session) return;
 
   const userKey = ctx.nick.toLowerCase();
-  const channelKey = ctx.channel?.toLowerCase() ?? null;
-  // Sessions bypass per-user/per-channel cooldowns — only enforce global RPM/RPD.
+  // Sessions bypass the per-user bucket — only enforce global RPM/RPD.
   const rl = rateLimiter.checkGlobal();
   if (!rl.allowed) {
     api.debug(`session rate-limited nick=${ctx.nick}`);
@@ -839,7 +840,7 @@ async function runSessionPipeline(
       cfg.maxOutputTokens,
     );
     tokenTracker.recordUsage(ctx.nick, res.usage);
-    rateLimiter.record(userKey, channelKey);
+    rateLimiter.record(userKey);
 
     const lines = formatResponse(
       res.text,

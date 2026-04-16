@@ -40,7 +40,7 @@ export interface AssistantRequest {
   promptContext: PromptContext;
   /** Per-character context window override (number of messages to include). */
   maxContextMessages?: number;
-  /** Admin users bypass per-user/per-channel cooldowns (global RPM/RPD still enforced). */
+  /** Admin users bypass the per-user bucket (global RPM/RPD still enforced). */
   isAdmin?: boolean;
 }
 
@@ -70,10 +70,9 @@ export async function respond(
 ): Promise<AssistantResult> {
   const { provider, rateLimiter, tokenTracker, contextManager, config } = deps;
   const userKey = req.nick.toLowerCase();
-  const channelKey = req.channel?.toLowerCase() ?? null;
 
-  // Admins bypass per-user/per-channel cooldowns; global RPM/RPD still enforced.
-  const rl = req.isAdmin ? rateLimiter.checkGlobal() : rateLimiter.check(userKey, channelKey);
+  // Admins bypass the per-user bucket; global RPM/RPD still enforced.
+  const rl = req.isAdmin ? rateLimiter.checkGlobal() : rateLimiter.check(userKey);
   if (!rl.allowed) {
     return {
       status: 'rate_limited',
@@ -123,7 +122,7 @@ export async function respond(
   if (usageIn > 0 || usageOut > 0) {
     tokenTracker.recordUsage(req.nick, { input: usageIn, output: usageOut });
   }
-  rateLimiter.record(userKey, channelKey);
+  rateLimiter.record(userKey);
 
   let fantasyDrop: { index: number; line: string } | null = null;
   const lines = formatResponse(text, config.maxLines, config.maxLineLength, (info) => {

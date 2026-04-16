@@ -1,177 +1,257 @@
 import { describe, expect, it } from 'vitest';
 
-import { RateLimiter } from '../../plugins/ai-chat/rate-limiter';
+import { RateLimiter, type RateLimiterConfig } from '../../plugins/ai-chat/rate-limiter';
 
-function makeLimiter(overrides: Partial<ConstructorParameters<typeof RateLimiter>[0]> = {}) {
+function makeLimiter(overrides: Partial<RateLimiterConfig> = {}): RateLimiter {
   return new RateLimiter({
-    userCooldownSeconds: 30,
-    channelCooldownSeconds: 10,
+    userBurst: 3,
+    userRefillSeconds: 12,
     globalRpm: 10,
     globalRpd: 100,
+    rpmBackpressurePct: 80,
     ...overrides,
   });
 }
 
 describe('RateLimiter', () => {
-  it('allows the first call from a user', () => {
-    const rl = makeLimiter();
-    expect(rl.check('alice', '#chan', 1000).allowed).toBe(true);
-  });
-
-  it('blocks a second call inside the user cooldown', () => {
-    const rl = makeLimiter({ userCooldownSeconds: 30, channelCooldownSeconds: 0 });
-    rl.record('alice', null, 1000);
-    const res = rl.check('alice', null, 5000);
-    expect(res.allowed).toBe(false);
-    expect(res.limitedBy).toBe('user');
-    expect(res.retryAfterMs).toBe(30_000 - 4_000);
-  });
-
-  it('allows again after the user cooldown elapses', () => {
-    const rl = makeLimiter({ userCooldownSeconds: 30, channelCooldownSeconds: 0 });
-    rl.record('alice', null, 1000);
-    expect(rl.check('alice', null, 31_001).allowed).toBe(true);
-  });
-
-  it('enforces channel cooldown independently of user', () => {
-    const rl = makeLimiter({ userCooldownSeconds: 0, channelCooldownSeconds: 10 });
-    rl.record('alice', '#chan', 1000);
-    const res = rl.check('bob', '#chan', 2000);
-    expect(res.allowed).toBe(false);
-    expect(res.limitedBy).toBe('channel');
-  });
-
-  it('ignores channel cooldown for PMs (channelKey null)', () => {
-    const rl = makeLimiter({ userCooldownSeconds: 0, channelCooldownSeconds: 10 });
-    rl.record('alice', '#chan', 1000);
-    expect(rl.check('bob', null, 2000).allowed).toBe(true);
-  });
-
-  it('blocks at the global RPM limit', () => {
-    const rl = makeLimiter({
-      userCooldownSeconds: 0,
-      channelCooldownSeconds: 0,
-      globalRpm: 3,
-      globalRpd: 1000,
+  describe('per-user token bucket', () => {
+    it('allows the first call from a user', () => {
+      const rl = makeLimiter();
+      expect(rl.check('alice', 1000).allowed).toBe(true);
     });
-    rl.record('a', null, 0);
-    rl.record('b', null, 100);
-    rl.record('c', null, 200);
-    const res = rl.check('d', null, 300);
-    expect(res.allowed).toBe(false);
-    expect(res.limitedBy).toBe('rpm');
+
+    it('grants burst tokens worth of rapid calls without delay', () => {
+      const rl = makeLimiter({ userBurst: 3 });
+      for (let i = 0; i < 3; i++) {
+        const res = rl.check('alice', 1000 + i);
+        expect(res.allowed).toBe(true);
+        rl.record('alice', 1000 + i);
+      }
+    });
+
+    it('blocks the call after burst is exhausted', () => {
+      const rl = makeLimiter({ userBurst: 3, userRefillSeconds: 12 });
+      for (let i = 0; i < 3; i++) rl.record('alice', 1000 + i);
+      const res = rl.check('alice', 1100);
+      expect(res.allowed).toBe(false);
+      expect(res.limitedBy).toBe('user');
+      // Last record was at 1002 (lastRefill); refill is 12000ms; check at 1100.
+      expect(res.retryAfterMs).toBe(12_000 - (1100 - 1000));
+    });
+
+    it('refills one token after `userRefillSeconds` and allows one more call', () => {
+      const rl = makeLimiter({ userBurst: 3, userRefillSeconds: 12 });
+      for (let i = 0; i < 3; i++) rl.record('alice', 1000 + i);
+      // Just before refill window — still blocked.
+      expect(rl.check('alice', 12_999).allowed).toBe(false);
+      // At/after refill — one token granted.
+      const ok = rl.check('alice', 13_000);
+      expect(ok.allowed).toBe(true);
+      rl.record('alice', 13_000);
+      // Immediately again — bucket is empty again.
+      expect(rl.check('alice', 13_001).allowed).toBe(false);
+    });
+
+    it('sustains at one call per `userRefillSeconds` after burst', () => {
+      const rl = makeLimiter({ userBurst: 3, userRefillSeconds: 12 });
+      for (let i = 0; i < 3; i++) rl.record('alice', 1000 + i);
+      let now = 1000;
+      for (let i = 0; i < 5; i++) {
+        now += 12_000;
+        expect(rl.check('alice', now).allowed).toBe(true);
+        rl.record('alice', now);
+      }
+    });
+
+    it('keeps user buckets independent', () => {
+      const rl = makeLimiter({ userBurst: 3 });
+      for (let i = 0; i < 3; i++) rl.record('alice', 1000 + i);
+      expect(rl.check('alice', 1100).allowed).toBe(false);
+      expect(rl.check('bob', 1100).allowed).toBe(true);
+    });
+
+    it('refills do not exceed burst capacity (no over-accumulation while idle)', () => {
+      const rl = makeLimiter({ userBurst: 3, userRefillSeconds: 12 });
+      rl.record('alice', 1000);
+      // Wait an hour — bucket should still cap at 3 tokens, not 300.
+      // After capping, user can fire exactly burst (3) in a row, then blocked.
+      for (let i = 0; i < 3; i++) {
+        expect(rl.check('alice', 3_601_000 + i).allowed).toBe(true);
+        rl.record('alice', 3_601_000 + i);
+      }
+      expect(rl.check('alice', 3_601_100).allowed).toBe(false);
+    });
+
+    it('userBurst:0 disables the per-user bucket', () => {
+      const rl = makeLimiter({ userBurst: 0, globalRpm: 0, globalRpd: 0 });
+      for (let i = 0; i < 100; i++) rl.record('alice', i);
+      expect(rl.check('alice', 101).allowed).toBe(true);
+    });
   });
 
-  it('recovers after the RPM window slides past', () => {
-    const rl = makeLimiter({
-      userCooldownSeconds: 0,
-      channelCooldownSeconds: 0,
-      globalRpm: 2,
-      globalRpd: 1000,
+  describe('global RPM/RPD windows', () => {
+    it('blocks at the global RPM limit', () => {
+      const rl = makeLimiter({ userBurst: 0, globalRpm: 3, globalRpd: 1000 });
+      rl.record('a', 0);
+      rl.record('b', 100);
+      rl.record('c', 200);
+      const res = rl.check('d', 300);
+      expect(res.allowed).toBe(false);
+      expect(res.limitedBy).toBe('rpm');
     });
-    rl.record('a', null, 0);
-    rl.record('b', null, 100);
-    expect(rl.check('c', null, 500).allowed).toBe(false);
-    // 60s after the first call, it should drop out of the window.
-    expect(rl.check('c', null, 60_001).allowed).toBe(true);
+
+    it('recovers after the RPM window slides past', () => {
+      const rl = makeLimiter({ userBurst: 0, globalRpm: 2, globalRpd: 1000 });
+      rl.record('a', 0);
+      rl.record('b', 100);
+      expect(rl.check('c', 500).allowed).toBe(false);
+      expect(rl.check('c', 60_001).allowed).toBe(true);
+    });
+
+    it('blocks at the global RPD limit', () => {
+      const rl = makeLimiter({ userBurst: 0, globalRpm: 100, globalRpd: 2 });
+      rl.record('a', 0);
+      rl.record('b', 100);
+      const res = rl.check('c', 200);
+      expect(res.allowed).toBe(false);
+      expect(res.limitedBy).toBe('rpd');
+    });
+
+    it('reports RPD before RPM when both are exhausted', () => {
+      const rl = makeLimiter({ userBurst: 0, globalRpm: 1, globalRpd: 1 });
+      rl.record('a', 0);
+      const res = rl.check('b', 100);
+      expect(res.limitedBy).toBe('rpd');
+    });
+
+    it('lets all 0-valued limits disable each layer', () => {
+      const rl = makeLimiter({ userBurst: 0, globalRpm: 0, globalRpd: 0 });
+      for (let i = 0; i < 100; i++) rl.record(`u${i}`, i);
+      expect(rl.check('u0', 101).allowed).toBe(true);
+    });
   });
 
-  it('blocks at the global RPD limit', () => {
-    const rl = makeLimiter({
-      userCooldownSeconds: 0,
-      channelCooldownSeconds: 0,
-      globalRpm: 100,
-      globalRpd: 2,
+  describe('RPM backpressure', () => {
+    it('halves effective burst when RPM usage crosses the threshold', () => {
+      // globalRpm: 20, threshold: 80% → kicks in once minuteWindow has > 16 entries.
+      // Pre-load 17 calls (85% usage); leaves headroom so the per-user bucket
+      // is the limiter, not the global RPM cap.
+      const rl = makeLimiter({
+        userBurst: 4,
+        userRefillSeconds: 12,
+        globalRpm: 20,
+        rpmBackpressurePct: 80,
+      });
+      for (let i = 0; i < 17; i++) rl.record(`u${i}`, 1000 + i);
+      // Alice's burst of 4 should be halved to 2.
+      expect(rl.check('alice', 1100).allowed).toBe(true);
+      rl.record('alice', 1100);
+      expect(rl.check('alice', 1101).allowed).toBe(true);
+      rl.record('alice', 1101);
+      const res = rl.check('alice', 1102);
+      expect(res.allowed).toBe(false);
+      expect(res.limitedBy).toBe('user');
     });
-    rl.record('a', null, 0);
-    rl.record('b', null, 100);
-    const res = rl.check('c', null, 200);
-    expect(res.allowed).toBe(false);
-    expect(res.limitedBy).toBe('rpd');
+
+    it('restores full burst when RPM usage drops below threshold', () => {
+      const rl = makeLimiter({
+        userBurst: 4,
+        userRefillSeconds: 12,
+        globalRpm: 20,
+        rpmBackpressurePct: 80,
+      });
+      for (let i = 0; i < 17; i++) rl.record(`u${i}`, 1000 + i);
+      // Slide forward 61 seconds — minute window is empty.
+      const later = 1000 + 61_000;
+      // Alice's full burst of 4 should be restored.
+      for (let i = 0; i < 4; i++) {
+        expect(rl.check('alice', later + i).allowed).toBe(true);
+        rl.record('alice', later + i);
+      }
+      const res = rl.check('alice', later + 100);
+      expect(res.allowed).toBe(false);
+      expect(res.limitedBy).toBe('user');
+    });
+
+    it('rpmBackpressurePct:0 disables backpressure', () => {
+      // globalRpm: 30, threshold: would be 80% = 24 → pre-load 25 to push past it.
+      // Headroom: 30 - 25 - 4 = 1 slot left after alice's burst, so RPM doesn't cap.
+      const rl = makeLimiter({
+        userBurst: 4,
+        userRefillSeconds: 12,
+        globalRpm: 30,
+        rpmBackpressurePct: 0,
+      });
+      for (let i = 0; i < 25; i++) rl.record(`u${i}`, 1000 + i);
+      // Alice's full burst of 4 should still be available — no halving.
+      for (let i = 0; i < 4; i++) {
+        expect(rl.check('alice', 1100 + i).allowed).toBe(true);
+        rl.record('alice', 1100 + i);
+      }
+      // Fifth call exhausts the bucket — proves burst was 4, not 2.
+      expect(rl.check('alice', 1200).limitedBy).toBe('user');
+    });
   });
 
-  it('lets 0-valued limits disable each layer', () => {
-    const rl = makeLimiter({
-      userCooldownSeconds: 0,
-      channelCooldownSeconds: 0,
-      globalRpm: 0,
-      globalRpd: 0,
+  describe('checkGlobal', () => {
+    it('ignores the per-user bucket', () => {
+      const rl = makeLimiter({
+        userBurst: 1,
+        userRefillSeconds: 60,
+        globalRpm: 100,
+        globalRpd: 100,
+      });
+      rl.record('alice', 0);
+      // Per-user bucket is now empty — check() blocks.
+      expect(rl.check('alice', 100).allowed).toBe(false);
+      // checkGlobal bypasses per-user bucket.
+      expect(rl.checkGlobal(100).allowed).toBe(true);
     });
-    for (let i = 0; i < 100; i++) rl.record(`u${i}`, '#c', i);
-    expect(rl.check('u0', '#c', 101).allowed).toBe(true);
+
+    it('still enforces RPM/RPD', () => {
+      const rl = makeLimiter({ userBurst: 0, globalRpm: 2, globalRpd: 100 });
+      rl.record('a', 0);
+      rl.record('b', 100);
+      const res = rl.checkGlobal(200);
+      expect(res.allowed).toBe(false);
+      expect(res.limitedBy).toBe('rpm');
+    });
+
+    it('reports RPD before RPM in checkGlobal', () => {
+      const rl = makeLimiter({ userBurst: 0, globalRpm: 1, globalRpd: 1 });
+      rl.record('a', 0);
+      expect(rl.checkGlobal(100).limitedBy).toBe('rpd');
+    });
   });
 
-  it('applies RPD block before RPM block', () => {
-    const rl = makeLimiter({
-      userCooldownSeconds: 0,
-      channelCooldownSeconds: 0,
-      globalRpm: 1,
-      globalRpd: 1,
+  describe('lifecycle', () => {
+    it('reset() clears buckets so full burst is available again', () => {
+      const rl = makeLimiter({ userBurst: 3, userRefillSeconds: 12 });
+      for (let i = 0; i < 3; i++) rl.record('alice', 1000 + i);
+      expect(rl.check('alice', 1100).allowed).toBe(false);
+      rl.reset();
+      for (let i = 0; i < 3; i++) {
+        expect(rl.check('alice', 2000 + i).allowed).toBe(true);
+        rl.record('alice', 2000 + i);
+      }
+      expect(rl.check('alice', 2100).allowed).toBe(false);
     });
-    rl.record('a', null, 0);
-    const res = rl.check('b', null, 100);
-    expect(res.limitedBy).toBe('rpd');
-  });
 
-  it('reset() wipes all counters', () => {
-    const rl = makeLimiter({
-      userCooldownSeconds: 30,
-      channelCooldownSeconds: 10,
-      globalRpm: 1,
-      globalRpd: 1,
+    it('setConfig() hot-reloads burst/refill values for the next check', () => {
+      const rl = makeLimiter({ userBurst: 1, userRefillSeconds: 60 });
+      rl.record('alice', 0);
+      // Small bucket, long refill — blocked.
+      expect(rl.check('alice', 100).allowed).toBe(false);
+      // Loosen to a much bigger burst.
+      rl.setConfig({
+        userBurst: 5,
+        userRefillSeconds: 1,
+        globalRpm: 100,
+        globalRpd: 100,
+        rpmBackpressurePct: 80,
+      });
+      // Existing bucket still has 0 tokens, but waiting 1s now refills 1.
+      expect(rl.check('alice', 1_100).allowed).toBe(true);
     });
-    rl.record('a', '#c', 0);
-    rl.reset();
-    expect(rl.check('a', '#c', 10).allowed).toBe(true);
-  });
-
-  it('checkGlobal() ignores per-user/per-channel cooldowns', () => {
-    const rl = makeLimiter({
-      userCooldownSeconds: 60,
-      channelCooldownSeconds: 60,
-      globalRpm: 100,
-      globalRpd: 100,
-    });
-    rl.record('alice', '#c', 0);
-    expect(rl.check('alice', '#c', 100).allowed).toBe(false);
-    expect(rl.checkGlobal(100).allowed).toBe(true);
-  });
-
-  it('checkGlobal() still enforces RPM/RPD', () => {
-    const rl = makeLimiter({
-      userCooldownSeconds: 0,
-      channelCooldownSeconds: 0,
-      globalRpm: 2,
-      globalRpd: 100,
-    });
-    rl.record('a', null, 0);
-    rl.record('b', null, 100);
-    const res = rl.checkGlobal(200);
-    expect(res.allowed).toBe(false);
-    expect(res.limitedBy).toBe('rpm');
-  });
-
-  it('checkGlobal() enforces RPD before RPM', () => {
-    const rl = makeLimiter({
-      userCooldownSeconds: 0,
-      channelCooldownSeconds: 0,
-      globalRpm: 1,
-      globalRpd: 1,
-    });
-    rl.record('a', null, 0);
-    expect(rl.checkGlobal(100).limitedBy).toBe('rpd');
-  });
-
-  it('setConfig() updates active limits', () => {
-    const rl = makeLimiter({ userCooldownSeconds: 30, channelCooldownSeconds: 0 });
-    rl.record('a', null, 0);
-    expect(rl.check('a', null, 100).allowed).toBe(false);
-    rl.setConfig({
-      userCooldownSeconds: 0,
-      channelCooldownSeconds: 0,
-      globalRpm: 0,
-      globalRpd: 0,
-    });
-    expect(rl.check('a', null, 100).allowed).toBe(true);
   });
 });

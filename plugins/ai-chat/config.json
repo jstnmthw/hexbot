@@ -26,10 +26,11 @@
   },
 
   "rate_limits": {
-    "user_cooldown_seconds": 30,
-    "channel_cooldown_seconds": 10,
+    "user_burst": 3,
+    "user_refill_seconds": 12,
     "global_rpm": 10,
     "global_rpd": 800,
+    "rpm_backpressure_pct": 80,
     "ambient_per_channel_per_hour": 5,
     "ambient_global_per_hour": 20
   },

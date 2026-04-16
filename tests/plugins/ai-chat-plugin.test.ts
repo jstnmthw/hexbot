@@ -147,15 +147,21 @@ describe('ai-chat plugin (integration)', () => {
     expect(ctx.reply).toHaveBeenCalledOnce();
   });
 
-  it('rate-limits the same user with a notice', async () => {
-    const ctx1 = makePubCtx('alice', '!ai first');
-    const ctx2 = makePubCtx('alice', '!ai second');
-    await dispatcher.dispatch('pub', ctx1);
-    await dispatcher.dispatch('pub', ctx2);
-    expect(ctx1.reply).toHaveBeenCalledOnce();
-    expect(ctx2.reply).not.toHaveBeenCalled();
-    expect(ctx2.replyPrivate).toHaveBeenCalledOnce();
-    expect(ctx2.replyPrivate.mock.calls[0][0]).toMatch(/Rate limited/);
+  it('rate-limits the same user with a notice once the burst is exhausted', async () => {
+    // userBurst:3 → first three calls go through, the fourth is rate-limited.
+    const burstCtxs = [
+      makePubCtx('alice', '!ai first'),
+      makePubCtx('alice', '!ai second'),
+      makePubCtx('alice', '!ai third'),
+    ];
+    for (const c of burstCtxs) await dispatcher.dispatch('pub', c);
+    for (const c of burstCtxs) expect(c.reply).toHaveBeenCalledOnce();
+
+    const limited = makePubCtx('alice', '!ai fourth');
+    await dispatcher.dispatch('pub', limited);
+    expect(limited.reply).not.toHaveBeenCalled();
+    expect(limited.replyPrivate).toHaveBeenCalledOnce();
+    expect(limited.replyPrivate.mock.calls[0][0]).toMatch(/Rate limited/);
   });
 
   it('handles provider errors gracefully', async () => {
@@ -364,10 +370,11 @@ describe('shouldRespond logic', () => {
     },
     context: { maxMessages: 50, maxTokens: 4000, ttlMs: 60_000 },
     rateLimits: {
-      userCooldownSeconds: 30,
-      channelCooldownSeconds: 10,
+      userBurst: 3,
+      userRefillSeconds: 12,
       globalRpm: 10,
       globalRpd: 800,
+      rpmBackpressurePct: 80,
       ambientPerChannelPerHour: 5,
       ambientGlobalPerHour: 20,
     },

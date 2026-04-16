@@ -51,10 +51,11 @@ function makeDeps(providerOverride?: AIProvider) {
   return {
     provider: providerOverride ?? makeProvider(),
     rateLimiter: new RateLimiter({
-      userCooldownSeconds: 0,
-      channelCooldownSeconds: 0,
+      userBurst: 0,
+      userRefillSeconds: 12,
       globalRpm: 100,
       globalRpd: 1000,
+      rpmBackpressurePct: 80,
     }),
     tokenTracker: new TokenTracker(makeDb(), { perUserDaily: 10_000, globalDaily: 100_000 }),
     contextManager: new ContextManager({
@@ -196,20 +197,21 @@ describe('respond', () => {
       },
       deps,
     );
-    // Second call with userCooldown=0 is fine but the dayWindow counter is bumped:
-    const t = deps.rateLimiter.check('alice', '#test');
+    // Second call with userBurst=0 is fine but the dayWindow counter is bumped:
+    const t = deps.rateLimiter.check('alice');
     expect(t.allowed).toBe(true);
   });
 
   it('returns rate_limited when limiter blocks', async () => {
     const deps = makeDeps();
     deps.rateLimiter.setConfig({
-      userCooldownSeconds: 60,
-      channelCooldownSeconds: 0,
+      userBurst: 1,
+      userRefillSeconds: 60,
       globalRpm: 100,
       globalRpd: 100,
+      rpmBackpressurePct: 80,
     });
-    deps.rateLimiter.record('alice', '#test');
+    deps.rateLimiter.record('alice');
     const res = await respond(
       {
         nick: 'alice',
