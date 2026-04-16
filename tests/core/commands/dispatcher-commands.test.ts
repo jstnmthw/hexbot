@@ -63,6 +63,19 @@ describe('dispatcher-commands', () => {
       expect(output).toContain('No active binds');
     });
 
+    it('should group binds by plugin with headers', async () => {
+      dispatcher.bind('pub', '-', '!a', vi.fn(), 'test-plugin');
+      dispatcher.bind('join', '-', '*', vi.fn(), 'test-plugin');
+      dispatcher.bind('pub', '-', '!b', vi.fn(), 'seen');
+
+      const ctx = makeCtx();
+      await handler.execute('.binds', ctx);
+
+      const output = ctx.reply.mock.calls[0][0];
+      expect(output).toContain('[test-plugin] 2 binds');
+      expect(output).toContain('[seen] 1 bind');
+    });
+
     it('should include plugin name in message when filtered and no binds found', async () => {
       const ctx = makeCtx();
       await handler.execute('.binds nonexistent-plugin', ctx);

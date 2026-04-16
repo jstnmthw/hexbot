@@ -35,15 +35,36 @@ export function registerDispatcherCommands(
       // bind masks originate from plugin code, so a compromised plugin
       // could otherwise inject IRC control codes into an operator's
       // console via the `.binds` output.
-      const rows = binds.map((b) => [
-        stripFormatting(b.type),
-        stripFormatting(b.flags),
-        `"${stripFormatting(b.mask)}"`,
-        `→ ${stripFormatting(b.pluginId)}`,
-        `(hits: ${b.hits})`,
-      ]);
-      const header = pluginId ? `Binds for "${pluginId}"` : 'All binds';
-      ctx.reply(`${header} (${binds.length}):\n${formatTable(rows)}`);
+
+      // Group binds by plugin for readability
+      const groups = new Map<string, typeof binds>();
+      for (const b of binds) {
+        const id = stripFormatting(b.pluginId);
+        let group = groups.get(id);
+        if (!group) {
+          group = [];
+          groups.set(id, group);
+        }
+        group.push(b);
+      }
+
+      const lines: string[] = [];
+      const title = pluginId ? `Binds for "${pluginId}"` : 'All binds';
+      lines.push(`${title} (${binds.length}):`);
+
+      for (const [id, group] of groups) {
+        const s = group.length === 1 ? 'bind' : 'binds';
+        lines.push(`[${id}] ${group.length} ${s}`);
+        const rows = group.map((b) => [
+          stripFormatting(b.type),
+          stripFormatting(b.flags),
+          `"${stripFormatting(b.mask)}"`,
+          `(hits: ${b.hits})`,
+        ]);
+        lines.push(formatTable(rows));
+      }
+
+      ctx.reply(lines.join('\n'));
     },
   );
 }
