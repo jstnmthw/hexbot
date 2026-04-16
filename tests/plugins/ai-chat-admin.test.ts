@@ -181,34 +181,34 @@ describe('ai-chat admin commands', () => {
     expect(ctx.reply.mock.calls[0][0]).toMatch(/cleared/i);
   });
 
-  // ---- personality ----
-  it('!ai personality switches personality for admins', async () => {
-    const ctx = makePubCtx('admin', '!ai personality sarcastic', 'admin', 'adm.host');
+  // ---- character ----
+  it('!ai character switches character for admins', async () => {
+    const ctx = makePubCtx('admin', '!ai character sarcastic', 'admin', 'adm.host');
     await dispatcher.dispatch('pub', ctx);
     expect(ctx.reply.mock.calls[0][0]).toMatch(/set to sarcastic/);
   });
 
-  it('switched personality is used on the next LLM call', async () => {
+  it('switched character is used on the next LLM call', async () => {
     // Switch to sarcastic
     await dispatcher.dispatch(
       'pub',
-      makePubCtx('admin', '!ai personality sarcastic', 'admin', 'adm.host'),
+      makePubCtx('admin', '!ai character sarcastic', 'admin', 'adm.host'),
     );
-    // Next query should use the sarcastic system prompt
+    // Next query should use the sarcastic character prompt
     const ctx = makePubCtx('alice', '!ai hi');
     await dispatcher.dispatch('pub', ctx);
     const [systemPrompt] = (mockProvider.complete as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(systemPrompt).toContain('sarcastic');
   });
 
-  it('!ai personality rejects unknown names', async () => {
-    const ctx = makePubCtx('admin', '!ai personality doesntexist', 'admin', 'adm.host');
+  it('!ai character rejects unknown names', async () => {
+    const ctx = makePubCtx('admin', '!ai character doesntexist', 'admin', 'adm.host');
     await dispatcher.dispatch('pub', ctx);
-    expect(ctx.reply.mock.calls[0][0]).toMatch(/Unknown personality/);
+    expect(ctx.reply.mock.calls[0][0]).toMatch(/Unknown character/);
   });
 
-  it('!ai personality silently ignored for non-admins', async () => {
-    const ctx = makePubCtx('alice', '!ai personality sarcastic');
+  it('!ai character silently ignored for non-admins', async () => {
+    const ctx = makePubCtx('alice', '!ai character sarcastic');
     await dispatcher.dispatch('pub', ctx);
     // Non-admin still shouldn't get a confirmation
     const replies = ctx.reply.mock.calls.map((c) => c[0]);
@@ -425,7 +425,7 @@ describe('ai-chat play subcommand edge cases', () => {
   });
 });
 
-describe('ai-chat channel_personalities', () => {
+describe('ai-chat channel_characters', () => {
   let dispatcher: EventDispatcher;
   let loader: PluginLoader;
   let db: BotDatabase;
@@ -450,9 +450,9 @@ describe('ai-chat channel_personalities', () => {
     const result = await loader.load(resolve('./plugins/ai-chat/dist/index.js'), {
       'ai-chat': {
         config: {
-          channel_personalities: {
+          channel_characters: {
             '#sarcastic': 'sarcastic',
-            '#french': { personality: 'friendly', language: 'French' },
+            '#french': { character: 'friendly', language: 'French' },
           },
         },
       },
@@ -466,13 +466,13 @@ describe('ai-chat channel_personalities', () => {
     __setProviderOverrideForTesting(null);
   });
 
-  it('uses string-form channel_personalities map', async () => {
-    const ctx = makePubCtx('alice', '!ai personality', 'user', 'host.com', '#sarcastic');
+  it('uses string-form channel_characters map', async () => {
+    const ctx = makePubCtx('alice', '!ai character', 'user', 'host.com', '#sarcastic');
     await dispatcher.dispatch('pub', ctx);
     expect(ctx.reply.mock.calls[0][0]).toMatch(/sarcastic/);
   });
 
-  it('uses object-form channel_personalities with language override', async () => {
+  it('uses object-form channel_characters with language override', async () => {
     const ctx = makePubCtx('alice', '!ai hi', 'user', 'host.com', '#french');
     await dispatcher.dispatch('pub', ctx);
     const [systemPrompt] = (mockProvider.complete as ReturnType<typeof vi.fn>).mock.calls[0];

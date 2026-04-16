@@ -120,7 +120,45 @@ function findLastMatch(text: string, re: RegExp): number {
  * @param maxLines       — maximum number of PRIVMSG lines to emit
  * @param maxLineLength  — max bytes per line
  */
-export function formatResponse(text: string, maxLines: number, maxLineLength: number): string[] {
+/** Character style overrides applied after formatResponse(). */
+export interface CharacterStyleOptions {
+  casing: 'normal' | 'lowercase' | 'uppercase';
+  verbosity: 'terse' | 'normal' | 'verbose';
+}
+
+/** Apply character-specific style overrides to formatted lines. */
+export function applyCharacterStyle(lines: string[], style: CharacterStyleOptions): string[] {
+  if (lines.length === 0) return lines;
+
+  let result = lines;
+
+  // Enforce verbosity limits
+  if (style.verbosity === 'terse' && result.length > 1) {
+    result = [result[0]];
+  } else if (style.verbosity === 'verbose') {
+    // Allow up to 6 lines (caller's maxLines may be higher)
+    result = result.slice(0, 6);
+  }
+
+  // Apply casing
+  if (style.casing === 'lowercase') {
+    result = result.map((l) => l.toLowerCase());
+  } else if (style.casing === 'uppercase') {
+    result = result.map((l) => l.toUpperCase());
+  }
+
+  return result;
+}
+
+/** Optional hook invoked when the entire response is dropped due to a fantasy-prefix line. */
+export type FantasyDropHook = (info: { index: number; line: string }) => void;
+
+export function formatResponse(
+  text: string,
+  maxLines: number,
+  maxLineLength: number,
+  onDropFantasy?: FantasyDropHook,
+): string[] {
   if (!text) return [];
 
   const cleaned = stripMarkdown(stripProtocolUnsafe(text));
@@ -145,10 +183,7 @@ export function formatResponse(text: string, maxLines: number, maxLineLength: nu
   // partial responses from a compromised generation are not trustworthy.
   const fantasyIdx = lines.findIndex((l) => isFantasyLine(l));
   if (fantasyIdx !== -1) {
-    console.warn(
-      `[ai-chat] WARNING: dropped response containing fantasy-prefix ` +
-        `line ${fantasyIdx}: ${JSON.stringify(lines[fantasyIdx].slice(0, 80))}`,
-    );
+    onDropFantasy?.({ index: fantasyIdx, line: lines[fantasyIdx] });
     return [];
   }
 

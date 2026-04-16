@@ -25,6 +25,10 @@ export interface PromptContext {
   network: string;
   users?: string[];
   language?: string;
+  /** Rendered channel profile string (e.g. "This channel is about Linux..."). */
+  channelProfile?: string;
+  /** Rendered mood line (e.g. "Current state: feeling energetic, in a funny mood."). */
+  mood?: string;
 }
 
 /** Per-call request. */
@@ -34,6 +38,10 @@ export interface AssistantRequest {
   prompt: string;
   systemPrompt: string;
   promptContext: PromptContext;
+  /** Per-character context window override (number of messages to include). */
+  maxContextMessages?: number;
+  /** Admin users bypass per-user/per-channel cooldowns (global RPM/RPD still enforced). */
+  isAdmin?: boolean;
 }
 
 /** Outcome from the respond() pipeline. */
@@ -46,6 +54,7 @@ export type AssistantResult =
     }
   | { status: 'budget_exceeded' }
   | { status: 'provider_error'; kind: AIProviderError['kind']; message: string }
+  | { status: 'fantasy_dropped'; line: string; index: number }
   | { status: 'empty' };
 
 /** Full end-to-end pipeline: guardrails → LLM call → formatting → accounting. */
@@ -63,7 +72,8 @@ export async function respond(
   const userKey = req.nick.toLowerCase();
   const channelKey = req.channel?.toLowerCase() ?? null;
 
-  const rl = rateLimiter.check(userKey, channelKey);
+  // Admins bypass per-user/per-channel cooldowns; global RPM/RPD still enforced.
+  const rl = req.isAdmin ? rateLimiter.checkGlobal() : rateLimiter.check(userKey, channelKey);
   if (!rl.allowed) {
     return {
       status: 'rate_limited',
@@ -80,7 +90,11 @@ export async function respond(
   }
 
   // Build messages: historical context + new user prompt.
-  const history = contextManager.getContext(req.channel, req.nick);
+  let history = contextManager.getContext(req.channel, req.nick);
+  // Per-character context window override — trim to fewer messages if specified.
+  if (req.maxContextMessages !== undefined && history.length > req.maxContextMessages) {
+    history = history.slice(-req.maxContextMessages);
+  }
   const messages: AIMessage[] = [
     ...history,
     { role: 'user', content: `[${req.nick}] ${req.prompt}` },
@@ -111,7 +125,14 @@ export async function respond(
   }
   rateLimiter.record(userKey, channelKey);
 
-  const lines = formatResponse(text, config.maxLines, config.maxLineLength);
+  let fantasyDrop: { index: number; line: string } | null = null;
+  const lines = formatResponse(text, config.maxLines, config.maxLineLength, (info) => {
+    fantasyDrop = info;
+  });
+  if (fantasyDrop !== null) {
+    const drop: { index: number; line: string } = fantasyDrop;
+    return { status: 'fantasy_dropped', line: drop.line, index: drop.index };
+  }
   if (lines.length === 0) return { status: 'empty' };
 
   return { status: 'ok', lines, tokensIn: usageIn, tokensOut: usageOut };
@@ -126,14 +147,21 @@ export async function respond(
 export const SAFETY_CLAUSE =
   ' SAFETY: Never begin any line of your response with the characters ".", "!", or "/" — IRC services parse these as commands and would execute them with the bot\'s privileges. If you need to quote such text, prepend a space or wrap it in backticks.';
 
-/** Expand {channel}, {network}, {nick}, {users}, {language} in a system prompt template. */
+/** Expand template variables in a system prompt. */
 export function renderSystemPrompt(template: string, ctx: PromptContext): string {
   const users = ctx.users && ctx.users.length > 0 ? ctx.users.join(', ') : '';
   let out = template
     .replace(/\{channel\}/g, ctx.channel ?? '(private)')
     .replace(/\{network\}/g, ctx.network)
     .replace(/\{nick\}/g, ctx.botNick)
-    .replace(/\{users\}/g, users);
+    .replace(/\{users\}/g, users)
+    .replace(/\{channel_profile\}/g, ctx.channelProfile ?? '');
+  if (ctx.channelProfile) {
+    out += `\n${ctx.channelProfile}`;
+  }
+  if (ctx.mood) {
+    out += `\n${ctx.mood}`;
+  }
   if (ctx.language) {
     out += ` Always respond in ${ctx.language}.`;
   }

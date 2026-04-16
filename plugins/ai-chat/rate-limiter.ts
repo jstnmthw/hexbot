@@ -11,6 +11,10 @@ export interface RateLimiterConfig {
   globalRpm: number;
   /** Global requests per day (rolling 24h window). */
   globalRpd: number;
+  /** Ambient messages allowed per channel per hour (rolling 1h window). */
+  ambientPerChannelPerHour?: number;
+  /** Ambient messages allowed globally per hour (rolling 1h window). */
+  ambientGlobalPerHour?: number;
 }
 
 /** Result of a rate-limit check. */
@@ -22,12 +26,14 @@ export interface RateCheckResult {
   limitedBy?: 'user' | 'channel' | 'rpm' | 'rpd';
 }
 
-/** Layered rate limiter: cooldowns + RPM + RPD. All state is in-memory. */
+/** Layered rate limiter: cooldowns + RPM + RPD + ambient budgets. All state is in-memory. */
 export class RateLimiter {
   private userLastCall = new Map<string, number>();
   private channelLastCall = new Map<string, number>();
   private minuteWindow: number[] = [];
   private dayWindow: number[] = [];
+  private ambientChannelWindows = new Map<string, number[]>();
+  private ambientGlobalWindow: number[] = [];
 
   constructor(private config: RateLimiterConfig) {}
 
@@ -111,11 +117,50 @@ export class RateLimiter {
     this.dayWindow.push(now);
   }
 
+  /**
+   * Check whether an ambient message is allowed for this channel.
+   * Ambient messages have their own budget separate from user-initiated requests.
+   */
+  checkAmbient(channelKey: string, now = Date.now()): boolean {
+    const perCh = this.config.ambientPerChannelPerHour ?? 5;
+    const global = this.config.ambientGlobalPerHour ?? 20;
+    const hour = 3_600_000;
+
+    // Prune global ambient window
+    this.ambientGlobalWindow = this.ambientGlobalWindow.filter((t) => now - t < hour);
+    if (global > 0 && this.ambientGlobalWindow.length >= global) return false;
+
+    // Prune per-channel ambient window
+    const chKey = channelKey.toLowerCase();
+    let chWindow = this.ambientChannelWindows.get(chKey);
+    if (chWindow) {
+      chWindow = chWindow.filter((t) => now - t < hour);
+      this.ambientChannelWindows.set(chKey, chWindow);
+    }
+    if (perCh > 0 && chWindow && chWindow.length >= perCh) return false;
+
+    return true;
+  }
+
+  /** Record an ambient message for budget tracking. */
+  recordAmbient(channelKey: string, now = Date.now()): void {
+    const chKey = channelKey.toLowerCase();
+    let chWindow = this.ambientChannelWindows.get(chKey);
+    if (!chWindow) {
+      chWindow = [];
+      this.ambientChannelWindows.set(chKey, chWindow);
+    }
+    chWindow.push(now);
+    this.ambientGlobalWindow.push(now);
+  }
+
   /** Erase all state (tests, plugin reload). */
   reset(): void {
     this.userLastCall.clear();
     this.channelLastCall.clear();
     this.minuteWindow = [];
     this.dayWindow = [];
+    this.ambientChannelWindows.clear();
+    this.ambientGlobalWindow = [];
   }
 }

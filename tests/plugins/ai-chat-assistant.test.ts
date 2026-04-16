@@ -114,6 +114,38 @@ describe('renderSystemPrompt', () => {
     expect(out).toContain('SAFETY:');
     expect(out).toContain('Never begin any line');
   });
+
+  it('appends channel profile when provided', () => {
+    const out = renderSystemPrompt('Base prompt.', {
+      botNick: 'hexbot',
+      channel: '#linux',
+      network: 'irc.test',
+      channelProfile: 'This channel is about Linux. The culture here is technical.',
+    });
+    expect(out).toContain('This channel is about Linux');
+    expect(out).toContain('The culture here is technical');
+  });
+
+  it('appends mood line when provided', () => {
+    const out = renderSystemPrompt('Base prompt.', {
+      botNick: 'hexbot',
+      channel: '#c',
+      network: 'irc.test',
+      mood: 'Current state: feeling energetic, in a funny mood.',
+    });
+    expect(out).toContain('feeling energetic');
+    expect(out).toContain('funny mood');
+  });
+
+  it('replaces {channel_profile} template variable', () => {
+    const out = renderSystemPrompt('Context: {channel_profile}', {
+      botNick: 'hexbot',
+      channel: '#c',
+      network: 'irc.test',
+      channelProfile: 'This is a tech channel.',
+    });
+    expect(out).toContain('Context: This is a tech channel.');
+  });
 });
 
 describe('respond', () => {

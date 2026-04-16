@@ -13,6 +13,7 @@ const BASE: TriggerConfig = {
   commandPrefix: '!ai',
   keywords: [],
   randomChance: 0,
+  engagementSeconds: 60,
 };
 
 describe('isLikelyBot', () => {

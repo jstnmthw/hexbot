@@ -2,6 +2,7 @@
 // Feeds channel messages into a sliding context window and responds via an
 // AI provider adapter (currently Gemini).
 import type { HandlerContext, PluginAPI } from '../../src/types';
+import { AmbientEngine } from './ambient';
 import {
   type AssistantConfig,
   type PromptContext,
@@ -9,14 +10,18 @@ import {
   respond,
   sendLines,
 } from './assistant';
+import { getCharacter, loadCharacters, resolveCharactersDir } from './character-loader';
+import type { Character } from './characters/types';
 import { ContextManager } from './context-manager';
 import { listGames, loadGamePrompt, resolveGamesDir } from './games-loader';
-import { formatResponse } from './output-formatter';
+import { MoodEngine } from './mood';
+import { applyCharacterStyle, formatResponse } from './output-formatter';
 import { createProvider } from './providers';
 import { ResilientProvider } from './providers/resilient';
 import type { AIMessage, AIProvider, AIProviderError } from './providers/types';
 import { RateLimiter } from './rate-limiter';
 import { SessionManager } from './session-manager';
+import { SocialTracker } from './social-tracker';
 import { TokenTracker } from './token-tracker';
 import { type TriggerConfig, detectTrigger, isIgnored, isLikelyBot } from './triggers';
 
@@ -33,6 +38,12 @@ let rateLimiter: RateLimiter | null = null;
 let tokenTracker: TokenTracker | null = null;
 let sessionManager: SessionManager | null = null;
 let provider: AIProvider | null = null;
+let characters: Map<string, Character> = new Map();
+let socialTracker: SocialTracker | null = null;
+let ambientEngine: AmbientEngine | null = null;
+let moodEngine: MoodEngine | null = null;
+/** Tracks per-channel per-nick engagement timestamps (when bot last responded to them). */
+const engagementMap = new Map<string, number>();
 let gamesDir: string = '';
 
 /**
@@ -57,9 +68,9 @@ interface AiChatConfig {
   model: string;
   temperature: number;
   maxOutputTokens: number;
-  personality: string;
-  personalities: Record<string, string>;
-  channelPersonalities: Record<string, string | { personality?: string; language?: string }>;
+  character: string;
+  charactersDir: string;
+  channelCharacters: Record<string, string | { character?: string; language?: string }>;
   triggers: TriggerConfig;
   context: { maxMessages: number; maxTokens: number; ttlMs: number };
   rateLimits: {
@@ -67,6 +78,8 @@ interface AiChatConfig {
     channelCooldownSeconds: number;
     globalRpm: number;
     globalRpd: number;
+    ambientPerChannelPerHour: number;
+    ambientGlobalPerHour: number;
   };
   tokenBudgets: { perUserDaily: number; globalDaily: number };
   permissions: {
@@ -77,6 +90,18 @@ interface AiChatConfig {
     botNickPatterns: string[];
   };
   output: { maxLines: number; maxLineLength: number; interLineDelayMs: number; stripUrls: boolean };
+  channelProfiles: Record<
+    string,
+    { topic?: string; culture?: string; role?: string; depth?: string }
+  >;
+  ambient: {
+    enabled: boolean;
+    idle: { afterMinutes: number; chance: number; minUsers: number };
+    unansweredQuestions: { enabled: boolean; waitSeconds: number };
+    chattiness: number;
+    interests: string[];
+    eventReactions: { joinWb: boolean; topicChange: boolean };
+  };
   security: {
     privilegeGating: boolean;
     privilegedModeThreshold: string;
@@ -93,27 +118,24 @@ export function parseConfig(raw: Record<string, unknown>): AiChatConfig {
   const tb = asRecord(raw.token_budgets);
   const perm = asRecord(raw.permissions);
   const output = asRecord(raw.output);
-  const personalities = asRecord(raw.personalities);
-  const channelPersonalities = asRecord(raw.channel_personalities);
+  const channelCharacters = asRecord(raw.channel_characters);
 
   return {
     provider: asString(raw.provider, 'gemini'),
     model: asString(raw.model, 'gemini-2.5-flash-lite'),
     temperature: asNum(raw.temperature, 0.9),
     maxOutputTokens: asNum(raw.max_output_tokens, 256),
-    personality: asString(raw.personality, 'friendly'),
-    personalities: Object.fromEntries(
-      Object.entries(personalities).filter(
-        (entry): entry is [string, string] => typeof entry[1] === 'string',
-      ),
-    ),
-    channelPersonalities: channelPersonalities as AiChatConfig['channelPersonalities'],
+    character: asString(raw.character, 'friendly'),
+    charactersDir: asString(raw.characters_dir, 'characters'),
+    channelCharacters: channelCharacters as AiChatConfig['channelCharacters'],
+    channelProfiles: asRecord(raw.channel_profiles) as AiChatConfig['channelProfiles'],
     triggers: {
       directAddress: asBool(triggers.direct_address, true),
       command: asBool(triggers.command, true),
       commandPrefix: asString(triggers.command_prefix, '!ai'),
       keywords: asStringArr(triggers.keywords, []),
       randomChance: asNum(triggers.random_chance, 0),
+      engagementSeconds: asNum(triggers.engagement_seconds, 60),
     },
     context: {
       maxMessages: asNum(context.max_messages, 50),
@@ -125,6 +147,8 @@ export function parseConfig(raw: Record<string, unknown>): AiChatConfig {
       channelCooldownSeconds: asNum(rl.channel_cooldown_seconds, 10),
       globalRpm: asNum(rl.global_rpm, 10),
       globalRpd: asNum(rl.global_rpd, 800),
+      ambientPerChannelPerHour: asNum(rl.ambient_per_channel_per_hour, 5),
+      ambientGlobalPerHour: asNum(rl.ambient_global_per_hour, 20),
     },
     tokenBudgets: {
       perUserDaily: asNum(tb.per_user_daily, 50_000),
@@ -143,6 +167,30 @@ export function parseConfig(raw: Record<string, unknown>): AiChatConfig {
       interLineDelayMs: asNum(output.inter_line_delay_ms, 500),
       stripUrls: asBool(output.strip_urls, false),
     },
+    ambient: (() => {
+      const a = asRecord(raw.ambient);
+      const idle = asRecord(a.idle);
+      const uq = asRecord(a.unanswered_questions);
+      const er = asRecord(a.event_reactions);
+      return {
+        enabled: asBool(a.enabled, false),
+        idle: {
+          afterMinutes: asNum(idle.after_minutes, 15),
+          chance: asNum(idle.chance, 0.3),
+          minUsers: asNum(idle.min_users, 2),
+        },
+        unansweredQuestions: {
+          enabled: asBool(uq.enabled, true),
+          waitSeconds: asNum(uq.wait_seconds, 90),
+        },
+        chattiness: asNum(a.chattiness, 0.08),
+        interests: asStringArr(a.interests, []),
+        eventReactions: {
+          joinWb: asBool(er.join_wb, false),
+          topicChange: asBool(er.topic_change, false),
+        },
+      };
+    })(),
     security: {
       privilegeGating: asBool(asRecord(raw.security).privilege_gating, false),
       privilegedModeThreshold: asString(asRecord(raw.security).privileged_mode_threshold, 'h'),
@@ -251,6 +299,22 @@ function getBotChannelModes(api: PluginAPI, channel: string | null): string | un
 }
 
 // ---------------------------------------------------------------------------
+// Engagement tracking — conversation stickiness
+// ---------------------------------------------------------------------------
+
+function isEngaged(channel: string, nick: string, windowMs: number): boolean {
+  if (windowMs <= 0) return false;
+  const key = `${channel.toLowerCase()}:${nick.toLowerCase()}`;
+  const lastAt = engagementMap.get(key);
+  if (lastAt === undefined) return false;
+  return Date.now() - lastAt < windowMs;
+}
+
+function recordEngagement(channel: string, nick: string): void {
+  engagementMap.set(`${channel.toLowerCase()}:${nick.toLowerCase()}`, Date.now());
+}
+
+// ---------------------------------------------------------------------------
 // Ignore list (persisted in DB under ignore:<entry>)
 // ---------------------------------------------------------------------------
 
@@ -261,37 +325,58 @@ function getDynamicIgnoreList(api: PluginAPI): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Personality lookup
+// Character lookup
 // ---------------------------------------------------------------------------
 
-const PERSONALITY_PREFIX = 'personality:';
+const CHARACTER_PREFIX = 'character:';
 
-function activePersonality(
+/** Render a channel profile string for prompt injection, or undefined if none configured. */
+function renderChannelProfile(cfg: AiChatConfig, channel: string | null): string | undefined {
+  if (!channel) return undefined;
+  const profile = cfg.channelProfiles[channel] ?? cfg.channelProfiles[channel.toLowerCase()];
+  if (!profile) return undefined;
+  const parts: string[] = [];
+  if (profile.topic) parts.push(`This channel is about ${profile.topic}.`);
+  if (profile.culture) parts.push(`The culture here is ${profile.culture}.`);
+  if (profile.role) parts.push(`Your role is ${profile.role}.`);
+  if (profile.depth) parts.push(`Answer with ${profile.depth} depth.`);
+  return parts.length > 0 ? parts.join(' ') : undefined;
+}
+
+function activeCharacter(
   api: PluginAPI,
   cfg: AiChatConfig,
   channel: string | null,
-): { name: string; prompt: string; language: string | undefined } {
-  let name = cfg.personality;
+): { character: Character; language: string | undefined } {
+  let name = cfg.character;
   let language: string | undefined;
 
   if (channel) {
-    // Dynamic override (DB) first, then config.channel_personalities
-    const dynamic = api.db.get(`${PERSONALITY_PREFIX}${channel.toLowerCase()}`);
+    // Dynamic override (DB) first, then config.channel_characters
+    // Also check for legacy personality:<channel> keys and migrate them
+    const dynamic = api.db.get(`${CHARACTER_PREFIX}${channel.toLowerCase()}`);
     if (dynamic) {
       name = dynamic;
     } else {
-      const entry =
-        cfg.channelPersonalities[channel] ?? cfg.channelPersonalities[channel.toLowerCase()];
-      if (typeof entry === 'string') name = entry;
-      else if (entry && typeof entry === 'object') {
-        if (typeof entry.personality === 'string') name = entry.personality;
-        if (typeof entry.language === 'string') language = entry.language;
+      const legacy = api.db.get(`personality:${channel.toLowerCase()}`);
+      if (legacy) {
+        // One-time migration: move personality: → character:
+        api.db.set(`${CHARACTER_PREFIX}${channel.toLowerCase()}`, legacy);
+        api.db.del(`personality:${channel.toLowerCase()}`);
+        name = legacy;
+      } else {
+        const entry =
+          cfg.channelCharacters[channel] ?? cfg.channelCharacters[channel.toLowerCase()];
+        if (typeof entry === 'string') name = entry;
+        else if (entry && typeof entry === 'object') {
+          if (typeof entry.character === 'string') name = entry.character;
+          if (typeof entry.language === 'string') language = entry.language;
+        }
       }
     }
   }
 
-  const prompt = cfg.personalities[name] ?? cfg.personalities[cfg.personality] ?? '';
-  return { name, prompt, language };
+  return { character: getCharacter(characters, name), language };
 }
 
 // ---------------------------------------------------------------------------
@@ -310,6 +395,17 @@ export async function init(api: PluginAPI): Promise<void> {
   });
   sessionManager = cfg.sessions.enabled ? new SessionManager(cfg.sessions.inactivityMs) : null;
   gamesDir = resolveGamesDir(cfg.sessions.gamesDir);
+
+  // Load character definitions
+  const charsDir = resolveCharactersDir(cfg.charactersDir);
+  characters = loadCharacters(charsDir, (msg) => api.warn(msg));
+  api.log(`Loaded ${characters.size} character(s): ${[...characters.keys()].join(', ')}`);
+
+  // Social tracker for channel activity + per-user interaction stats
+  socialTracker = new SocialTracker(api.db);
+
+  // Mood engine for temporal variety
+  moodEngine = new MoodEngine();
 
   // Initialize provider
   provider = null;
@@ -354,8 +450,8 @@ export async function init(api: PluginAPI): Promise<void> {
       usage: `${cfg.triggers.commandPrefix} <message>`,
       description: 'Ask the AI chat bot a question',
       detail: [
-        `Subcommands (admin): stats, reset <nick>, ignore <nick>, unignore <nick>, clear, personality [name]`,
-        `Subcommands (anyone): personalities, model`,
+        `Subcommands (admin): stats, reset <nick>, ignore <nick>, unignore <nick>, clear, character [name]`,
+        `Subcommands (anyone): characters, model`,
       ],
       category: 'ai',
     },
@@ -367,15 +463,102 @@ export async function init(api: PluginAPI): Promise<void> {
   );
 
   // -----------------------------------------------------------------------
+  // Ambient participation engine
+  // -----------------------------------------------------------------------
+  if (cfg.ambient.enabled) {
+    ambientEngine = new AmbientEngine(cfg.ambient, socialTracker);
+    ambientEngine.start(async (channel, kind, prompt) => {
+      if (!rateLimiter || !rateLimiter.checkAmbient(channel)) return;
+      const { character, language } = activeCharacter(api, cfg, channel);
+      if (!provider || !contextManager || !tokenTracker) return;
+
+      const maxOutputTokens = Math.min(
+        character.generation?.maxOutputTokens ?? cfg.maxOutputTokens,
+        128, // ambient messages use shorter output
+      );
+
+      const assistantCfg: AssistantConfig = {
+        maxLines: cfg.output.maxLines,
+        maxLineLength: cfg.output.maxLineLength,
+        interLineDelayMs: cfg.output.interLineDelayMs,
+        maxOutputTokens,
+      };
+
+      const promptCtx: PromptContext = {
+        botNick: botNick(),
+        channel,
+        network: network(),
+        users: api.getUsers(channel).map((u) => u.nick),
+        language,
+        channelProfile: renderChannelProfile(cfg, channel),
+        mood: moodEngine?.renderMoodLine(),
+      };
+
+      const result = await respond(
+        {
+          nick: botNick(),
+          channel,
+          prompt,
+          systemPrompt: character.prompt,
+          promptContext: promptCtx,
+          maxContextMessages: character.generation?.maxContextMessages,
+        },
+        { provider, rateLimiter, tokenTracker, contextManager, config: assistantCfg },
+      );
+
+      if (result.status === 'fantasy_dropped') {
+        api.warn(
+          `ambient ${kind}: dropped response containing fantasy-prefix line ${result.index}: ` +
+            JSON.stringify(result.line.slice(0, 80)),
+        );
+      } else if (result.status === 'ok') {
+        const styled = applyCharacterStyle(result.lines, {
+          casing: character.style.casing,
+          verbosity: character.style.verbosity,
+        });
+        rateLimiter.recordAmbient(channel);
+        contextManager.addMessage(channel, botNick(), styled.join(' '), true);
+        socialTracker?.onMessage(channel, botNick(), styled.join(' '), true);
+        api.log(
+          `ambient ${kind} channel=${channel} character=${character.name} lines=${styled.length}`,
+        );
+        await sendLines(styled, (line) => api.say(channel, line), cfg.output.interLineDelayMs);
+      }
+    });
+
+    // Register join/topic binds for event reactions
+    if (cfg.ambient.eventReactions.joinWb) {
+      api.bind('join', '-', '*', (ctx: HandlerContext) => {
+        if (!ctx.channel) return;
+        if (ctx.nick.toLowerCase() === botNick().toLowerCase()) return;
+        ambientEngine?.onJoin(ctx.channel, ctx.nick);
+      });
+    }
+    if (cfg.ambient.eventReactions.topicChange) {
+      api.bind('topic', '-', '*', (ctx: HandlerContext) => {
+        if (!ctx.channel) return;
+        ambientEngine?.onTopic(ctx.channel, ctx.nick, ctx.text);
+      });
+    }
+
+    api.log(`Ambient participation enabled (chattiness=${cfg.ambient.chattiness})`);
+  }
+
+  // -----------------------------------------------------------------------
   // pubm * — context feed + non-command trigger detection
   // -----------------------------------------------------------------------
   api.bind('pubm', '-', '*', async (ctx: HandlerContext) => {
     if (!ctx.channel) return;
 
     // Feed every non-bot channel message into the context buffer.
-    if (ctx.nick.toLowerCase() !== botNick().toLowerCase()) {
+    const isBotMsg = ctx.nick.toLowerCase() === botNick().toLowerCase();
+    if (!isBotMsg) {
       contextManager!.addMessage(ctx.channel, ctx.nick, ctx.text, false);
     }
+
+    // Feed social tracker (always active) and notify ambient of channel activity
+    socialTracker?.onMessage(ctx.channel, ctx.nick, ctx.text, isBotMsg);
+    ambientEngine?.onChannelActivity(ctx.channel);
 
     // Let the pub `!ai` handler own the command trigger.
     const cmdPrefix = cfg.triggers.commandPrefix.toLowerCase();
@@ -413,7 +596,16 @@ export async function init(api: PluginAPI): Promise<void> {
       return;
     }
 
-    const match = detectTrigger(ctx.text, botNick(), cfg.triggers);
+    let match = detectTrigger(ctx.text, botNick(), cfg.triggers);
+    // Engagement fallback: if no trigger matched but the user recently talked
+    // to the bot, treat this as a conversation continuation.
+    if (
+      !match &&
+      ctx.channel &&
+      isEngaged(ctx.channel, ctx.nick, cfg.triggers.engagementSeconds * 1_000)
+    ) {
+      match = { kind: 'engaged', prompt: ctx.text.trim() };
+    }
     if (!match) return;
     if (match.kind === 'command') return;
 
@@ -434,7 +626,8 @@ export async function init(api: PluginAPI): Promise<void> {
       return;
     }
 
-    await runPipeline(api, cfg, ctx, match.prompt, botNick(), network(), false);
+    const hasAdmin = api.permissions.checkFlags(cfg.permissions.adminFlag, ctx);
+    await runPipeline(api, cfg, ctx, match.prompt, botNick(), network(), false, hasAdmin);
   });
 
   // -----------------------------------------------------------------------
@@ -475,7 +668,8 @@ export async function init(api: PluginAPI): Promise<void> {
         ) {
           return;
         }
-        await runPipeline(api, cfg, ctx, prompt, botNick(), network(), true);
+        const cmdAdmin = api.permissions.checkFlags(cfg.permissions.adminFlag, ctx);
+        await runPipeline(api, cfg, ctx, prompt, botNick(), network(), true, cmdAdmin);
       },
     );
   }
@@ -493,14 +687,11 @@ async function runPipeline(
   botNick: string,
   network: string,
   noticeOnBlock: boolean,
+  isAdmin = false,
 ): Promise<void> {
   if (!rateLimiter || !tokenTracker || !contextManager) return;
 
-  const personality = activePersonality(api, cfg, ctx.channel);
-  if (!personality.prompt) {
-    api.warn(`Personality "${personality.name}" has no system prompt; skipping response.`);
-    return;
-  }
+  const { character, language } = activeCharacter(api, cfg, ctx.channel);
 
   // No provider? Degraded placeholder mode.
   if (!provider) {
@@ -508,28 +699,44 @@ async function runPipeline(
     return;
   }
 
+  // Apply per-character generation overrides
+  const maxOutputTokens = character.generation?.maxOutputTokens ?? cfg.maxOutputTokens;
+
+  // Apply mood verbosity multiplier to maxLines
+  const moodMultiplier = moodEngine?.getVerbosityMultiplier() ?? 1;
+  const effectiveMaxLines = Math.max(1, Math.round(cfg.output.maxLines * moodMultiplier));
+
   const assistantCfg: AssistantConfig = {
-    maxLines: cfg.output.maxLines,
+    maxLines: effectiveMaxLines,
     maxLineLength: cfg.output.maxLineLength,
     interLineDelayMs: cfg.output.interLineDelayMs,
-    maxOutputTokens: cfg.maxOutputTokens,
+    maxOutputTokens,
   };
+
+  // Notify mood engine of the interaction
+  moodEngine?.onInteraction();
 
   const promptCtx: PromptContext = {
     botNick,
     channel: ctx.channel,
     network,
     users: ctx.channel ? api.getUsers(ctx.channel).map((u) => u.nick) : undefined,
-    language: personality.language,
+    language,
+    channelProfile: renderChannelProfile(cfg, ctx.channel),
+    mood: moodEngine?.renderMoodLine(),
   };
 
+  // Use per-character context window if specified
+  const maxContextMessages = character.generation?.maxContextMessages;
   const result = await respond(
     {
       nick: ctx.nick,
       channel: ctx.channel,
       prompt,
-      systemPrompt: personality.prompt,
+      systemPrompt: character.prompt,
       promptContext: promptCtx,
+      maxContextMessages,
+      isAdmin,
     },
     { provider, rateLimiter, tokenTracker, contextManager, config: assistantCfg },
   );
@@ -558,13 +765,27 @@ async function runPipeline(
     case 'empty':
       api.debug('empty LLM response — nothing to send');
       return;
+    case 'fantasy_dropped':
+      api.warn(
+        `dropped response containing fantasy-prefix line ${result.index}: ` +
+          JSON.stringify(result.line.slice(0, 80)),
+      );
+      return;
     case 'ok': {
-      contextManager.addMessage(ctx.channel, botNick, result.lines.join(' '), true);
+      // Apply character style (casing, verbosity enforcement)
+      const styled = applyCharacterStyle(result.lines, {
+        casing: character.style.casing,
+        verbosity: character.style.verbosity,
+      });
+      contextManager.addMessage(ctx.channel, botNick, styled.join(' '), true);
+      // Record engagement so the user's next messages are treated as continuations
+      if (ctx.channel) recordEngagement(ctx.channel, ctx.nick);
+      socialTracker?.recordBotInteraction(ctx.nick);
       api.log(
         `response sent channel=${ctx.channel ?? '(unknown)'} nick=${ctx.nick} ` +
-          `lines=${result.lines.length} in=${result.tokensIn} out=${result.tokensOut}`,
+          `character=${character.name} lines=${styled.length} in=${result.tokensIn} out=${result.tokensOut}`,
       );
-      await sendLines(result.lines, (line) => ctx.reply(line), cfg.output.interLineDelayMs);
+      await sendLines(styled, (line) => ctx.reply(line), cfg.output.interLineDelayMs);
       return;
     }
   }
@@ -620,7 +841,17 @@ async function runSessionPipeline(
     tokenTracker.recordUsage(ctx.nick, res.usage);
     rateLimiter.record(userKey, channelKey);
 
-    const lines = formatResponse(res.text, cfg.output.maxLines, cfg.output.maxLineLength);
+    const lines = formatResponse(
+      res.text,
+      cfg.output.maxLines,
+      cfg.output.maxLineLength,
+      ({ index, line }) => {
+        api.warn(
+          `session: dropped response containing fantasy-prefix line ${index}: ` +
+            JSON.stringify(line.slice(0, 80)),
+        );
+      },
+    );
     if (lines.length === 0) return;
 
     sessionManager.addMessage(session, userMsg);
@@ -701,28 +932,28 @@ async function handleSubcommand(
       ctx.reply('Channel context cleared.');
       return true;
     }
-    case 'personality': {
+    case 'character': {
       if (!subArgs) {
-        const active = activePersonality(api, cfg, ctx.channel);
-        ctx.reply(`Personality: ${active.name}${active.language ? ` (${active.language})` : ''}`);
-        return true;
-      }
-      if (!hasAdmin) return true;
-      const name = subArgs;
-      if (!(name in cfg.personalities)) {
+        const active = activeCharacter(api, cfg, ctx.channel);
         ctx.reply(
-          `Unknown personality: ${name}. Available: ${Object.keys(cfg.personalities).join(', ')}`,
+          `Character: ${active.character.name}${active.language ? ` (${active.language})` : ''}`,
         );
         return true;
       }
+      if (!hasAdmin) return true;
+      const name = subArgs.toLowerCase();
+      if (!characters.has(name)) {
+        ctx.reply(`Unknown character: ${subArgs}. Available: ${[...characters.keys()].join(', ')}`);
+        return true;
+      }
       if (ctx.channel) {
-        api.db.set(`${PERSONALITY_PREFIX}${ctx.channel.toLowerCase()}`, name);
-        ctx.reply(`Personality set to ${name} for ${ctx.channel}.`);
+        api.db.set(`${CHARACTER_PREFIX}${ctx.channel.toLowerCase()}`, name);
+        ctx.reply(`Character set to ${name} for ${ctx.channel}.`);
       }
       return true;
     }
-    case 'personalities': {
-      ctx.reply(`Available: ${Object.keys(cfg.personalities).join(', ')}`);
+    case 'characters': {
+      ctx.reply(`Available: ${[...characters.keys()].join(', ')}`);
       return true;
     }
     case 'model': {
@@ -789,11 +1020,18 @@ async function handleSubcommand(
 export function teardown(): void {
   rateLimiter?.reset();
   sessionManager?.clear();
+  ambientEngine?.stop();
+  socialTracker?.clear();
   rateLimiter = null;
   tokenTracker = null;
   contextManager = null;
   sessionManager = null;
   provider = null;
+  characters = new Map();
+  socialTracker = null;
+  ambientEngine = null;
+  moodEngine = null;
+  engagementMap.clear();
 }
 
 // Re-export so Phase 6 tests can still access the formatter.

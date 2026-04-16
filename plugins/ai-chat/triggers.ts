@@ -8,11 +8,14 @@ export interface TriggerConfig {
   commandPrefix: string;
   keywords: string[];
   randomChance: number;
+  /** Seconds after a bot response during which the same user's messages are
+   *  treated as conversation continuations (no re-address needed). 0 = disabled. */
+  engagementSeconds: number;
 }
 
 /** The kind of trigger that matched, plus the user's actual question/text. */
 export interface TriggerMatch {
-  kind: 'direct' | 'command' | 'keyword' | 'random';
+  kind: 'direct' | 'command' | 'keyword' | 'random' | 'engaged';
   /** The user's message with trigger prefix (nick/command) stripped. */
   prompt: string;
 }

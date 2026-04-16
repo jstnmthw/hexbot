@@ -178,8 +178,8 @@ describe('ai-chat plugin (integration)', () => {
     expect(ctx.reply.mock.calls[0][0]).toMatch(/can't help with that/);
   });
 
-  it('!ai personalities lists available personalities', async () => {
-    const ctx = makePubCtx('alice', '!ai personalities');
+  it('!ai characters lists available characters', async () => {
+    const ctx = makePubCtx('alice', '!ai characters');
     await dispatcher.dispatch('pub', ctx);
     expect(ctx.reply).toHaveBeenCalledOnce();
     expect(ctx.reply.mock.calls[0][0]).toContain('friendly');
@@ -193,8 +193,8 @@ describe('ai-chat plugin (integration)', () => {
     expect(ctx.reply.mock.calls[0][0]).toContain('mock');
   });
 
-  it('!ai personality shows current personality for anyone', async () => {
-    const ctx = makePubCtx('alice', '!ai personality');
+  it('!ai character shows current character for anyone', async () => {
+    const ctx = makePubCtx('alice', '!ai character');
     await dispatcher.dispatch('pub', ctx);
     expect(ctx.reply).toHaveBeenCalledOnce();
     expect(ctx.reply.mock.calls[0][0]).toMatch(/friendly/);
@@ -350,15 +350,17 @@ describe('shouldRespond logic', () => {
     model: 'test-model',
     temperature: 0.9,
     maxOutputTokens: 256,
-    personality: 'friendly',
-    personalities: { friendly: 'You are helpful.' },
-    channelPersonalities: {},
+    character: 'friendly',
+    charactersDir: 'characters',
+    channelCharacters: {},
+    channelProfiles: {},
     triggers: {
       directAddress: true,
       command: true,
       commandPrefix: '!ai',
       keywords: [] as string[],
       randomChance: 0,
+      engagementSeconds: 60,
     },
     context: { maxMessages: 50, maxTokens: 4000, ttlMs: 60_000 },
     rateLimits: {
@@ -366,6 +368,8 @@ describe('shouldRespond logic', () => {
       channelCooldownSeconds: 10,
       globalRpm: 10,
       globalRpd: 800,
+      ambientPerChannelPerHour: 5,
+      ambientGlobalPerHour: 20,
     },
     tokenBudgets: { perUserDaily: 50_000, globalDaily: 200_000 },
     permissions: {
@@ -376,6 +380,14 @@ describe('shouldRespond logic', () => {
       botNickPatterns: ['*bot', '*Bot', '*BOT'],
     },
     output: { maxLines: 4, maxLineLength: 440, interLineDelayMs: 0, stripUrls: false },
+    ambient: {
+      enabled: false,
+      idle: { afterMinutes: 15, chance: 0.3, minUsers: 2 },
+      unansweredQuestions: { enabled: true, waitSeconds: 90 },
+      chattiness: 0.08,
+      interests: [],
+      eventReactions: { joinWb: false, topicChange: false },
+    },
     security: {
       privilegeGating: false,
       privilegedModeThreshold: 'h',
