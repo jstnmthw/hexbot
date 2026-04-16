@@ -23,6 +23,8 @@ interface ModeCommandOptions {
    * (e.g. !deop hexbot). Setting this enables the bot-self guard.
    */
   selfRejectReply?: string;
+  /** Silently ignore the command when the target is the bot itself. */
+  silentSelfIgnore?: boolean;
   /** Mark the change as intentional so mode-enforce skips revenge/cycle. */
   markIntent?: boolean;
 }
@@ -38,13 +40,16 @@ function createModeCommandHandler(
 ): (ctx: ChannelHandlerContext) => void {
   return (ctx: ChannelHandlerContext): void => {
     const { channel } = ctx;
-    if (!opts.canApply(api, channel)) {
-      ctx.reply(opts.capabilityError);
-      return;
-    }
     const target = ctx.args.trim() || ctx.nick;
     if (!isValidNick(target)) {
       ctx.reply('Invalid nick.');
+      return;
+    }
+    if (opts.silentSelfIgnore && api.isBotNick(target)) {
+      return;
+    }
+    if (!opts.canApply(api, channel)) {
+      ctx.reply(opts.capabilityError);
       return;
     }
     if (opts.selfRejectReply && api.isBotNick(target)) {
@@ -132,6 +137,7 @@ export function setupCommands(
       canApply: botHasOps,
       capabilityError: OPS_REQUIRED_ERROR,
       execute: (a, c, t) => a.op(c, t),
+      silentSelfIgnore: true,
     }),
   );
 
@@ -158,6 +164,7 @@ export function setupCommands(
       canApply: botHasOps,
       capabilityError: OPS_REQUIRED_ERROR,
       execute: (a, c, t) => a.voice(c, t),
+      silentSelfIgnore: true,
     }),
   );
 
@@ -183,6 +190,7 @@ export function setupCommands(
       canApply: botCanHalfop,
       capabilityError: HALFOP_REQUIRED_ERROR,
       execute: (a, c, t) => a.halfop(c, t),
+      silentSelfIgnore: true,
     }),
   );
 
