@@ -129,7 +129,7 @@ export function buildBanMask(hostmask: string, banType: number): string | null {
 export const PARAM_MODES = new Set(['k', 'l']);
 
 /**
- * Structured result of parsing an Eggdrop-style additive/subtractive mode string.
+ * Structured result of parsing an additive/subtractive mode string.
  * Modes in `add` should be ensured set; modes in `remove` should be ensured unset.
  * Modes not mentioned in either set are left alone.
  */
@@ -139,7 +139,7 @@ export interface ParsedChannelModes {
 }
 
 /**
- * Parse an Eggdrop-style mode string like "+nt-s" into structured add/remove sets.
+ * Parse an mode string like "+nt-s" into structured add/remove sets.
  *
  * - Must start with `+` or `-`; any other leading character yields empty sets.
  * - Characters after `+` go into `add`, characters after `-` go into `remove`.

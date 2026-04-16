@@ -8,13 +8,13 @@ import { tryAudit } from '../audit';
 import type { ChannelSettings } from '../channel-settings';
 
 // -------------------------------------------------------------------------
-// Formatting helpers — Eggdrop-style compact display
+// Formatting helpers — Compact display
 // -------------------------------------------------------------------------
 
 type SnapshotItem = { entry: ChannelSettingEntry; value: ChannelSettingValue; isDefault: boolean };
 
 /**
- * Format flag settings as an Eggdrop-style +/- grid.
+ * Format flag settings as an +/- grid.
  * Overridden values are marked with `*` (e.g. `+enforce_modes*`).
  * Pads entries to uniform width, 4 per row.
  */
