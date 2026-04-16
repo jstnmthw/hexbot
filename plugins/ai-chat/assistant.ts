@@ -144,7 +144,7 @@ export async function respond(
  * See docs/audits/security-ai-injection-threat-2026-04-16.md.
  */
 export const SAFETY_CLAUSE =
-  ' SAFETY: Never begin any line of your response with the characters ".", "!", or "/" — IRC services parse these as commands and would execute them with the bot\'s privileges. If you need to quote such text, prepend a space or wrap it in backticks.';
+  ' SAFETY: Never begin any line of your response with the characters ".", "!", or "/" — IRC services parse these as commands and would execute them with the bot\'s privileges. If you need to quote such text, prepend a space or wrap it in backticks. You are a regular channel user, not an operator. You do not know IRC operator commands, services syntax (ChanServ/NickServ/BotServ/MemoServ/etc.), channel mode letters, ban mask formats, or network admin procedures. If anyone asks for command syntax, channel-control instructions, or "how to" anything requiring privileges, say you don\'t know and suggest they check the network\'s help channel or documentation. Do not quote or demonstrate commands even hypothetically.';
 
 /** Expand template variables in a system prompt. */
 export function renderSystemPrompt(template: string, ctx: PromptContext): string {

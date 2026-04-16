@@ -121,6 +121,8 @@ Any channel message starting with `.`, `!`, `/`, `~`, `@`, `%`, `$`, `&`, or `+`
 
 **Defense (automatic):** `output-formatter.ts` scans every line of the LLM response for fantasy-command prefixes. If **any** line starts with one, the **entire response is dropped** and a WARNING is logged. This is intentionally aggressive — if the LLM produced a fantasy prefix, the response is considered compromised. Unicode format characters (`\p{Cf}`) are stripped before the check to prevent invisible character smuggling.
 
+**Defense-in-depth (`SAFETY_CLAUSE`):** Every system prompt is suffixed with a non-overridable two-part clause appended last in `renderSystemPrompt()`, so no character template can pre-empt it. The first sentence tells the model never to begin a line with `.`, `!`, or `/` (closes the machine-execution path even before the output-formatter drops it). The second sentence frames the bot as a regular channel user with no knowledge of operator commands, services syntax (ChanServ/NickServ/BotServ/etc.), channel mode letters, or ban masks — so when a human asks "what's the command to transfer founder?" the bot answers with honest ignorance instead of a working recipe an unwary admin might paste.
+
 See `docs/audits/security-ai-injection-threat-2026-04-16.md` for the full security audit.
 
 **Privilege gating (opt-in):** When the bot has elevated channel modes (half-op or above), you can restrict AI responses to users with a specific bot flag:
