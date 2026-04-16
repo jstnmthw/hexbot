@@ -131,7 +131,6 @@ const DccConfigSchema = z.strictObject({
   require_flags: z.string(),
   max_sessions: z.number(),
   idle_timeout_ms: z.number(),
-  nickserv_verify: z.boolean(),
 });
 
 const BotlinkEndpointSchema = z.strictObject({

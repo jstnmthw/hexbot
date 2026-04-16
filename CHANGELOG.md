@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] - 2026-04-16
+
+### Changed
+
+- **Plugins bundled via tsup** (`scripts/build-plugins.ts`, per-plugin `tsup.config.ts`): plugins with a `tsup.config.ts` are now compiled into self-contained `dist/index.js` bundles at build time instead of being loaded as raw TypeScript via `tsx`. The RSS plugin bundles its CJS dependencies (`rss-parser`, `xml2js`, `sax`) with a `createRequire` shim for Node built-in interop. The plugin loader resolves `plugins/<name>/dist/index.js` for bundled plugins.
+- **`.binds` output grouped by plugin** with section headers for easier scanning
+- **Topic plugin `protect_topic` setting renamed to `topic_lock`** for consistency with Eggdrop terminology
+- **DCC CHAT rejection notices collapsed** into a single generic "request denied" message — no longer leaks the specific denial reason (hostmask mismatch, missing flags, etc.) to the connecting user
+
+### Fixed
+
+- **Mode-grant commands targeting the bot itself silently ignored** — previously the bot could attempt to op/deop/voice itself in response to a user command, causing confusing no-ops or mode bounces
+- **Docker build failure when plugins have local `node_modules`** (`.dockerignore`): `COPY plugins/` was copying host-side `node_modules/` and `dist/` directories into the image; pnpm then refused to overwrite them in the non-TTY Docker build environment (`ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`). Added `plugins/*/node_modules` and `plugins/*/dist` to `.dockerignore`.
+- **ESLint errors on plugin `dist/` bundles** (`eslint.config.js`): the `dist/` ignore pattern only matched the top-level directory; added `**/dist/` to also exclude plugin build output.
+
+### Removed
+
+- **`dcc.nickserv_verify` config field** — deprecated in 0.3.0, now removed. DCC authentication uses per-user passwords exclusively. Remove the field from your `config/bot.json` to avoid a schema validation error on startup.
+
 ## [0.3.0] - 2026-04-15
 
 ### Added

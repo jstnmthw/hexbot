@@ -604,8 +604,6 @@ Passive DCC CHAT for remote administration (`src/core/dcc.ts`). This is "Option 
 }
 ```
 
-`dcc.nickserv_verify` is retained as a deprecated no-op for 0.3.0 (logs a startup warning) and will be removed in 0.4.0. The password prompt supersedes the NickServ gate.
-
 See `docs/DCC.md` for full setup, client instructions, and security notes.
 
 ### 2.16 Bot linking (core module)

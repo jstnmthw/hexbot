@@ -1118,7 +1118,6 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
       return;
     }
     this.attached = true;
-    this.warnIfDeprecatedNickservVerify();
     this.dispatcher.bind('ctcp', '-', 'DCC', this.onDccCtcp.bind(this), PLUGIN_ID);
 
     // Mirror incoming private messages and notices to all DCC sessions so
@@ -1389,9 +1388,6 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     // See stability audit 2026-04-14.
     if (!this.checkNotAlreadyConnected(nick)) return null;
     if (!this.checkSessionLimit(nick)) return null;
-    // `nickserv_verify` is no longer consulted — authentication now runs
-    // through the password prompt inside DCCSession. The config knob is
-    // kept as a no-op for 0.3.0 with a startup deprecation warning.
     return user;
   }
 
@@ -1462,20 +1458,6 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
       }
     }
     return true;
-  }
-
-  /**
-   * Log a startup deprecation warning if `nickserv_verify` is still set.
-   * Called once from `attach()` — the knob is retained for one release as a
-   * no-op so operators upgrading from 0.2.x don't fail on schema validation.
-   */
-  private warnIfDeprecatedNickservVerify(): void {
-    if (this.config.nickserv_verify) {
-      this.logger?.warn(
-        'nickserv_verify is deprecated and no longer used — DCC now requires per-user passwords. ' +
-          'See docs/DCC.md for the migration path. This setting will be removed in 0.4.0.',
-      );
-    }
   }
 
   /**

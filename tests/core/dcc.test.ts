@@ -125,7 +125,6 @@ function makeConfig(overrides: Partial<DccConfig> = {}): DccConfig {
     require_flags: 'm',
     max_sessions: 2,
     idle_timeout_ms: 300000,
-    nickserv_verify: false,
     ...overrides,
   };
 }
@@ -600,80 +599,6 @@ describe('DCCManager', () => {
 
     await handler(makeCtx('testnick'));
     expect(client.notices.some((n) => n.message.includes('request denied'))).toBe(true);
-  });
-
-  it('nickserv_verify is now a no-op — DCC proceeds regardless of NickServ state', async () => {
-    // With password auth in place, DCC no longer consults NickServ. A user
-    // whose NickServ verification would have failed should still be allowed
-    // through the CTCP accept path (the password prompt is the gate).
-    const dispatcher = makeDispatcher();
-    let handler!: (ctx: HandlerContext) => Promise<void>;
-    (dispatcher.bind as ReturnType<typeof vi.fn>).mockImplementation(
-      (_t: string, _f: string, _m: string, fn: (ctx: HandlerContext) => Promise<void>) => {
-        handler = fn;
-      },
-    );
-    const portAllocator = new RangePortAllocator([50000, 50000]);
-    portAllocator.markUsed(50000);
-    const m = new DCCManager({
-      client,
-      dispatcher,
-      permissions: makePermissions(makeUser()),
-      services: makeServices(false), // would have failed verification
-      commandHandler: makeCommandHandler(),
-      config: makeConfig({ nickserv_verify: true, port_range: [50000, 50000] }),
-      version: '1.0.0',
-      botNick: 'hexbot',
-      portAllocator,
-    });
-    m.attach();
-
-    await handler(makeCtx());
-    // The session should have proceeded past the CTCP accept checks and
-    // ultimately failed at port allocation — proving NickServ was not
-    // consulted. If the old check were still active it would reject with
-    // "NickServ verification failed".
-    expect(client.notices.some((n) => n.message.includes('NickServ'))).toBe(false);
-    expect(client.notices.some((n) => n.message.includes('request denied'))).toBe(true);
-  });
-
-  it('logs a deprecation warning when nickserv_verify is still set', () => {
-    const logger = createMockLogger();
-    const m = new DCCManager({
-      client,
-      dispatcher: makeDispatcher(),
-      permissions: makePermissions(null),
-      services: makeServices(),
-      commandHandler: makeCommandHandler(),
-      config: makeConfig({ nickserv_verify: true }),
-      version: '1.0.0',
-      botNick: 'hexbot',
-      logger,
-    });
-    m.attach();
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('nickserv_verify'));
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('deprecated'));
-  });
-
-  it('does not log deprecation warning when nickserv_verify is false', () => {
-    const logger = createMockLogger();
-    const m = new DCCManager({
-      client,
-      dispatcher: makeDispatcher(),
-      permissions: makePermissions(null),
-      services: makeServices(),
-      commandHandler: makeCommandHandler(),
-      config: makeConfig({ nickserv_verify: false }),
-      version: '1.0.0',
-      botNick: 'hexbot',
-      logger,
-    });
-    m.attach();
-    const warnMock = logger.warn as ReturnType<typeof vi.fn>;
-    const nickservCalls = warnMock.mock.calls.filter((call) =>
-      call.some((arg) => typeof arg === 'string' && arg.includes('nickserv_verify')),
-    );
-    expect(nickservCalls).toHaveLength(0);
   });
 
   it('rejects when port range is exhausted (in handler)', async () => {

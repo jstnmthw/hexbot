@@ -44,8 +44,7 @@
     "port_range": [49152, 49171],
     "require_flags": "m",
     "max_sessions": 5,
-    "idle_timeout_ms": 300000,
-    "nickserv_verify": false
+    "idle_timeout_ms": 300000
   },
   "proxy": {
     "enabled": false,

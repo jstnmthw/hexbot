@@ -713,8 +713,6 @@ export interface DccConfig {
   max_sessions: number;
   /** Idle timeout in ms before disconnecting. Default: 300000 (5 min) */
   idle_timeout_ms: number;
-  /** Require NickServ ACC verification before accepting. Default: false */
-  nickserv_verify: boolean;
 }
 
 /** Bot-to-bot link settings. */

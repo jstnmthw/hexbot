@@ -32,7 +32,6 @@ function makeConfig(): DccConfig {
     require_flags: 'm',
     max_sessions: 4,
     idle_timeout_ms: 300000,
-    nickserv_verify: false,
   };
 }
 

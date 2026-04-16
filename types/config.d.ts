@@ -307,7 +307,7 @@ export interface ProxyConfig {
  *
  * **Security note:** The listening port accepts the first TCP connection
  * within the 30-second window, regardless of source IP. Ensure
- * `nickserv_verify: true` and strong `require_flags` for untrusted networks.
+ * strong `require_flags` for untrusted networks.
  */
 export interface DccConfig {
   /** Enable DCC CHAT support. Default `false`. */
@@ -336,11 +336,6 @@ export interface DccConfig {
    * Default `300000` (5 minutes).
    */
   idle_timeout_ms: number;
-  /**
-   * Require NickServ ACC verification (level ≥ 3) before accepting a DCC
-   * connection. Recommended on public networks. Default `false`.
-   */
-  nickserv_verify: boolean;
 }
 
 // ---------------------------------------------------------------------------

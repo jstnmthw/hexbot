@@ -65,7 +65,6 @@ describe('parseBotConfigOnDisk — valid shapes', () => {
         require_flags: 'm',
         max_sessions: 5,
         idle_timeout_ms: 300000,
-        nickserv_verify: false,
       },
       botlink: {
         enabled: false,
@@ -152,7 +151,6 @@ describe('parseBotConfigOnDisk — type errors', () => {
         require_flags: 'm',
         max_sessions: 5,
         idle_timeout_ms: 300000,
-        nickserv_verify: false,
       },
     };
     expect(() => parseBotConfigOnDisk(config)).toThrow(/dcc\.port_range/);

@@ -143,8 +143,6 @@ Replace `203.0.113.42` with the bot's **public** IPv4 address. This is what gets
 | `max_sessions`    | number           | `5`      | Maximum concurrent DCC sessions                     |
 | `idle_timeout_ms` | number           | `300000` | Idle disconnect timeout in ms (default 5 minutes)   |
 
-> **Deprecated:** `nickserv_verify` is retained as a no-op for 0.3.0 and will be removed in 0.4.0. The bot now uses per-user password authentication, which closes the same spoofing gap without depending on services. If the field is still present and truthy, the bot logs a startup warning.
-
 ---
 
 ## Connecting

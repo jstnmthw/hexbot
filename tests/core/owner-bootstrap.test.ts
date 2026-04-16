@@ -177,7 +177,6 @@ describe('ensureOwner — DCC onboarding guardrail', () => {
       require_flags: 'm',
       max_sessions: 5,
       idle_timeout_ms: 300000,
-      nickserv_verify: false,
     };
   }
 

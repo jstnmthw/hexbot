@@ -1,4 +1,6 @@
 node_modules
+plugins/*/node_modules
+plugins/*/dist
 dist
 data
 config/bot.json

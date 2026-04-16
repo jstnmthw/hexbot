@@ -1,6 +1,6 @@
 {
   "name": "hexbot",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "description": "Modular IRC bot written in TypeScript",
   "main": "src/index.ts",

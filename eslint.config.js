@@ -22,6 +22,13 @@ export default [
     },
   },
   {
-    ignores: ['dist/', 'node_modules/', 'coverage/', 'eslint.config.js', '**/.reload-*.ts'],
+    ignores: [
+      'dist/',
+      '**/dist/',
+      'node_modules/',
+      'coverage/',
+      'eslint.config.js',
+      '**/.reload-*.ts',
+    ],
   },
 ];
