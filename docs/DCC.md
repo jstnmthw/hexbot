@@ -336,21 +336,16 @@ The bot sends its offer as a CTCP message. Some clients suppress these. Check yo
 
 ### Bot sends a NOTICE instead of opening a chat
 
-The NOTICE text will tell you why:
+The NOTICE text will tell you why. Most pre-connection rejections return a generic `request denied` message to avoid leaking internal state to unauthenticated users; check the bot's log for the specific reason.
 
-| Notice contains         | Cause                                                           | Fix                                                              |
-| ----------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `passive DCC CHAT`      | Your client sent active DCC (non-zero ip/port)                  | Enable passive/reverse DCC in your client settings               |
-| `user database`         | Your hostmask is not registered                                 | Add yourself with `.adduser` (see Prerequisites above)           |
-| `insufficient flags`    | You don't have the required flags                               | Set your flags with `.flags handle +m`                           |
-| `maximum sessions`      | `max_sessions` limit reached                                    | Wait for a session to end or increase `max_sessions`             |
-| `active session`        | Your nick is already in an active session                       | Disconnect the existing session first                            |
-| `already pending`       | A previous DCC offer is still waiting for your connection       | Wait for it to expire (30s) or reconnect                         |
-| `no ports available`    | All ports in `port_range` are in use                            | Wait or widen `port_range`                                       |
-| `no password set`       | The matched user has no `password_hash` on file                 | Ask an admin to run `.chpass <handle> <newpass>` from the REPL   |
-| `bad password`          | You typed the wrong password at the prompt                      | Try again; after several failures the hostmask is locked out     |
-| `too many failed`       | Per-hostmask lockout in effect after repeated password failures | Wait out the lockout (escalates exponentially); fix the password |
-| `Password prompt timed` | You took longer than 30s to answer the prompt                   | Reconnect and type the password promptly                         |
+| Notice contains         | Cause                                                                                             | Fix                                                                                                              |
+| ----------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `passive DCC CHAT`      | Your client sent active DCC (non-zero ip/port)                                                    | Enable passive/reverse DCC in your client settings                                                               |
+| `request denied`        | Hostmask not registered, insufficient flags, session limit, duplicate session, or port exhaustion | Check the bot log for the specific reason; common fixes: `.adduser`, `.flags handle +m`, wait for a session slot |
+| `no password set`       | The matched user has no `password_hash` on file (sent on the DCC socket, not via NOTICE)          | Ask an admin to run `.chpass <handle> <newpass>` from the REPL                                                   |
+| `bad password`          | You typed the wrong password at the prompt                                                        | Try again; after several failures the hostmask is locked out                                                     |
+| `too many failed`       | Per-hostmask lockout in effect after repeated password failures                                   | Wait out the lockout (escalates exponentially); fix the password                                                 |
+| `Password prompt timed` | You took longer than 30s to answer the prompt                                                     | Reconnect and type the password promptly                                                                         |
 
 ### Connection times out after the offer
 

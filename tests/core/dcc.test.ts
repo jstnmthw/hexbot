@@ -355,7 +355,7 @@ describe('DCCManager', () => {
     m.attach();
 
     await handler(makeCtx());
-    expect(client.notices[0].message).toContain('user database');
+    expect(client.notices[0].message).toContain('request denied');
   });
 
   it('rejects insufficient flags', async () => {
@@ -381,7 +381,7 @@ describe('DCCManager', () => {
     m.attach();
 
     await handler(makeCtx());
-    expect(client.notices[0].message).toContain('insufficient flags');
+    expect(client.notices[0].message).toContain('request denied');
   });
 
   it('getSessionList returns empty when no sessions', () => {
@@ -460,7 +460,7 @@ describe('DCCManager', () => {
     localSessions.set('other', fakeSession);
 
     await handler(makeCtx('testnick'));
-    expect(client.notices.some((n) => n.message.includes('maximum sessions'))).toBe(true);
+    expect(client.notices.some((n) => n.message.includes('request denied'))).toBe(true);
   });
 
   it('rejects already-connected nick', async () => {
@@ -489,7 +489,7 @@ describe('DCCManager', () => {
     localSessions.set('testnick', fakeSession);
 
     await handler(makeCtx('testnick'));
-    expect(client.notices.some((n) => n.message.includes('active session'))).toBe(true);
+    expect(client.notices.some((n) => n.message.includes('request denied'))).toBe(true);
   });
 
   it('evicts a stale session and lets a reconnect through', async () => {
@@ -527,11 +527,9 @@ describe('DCCManager', () => {
 
     await handler(makeCtx('testnick'));
     // The old session was closed for replacement, and the reconnect was
-    // NOT rejected with "already have an active session".
+    // NOT rejected — the stale session was evicted and replaced.
     expect(staleSession.close).toHaveBeenCalledWith('Stale session replaced.');
-    expect(client.notices.some((n) => n.message.includes('already have an active session'))).toBe(
-      false,
-    );
+    expect(client.notices.some((n) => n.message.includes('request denied'))).toBe(false);
   });
 
   it('clears an already-closed session entry so the reconnect passes through', async () => {
@@ -572,9 +570,7 @@ describe('DCCManager', () => {
     // reconnect is not rejected.
     expect(closedSession.close).not.toHaveBeenCalled();
     expect(localSessions.has('testnick')).toBe(false);
-    expect(client.notices.some((n) => n.message.includes('already have an active session'))).toBe(
-      false,
-    );
+    expect(client.notices.some((n) => n.message.includes('request denied'))).toBe(false);
   });
 
   it('rejects nick with a pending connection', async () => {
@@ -603,7 +599,7 @@ describe('DCCManager', () => {
     pendingMap.set(50001, { nick: 'testnick' } as PendingDCC);
 
     await handler(makeCtx('testnick'));
-    expect(client.notices.some((n) => n.message.includes('already pending'))).toBe(true);
+    expect(client.notices.some((n) => n.message.includes('request denied'))).toBe(true);
   });
 
   it('nickserv_verify is now a no-op — DCC proceeds regardless of NickServ state', async () => {
@@ -638,7 +634,7 @@ describe('DCCManager', () => {
     // consulted. If the old check were still active it would reject with
     // "NickServ verification failed".
     expect(client.notices.some((n) => n.message.includes('NickServ'))).toBe(false);
-    expect(client.notices.some((n) => n.message.includes('no ports available'))).toBe(true);
+    expect(client.notices.some((n) => n.message.includes('request denied'))).toBe(true);
   });
 
   it('logs a deprecation warning when nickserv_verify is still set', () => {
@@ -704,7 +700,7 @@ describe('DCCManager', () => {
     m.attach();
 
     await handler(makeCtx());
-    expect(client.notices.some((n) => n.message.includes('no ports available'))).toBe(true);
+    expect(client.notices.some((n) => n.message.includes('request denied'))).toBe(true);
   });
 
   it('detach closes all active sessions', () => {

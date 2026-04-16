@@ -1414,7 +1414,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     const user = this.permissions.findByHostmask(fullHostmask);
     if (user) return user;
     this.logger?.info(`DCC CHAT rejected (no hostmask match) for ${fullHostmask}`);
-    this.client.notice(nick, 'DCC CHAT: your hostmask is not in the user database.');
+    this.client.notice(nick, 'DCC CHAT: request denied.');
     return null;
   }
 
@@ -1425,14 +1425,14 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     this.logger?.info(
       `DCC CHAT rejected (insufficient flags) for ${nick}: has="${user.global}" needs="${requiredFlags}"`,
     );
-    this.client.notice(nick, `DCC CHAT: insufficient flags (requires +${requiredFlags}).`);
+    this.client.notice(nick, 'DCC CHAT: request denied.');
     return false;
   }
 
   /** Cap total concurrent sessions. */
   private checkSessionLimit(nick: string): boolean {
     if (this.sessions.size < this.config.max_sessions) return true;
-    this.client.notice(nick, `DCC CHAT: maximum sessions (${this.config.max_sessions}) reached.`);
+    this.client.notice(nick, 'DCC CHAT: request denied.');
     return false;
   }
 
@@ -1451,13 +1451,13 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
           session.close('Stale session replaced.');
         }
       } else {
-        this.client.notice(nick, 'DCC CHAT: you already have an active session.');
+        this.client.notice(nick, 'DCC CHAT: request denied.');
         return false;
       }
     }
     for (const p of this.pending.values()) {
       if (ircLower(p.nick, this.casemapping) === lowerNick) {
-        this.client.notice(nick, 'DCC CHAT: a connection is already pending.');
+        this.client.notice(nick, 'DCC CHAT: request denied.');
         return false;
       }
     }
@@ -1493,7 +1493,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     /* v8 ignore next -- FALSE branch: port available leads to createServer block already ignored; unreachable without real TCP */
     if (port === null) {
       this.logger?.error(`DCC port range exhausted for ${nick}`);
-      this.client.notice(nick, 'DCC CHAT: no ports available, try again later.');
+      this.client.notice(nick, 'DCC CHAT: request denied.');
       return;
     }
     /* v8 ignore next -- leads directly into TCP server creation; unreachable without real TCP */
