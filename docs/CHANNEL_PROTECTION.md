@@ -374,7 +374,9 @@ sequenceDiagram
 **Settings needed:**
 
 ```
-.chanset #chan chanserv_access founder   # founder required for RECOVER
+.chanset #chan chanserv_access op        # op handles everything except RECOVER
+                                         # (set to 'founder' only after reading
+                                         # the Founder access trade-off section)
 .chanset #chan +takeover_detection       # on by default
 .chanset #chan +mass_reop_on_recovery    # on by default
 .chanset #chan takeover_punish kickban   # default is 'deop'; also: none, akick
@@ -428,7 +430,9 @@ chanserv_services_type: "atheme"
 - ChanServ has a native RECOVER command (requires founder access, +R or +F flag).
 - `MODE -k` works at op+ access level for key removal.
 - Access detection uses the `FLAGS #channel <nick>` probe.
-- Recommended: `chanserv_access founder` for full protection including RECOVER.
+- Recommended: `chanserv_access op` (handles kick/ban/deop/lockdown recovery).
+  Grant founder only after reading the trade-off section above, typically on a
+  dedicated non-LLM bot.
 
 ### Anope networks (Rizon, DALnet, SwiftIRC)
 
@@ -441,7 +445,10 @@ chanserv_services_type: "anope"
 - Access detection uses `ACCESS #channel LIST` for explicit levels and `INFO #channel` to detect implicit founder status (Anope founders are not listed in access lists).
 - MODE CLEAR requires founder/QOP (level 10000) for synthetic RECOVER.
 - AKICK requires SOP (level 10).
-- Recommended: `chanserv_access founder` for full protection, `op` for basic recovery without RECOVER.
+- Recommended: `chanserv_access op` (AOP, level 5) — covers re-op, unban,
+  invite, GETKEY, and mass re-op via the bot's own `+o`. Grant founder only
+  after reading the trade-off section above, typically on a dedicated non-LLM
+  bot.
 
 ### EFnet-style networks (no services)
 
@@ -468,12 +475,20 @@ Stopnethack is configured globally in `plugins.json`, not per-channel:
 
 ## Recommended settings
 
+**The recommended default is `chanserv_access op` (AOP on Anope), not founder.**
+Founder access lets the bot execute commands — DROP, SET FOUNDER, FLAGS wipe,
+permanent AKICK on the human owner — that are **not recoverable** without
+services-staff intervention if the bot's nick is ever compromised. See
+[Founder access and bot-nick compromise](#founder-access-and-bot-nick-compromise)
+below for the full trade-off. Op / AOP covers every attack scenario documented
+in this file except the single-command `RECOVER` shortcut.
+
 ### Minimal protection
 
 Any network with ChanServ. Both `takeover_detection` and `chanserv_unban_on_kick` are on by default, so only the access tier needs to be set.
 
 ```
-.chanset #chan chanserv_access founder
+.chanset #chan chanserv_access op
 ```
 
 ### Standard protection
@@ -481,7 +496,7 @@ Any network with ChanServ. Both `takeover_detection` and `chanserv_unban_on_kick
 Adds mode enforcement, ban-on-kick recovery, and topic protection. `takeover_detection` and `chanserv_unban_on_kick` are on by default but shown here for clarity.
 
 ```
-.chanset #chan chanserv_access founder
+.chanset #chan chanserv_access op
 .chanset #chan +takeover_detection       # on by default
 .chanset #chan +enforce_modes
 .chanset #chan channel_modes +nt
@@ -491,10 +506,13 @@ Adds mode enforcement, ban-on-kick recovery, and topic protection. `takeover_det
 
 ### Maximum protection
 
-Enables all defensive features. Suitable for high-value channels on networks where the bot has founder access. Settings that are on by default are annotated but included for completeness.
+Enables all defensive features at the ops tier. Suitable for high-value
+channels on networks where the bot has ChanServ op / AOP access (the
+recommended tier). Settings that are on by default are annotated but included
+for completeness.
 
 ```
-.chanset #chan chanserv_access founder
+.chanset #chan chanserv_access op
 .chanset #chan +takeover_detection       # on by default
 .chanset #chan +enforce_modes
 .chanset #chan channel_modes +nt
@@ -507,6 +525,76 @@ Enables all defensive features. Suitable for high-value channels on networks whe
 .chanset #chan +revenge
 .chanset #chan takeover_punish kickban   # default is 'deop'
 ```
+
+### Founder-tier protection (opt-in, advanced)
+
+Grant founder only after reading the trade-off section below. With founder,
+chanmod unlocks native RECOVER (Atheme) and synthetic MODE CLEAR (Anope) for
+the worst-case takeover scenario.
+
+```
+.chanset #chan chanserv_access founder
+```
+
+If you run this bot with ai-chat (or any other LLM-driven plugin) loaded, do
+not grant founder on channels where those plugins are active — see
+[`plugins/ai-chat/README.md`](../plugins/ai-chat/README.md) for the reasoning
+and the `disable_when_founder` escape hatch.
+
+## Founder access and bot-nick compromise
+
+Granting the bot ChanServ founder access is qualitatively different from
+granting op / AOP. The extra capabilities are small; the extra blast radius
+from compromise is large.
+
+### What founder adds
+
+- **Atheme `RECOVER` / Anope synthetic `MODE CLEAR`** — one-shot takeover
+  reversal. With op / AOP, the bot gets the same end state via ChanServ `OP`
+  - its own `+o` re-op sequence; just a few steps slower.
+- **`canClearBans`** — mass ban wipe. With op, the bot can still remove bans
+  one at a time via `MODE -b`.
+
+### What founder risks (unrecoverable without services staff)
+
+- **`DROP #channel`** — deregisters the channel entirely. All access lists,
+  AKICKs, metadata, and founder records are gone.
+- **`SET #channel FOUNDER <nick>`** — transfers founder to someone else. If
+  the new founder doesn't co-operate, you've lost the channel.
+- **`FLAGS #channel * -*`** (Atheme) / access-list wipe (Anope) — every
+  trusted user loses their access in a single command.
+- **`AKICK` on the human owner** — permanently locks the real founder out.
+
+### Why this matters
+
+The bot is software running on a machine you administer. Its nick is protected
+by a NickServ password (and ideally SASL). Any of the following turns founder
+access into a channel-destroying incident:
+
+- NickServ password leak or SASL key theft
+- Nick hijack during a services outage
+- Prompt injection in an LLM-driven plugin (ai-chat, etc.)
+- A plugin bug that passes untrusted input to `raw()` or writes a fantasy
+  command to a channel the bot is in
+- An unpatched remote code execution on the bot host
+
+At op / AOP, the worst case is a kick/ban/deop round trip — noisy, but you
+recover in minutes. At founder, the worst case is a channel you no longer own.
+
+### Recommendation
+
+- **Default to op (Atheme) / AOP (Anope) on every channel.** This is now the
+  documented recommendation across Minimal, Standard, and Maximum protection.
+- **Keep the human owner as founder.** A bot does not need to be on the
+  access list as founder to be opped, unbanned, invited, or have keys
+  removed.
+- **If you need `RECOVER`**, either accept the trade-off for that channel, or
+  run a two-bot topology: an unprivileged AI / user-facing bot plus a
+  separate chanmod-only bot with founder access and no LLM or DCC surfaces.
+- **ai-chat** ships with a `disable_when_founder` gate (on by default) that
+  refuses to respond in any channel where the bot's `chanserv_access` chanset
+  reads `founder`. This is an enforcement backstop, not a substitute for
+  choosing op / AOP in the first place.
 
 ## Troubleshooting
 

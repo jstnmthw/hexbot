@@ -78,7 +78,8 @@
     "privilege_gating": false,
     "privileged_mode_threshold": "h",
     "privileged_required_flag": "m",
-    "disable_when_privileged": false
+    "disable_when_privileged": false,
+    "disable_when_founder": true
   },
 
   "sessions": {

@@ -108,6 +108,13 @@ interface AiChatConfig {
     privilegedModeThreshold: string;
     privilegedRequiredFlag: string;
     disableWhenPrivileged: boolean;
+    /**
+     * Refuse to respond in any channel where the bot holds ChanServ founder
+     * access. Enforced by reading the `chanserv_access` chanset (written by
+     * chanmod auto-detect or manual override). Checked at both trigger time
+     * and post time so a probe that resolves between the two still blocks.
+     */
+    disableWhenFounder: boolean;
   };
   sessions: { enabled: boolean; inactivityMs: number; gamesDir: string };
 }
@@ -198,6 +205,7 @@ export function parseConfig(raw: Record<string, unknown>): AiChatConfig {
       privilegedModeThreshold: asString(asRecord(raw.security).privileged_mode_threshold, 'h'),
       privilegedRequiredFlag: asString(asRecord(raw.security).privileged_required_flag, 'm'),
       disableWhenPrivileged: asBool(asRecord(raw.security).disable_when_privileged, false),
+      disableWhenFounder: asBool(asRecord(raw.security).disable_when_founder, true),
     },
     sessions: {
       enabled: asBool(asRecord(raw.sessions).enabled, true),
@@ -238,6 +246,12 @@ export interface ShouldRespondCtx {
   hasPrivilegedFlag: boolean;
   /** Bot's channel modes (e.g. 'o', 'ov') or undefined if unknown. */
   botChannelModes: string | undefined;
+  /**
+   * Bot's resolved ChanServ access tier for this channel (from the
+   * `chanserv_access` chanset). `undefined` when no channel context is
+   * available (PM etc.). Used by the founder-disable gate.
+   */
+  botChanservAccess: string | undefined;
   config: AiChatConfig;
   /** Dynamic ignore list (from DB) merged with config.permissions.ignoreList. */
   dynamicIgnoreList: string[];
@@ -270,6 +284,34 @@ function isPrivilegeRestricted(ctx: ShouldRespondCtx): boolean {
   return !ctx.hasPrivilegedFlag;
 }
 
+/**
+ * Pure rule for the founder-disable gate. Exported for testing. A compromised
+ * or prompt-injected response at founder tier can DROP the channel, transfer
+ * founder to an attacker, or wipe the access list — none recoverable without
+ * services-staff intervention — so we refuse to respond when the bot's
+ * ChanServ tier for the channel reads `'founder'`. Only the affirmative
+ * string matches; `undefined` / `'none'` / `'op'` / `'superop'` all permit.
+ */
+export function shouldBlockOnFounder(
+  disableWhenFounder: boolean,
+  channel: string | null,
+  chanservAccess: string | undefined,
+): boolean {
+  if (!disableWhenFounder) return false;
+  if (!channel) return false;
+  // Normalise: defend against casing/whitespace drift if a non-chanmod path
+  // ever writes chanserv_access without going through the allowedValues enum.
+  return chanservAccess?.trim().toLowerCase() === 'founder';
+}
+
+function isFounderRestricted(ctx: ShouldRespondCtx): boolean {
+  return shouldBlockOnFounder(
+    ctx.config.security.disableWhenFounder,
+    ctx.channel,
+    ctx.botChanservAccess,
+  );
+}
+
 export function shouldRespond(ctx: ShouldRespondCtx): boolean {
   const nick = ctx.nick;
   if (nick.toLowerCase() === ctx.botNick.toLowerCase()) return false;
@@ -283,6 +325,7 @@ export function shouldRespond(ctx: ShouldRespondCtx): boolean {
   if (isIgnored(nick, hostmask, fullIgnore)) return false;
   if (ctx.config.permissions.requiredFlag !== '-' && !ctx.hasRequiredFlag) return false;
   if (isPrivilegeRestricted(ctx)) return false;
+  if (isFounderRestricted(ctx)) return false;
   return true;
 }
 
@@ -298,6 +341,41 @@ function getBotChannelModes(api: PluginAPI, channel: string | null): string | un
     if (api.isBotNick(u.nick)) return u.modes;
   }
   return undefined;
+}
+
+/**
+ * Read the bot's ChanServ access tier for a channel from the chanset written
+ * by chanmod. Returns undefined for PMs and for channels chanmod has never
+ * touched. Used by the founder-disable gate at both trigger and post time.
+ */
+function getBotChanservAccess(api: PluginAPI, channel: string | null): string | undefined {
+  if (!channel) return undefined;
+  return api.channelSettings.getString(channel, 'chanserv_access');
+}
+
+/**
+ * Post-time fail-closed gate. Re-checks the founder condition right before we
+ * publish to IRC, closing the race where the ChanServ probe resolves between
+ * the trigger-time `shouldRespond` decision and the LLM round-trip completing.
+ * Returns true when the response must be discarded. Logs the drop.
+ */
+function isFounderPostGate(
+  api: PluginAPI,
+  cfg: AiChatConfig,
+  channel: string | null,
+  reason: string,
+): boolean {
+  const block = shouldBlockOnFounder(
+    cfg.security.disableWhenFounder,
+    channel,
+    getBotChanservAccess(api, channel),
+  );
+  if (!block) return false;
+  api.warn(
+    `post-gate: dropped ${reason} response — bot is ChanServ founder in ${channel} ` +
+      `(disable_when_founder is on; grant op/AOP instead, or disable this gate explicitly)`,
+  );
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -518,6 +596,7 @@ export async function init(api: PluginAPI): Promise<void> {
           casing: character.style.casing,
           verbosity: character.style.verbosity,
         });
+        if (isFounderPostGate(api, cfg, channel, `ambient ${kind}`)) return;
         rateLimiter.recordAmbient(channel);
         contextManager.addMessage(channel, botNick(), styled.join(' '), true);
         socialTracker?.onMessage(channel, botNick(), styled.join(' '), true);
@@ -588,6 +667,7 @@ export async function init(api: PluginAPI): Promise<void> {
           hasRequiredFlag: api.permissions.checkFlags(cfg.permissions.requiredFlag, ctx),
           hasPrivilegedFlag: api.permissions.checkFlags(cfg.security.privilegedRequiredFlag, ctx),
           botChannelModes: getBotChannelModes(api, ctx.channel),
+          botChanservAccess: getBotChanservAccess(api, ctx.channel),
           config: cfg,
           dynamicIgnoreList: getDynamicIgnoreList(api),
         })
@@ -621,6 +701,7 @@ export async function init(api: PluginAPI): Promise<void> {
         hasRequiredFlag: api.permissions.checkFlags(cfg.permissions.requiredFlag, ctx),
         hasPrivilegedFlag: api.permissions.checkFlags(cfg.security.privilegedRequiredFlag, ctx),
         botChannelModes: getBotChannelModes(api, ctx.channel),
+        botChanservAccess: getBotChanservAccess(api, ctx.channel),
         config: cfg,
         dynamicIgnoreList: getDynamicIgnoreList(api),
       })
@@ -664,6 +745,7 @@ export async function init(api: PluginAPI): Promise<void> {
             hasRequiredFlag: true,
             hasPrivilegedFlag: api.permissions.checkFlags(cfg.security.privilegedRequiredFlag, ctx),
             botChannelModes: getBotChannelModes(api, ctx.channel),
+            botChanservAccess: getBotChanservAccess(api, ctx.channel),
             config: cfg,
             dynamicIgnoreList: getDynamicIgnoreList(api),
           })
@@ -774,6 +856,7 @@ async function runPipeline(
       );
       return;
     case 'ok': {
+      if (isFounderPostGate(api, cfg, ctx.channel, 'pipeline')) return;
       // Apply character style (casing, verbosity enforcement)
       const styled = applyCharacterStyle(result.lines, {
         casing: character.style.casing,
@@ -858,6 +941,7 @@ async function runSessionPipeline(
     sessionManager.addMessage(session, userMsg);
     sessionManager.addMessage(session, { role: 'assistant', content: lines.join(' ') });
 
+    if (isFounderPostGate(api, cfg, ctx.channel, 'session')) return;
     await sendLines(lines, (line) => ctx.reply(line), cfg.output.interLineDelayMs);
   } catch (err) {
     const provErr = err as AIProviderError;

@@ -56,6 +56,15 @@ export interface ProbeState {
   /** Channel that the current multi-line INFO response is about (set on "Information for channel #xxx:"). */
   activeInfoChannel: string | null;
   /**
+   * Anope-only: channels where ACCESS LIST returned empty while the INFO
+   * probe was still pending. We defer committing `'none'` in this case —
+   * INFO might still report the bot as implicit founder. The deferred
+   * commit is flushed when INFO resolves as "not founder", or dropped when
+   * INFO resolves as "bot is founder" (founder result supersedes).
+   * Keys are ircLower channel names; values preserve original-case name.
+   */
+  deferredAnopeNoAccess: Map<string, string>;
+  /**
    * Timeout timers for probe responses. Using a Set (instead of an array)
    * so self-removal on fire is O(1); see audit finding W-CM3.
    */
@@ -70,6 +79,7 @@ export function createProbeState(): ProbeState {
     pendingAnopeProbes: new Map(),
     pendingInfoProbes: new Map(),
     activeInfoChannel: null,
+    deferredAnopeNoAccess: new Map(),
     probeTimers: new Set(),
     pendingGetKey: new Map(),
   };
@@ -116,6 +126,7 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
     probeState.pendingAthemeProbes.clear();
     probeState.pendingAnopeProbes.clear();
     probeState.pendingInfoProbes.clear();
+    probeState.deferredAnopeNoAccess.clear();
     probeState.pendingGetKey.clear();
     probeState.activeInfoChannel = null;
     for (const t of probeState.probeTimers) clearTimeout(t);

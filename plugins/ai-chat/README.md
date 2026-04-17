@@ -133,14 +133,21 @@ See `docs/audits/security-ai-injection-threat-2026-04-16.md` for the full securi
     "privilege_gating": true,
     "privileged_mode_threshold": "h",
     "privileged_required_flag": "m",
-    "disable_when_privileged": false
+    "disable_when_privileged": false,
+    "disable_when_founder": true
   }
 }
 ```
 
 Set `disable_when_privileged: true` to disable AI responses entirely when the bot has ops.
 
-**Operator note:** Do not grant this bot `founder` access on any channel where ai-chat runs. Ops-level access limits the blast radius to kicks/bans/deops — damaging but recoverable. Founder loss is not. For maximum isolation, run an unprivileged AI bot alongside a separate chanmod/ops bot.
+**Founder-disable gate (`disable_when_founder`, default `true`):** ai-chat refuses to respond in any channel where the bot's ChanServ tier is `founder`. The check runs twice — once at trigger time, once right before each line is sent to IRC — so a ChanServ probe that resolves mid-request still blocks the response. The tier is read from the `chanserv_access` chanset written by chanmod's auto-detect probe (or by a manual `.chanset <chan> chanserv_access founder` override). See `docs/CHANNEL_PROTECTION.md` §"Founder access and bot-nick compromise" for the full rationale.
+
+Operator responsibilities:
+
+- **chanmod only probes ChanServ on channel JOIN.** If you grant the bot founder mid-session, you must immediately run `.chanset <chan> chanserv_access founder` yourself — nothing will correct the stale chanset until the bot next rejoins the channel. Treat the founder grant and the `.chanset` write as a single atomic action.
+- If you deliberately want ai-chat to run at founder tier anyway (you accept the trade-off), set `disable_when_founder: false`. Keep in mind the fantasy-command dropper remains the only defence at that point.
+- The cleanest topology for wanting both ai-chat _and_ full founder-level takeover recovery is two bots: an unprivileged AI bot, and a separate chanmod-only bot with founder access and no LLM / DCC / user-input surfaces.
 
 ## Privacy
 

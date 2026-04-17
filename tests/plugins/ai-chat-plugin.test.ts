@@ -2,7 +2,11 @@
 import { resolve } from 'node:path';
 import { type Mock, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { __setProviderOverrideForTesting, shouldRespond } from '../../plugins/ai-chat/index';
+import {
+  __setProviderOverrideForTesting,
+  shouldBlockOnFounder,
+  shouldRespond,
+} from '../../plugins/ai-chat/index';
 import type { AIProvider } from '../../plugins/ai-chat/providers/types';
 import { Permissions } from '../../src/core/permissions';
 import { BotDatabase } from '../../src/database';
@@ -400,6 +404,7 @@ describe('shouldRespond logic', () => {
       privilegedModeThreshold: 'h',
       privilegedRequiredFlag: 'm',
       disableWhenPrivileged: false,
+      disableWhenFounder: true,
     },
     sessions: { enabled: true, inactivityMs: 600_000, gamesDir: 'games' },
   };
@@ -413,6 +418,7 @@ describe('shouldRespond logic', () => {
     hasRequiredFlag: true,
     hasPrivilegedFlag: false,
     botChannelModes: undefined as string | undefined,
+    botChanservAccess: undefined as string | undefined,
     dynamicIgnoreList: [] as string[],
     config: baseConfig,
   };
@@ -548,5 +554,71 @@ describe('shouldRespond logic', () => {
         },
       }),
     ).toBe(true);
+  });
+
+  // Founder-disable gate
+  it('blocks when bot has ChanServ founder access (default gate on)', () => {
+    expect(shouldRespond({ ...baseCtx, botChanservAccess: 'founder' })).toBe(false);
+  });
+
+  it('permits when bot has ChanServ op access', () => {
+    expect(shouldRespond({ ...baseCtx, botChanservAccess: 'op' })).toBe(true);
+  });
+
+  it('permits when bot has ChanServ superop access (non-founder)', () => {
+    expect(shouldRespond({ ...baseCtx, botChanservAccess: 'superop' })).toBe(true);
+  });
+
+  it('permits when bot has no ChanServ access', () => {
+    expect(shouldRespond({ ...baseCtx, botChanservAccess: 'none' })).toBe(true);
+  });
+
+  it('permits when access is unknown (undefined) — trigger-time check is not fail-closed on undefined', () => {
+    // The trigger-time check only blocks the affirmative 'founder' string.
+    // The post-time gate (isFounderPostGate) is where the race between probe
+    // and LLM round-trip is closed; here we only assert the trigger-time
+    // behaviour matches "block only on confirmed founder".
+    expect(shouldRespond({ ...baseCtx, botChanservAccess: undefined })).toBe(true);
+  });
+
+  it('does not block on founder when disableWhenFounder is false (opt-out)', () => {
+    expect(
+      shouldRespond({
+        ...baseCtx,
+        botChanservAccess: 'founder',
+        config: {
+          ...baseConfig,
+          security: { ...baseConfig.security, disableWhenFounder: false },
+        },
+      }),
+    ).toBe(true);
+  });
+});
+
+describe('shouldBlockOnFounder (post-time gate rule)', () => {
+  it('blocks when gate on, channel present, access is founder', () => {
+    expect(shouldBlockOnFounder(true, '#c', 'founder')).toBe(true);
+  });
+
+  it('permits when gate is off, even at founder', () => {
+    expect(shouldBlockOnFounder(false, '#c', 'founder')).toBe(false);
+  });
+
+  it('permits non-founder tiers (op, superop, none, undefined)', () => {
+    expect(shouldBlockOnFounder(true, '#c', 'op')).toBe(false);
+    expect(shouldBlockOnFounder(true, '#c', 'superop')).toBe(false);
+    expect(shouldBlockOnFounder(true, '#c', 'none')).toBe(false);
+    expect(shouldBlockOnFounder(true, '#c', undefined)).toBe(false);
+  });
+
+  it('permits when channel is null (PM context)', () => {
+    expect(shouldBlockOnFounder(true, null, 'founder')).toBe(false);
+  });
+
+  it('matches founder case/whitespace-insensitively (defence against chanset drift)', () => {
+    expect(shouldBlockOnFounder(true, '#c', 'Founder')).toBe(true);
+    expect(shouldBlockOnFounder(true, '#c', 'FOUNDER')).toBe(true);
+    expect(shouldBlockOnFounder(true, '#c', ' founder')).toBe(true);
+    expect(shouldBlockOnFounder(true, '#c', 'founder ')).toBe(true);
   });
 });
