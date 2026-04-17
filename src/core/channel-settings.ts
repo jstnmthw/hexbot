@@ -192,10 +192,6 @@ export class ChannelSettings {
     });
   }
 
-  // -------------------------------------------------------------------------
-  // Internal
-  // -------------------------------------------------------------------------
-
   /**
    * Build the composite DB key for a (channel, setting) pair. Channel is
    * folded through the injected casemapping so that `#Foo` and `#foo`

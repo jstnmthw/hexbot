@@ -6,10 +6,6 @@ import { AdminListStore } from '../utils/admin-list-store';
 
 export type { BanRecord } from '../types';
 
-// ---------------------------------------------------------------------------
-// BanStore
-// ---------------------------------------------------------------------------
-
 const NAMESPACE = '_bans';
 
 /** Runtime shape check — the JSON we load from the legacy plugin namespace is
