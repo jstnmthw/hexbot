@@ -75,6 +75,13 @@ let state: PluginState | null = null;
 /** Periodic timer that expires idle game sessions. */
 let sessionExpiryInterval: ReturnType<typeof setInterval> | null = null;
 let gamesDir: string = '';
+/**
+ * Per-channel timestamp of the last "API rate-limited" op-notice we sent.
+ * Debounces the notice so a flood of triggered messages during an outage
+ * doesn't spam every op once per attempt. Cleared on teardown.
+ */
+const lastRateLimitOpNoticeAt = new Map<string, number>();
+const RATE_LIMIT_OP_NOTICE_COOLDOWN_MS = 5 * 60_000;
 
 /**
  * Max bytes of channel text allowed into in-memory buffers (context, social
@@ -346,21 +353,39 @@ function isFounderRestricted(ctx: ShouldRespondCtx): boolean {
   );
 }
 
-export function shouldRespond(ctx: ShouldRespondCtx): boolean {
+/**
+ * Reason a message was rejected. `'allowed'` means it passed every gate. The
+ * other values name the specific gate that fired so the pubm-level debug log
+ * can attribute drops without re-running each predicate.
+ */
+export type ShouldRespondReason =
+  | 'allowed'
+  | 'self'
+  | 'bot_nick'
+  | 'ignored'
+  | 'no_flag'
+  | 'privilege_restricted'
+  | 'founder_restricted';
+
+export function shouldRespondReason(ctx: ShouldRespondCtx): ShouldRespondReason {
   const nick = ctx.nick;
-  if (nick.toLowerCase() === ctx.botNick.toLowerCase()) return false;
+  if (nick.toLowerCase() === ctx.botNick.toLowerCase()) return 'self';
   if (
     isLikelyBot(nick, ctx.config.permissions.botNickPatterns, ctx.config.permissions.ignoreBots)
   ) {
-    return false;
+    return 'bot_nick';
   }
   const hostmask = `${nick}!${ctx.ident}@${ctx.hostname}`;
   const fullIgnore = [...ctx.config.permissions.ignoreList, ...ctx.dynamicIgnoreList];
-  if (isIgnored(nick, hostmask, fullIgnore)) return false;
-  if (ctx.config.permissions.requiredFlag !== '-' && !ctx.hasRequiredFlag) return false;
-  if (isPrivilegeRestricted(ctx)) return false;
-  if (isFounderRestricted(ctx)) return false;
-  return true;
+  if (isIgnored(nick, hostmask, fullIgnore)) return 'ignored';
+  if (ctx.config.permissions.requiredFlag !== '-' && !ctx.hasRequiredFlag) return 'no_flag';
+  if (isPrivilegeRestricted(ctx)) return 'privilege_restricted';
+  if (isFounderRestricted(ctx)) return 'founder_restricted';
+  return 'allowed';
+}
+
+export function shouldRespond(ctx: ShouldRespondCtx): boolean {
+  return shouldRespondReason(ctx) === 'allowed';
 }
 
 // ---------------------------------------------------------------------------
@@ -466,6 +491,50 @@ function recordEngagement(channel: string, nick: string, engagementWindowMs: num
       if (t < cutoff) map.delete(k);
     }
   }
+}
+
+/**
+ * One-line debug summary of a pubm decision. Lets `api.debug` show why a
+ * given message was skipped or routed without dumping full context. Text is
+ * truncated and quoted so newlines / control bytes can't smear log lines.
+ */
+function traceLine(
+  ctx: HandlerContext,
+  text: string,
+  fields: { trigger: string; reason: ShouldRespondReason; action: string },
+): string {
+  const snippet = text.length > 60 ? text.slice(0, 60) + '…' : text;
+  const safe = JSON.stringify(snippet);
+  return (
+    `pubm ch=${ctx.channel ?? '(none)'} nick=${ctx.nick} ` +
+    `trigger=${fields.trigger} gate=${fields.reason} → ${fields.action} text=${safe}`
+  );
+}
+
+/**
+ * Notice every +o user in `channel` (PM target ignored) that the AI provider
+ * is rate-limited. Debounced per channel by `RATE_LIMIT_OP_NOTICE_COOLDOWN_MS`
+ * so the bot doesn't flood ops with one notice per dropped message during an
+ * outage. No-op when the channel has no current ops — better silent than
+ * leaking the outage to non-ops by falling back to a public reply.
+ */
+function noticeOpsRateLimited(api: PluginAPI, channel: string | null, detail: string): void {
+  if (!channel) return;
+  const now = Date.now();
+  const last = lastRateLimitOpNoticeAt.get(channel) ?? 0;
+  if (now - last < RATE_LIMIT_OP_NOTICE_COOLDOWN_MS) return;
+
+  const ops = api.getUsers(channel).filter((u) => u.modes.includes('o'));
+  if (ops.length === 0) return;
+
+  lastRateLimitOpNoticeAt.set(channel, now);
+  const message = `[ai-chat] AI provider rate-limited in ${channel}: ${detail}`;
+  for (const op of ops) {
+    api.notice(op.nick, message);
+  }
+  api.debug(
+    `op-notice rate_limit ch=${channel} ops=${ops.length} (${ops.map((u) => u.nick).join(',')})`,
+  );
 }
 
 /** Build a SessionIdentity from a handler context for session identity gating. */
@@ -800,7 +869,8 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
       config: cfg,
       dynamicIgnoreList: getDynamicIgnoreList(api),
     };
-    const allowed = shouldRespond(baseShouldRespondCtx);
+    const reason = shouldRespondReason(baseShouldRespondCtx);
+    const allowed = reason === 'allowed';
 
     // Ambient engine tracks every channel it sees activity in, so that
     // join/topic reactions know the channel exists. Social-tracker state
@@ -819,6 +889,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
       cfg.triggers.command &&
       (lowerText === cmdPrefix || lowerText.startsWith(cmdPrefix + ' '))
     ) {
+      api.debug(traceLine(ctx, text, { trigger: 'command', reason, action: 'defer-to-pub' }));
       return;
     }
 
@@ -829,7 +900,11 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
       !isBotMsg &&
       sessionManager.isInSession(ctx.nick, ctx.channel, identity)
     ) {
-      if (!allowed) return;
+      if (!allowed) {
+        api.debug(traceLine(ctx, text, { trigger: 'session', reason, action: 'skip' }));
+        return;
+      }
+      api.debug(traceLine(ctx, text, { trigger: 'session', reason, action: 'session' }));
       await runSessionPipeline(api, cfg, ctx, text, botNick(), network());
       return;
     }
@@ -844,11 +919,20 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
     ) {
       match = { kind: 'engaged', prompt: text.trim() };
     }
-    if (!match) return;
+    if (!match) {
+      if (!isBotMsg) {
+        api.debug(traceLine(ctx, text, { trigger: 'none', reason, action: 'skip' }));
+      }
+      return;
+    }
     if (match.kind === 'command') return;
 
-    if (!allowed) return;
+    if (!allowed) {
+      api.debug(traceLine(ctx, text, { trigger: match.kind, reason, action: 'skip' }));
+      return;
+    }
 
+    api.debug(traceLine(ctx, text, { trigger: match.kind, reason, action: 'pipeline' }));
     const hasAdmin = api.permissions.checkFlags(cfg.permissions.adminFlag, ctx);
     await runPipeline(api, cfg, ctx, match.prompt, botNick(), network(), false, hasAdmin);
   });
@@ -885,23 +969,28 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
           ctx.reply(`Usage: ${cfg.triggers.commandPrefix} <message>`);
           return;
         }
-        if (
-          !shouldRespond({
-            nick: ctx.nick,
-            ident: ctx.ident,
-            hostname: ctx.hostname,
-            channel: ctx.channel,
-            botNick: botNick(),
-            hasRequiredFlag: true,
-            hasPrivilegedFlag: api.permissions.checkFlags(cfg.security.privilegedRequiredFlag, ctx),
-            botChannelModes: getBotChannelModes(api, ctx.channel),
-            botChanservAccess: getBotChanservAccess(api, ctx.channel),
-            config: cfg,
-            dynamicIgnoreList: getDynamicIgnoreList(api),
-          })
-        ) {
+        const cmdReason = shouldRespondReason({
+          nick: ctx.nick,
+          ident: ctx.ident,
+          hostname: ctx.hostname,
+          channel: ctx.channel,
+          botNick: botNick(),
+          hasRequiredFlag: true,
+          hasPrivilegedFlag: api.permissions.checkFlags(cfg.security.privilegedRequiredFlag, ctx),
+          botChannelModes: getBotChannelModes(api, ctx.channel),
+          botChanservAccess: getBotChanservAccess(api, ctx.channel),
+          config: cfg,
+          dynamicIgnoreList: getDynamicIgnoreList(api),
+        });
+        if (cmdReason !== 'allowed') {
+          api.debug(
+            traceLine(ctx, text, { trigger: 'command', reason: cmdReason, action: 'skip' }),
+          );
           return;
         }
+        api.debug(
+          traceLine(ctx, text, { trigger: 'command', reason: cmdReason, action: 'pipeline' }),
+        );
         const cmdAdmin = api.permissions.checkFlags(cfg.permissions.adminFlag, ctx);
         await runPipeline(api, cfg, ctx, prompt, botNick(), network(), true, cmdAdmin);
       },
@@ -926,6 +1015,12 @@ async function runPipeline(
   if (!rateLimiter || !tokenTracker || !contextManager) return;
 
   const { character, language } = activeCharacter(api, cfg, ctx.channel);
+
+  api.debug(
+    `pipeline enter ch=${ctx.channel ?? '(none)'} nick=${ctx.nick} ` +
+      `character=${character.name}${language ? `/${language}` : ''} ` +
+      `provider=${provider?.name ?? 'none'} admin=${isAdmin} promptLen=${prompt.length}`,
+  );
 
   // No provider? Degraded placeholder mode.
   if (!provider) {
@@ -977,20 +1072,32 @@ async function runPipeline(
 
   switch (result.status) {
     case 'rate_limited': {
+      const secs = Math.max(1, Math.ceil(result.retryAfterMs / 1000));
       if (noticeOnBlock) {
-        const secs = Math.max(1, Math.ceil(result.retryAfterMs / 1000));
         ctx.replyPrivate(`Rate limited (${result.limitedBy}) — try again in ${secs}s.`);
       }
-      api.debug(`blocked=${result.limitedBy} nick=${ctx.nick}`);
+      api.debug(
+        `pipeline rate_limited ch=${ctx.channel ?? '(none)'} nick=${ctx.nick} ` +
+          `limitedBy=${result.limitedBy} retryAfterSec=${secs} notice=${noticeOnBlock}`,
+      );
       return;
     }
     case 'budget_exceeded':
       if (noticeOnBlock) ctx.replyPrivate('Daily token budget exceeded — try again tomorrow.');
+      api.debug(
+        `pipeline budget_exceeded ch=${ctx.channel ?? '(none)'} nick=${ctx.nick} ` +
+          `notice=${noticeOnBlock}`,
+      );
       return;
     case 'provider_error': {
       api.error(`provider error (${result.kind}): ${result.message}`);
       if (result.kind === 'safety') {
         ctx.reply("Sorry — I can't help with that.");
+      } else if (result.kind === 'rate_limit') {
+        // Stay silent in-channel — repeating "AI is temporarily unavailable"
+        // on every triggered message during an outage is noisy and reveals
+        // upstream state to the channel. Tell ops privately instead.
+        noticeOpsRateLimited(api, ctx.channel, result.message);
       } else {
         ctx.reply('AI is temporarily unavailable.');
       }
@@ -1054,7 +1161,10 @@ async function runSessionPipeline(
   if (!rl.allowed) {
     const secs = Math.max(1, Math.ceil((rl.retryAfterMs ?? 0) / 1000));
     ctx.replyPrivate(`Rate limited (${rl.limitedBy ?? 'rpm'}) — try again in ${secs}s.`);
-    api.debug(`session rate-limited nick=${ctx.nick}`);
+    api.debug(
+      `session rate_limited ch=${ctx.channel ?? '(none)'} nick=${ctx.nick} ` +
+        `limitedBy=${rl.limitedBy ?? 'rpm'} retryAfterSec=${secs}`,
+    );
     return;
   }
   const estimate = Math.ceil(text.length / 4) + 64;
@@ -1105,7 +1215,11 @@ async function runSessionPipeline(
     const kind = isAIProviderError(err) ? err.kind : 'other';
     const message = err instanceof Error ? err.message : String(err);
     api.error(`session provider error (${kind}): ${message}`);
-    ctx.reply('AI is temporarily unavailable.');
+    if (kind === 'rate_limit') {
+      noticeOpsRateLimited(api, ctx.channel, message);
+    } else {
+      ctx.reply('AI is temporarily unavailable.');
+    }
   }
 }
 
@@ -1322,6 +1436,7 @@ export function teardown(): void {
   moodEngine = null;
   state = null;
   gamesDir = '';
+  lastRateLimitOpNoticeAt.clear();
 }
 
 // Re-export so Phase 6 tests can still access the formatter.
