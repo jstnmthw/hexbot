@@ -29,7 +29,14 @@ export function listGames(gamesDir: string): string[] {
 export function loadGamePrompt(gamesDir: string, name: string): string | null {
   // Only allow safe names (no path separators, no traversal).
   if (!/^[a-zA-Z0-9_-]+$/.test(name)) return null;
-  const filePath = join(gamesDir, `${name}.txt`);
+  // Defence-in-depth: resolve both sides and refuse any path that escapes the
+  // games dir. `gamesDir` is operator-supplied config (trusted), but a
+  // symlink or future caller passing a relative segment shouldn't punch out.
+  // Unreachable via the name regex above — kept as a last-line guard.
+  const rootResolved = resolve(gamesDir);
+  const filePath = resolve(rootResolved, `${name}.txt`);
+  /* v8 ignore next */
+  if (filePath !== join(rootResolved, `${name}.txt`)) return null;
   if (!existsSync(filePath)) return null;
   try {
     const st = statSync(filePath);

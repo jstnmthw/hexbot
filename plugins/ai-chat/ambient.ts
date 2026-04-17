@@ -51,6 +51,13 @@ export class AmbientEngine {
     private config: AmbientConfig,
     private social: SocialTracker,
     private now: () => number = Date.now,
+    /**
+     * Optional warn-level logger. Tick-loop and event-reaction errors are
+     * surfaced here so an ambient bug doesn't stealth-disable the feature
+     * (a silently-swallowed synchronous throw would otherwise leave the
+     * interval running but producing nothing for the process lifetime).
+     */
+    private warn: (msg: string) => void = () => {},
   ) {}
 
   /** Start the ambient tick loop. */
@@ -89,7 +96,7 @@ export class AmbientEngine {
       channel,
       'join_wb',
       `A user named <<<${safeNick}>>> just joined the channel.`,
-    ).catch(() => {});
+    ).catch((err) => this.warn(`ambient join_wb sender rejected: ${describeError(err)}`));
   }
 
   /** Notify the engine that the channel topic changed. */
@@ -105,7 +112,9 @@ export class AmbientEngine {
     const safeNick = filterNick(nick);
     const delimitedTopic = `<<<${sanitiseForPrompt(topic)}>>>`;
     const who = safeNick ? `<<<${safeNick}>>>` : 'someone';
-    this.sender(channel, 'topic', `${who} changed the topic to: ${delimitedTopic}`).catch(() => {});
+    this.sender(channel, 'topic', `${who} changed the topic to: ${delimitedTopic}`).catch((err) =>
+      this.warn(`ambient topic sender rejected: ${describeError(err)}`),
+    );
   }
 
   /** Get effective chattiness (config base × character trait). */
@@ -115,6 +124,17 @@ export class AmbientEngine {
 
   /** The periodic tick — evaluates idle and unanswered question conditions. */
   tick(): void {
+    try {
+      this.tickInner();
+    } catch (err) {
+      // A synchronous throw here (e.g. a bug in social-tracker or in a
+      // sender callback before it returns its promise) would otherwise
+      // silently disable ambient for the process lifetime.
+      this.warn(`ambient tick threw: ${describeError(err)}`);
+    }
+  }
+
+  private tickInner(): void {
     if (!this.sender) return;
     const now = this.now();
 
@@ -143,7 +163,7 @@ export class AmbientEngine {
               channelKey,
               'idle',
               'The channel has been quiet for a while. Say something casual or interesting.',
-            ).catch(() => {});
+            ).catch((err) => this.warn(`ambient idle sender rejected: ${describeError(err)}`));
             continue;
           }
         }
@@ -163,7 +183,7 @@ export class AmbientEngine {
             channelKey,
             'unanswered',
             `${who} asked: ${delimited} — no one answered. You can respond if you have something to say.`,
-          ).catch(() => {});
+          ).catch((err) => this.warn(`ambient unanswered sender rejected: ${describeError(err)}`));
           continue;
         }
       }
@@ -191,6 +211,10 @@ function sanitiseForPrompt(text: string): string {
     .replace(/[<>]/g, '')
     .replace(/[\r\n]+/g, ' ')
     .slice(0, 256);
+}
+
+function describeError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /** Re-export question heuristic for tests that imported it from ambient. */

@@ -173,7 +173,11 @@ export function mapGeminiError(err: unknown): AIProviderError {
     if (status === 401 || status === 403)
       return new AIProviderError('Gemini auth error', 'auth', err);
     if (status >= 500) return new AIProviderError('Gemini server error', 'network', err);
-    return new AIProviderError(`Gemini HTTP ${status}: ${err.statusText ?? ''}`, 'network', err);
+    return new AIProviderError(
+      `Gemini HTTP ${status}${err.statusText ? `: ${err.statusText}` : ''}`,
+      'network',
+      err,
+    );
   }
 
   if (err instanceof GoogleGenerativeAIResponseError) {

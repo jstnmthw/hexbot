@@ -23,6 +23,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm lint
+      - run: pnpm build:plugins
       - run: pnpm test:coverage --coverage.reporter=text --coverage.reporter=json-summary
       - name: Extract coverage percentage
         id: coverage

@@ -6,6 +6,13 @@ import type { AIMessage } from './providers/types';
 const MAX_SESSION_TURNS = 40;
 
 /**
+ * Hard cap on concurrent sessions. Inactivity expiry runs on a poll, so a
+ * nick-rotation flood across many channels could otherwise grow the map
+ * unbounded between ticks. On overflow we evict oldest-by-`lastActivityAt`.
+ */
+const MAX_SESSIONS = 500;
+
+/**
  * Identity captured at session creation to prevent nick-takeover hijacks.
  * A session is bound to the creator's account (when available) and their
  * ident+host; a different caller using the same nick is refused.
@@ -58,6 +65,20 @@ export class SessionManager {
     identity: SessionIdentity,
   ): Session {
     const key = sessionKey(userKey, channel);
+    // Evict the oldest-by-activity session when at cap and this is a new key,
+    // so a nick-rotation flood can't grow the map without bound. Replacing an
+    // existing key doesn't increase size and skips eviction.
+    if (!this.sessions.has(key) && this.sessions.size >= MAX_SESSIONS) {
+      let oldestKey: string | null = null;
+      let oldestAt = Infinity;
+      for (const [k, s] of this.sessions) {
+        if (s.lastActivityAt < oldestAt) {
+          oldestAt = s.lastActivityAt;
+          oldestKey = k;
+        }
+      }
+      if (oldestKey !== null) this.sessions.delete(oldestKey);
+    }
     const session: Session = {
       id: `sess-${this.nextId++}`,
       userKey: userKey.toLowerCase(),

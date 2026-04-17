@@ -45,7 +45,9 @@ export function resolveCharactersDir(relative = 'characters'): string {
 export function validateCharacter(raw: CharacterJson, _filename: string): Character | null {
   if (!raw || typeof raw !== 'object') return null;
   if (typeof raw.name !== 'string' || !raw.name) return null;
-  if (typeof raw.prompt !== 'string' || !raw.prompt) return null;
+  // Reject empty/whitespace prompts — an unanchored system prompt effectively
+  // ungates the safety/persona rules the rest of the pipeline relies on.
+  if (typeof raw.prompt !== 'string' || raw.prompt.trim().length === 0) return null;
 
   const style: Partial<Character['style']> = raw.style ?? {};
   return {

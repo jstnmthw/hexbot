@@ -187,4 +187,40 @@ describe('SessionManager', () => {
     expect(s.context[0].content).toBe('msg-10');
     expect(s.context[39].content).toBe('msg-49');
   });
+
+  // --- MAX_SESSIONS overflow eviction ---
+
+  it('evicts oldest-by-lastActivity on overflow past the session cap', () => {
+    const { mgr, clock } = make();
+    // Seed cap-worth of sessions; advance the clock between each so
+    // lastActivityAt is strictly ordered and the oldest is unambiguous.
+    for (let i = 0; i < 500; i++) {
+      clock.advance(1);
+      mgr.createSession(`u${i}`, `#c${i}`, 't', 'p', ID);
+    }
+    expect(mgr.list()).toHaveLength(500);
+    // The very first session should still be here before the overflow insert.
+    expect(mgr.getSession('u0', '#c0')).not.toBeNull();
+    // One more new session pushes us past the cap → oldest-by-activity evicted.
+    clock.advance(1);
+    mgr.createSession('overflow', '#new', 't', 'p', ID);
+    expect(mgr.list()).toHaveLength(500);
+    expect(mgr.getSession('u0', '#c0')).toBeNull();
+    expect(mgr.getSession('overflow', '#new')).not.toBeNull();
+  });
+
+  it('replacing an existing session at the cap does not evict anyone', () => {
+    const { mgr, clock } = make();
+    for (let i = 0; i < 500; i++) {
+      clock.advance(1);
+      mgr.createSession(`u${i}`, `#c${i}`, 't', 'p', ID);
+    }
+    clock.advance(1);
+    // Same (userKey, channel) → replaces, doesn't grow the map.
+    mgr.createSession('u0', '#c0', 'newtype', 'p', ID);
+    expect(mgr.list()).toHaveLength(500);
+    expect(mgr.getSession('u0', '#c0')?.type).toBe('newtype');
+    // u1 (next-oldest) still present — no eviction happened.
+    expect(mgr.getSession('u1', '#c1')).not.toBeNull();
+  });
 });

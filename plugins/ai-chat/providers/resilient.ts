@@ -1,5 +1,6 @@
 // Resilience wrappers for AIProvider: retry transient errors + circuit breaker.
 import {
+  type AIMessage,
   type AIProvider,
   type AIProviderConfig,
   AIProviderError,
@@ -47,7 +48,7 @@ export class ResilientProvider implements AIProvider {
 
   async complete(
     systemPrompt: string,
-    messages: Parameters<AIProvider['complete']>[1],
+    messages: AIMessage[],
     maxTokens: number,
   ): Promise<AIResponse> {
     this.assertCircuitClosed();
@@ -68,12 +69,9 @@ export class ResilientProvider implements AIProvider {
           // prompt that trips Gemini's safety filter); `auth` is a config
           // problem that won't resolve on its own. Either opening the circuit
           // on these would let a single user DoS every channel for 5 minutes
-          // by triggering 5 deterministic rejections.
-          if (
-            provErr.kind === 'rate_limit' ||
-            provErr.kind === 'network' ||
-            provErr.kind === 'other'
-          ) {
+          // by triggering 5 deterministic rejections. Expressed as a blacklist
+          // so new transient kinds added later are included by default.
+          if (provErr.kind !== 'safety' && provErr.kind !== 'auth') {
             this.recordFailure();
           }
           throw provErr;
@@ -92,6 +90,10 @@ export class ResilientProvider implements AIProvider {
   }
 
   async countTokens(text: string): Promise<number> {
+    // Intentionally bypasses retry + circuit-breaker: tokenizer calls are
+    // best-effort accounting. A transient failure here should surface to the
+    // caller immediately, and failures of token counting are not a signal to
+    // open the circuit on the generation path.
     return this.inner.countTokens(text);
   }
 

@@ -274,3 +274,97 @@ describe('RateLimiter ambient budget', () => {
     expect(rl.checkAmbient('#test')).toBe(true);
   });
 });
+
+describe('AmbientEngine error surfacing', () => {
+  const config: AmbientConfig = {
+    ...BASE_CONFIG,
+    idle: { afterMinutes: 1, chance: 1.0, minUsers: 1 },
+    unansweredQuestions: { enabled: true, waitSeconds: 1 },
+  };
+
+  it('routes idle sender rejections through the warn logger', async () => {
+    const warns: string[] = [];
+    const social = new SocialTracker(null, () => 1_000);
+    const engine = new AmbientEngine(
+      config,
+      social,
+      () => 1_000,
+      (msg) => warns.push(msg),
+    );
+    const failing: AmbientSender = async () => {
+      throw new Error('boom');
+    };
+    engine.start(failing, 999_999);
+    social.onMessage('#x', 'alice', 'hi', false);
+    engine.onChannelActivity('#x');
+    // Advance clock past the 1-minute idle threshold.
+    (engine as unknown as { now: () => number }).now = () => 1_000 + 2 * 60_000;
+    engine.tick();
+    // Let the rejected promise settle.
+    await new Promise((r) => setTimeout(r, 0));
+    engine.stop();
+    expect(warns.some((m) => m.includes('ambient idle sender rejected'))).toBe(true);
+    expect(warns.some((m) => m.includes('boom'))).toBe(true);
+  });
+
+  it('catches synchronous throws from the tick body and warns', () => {
+    const warns: string[] = [];
+    const social = new SocialTracker(null, () => 1_000);
+    const engine = new AmbientEngine(
+      config,
+      social,
+      () => {
+        throw new Error('clock-broke');
+      },
+      (msg) => warns.push(msg),
+    );
+    const noop: AmbientSender = async () => {};
+    engine.start(noop, 999_999);
+    engine.onChannelActivity('#x');
+    // tick() must not propagate — the warn is the only observable side effect.
+    expect(() => engine.tick()).not.toThrow();
+    expect(warns.some((m) => m.includes('ambient tick threw'))).toBe(true);
+    expect(warns.some((m) => m.includes('clock-broke'))).toBe(true);
+    engine.stop();
+  });
+
+  it('routes join_wb sender rejections through the warn logger', async () => {
+    const warns: string[] = [];
+    const social = new SocialTracker(null, () => 1_000);
+    const engine = new AmbientEngine(
+      config,
+      social,
+      () => 1_000,
+      (msg) => warns.push(msg),
+    );
+    const failing: AmbientSender = async () => {
+      throw new Error('join-fail');
+    };
+    engine.start(failing, 999_999);
+    engine.onChannelActivity('#x');
+    engine.onJoin('#x', 'bob');
+    await new Promise((r) => setTimeout(r, 0));
+    engine.stop();
+    expect(warns.some((m) => m.includes('ambient join_wb sender rejected'))).toBe(true);
+  });
+
+  it('routes topic sender rejections through the warn logger', async () => {
+    const warns: string[] = [];
+    const social = new SocialTracker(null, () => 1_000);
+    const engine = new AmbientEngine(
+      config,
+      social,
+      () => 1_000,
+      (msg) => warns.push(msg),
+    );
+    const failing: AmbientSender = async () => {
+      throw new Error('topic-fail');
+    };
+    engine.start(failing, 999_999);
+    engine.onChannelActivity('#x');
+    engine.onTopic('#x', 'bob', 'new topic');
+    await new Promise((r) => setTimeout(r, 0));
+    engine.stop();
+    expect(warns.some((m) => m.includes('ambient topic sender rejected'))).toBe(true);
+  });
+});

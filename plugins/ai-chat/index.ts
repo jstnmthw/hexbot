@@ -412,6 +412,31 @@ function isFounderPostGate(
   return true;
 }
 
+/**
+ * Wrap a line-sender so every line is re-checked against `isFounderPostGate`
+ * immediately before going to IRC. `sendLines()` uses setTimeout between
+ * lines, so the chanserv-access state can flip mid-send even after the gate
+ * passed at pipeline start — the point of the gate is to fail closed, and
+ * this is the last line of defence. The warn fires at most once per send.
+ */
+function gatedSender(
+  api: PluginAPI,
+  cfg: AiChatConfig,
+  channel: string | null,
+  reason: string,
+  send: (line: string) => void,
+): (line: string) => void {
+  let dropped = false;
+  return (line) => {
+    if (dropped) return;
+    if (isFounderPostGate(api, cfg, channel, reason)) {
+      dropped = true;
+      return;
+    }
+    send(line);
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Engagement tracking — conversation stickiness
 // ---------------------------------------------------------------------------
@@ -424,15 +449,19 @@ function isEngaged(channel: string, nick: string, windowMs: number): boolean {
   return Date.now() - lastAt < windowMs;
 }
 
-function recordEngagement(channel: string, nick: string): void {
+const ENGAGEMENT_MAP_CAP = 1000;
+
+function recordEngagement(channel: string, nick: string, engagementWindowMs: number): void {
   if (!state) return;
   const now = Date.now();
   const map = state.engagement;
   map.set(`${channel.toLowerCase()}:${nick.toLowerCase()}`, now);
-  // Opportunistic TTL eviction — entries that have aged past the typical
-  // engagement window aren't useful and would leak forever otherwise.
-  if (map.size > 1000) {
-    const cutoff = now - 10 * 60_000;
+  // TTL tied to the configured engagement window — entries older than that
+  // are no longer functionally meaningful (isEngaged() would reject them).
+  // Floor at 60s so a misconfigured 0 doesn't churn the map every insert.
+  if (map.size >= ENGAGEMENT_MAP_CAP) {
+    const ttlMs = Math.max(60_000, engagementWindowMs);
+    const cutoff = now - ttlMs;
     for (const [k, t] of map) {
       if (t < cutoff) map.delete(k);
     }
@@ -452,9 +481,16 @@ function makeSessionIdentity(ctx: HandlerContext): SessionIdentity {
 // ---------------------------------------------------------------------------
 
 const IGNORE_PREFIX = 'ignore:';
+/** Soft cap on the persisted ignore list — cheap insurance against a script
+ *  looping `.ai ignore`. Admin-gated so this is not a threat, just hygiene. */
+const IGNORE_LIST_MAX = 1000;
 
 function getDynamicIgnoreList(api: PluginAPI): string[] {
   return api.db.list(IGNORE_PREFIX).map((row) => row.key.substring(IGNORE_PREFIX.length));
+}
+
+function ignoreListSize(api: PluginAPI): number {
+  return api.db.list(IGNORE_PREFIX).length;
 }
 
 // ---------------------------------------------------------------------------
@@ -627,7 +663,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
   if (merged.ambientEngine !== undefined) {
     ambientEngine = merged.ambientEngine;
   } else if (cfg.ambient.enabled) {
-    ambientEngine = new AmbientEngine(cfg.ambient, socialTracker);
+    ambientEngine = new AmbientEngine(cfg.ambient, socialTracker, Date.now, (msg) => api.warn(msg));
   }
   if (ambientEngine && cfg.ambient.enabled) {
     ambientEngine.start(async (channel, kind, prompt) => {
@@ -686,7 +722,11 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
         api.log(
           `ambient ${kind} channel=${channel} character=${character.name} lines=${styled.length}`,
         );
-        await sendLines(styled, (line) => api.say(channel, line), cfg.output.interLineDelayMs);
+        await sendLines(
+          styled,
+          gatedSender(api, cfg, channel, `ambient ${kind}`, (line) => api.say(channel, line)),
+          cfg.output.interLineDelayMs,
+        );
       }
     });
 
@@ -974,13 +1014,19 @@ async function runPipeline(
       });
       contextManager.addMessage(ctx.channel, botNick, styled.join(' '), true);
       // Record engagement so the user's next messages are treated as continuations
-      if (ctx.channel) recordEngagement(ctx.channel, ctx.nick);
+      if (ctx.channel) {
+        recordEngagement(ctx.channel, ctx.nick, cfg.triggers.engagementSeconds * 1000);
+      }
       socialTracker?.recordBotInteraction(ctx.nick);
       api.log(
         `response sent channel=${ctx.channel ?? '(unknown)'} nick=${ctx.nick} ` +
           `character=${character.name} lines=${styled.length} in=${result.tokensIn} out=${result.tokensOut}`,
       );
-      await sendLines(styled, (line) => ctx.reply(line), cfg.output.interLineDelayMs);
+      await sendLines(
+        styled,
+        gatedSender(api, cfg, ctx.channel, 'pipeline', (line) => ctx.reply(line)),
+        cfg.output.interLineDelayMs,
+      );
       return;
     }
   }
@@ -998,7 +1044,7 @@ async function runSessionPipeline(
   botNickValue: string,
   networkName: string,
 ): Promise<void> {
-  if (!rateLimiter || !tokenTracker || !sessionManager) return;
+  if (!rateLimiter || !tokenTracker || !sessionManager || !provider) return;
   const session = sessionManager.getSession(ctx.nick, ctx.channel, makeSessionIdentity(ctx));
   if (!session) return;
 
@@ -1006,16 +1052,14 @@ async function runSessionPipeline(
   // Sessions bypass the per-user bucket — only enforce global RPM/RPD.
   const rl = rateLimiter.checkGlobal();
   if (!rl.allowed) {
+    const secs = Math.max(1, Math.ceil((rl.retryAfterMs ?? 0) / 1000));
+    ctx.replyPrivate(`Rate limited (${rl.limitedBy ?? 'rpm'}) — try again in ${secs}s.`);
     api.debug(`session rate-limited nick=${ctx.nick}`);
     return;
   }
   const estimate = Math.ceil(text.length / 4) + 64;
   if (!tokenTracker.canSpend(ctx.nick, estimate)) {
     ctx.replyPrivate('Daily token budget exceeded — try again tomorrow.');
-    return;
-  }
-  if (!provider) {
-    ctx.reply('AI chat is currently unavailable.');
     return;
   }
 
@@ -1052,7 +1096,11 @@ async function runSessionPipeline(
     sessionManager.addMessage(session, { role: 'assistant', content: lines.join(' ') });
 
     if (isFounderPostGate(api, cfg, ctx.channel, 'session')) return;
-    await sendLines(lines, (line) => ctx.reply(line), cfg.output.interLineDelayMs);
+    await sendLines(
+      lines,
+      gatedSender(api, cfg, ctx.channel, 'session', (line) => ctx.reply(line)),
+      cfg.output.interLineDelayMs,
+    );
   } catch (err) {
     const kind = isAIProviderError(err) ? err.kind : 'other';
     const message = err instanceof Error ? err.message : String(err);
@@ -1113,6 +1161,15 @@ async function handleSubcommand(
       // fill attack).
       if (target.length > 128 || !/^[$#&]?[\w[\]\\`^{}*?@!.-]+$/.test(target)) {
         ctx.reply('Invalid ignore target.');
+        return true;
+      }
+      // Only count toward the cap if this is a new entry — re-ignoring an
+      // existing target is a no-op and shouldn't be refused.
+      const existing = api.db.get(`${IGNORE_PREFIX}${target}`);
+      if (existing === undefined && ignoreListSize(api) >= IGNORE_LIST_MAX) {
+        ctx.reply(
+          `Ignore list is full (${IGNORE_LIST_MAX} entries). Remove entries with "!ai unignore".`,
+        );
         return true;
       }
       api.db.set(`${IGNORE_PREFIX}${target}`, '1');

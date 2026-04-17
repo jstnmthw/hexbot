@@ -224,10 +224,13 @@ export class RateLimiter {
   }
 
   private getOrCreateBucket(userKey: string, now: number): UserBucket {
-    let bucket = this.userBuckets.get(userKey);
+    // Defence-in-depth: normalise the key here so a future caller that forgets
+    // to lowercase doesn't silently split one user's bucket across casings.
+    const key = userKey.toLowerCase();
+    let bucket = this.userBuckets.get(key);
     if (!bucket) {
       bucket = { tokens: this.config.userBurst, lastRefill: now };
-      this.userBuckets.set(userKey, bucket);
+      this.userBuckets.set(key, bucket);
     }
     return bucket;
   }
