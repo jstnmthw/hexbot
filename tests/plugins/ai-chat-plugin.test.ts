@@ -4,7 +4,7 @@ import { type Mock, afterEach, beforeEach, describe, expect, it, vi } from 'vite
 
 // Pure-function imports from source (typechecked, used in pure unit tests).
 import { type AIChatDeps, shouldBlockOnFounder, shouldRespond } from '../../plugins/ai-chat/index';
-import type { AIProvider } from '../../plugins/ai-chat/providers/types';
+import { type AIProvider, AIProviderError } from '../../plugins/ai-chat/providers/types';
 import { Permissions } from '../../src/core/permissions';
 import { BotDatabase } from '../../src/database';
 import { EventDispatcher } from '../../src/dispatcher';
@@ -167,7 +167,7 @@ describe('ai-chat plugin (integration)', () => {
 
   it('handles provider errors gracefully', async () => {
     (mockProvider.complete as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      Object.assign(new Error('api down'), { kind: 'network' }),
+      new AIProviderError('api down', 'network'),
     );
     const ctx = makePubCtx('alice', '!ai query');
     await dispatcher.dispatch('pub', ctx);
@@ -177,7 +177,7 @@ describe('ai-chat plugin (integration)', () => {
 
   it('safety-filtered responses show a polite refusal', async () => {
     (mockProvider.complete as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      Object.assign(new Error('blocked'), { kind: 'safety' }),
+      new AIProviderError('blocked', 'safety'),
     );
     const ctx = makePubCtx('alice', '!ai naughty');
     await dispatcher.dispatch('pub', ctx);

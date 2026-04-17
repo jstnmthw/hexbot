@@ -1,5 +1,11 @@
 // Resilience wrappers for AIProvider: retry transient errors + circuit breaker.
-import { type AIProvider, type AIProviderConfig, AIProviderError, type AIResponse } from './types';
+import {
+  type AIProvider,
+  type AIProviderConfig,
+  AIProviderError,
+  type AIResponse,
+  isAIProviderError,
+} from './types';
 
 export interface ResilienceConfig {
   /** Max retry attempts for retryable errors (0 = no retries). */
@@ -125,7 +131,7 @@ export class ResilientProvider implements AIProvider {
 }
 
 function toProviderError(err: unknown): AIProviderError {
-  if (err instanceof AIProviderError) return err;
+  if (isAIProviderError(err)) return err;
   if (err instanceof Error) return new AIProviderError(err.message, 'other', err);
   return new AIProviderError('Unknown error', 'other', err);
 }

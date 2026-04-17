@@ -66,3 +66,16 @@ export class AIProviderError extends Error {
     this.name = 'AIProviderError';
   }
 }
+
+const AI_PROVIDER_ERROR_KINDS = new Set(['rate_limit', 'safety', 'network', 'auth', 'other']);
+
+/**
+ * Cross-bundle-safe type guard. `instanceof AIProviderError` breaks when the
+ * plugin is bundled (tsup) and a caller constructs the error from a different
+ * module copy, so we discriminate by `name` and a valid `kind` instead.
+ */
+export function isAIProviderError(err: unknown): err is AIProviderError {
+  if (!(err instanceof Error) || err.name !== 'AIProviderError') return false;
+  const kind = (err as unknown as { kind?: unknown }).kind;
+  return typeof kind === 'string' && AI_PROVIDER_ERROR_KINDS.has(kind);
+}

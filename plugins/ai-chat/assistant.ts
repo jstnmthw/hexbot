@@ -2,7 +2,12 @@
 // Kept separate from the plugin entry so it can be unit-tested with a mock provider.
 import type { ContextManager } from './context-manager';
 import { formatResponse } from './output-formatter';
-import { type AIMessage, type AIProvider, AIProviderError } from './providers/types';
+import {
+  type AIMessage,
+  type AIProvider,
+  type AIProviderError,
+  isAIProviderError,
+} from './providers/types';
 import type { RateCheckResult, RateLimiter } from './rate-limiter';
 import type { TokenTracker } from './token-tracker';
 
@@ -112,7 +117,7 @@ export async function respond(
   } catch (err) {
     return {
       status: 'provider_error',
-      kind: err instanceof AIProviderError ? err.kind : 'other',
+      kind: isAIProviderError(err) ? err.kind : 'other',
       message: err instanceof Error ? err.message : 'unknown error',
     };
   }
