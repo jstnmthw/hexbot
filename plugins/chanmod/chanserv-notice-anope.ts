@@ -58,8 +58,14 @@ export function handleAnopeNotice(
   const botNick = getBotNick(api);
   const accessProbes = probeState.pendingAnopeProbes;
 
-  const applyAccess = (channel: string, level: number, sync: boolean, why: string): void => {
-    api.debug(`ChanServ ACCESS response for ${channel}: ${why}`);
+  const applyAccess = (
+    channel: string,
+    level: number,
+    sync: boolean,
+    why: string,
+    source: 'ACCESS' | 'INFO' = 'ACCESS',
+  ): void => {
+    api.debug(`ChanServ ${source} response for ${channel}: ${why}`);
     backend.handleAccessResponse(channel, level);
     if (sync) syncAccessToSettings(api, backend, channel);
   };
@@ -86,14 +92,14 @@ export function handleAnopeNotice(
   // "End of access list." — bot wasn't listed
   if (ANOPE_END_OF_LIST_RE.test(text)) {
     const channel = consumeFirstPendingProbe(accessProbes);
-    if (channel) applyAccess(channel, 0, false, 'not in access list');
+    if (channel) deferOrApplyNoAccess(api, probeState, channel, 'not in access list', applyAccess);
     return;
   }
 
   // "#channel access list is empty."
   if (ANOPE_EMPTY_LIST_RE.test(text)) {
     const channel = consumeFirstPendingProbe(accessProbes);
-    if (channel) applyAccess(channel, 0, false, 'access list empty');
+    if (channel) deferOrApplyNoAccess(api, probeState, channel, 'access list empty', applyAccess);
     return;
   }
 
@@ -147,19 +153,73 @@ export function handleAnopeNotice(
       if (api.ircLower(founderMatch[1]) === api.ircLower(botNick)) {
         probeState.pendingInfoProbes.delete(key);
         probeState.activeInfoChannel = null;
-        applyAccess(channel, 10000, true, 'bot is founder');
+        // Founder result supersedes any deferred 'none' commit from ACCESS LIST.
+        probeState.deferredAnopeNoAccess.delete(key);
+        applyAccess(channel, 10000, true, 'bot is founder', 'INFO');
       }
       return;
     }
 
     if (ANOPE_INFO_END_RE.test(text)) {
       const channel = probeState.activeInfoChannel;
-      probeState.pendingInfoProbes.delete(api.ircLower(channel));
+      const key = api.ircLower(channel);
+      probeState.pendingInfoProbes.delete(key);
       probeState.activeInfoChannel = null;
       api.debug(`ChanServ INFO response for ${channel}: bot is not founder`);
+      // Flush a deferred 'none' commit now that INFO has ruled out founder —
+      // unless the operator wrote a manual `.chanset chanserv_access …`
+      // during the defer window. In that case the snapshot no longer matches
+      // current, and flushing would clobber the override and desync backend
+      // state from the chanset.
+      const entry = probeState.deferredAnopeNoAccess.get(key);
+      if (entry !== undefined) {
+        probeState.deferredAnopeNoAccess.delete(key);
+        const current = api.channelSettings.getString(channel, 'chanserv_access');
+        if (current !== entry.chansetSnapshot) {
+          api.debug(
+            `ChanServ INFO for ${channel}: skipping deferred flush — chanset moved ` +
+              `${JSON.stringify(entry.chansetSnapshot)} → ${JSON.stringify(current)} during race`,
+          );
+        } else {
+          applyAccess(channel, 0, false, entry.why);
+        }
+      }
       return;
     }
   }
+}
+
+/**
+ * When ACCESS LIST returns "no access" for a channel, defer the `'none'`
+ * commit if INFO is still pending — INFO might still report the bot as
+ * implicit founder, and we don't want to churn backend/chanset state
+ * (`'founder' → 'none' → 'founder'`) or emit a misleading "downgrading"
+ * warn for a tier that was never actually wrong. If INFO is not pending
+ * (not registered, services down, etc.) commit immediately.
+ */
+function deferOrApplyNoAccess(
+  api: PluginAPI,
+  probeState: ProbeState,
+  channel: string,
+  why: string,
+  applyAccess: (
+    channel: string,
+    level: number,
+    sync: boolean,
+    why: string,
+    source?: 'ACCESS' | 'INFO',
+  ) => void,
+): void {
+  const key = api.ircLower(channel);
+  if (probeState.pendingInfoProbes.has(key)) {
+    const chansetSnapshot = api.channelSettings.getString(channel, 'chanserv_access');
+    probeState.deferredAnopeNoAccess.set(key, { why, chansetSnapshot });
+    api.debug(
+      `ChanServ ACCESS response for ${channel}: ${why} — deferring commit until INFO probe resolves`,
+    );
+    return;
+  }
+  applyAccess(channel, 0, false, why);
 }
 
 /** Resolve a pending GETKEY callback for a channel, logging the outcome. */

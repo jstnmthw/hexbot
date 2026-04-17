@@ -159,4 +159,14 @@ describe('SlidingWindowCounter', () => {
       expect(counter.size).toBe(1);
     });
   });
+
+  describe('initialWindows seed', () => {
+    it('pre-populates the counter so check() observes existing timestamps', () => {
+      vi.setSystemTime(1_000);
+      const counter = new SlidingWindowCounter([['key', [500, 800]]]);
+      expect(counter.size).toBe(1);
+      // 2 pre-seeded + 1 new = 3; limit 2 means this call returns true.
+      expect(counter.check('key', 1000, 2)).toBe(true);
+    });
+  });
 });

@@ -23,15 +23,33 @@ export interface RateLimitWindows {
   nickWindowMs: number;
 }
 
-export class RateLimitTracker {
-  private readonly counters: Record<RateLimitKind, SlidingWindowCounter> = {
-    msg: new SlidingWindowCounter(),
-    join: new SlidingWindowCounter(),
-    part: new SlidingWindowCounter(),
-    nick: new SlidingWindowCounter(),
-  };
+/**
+ * Optional pre-built counters for each event class. Tests that need "msg
+ * counter already at 45/50, join counter idle" can construct each
+ * `SlidingWindowCounter` with its own seed and pass them in without replaying
+ * hundreds of `check()` calls.
+ */
+export interface RateLimitTrackerInitialCounters {
+  msg?: SlidingWindowCounter;
+  join?: SlidingWindowCounter;
+  part?: SlidingWindowCounter;
+  nick?: SlidingWindowCounter;
+}
 
-  constructor(private readonly windows: RateLimitWindows) {}
+export class RateLimitTracker {
+  private readonly counters: Record<RateLimitKind, SlidingWindowCounter>;
+
+  constructor(
+    private readonly windows: RateLimitWindows,
+    initialCounters?: RateLimitTrackerInitialCounters,
+  ) {
+    this.counters = {
+      msg: initialCounters?.msg ?? new SlidingWindowCounter(),
+      join: initialCounters?.join ?? new SlidingWindowCounter(),
+      part: initialCounters?.part ?? new SlidingWindowCounter(),
+      nick: initialCounters?.nick ?? new SlidingWindowCounter(),
+    };
+  }
 
   /** Record one hit on `kind` and return true once the threshold is exceeded. */
   check(kind: RateLimitKind, key: string): boolean {

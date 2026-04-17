@@ -64,11 +64,31 @@ export class ChannelState {
   private casemapping: Casemapping = 'rfc1459';
   private capabilities: ServerCapabilities = defaultServerCapabilities();
 
-  constructor(client: ChannelStateClient, eventBus: BotEventBus, logger?: LoggerLike | null) {
+  /**
+   * @param initialState Optional seed for the internal channel and
+   *   network-account maps. Keys must already match whatever casemapping the
+   *   caller plans to use (pass the seed *after* any `setCasemapping` call
+   *   that would otherwise change lookup behaviour). Lets tests start from
+   *   a known "channel has 10 users, 3 accounts" state without replaying
+   *   join/account events.
+   */
+  constructor(
+    client: ChannelStateClient,
+    eventBus: BotEventBus,
+    logger?: LoggerLike | null,
+    initialState?: {
+      channels?: Iterable<readonly [string, ChannelInfo]>;
+      networkAccounts?: Iterable<readonly [string, string | null]>;
+    },
+  ) {
     this.client = client;
     this.eventBus = eventBus;
     this.logger = logger?.child('channel-state') ?? null;
     this.listeners = new ListenerGroup(client);
+    if (initialState?.channels) this.channels = new Map(initialState.channels);
+    if (initialState?.networkAccounts) {
+      this.networkAccounts = new Map(initialState.networkAccounts);
+    }
   }
 
   /** Set the bot's own nick (used to detect self-PART/KICK for channel cleanup). */

@@ -9,7 +9,7 @@ HexBot is a modular Internet Relay Chat bot for Node.js, written in TypeScript. 
 - **Event bind system** — register handlers for IRC events with `bind(type, flags, mask, handler)`.
 - **Flag-based permissions** — owner/master/op/voice flags with hostmask and IRCv3 account-tag matching
 - **Hot-reloadable plugins** — load, unload, and reload plugins at runtime without restarting the bot
-- **DCC CHAT console** — remote admin party line with per-user scrypt passwords (Eggdrop-style auth) and per-session log-stream flags
+- **DCC CHAT console** — remote admin console (party line) with per-user authentication (scrypt passwords) and per-session log-stream flags
 - **Bot linking** — hub-and-leaf multi-bot networking with permission sync, command relay, and ban sharing
 - **Audit log** — every privileged action lands in `mod_log` with structured filters via `.modlog` / `.audit-tail`
 - **Flood protection** — token-bucket outgoing queue and per-user input rate limiting
@@ -137,13 +137,13 @@ Available when bot linking is enabled in `bot.json`. See [docs/BOTLINK.md](docs/
 
 Available inside a DCC CHAT session. See [docs/DCC.md](docs/DCC.md) for setup.
 
-| Command                      | Description                                              |
-| ---------------------------- | -------------------------------------------------------- |
-| `.who`                       | Show who is on the console                               |
-| `.console [+flags\|-flags]`  | Show or set per-session log-stream flags (Eggdrop-style) |
-| `.modlog [filters]`          | Page the audit log with cursor-based pagination          |
-| `.audit-tail [filters\|off]` | Stream audit-log rows live as they are written           |
-| `.quit`                      | Disconnect from the DCC session                          |
+| Command                      | Description                                     |
+| ---------------------------- | ----------------------------------------------- |
+| `.who`                       | Show who is on the console                      |
+| `.console [+flags\|-flags]`  | Show or set per-session log-stream flags        |
+| `.modlog [filters]`          | Page the audit log with cursor-based pagination |
+| `.audit-tail [filters\|off]` | Stream audit-log rows live as they are written  |
+| `.quit`                      | Disconnect from the DCC session                 |
 
 ## Permission flags
 

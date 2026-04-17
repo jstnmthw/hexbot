@@ -1790,4 +1790,29 @@ describe('ChannelState', () => {
       expect(state.getAccountForNick('Alice')).toBe('Alice');
     });
   });
+
+  describe('initialState seed', () => {
+    it('pre-populates channels and networkAccounts from the constructor seed', () => {
+      const seededClient = new MockClient();
+      const seededBus = new BotEventBus();
+      const seededState = new ChannelState(seededClient, seededBus, null, {
+        channels: [
+          [
+            '#preloaded',
+            {
+              name: '#preloaded',
+              topic: 'hello',
+              modes: 'nt',
+              key: '',
+              limit: 0,
+              users: new Map(),
+            },
+          ],
+        ],
+        networkAccounts: [['alice', 'AliceAcct']],
+      });
+      expect(seededState.getChannel('#preloaded')?.topic).toBe('hello');
+      expect(seededState.getAccountForNick('alice')).toBe('AliceAcct');
+    });
+  });
 });

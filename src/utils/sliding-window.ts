@@ -14,6 +14,19 @@ export class SlidingWindowCounter {
   private windows = new Map<string, number[]>();
 
   /**
+   * @param initialWindows Optional seed map of `key → timestamps[]`. Copies
+   *   each timestamp list so caller arrays stay immutable while the internal
+   *   arrays remain mutable (the check/sweep paths rewrite them in place).
+   *   Unblocks tests that need a counter pre-loaded to "just under threshold"
+   *   without replaying N `check()` calls.
+   */
+  constructor(initialWindows?: Iterable<readonly [string, readonly number[]]>) {
+    if (initialWindows) {
+      this.windows = new Map(Array.from(initialWindows, ([k, v]) => [k, [...v]]));
+    }
+  }
+
+  /**
    * Record one event for `key` and return true if the total count in the last
    * `windowMs` milliseconds (including this event) exceeds `limit`.
    */

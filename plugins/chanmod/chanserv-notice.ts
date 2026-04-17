@@ -56,6 +56,27 @@ export interface ProbeState {
   /** Channel that the current multi-line INFO response is about (set on "Information for channel #xxx:"). */
   activeInfoChannel: string | null;
   /**
+   * Anope-only: channels where ACCESS LIST returned empty while the INFO
+   * probe was still pending. We defer committing `'none'` in this case —
+   * INFO might still report the bot as implicit founder. The deferred
+   * commit is flushed when INFO resolves as "not founder", or dropped when
+   * INFO resolves as "bot is founder" (founder result supersedes).
+   *
+   * Each entry also snapshots the chanset value at defer time. On flush,
+   * we re-read the chanset — if the operator ran `.chanset <chan>
+   * chanserv_access founder` during the race window, the snapshot won't
+   * match current, and we skip the flush so the manual override isn't
+   * clobbered. Keys are ircLower channel names.
+   */
+  deferredAnopeNoAccess: Map<string, { why: string; chansetSnapshot: string | undefined }>;
+  /**
+   * Callback that commits a deferred no-access result, invoked by the INFO
+   * probe timeout path to flush a leaked `deferredAnopeNoAccess` entry.
+   * Registered by `setupChanServNotice` when the backend is Anope; null on
+   * Atheme (which has no defer path).
+   */
+  commitDeferredNoAccess: ((channel: string, why: string) => void) | null;
+  /**
    * Timeout timers for probe responses. Using a Set (instead of an array)
    * so self-removal on fire is O(1); see audit finding W-CM3.
    */
@@ -70,6 +91,8 @@ export function createProbeState(): ProbeState {
     pendingAnopeProbes: new Map(),
     pendingInfoProbes: new Map(),
     activeInfoChannel: null,
+    deferredAnopeNoAccess: new Map(),
+    commitDeferredNoAccess: null,
     probeTimers: new Set(),
     pendingGetKey: new Map(),
   };
@@ -98,6 +121,22 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
   const { api, config, backend, probeState } = opts;
   const csNick = config.chanserv_nick;
 
+  // Register the Anope deferred-commit flusher so the INFO-probe timeout
+  // path (in markProbePending) can clear a leaked `deferredAnopeNoAccess`
+  // entry and commit the backend's no-access state when INFO never arrives.
+  // Writes the 'none' commit through the backend only — the chanset is left
+  // alone (same semantics as applyAccess(..., sync: false) in the notice
+  // parser, where no-access paths never downgrade an operator's explicit
+  // chanset value).
+  if (!isAthemeBackend(backend)) {
+    probeState.commitDeferredNoAccess = (channel: string, why: string): void => {
+      backend.handleAccessResponse(channel, 0);
+      api.debug(
+        `ChanServ INFO probe for ${channel} timed out — flushed deferred no-access (${why})`,
+      );
+    };
+  }
+
   api.bind('notice', '-', '*', (ctx) => {
     // Only process notices from ChanServ (PM — channel is null)
     if (ctx.channel !== null) return;
@@ -116,6 +155,8 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
     probeState.pendingAthemeProbes.clear();
     probeState.pendingAnopeProbes.clear();
     probeState.pendingInfoProbes.clear();
+    probeState.deferredAnopeNoAccess.clear();
+    probeState.commitDeferredNoAccess = null;
     probeState.pendingGetKey.clear();
     probeState.activeInfoChannel = null;
     for (const t of probeState.probeTimers) clearTimeout(t);
@@ -147,6 +188,19 @@ export function markProbePending(
   const timer = setTimeout(() => {
     if (probes.has(key)) {
       probes.delete(key);
+      // Anope INFO probe timeout: flush any deferred ACCESS-LIST-empty commit
+      // that was waiting for INFO to resolve. Without this, the deferred
+      // entry leaks forever and the backend never records the 'none' state.
+      if (backendType === 'anope-info') {
+        const entry = probeState.deferredAnopeNoAccess.get(key);
+        if (entry !== undefined) {
+          probeState.deferredAnopeNoAccess.delete(key);
+          probeState.commitDeferredNoAccess?.(channel, entry.why);
+          probeState.activeInfoChannel = null;
+          probeState.probeTimers.delete(timer);
+          return;
+        }
+      }
       api.debug(
         `ChanServ access probe for ${channel} timed out — no services response (access remains 'none')`,
       );

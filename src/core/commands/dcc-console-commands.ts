@@ -1,6 +1,6 @@
 // HexBot — DCC console flag commands
 // Registers the `.console` dot-command for managing per-session DCC log
-// subscription flags. Eggdrop-style `+mojkpbsdw` letters are parsed and
+// subscription flags. Flags `+mojkpbsdw` letters are parsed and
 // persisted per handle via the manager's ConsoleFlagStore.
 import type { CommandContext, CommandHandler } from '../../command-handler';
 import type { BotDatabase } from '../../database';

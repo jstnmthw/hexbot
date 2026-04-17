@@ -1,4 +1,3 @@
-// chanmod — Anope ChanServ ProtectionBackend implementation
 import type { PluginAPI } from '../../src/types';
 import type { ProbeState } from './chanserv-notice';
 import { getBotNick } from './helpers';

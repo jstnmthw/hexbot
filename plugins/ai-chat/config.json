@@ -1,0 +1,97 @@
+{
+  "provider": "gemini",
+  "api_key_env": "HEX_GEMINI_API_KEY",
+  "model": "gemini-2.5-flash-lite",
+  "temperature": 0.9,
+  "max_output_tokens": 256,
+
+  "triggers": {
+    "direct_address": true,
+    "command": true,
+    "command_prefix": "!ai",
+    "keywords": [],
+    "random_chance": 0,
+    "engagement_seconds": 60
+  },
+
+  "channel_profiles": {},
+
+  "character": "friendly",
+  "characters_dir": "characters",
+  "channel_characters": {},
+
+  "context": {
+    "max_messages": 50,
+    "max_tokens": 4000,
+    "ttl_minutes": 60
+  },
+
+  "rate_limits": {
+    "user_burst": 3,
+    "user_refill_seconds": 12,
+    "global_rpm": 10,
+    "global_rpd": 800,
+    "rpm_backpressure_pct": 80,
+    "ambient_per_channel_per_hour": 5,
+    "ambient_global_per_hour": 20
+  },
+
+  "token_budgets": {
+    "per_user_daily": 50000,
+    "global_daily": 200000
+  },
+
+  "output": {
+    "max_lines": 4,
+    "max_line_length": 440,
+    "inter_line_delay_ms": 500,
+    "strip_urls": false
+  },
+
+  "permissions": {
+    "required_flag": "-",
+    "admin_flag": "m",
+    "ignore_list": [],
+    "ignore_bots": true,
+    "bot_nick_patterns": ["*bot", "*Bot", "*BOT"]
+  },
+
+  "ambient": {
+    "enabled": false,
+    "idle": {
+      "after_minutes": 15,
+      "chance": 0.3,
+      "min_users": 2
+    },
+    "unanswered_questions": {
+      "enabled": true,
+      "wait_seconds": 90
+    },
+    "chattiness": 0.08,
+    "interests": [],
+    "event_reactions": {
+      "join_wb": false,
+      "topic_change": false
+    }
+  },
+
+  "security": {
+    "privilege_gating": false,
+    "privileged_mode_threshold": "h",
+    "privileged_required_flag": "m",
+    "disable_when_privileged": false,
+    "disable_when_founder": true
+  },
+
+  "sessions": {
+    "enabled": true,
+    "inactivity_timeout_minutes": 10,
+    "games_dir": "games"
+  },
+
+  "ollama": {
+    "base_url": "http://127.0.0.1:11434",
+    "request_timeout_ms": 60000,
+    "use_server_tokenizer": false
+  }
+}

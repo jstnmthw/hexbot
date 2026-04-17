@@ -32,7 +32,10 @@ interface PluginModule {
   name: string;
   version?: unknown;
   description?: unknown;
-  init: (api: PluginAPI) => void | Promise<void>;
+  // The second arg is an optional, plugin-specific deps bag forwarded from
+  // `load(..., deps)`. Plugins that don't take deps declare `init(api)` and
+  // the extra arg is simply ignored at the JS level.
+  init: (api: PluginAPI, deps?: unknown) => void | Promise<void>;
   teardown?: () => void | Promise<void>;
 }
 
@@ -222,8 +225,21 @@ export class PluginLoader {
     return results;
   }
 
-  /** Load a single plugin from a file path. */
-  async load(pluginPath: string, pluginsConfig?: PluginsConfig): Promise<LoadResult> {
+  /**
+   * Load a single plugin from a file path.
+   *
+   * `deps` is an optional, plugin-specific dependencies bag that gets
+   * forwarded to the plugin's `init(api, deps)` call. Tests use this to
+   * inject mock collaborators (e.g. a fake AIProvider) without needing a
+   * module-local test hatch inside the plugin. Production callers
+   * (`loadAll`, `reload`) pass no deps, so plugins receive `undefined` and
+   * construct real dependencies from config as before.
+   */
+  async load(
+    pluginPath: string,
+    pluginsConfig?: PluginsConfig,
+    deps?: unknown,
+  ): Promise<LoadResult> {
     const absPath = resolve(pluginPath);
 
     // Path traversal guard — reject any plugin path that resolves outside
@@ -310,7 +326,7 @@ export class PluginLoader {
 
     // Call init()
     try {
-      const result = mod.init(api);
+      const result = mod.init(api, deps);
       if (result instanceof Promise) {
         await result;
       }
