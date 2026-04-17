@@ -35,9 +35,22 @@ export interface RateCheckResult {
   limitedBy?: 'user' | 'rpm' | 'rpd';
 }
 
-interface UserBucket {
+export interface UserBucket {
   tokens: number;
   lastRefill: number;
+}
+
+/**
+ * Optional per-field seed for RateLimiter state. Every field is optional so
+ * tests can pre-load a specific window/bucket without replaying N `record()`
+ * calls; each list is copied defensively to keep the caller's input immutable.
+ */
+export interface RateLimiterInitialState {
+  userBuckets?: Iterable<readonly [string, UserBucket]>;
+  minuteWindow?: readonly number[];
+  dayWindow?: readonly number[];
+  ambientChannelWindows?: Iterable<readonly [string, readonly number[]]>;
+  ambientGlobalWindow?: readonly number[];
 }
 
 /** Layered rate limiter: per-user token bucket + RPM + RPD + ambient budgets. All state is in-memory. */
@@ -48,7 +61,22 @@ export class RateLimiter {
   private ambientChannelWindows = new Map<string, number[]>();
   private ambientGlobalWindow: number[] = [];
 
-  constructor(private config: RateLimiterConfig) {}
+  constructor(
+    private config: RateLimiterConfig,
+    initialState?: RateLimiterInitialState,
+  ) {
+    if (initialState?.userBuckets) this.userBuckets = new Map(initialState.userBuckets);
+    if (initialState?.minuteWindow) this.minuteWindow = [...initialState.minuteWindow];
+    if (initialState?.dayWindow) this.dayWindow = [...initialState.dayWindow];
+    if (initialState?.ambientChannelWindows) {
+      this.ambientChannelWindows = new Map(
+        Array.from(initialState.ambientChannelWindows, ([k, v]) => [k, [...v]]),
+      );
+    }
+    if (initialState?.ambientGlobalWindow) {
+      this.ambientGlobalWindow = [...initialState.ambientGlobalWindow];
+    }
+  }
 
   /** Update the active limits (hot-reload). */
   setConfig(config: RateLimiterConfig): void {

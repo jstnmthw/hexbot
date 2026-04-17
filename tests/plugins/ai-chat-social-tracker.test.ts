@@ -271,4 +271,21 @@ describe('SocialTracker', () => {
       expect(st.getState('#new')).toBeDefined();
     });
   });
+
+  describe('initialChannels seed', () => {
+    it('pre-populates channel state from the constructor seed', () => {
+      const seededState = {
+        activity: 'normal' as const,
+        messageTimestamps: [1_000_000],
+        activeUsers: new Map([['alice', { lastSeen: 1_000_000, messageCount: 5 }]]),
+        lastMessageAt: 1_000_000,
+        lastBotMessage: 0,
+        lastWasBot: false,
+        pendingQuestions: [{ nick: 'alice', text: 'why?', at: 1_000_000 }],
+      };
+      const st = new SocialTracker(null, () => 1_000_000, [['#seeded', seededState]]);
+      expect(st.getState('#seeded')?.lastMessageAt).toBe(1_000_000);
+      expect(st.getUnansweredQuestions('#seeded', 0)).toHaveLength(1);
+    });
+  });
 });

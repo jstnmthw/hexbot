@@ -137,4 +137,20 @@ describe('ContextManager', () => {
     for (let i = 5; i < 10; i++) mgr.addMessage('#c', 'a', `m${i}`, false);
     expect(mgr.size('#c')).toBe(10);
   });
+
+  describe('initialChannels seed', () => {
+    it('pre-populates a channel buffer from the constructor seed', () => {
+      const now = 1_000_000;
+      const seeded = [
+        { nick: 'alice', text: 'hi', isBot: false, timestamp: now - 1_000 },
+        { nick: 'hexbot', text: 'hello', isBot: true, timestamp: now - 500 },
+      ];
+      const mgr = new ContextManager({ maxMessages: 5, maxTokens: 100, ttlMs: 60_000 }, () => now, [
+        ['#c', seeded],
+      ]);
+      expect(mgr.size('#c')).toBe(2);
+      const msgs = mgr.getContext('#c', 'alice');
+      expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant']);
+    });
+  });
 });

@@ -28,14 +28,19 @@ const RATES = {
 /** How long a quiet window must last to recharge energy (ms). */
 const QUIET_WINDOW_MS = 15 * 60_000;
 
+const DEFAULT_MOOD: BotMood = { energy: 0.7, engagement: 0.5, patience: 0.8, humor: 0.5 };
+
 export class MoodEngine {
   private mood: BotMood;
   private lastUpdate: number;
   private lastInteraction: number;
 
-  constructor(private now: () => number = Date.now) {
+  constructor(
+    private now: () => number = Date.now,
+    initialMood?: Partial<BotMood>,
+  ) {
     const t = this.now();
-    this.mood = { energy: 0.7, engagement: 0.5, patience: 0.8, humor: 0.5 };
+    this.mood = { ...DEFAULT_MOOD, ...initialMood };
     this.lastUpdate = t;
     this.lastInteraction = t;
   }

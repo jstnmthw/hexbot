@@ -16,8 +16,7 @@ import { ContextManager } from './context-manager';
 import { listGames, loadGamePrompt, resolveGamesDir } from './games-loader';
 import { MoodEngine } from './mood';
 import { applyCharacterStyle, formatResponse } from './output-formatter';
-import { createProvider } from './providers';
-import { ResilientProvider } from './providers/resilient';
+import { createResilientProvider } from './providers';
 import type { AIMessage, AIProvider, AIProviderError } from './providers/types';
 import { RateLimiter } from './rate-limiter';
 import { type SessionIdentity, SessionManager } from './session-manager';
@@ -33,32 +32,49 @@ export const description = 'AI-powered chat with pluggable LLM providers';
 // Module state (reset on each init/teardown)
 // ---------------------------------------------------------------------------
 
+/**
+ * Named bag of per-init mutable collections. Folds what used to be two
+ * module-level `let`s (characters) + `const` (engagementMap) so they can be
+ * injected as a single unit via AIChatDeps for tests that want per-case
+ * isolation without a full teardown/init cycle.
+ */
+export interface PluginState {
+  /** Tracks per-channel per-nick engagement timestamps (when bot last responded). */
+  engagement: Map<string, number>;
+  /** Loaded character definitions, keyed by character name. */
+  characters: Map<string, Character>;
+}
+
+/**
+ * Optional dependencies a caller can inject at init() time. Every field is
+ * optional; anything absent is instantiated with its production default. Used
+ * by tests that want to pass a spy/fake for one or more collaborators without
+ * touching the rest, and by the test-deps hatch below.
+ */
+export interface AIChatDeps {
+  provider?: AIProvider | null;
+  contextManager?: ContextManager;
+  rateLimiter?: RateLimiter;
+  tokenTracker?: TokenTracker;
+  sessionManager?: SessionManager | null;
+  socialTracker?: SocialTracker;
+  moodEngine?: MoodEngine;
+  ambientEngine?: AmbientEngine | null;
+  state?: PluginState;
+}
+
 let contextManager: ContextManager | null = null;
 let rateLimiter: RateLimiter | null = null;
 let tokenTracker: TokenTracker | null = null;
 let sessionManager: SessionManager | null = null;
 let provider: AIProvider | null = null;
-let characters: Map<string, Character> = new Map();
 let socialTracker: SocialTracker | null = null;
 let ambientEngine: AmbientEngine | null = null;
 let moodEngine: MoodEngine | null = null;
-/** Tracks per-channel per-nick engagement timestamps (when bot last responded to them). */
-const engagementMap = new Map<string, number>();
+let state: PluginState | null = null;
 /** Periodic timer that expires idle game sessions. */
 let sessionExpiryInterval: ReturnType<typeof setInterval> | null = null;
 let gamesDir: string = '';
-
-/**
- * Test-only hook: inject a mock provider factory before init runs. Module-local —
- * tests must import this from the same bundle the plugin loader loads
- * (`plugins/ai-chat/dist/index.js`) so the variable they write is the one
- * init() reads. Reading/writing globalThis is forbidden by docs/SECURITY.md
- * §4.1 (plugin isolation).
- */
-let testProviderFactory: (() => AIProvider) | null = null;
-export function __setProviderOverrideForTesting(factory: (() => AIProvider) | null): void {
-  testProviderFactory = factory;
-}
 
 /**
  * Max bytes of channel text allowed into in-memory buffers (context, social
@@ -401,22 +417,24 @@ function isFounderPostGate(
 // ---------------------------------------------------------------------------
 
 function isEngaged(channel: string, nick: string, windowMs: number): boolean {
-  if (windowMs <= 0) return false;
+  if (windowMs <= 0 || !state) return false;
   const key = `${channel.toLowerCase()}:${nick.toLowerCase()}`;
-  const lastAt = engagementMap.get(key);
+  const lastAt = state.engagement.get(key);
   if (lastAt === undefined) return false;
   return Date.now() - lastAt < windowMs;
 }
 
 function recordEngagement(channel: string, nick: string): void {
+  if (!state) return;
   const now = Date.now();
-  engagementMap.set(`${channel.toLowerCase()}:${nick.toLowerCase()}`, now);
+  const map = state.engagement;
+  map.set(`${channel.toLowerCase()}:${nick.toLowerCase()}`, now);
   // Opportunistic TTL eviction — entries that have aged past the typical
   // engagement window aren't useful and would leak forever otherwise.
-  if (engagementMap.size > 1000) {
+  if (map.size > 1000) {
     const cutoff = now - 10 * 60_000;
-    for (const [k, t] of engagementMap) {
-      if (t < cutoff) engagementMap.delete(k);
+    for (const [k, t] of map) {
+      if (t < cutoff) map.delete(k);
     }
   }
 }
@@ -491,24 +509,36 @@ function activeCharacter(
     }
   }
 
-  return { character: getCharacter(characters, name), language };
+  return { character: getCharacter(state?.characters ?? new Map(), name), language };
 }
 
 // ---------------------------------------------------------------------------
 // Plugin entry
 // ---------------------------------------------------------------------------
 
-export async function init(api: PluginAPI): Promise<void> {
+export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
   const cfg = parseConfig(api.config);
+  // `deps` is typed as unknown at the plugin-loader boundary (the loader
+  // forwards whatever the caller passed without inspecting it). Cast to the
+  // narrow AIChatDeps here — the loader is the only caller that supplies a
+  // value, and production callers pass nothing.
+  const merged: AIChatDeps = (deps as AIChatDeps | undefined) ?? {};
 
-  rateLimiter = new RateLimiter(cfg.rateLimits);
-  tokenTracker = new TokenTracker(api.db, cfg.tokenBudgets);
-  contextManager = new ContextManager({
-    maxMessages: cfg.context.maxMessages,
-    maxTokens: cfg.context.maxTokens,
-    ttlMs: cfg.context.ttlMs,
-  });
-  sessionManager = cfg.sessions.enabled ? new SessionManager(cfg.sessions.inactivityMs) : null;
+  rateLimiter = merged.rateLimiter ?? new RateLimiter(cfg.rateLimits);
+  tokenTracker = merged.tokenTracker ?? new TokenTracker(api.db, cfg.tokenBudgets);
+  contextManager =
+    merged.contextManager ??
+    new ContextManager({
+      maxMessages: cfg.context.maxMessages,
+      maxTokens: cfg.context.maxTokens,
+      ttlMs: cfg.context.ttlMs,
+    });
+  sessionManager =
+    merged.sessionManager !== undefined
+      ? merged.sessionManager
+      : cfg.sessions.enabled
+        ? new SessionManager(cfg.sessions.inactivityMs)
+        : null;
   gamesDir = resolveGamesDir(cfg.sessions.gamesDir);
 
   // Periodic sweep: expire game sessions past the inactivity timeout. Without
@@ -521,24 +551,34 @@ export async function init(api: PluginAPI): Promise<void> {
     }, 60_000);
   }
 
-  // Load character definitions
-  const charsDir = resolveCharactersDir(cfg.charactersDir);
-  characters = loadCharacters(charsDir, (msg) => api.warn(msg));
-  api.log(`Loaded ${characters.size} character(s): ${[...characters.keys()].join(', ')}`);
+  // Plugin state: engagement map + loaded characters. When a test injects
+  // state, we honour it as-is (including an empty characters map); when not
+  // injected, build a fresh state and populate characters from disk.
+  if (merged.state) {
+    state = merged.state;
+  } else {
+    const charsDir = resolveCharactersDir(cfg.charactersDir);
+    state = {
+      engagement: new Map(),
+      characters: loadCharacters(charsDir, (msg) => api.warn(msg)),
+    };
+  }
+  api.log(
+    `Loaded ${state.characters.size} character(s): ${[...state.characters.keys()].join(', ')}`,
+  );
 
   // Social tracker for channel activity + per-user interaction stats
-  socialTracker = new SocialTracker(api.db);
+  socialTracker = merged.socialTracker ?? new SocialTracker(api.db);
 
   // Mood engine for temporal variety
-  moodEngine = new MoodEngine();
+  moodEngine = merged.moodEngine ?? new MoodEngine();
 
   // Initialize provider
-  provider = null;
-  const override = testProviderFactory;
-  if (override) {
-    provider = override();
-    api.log(`Using injected provider for testing: ${provider.name}`);
+  if (merged.provider !== undefined) {
+    provider = merged.provider;
+    if (provider) api.log(`Using injected provider: ${provider.name}`);
   } else {
+    provider = null;
     const apiKey = cfg.apiKey;
     if (!apiKey) {
       api.warn(
@@ -546,14 +586,12 @@ export async function init(api: PluginAPI): Promise<void> {
       );
     } else {
       try {
-        const p = createProvider(cfg.provider);
-        await p.initialize({
+        provider = await createResilientProvider(cfg.provider, {
           apiKey,
           model: cfg.model,
           maxOutputTokens: cfg.maxOutputTokens,
           temperature: cfg.temperature,
         });
-        provider = new ResilientProvider(p);
         api.log(`Initialized ${cfg.provider} provider with model ${cfg.model}`);
       } catch (err) {
         api.error(`Failed to initialize provider: ${err instanceof Error ? err.message : err}`);
@@ -586,8 +624,12 @@ export async function init(api: PluginAPI): Promise<void> {
   // -----------------------------------------------------------------------
   // Ambient participation engine
   // -----------------------------------------------------------------------
-  if (cfg.ambient.enabled) {
+  if (merged.ambientEngine !== undefined) {
+    ambientEngine = merged.ambientEngine;
+  } else if (cfg.ambient.enabled) {
     ambientEngine = new AmbientEngine(cfg.ambient, socialTracker);
+  }
+  if (ambientEngine && cfg.ambient.enabled) {
     ambientEngine.start(async (channel, kind, prompt) => {
       if (!rateLimiter || !rateLimiter.checkAmbient(channel)) return;
       const { character, language } = activeCharacter(api, cfg, channel);
@@ -1103,10 +1145,11 @@ async function handleSubcommand(
       }
       if (!hasAdmin) return true;
       const name = subArgs.toLowerCase();
-      if (!characters.has(name)) {
+      const charMap = state?.characters ?? new Map();
+      if (!charMap.has(name)) {
         ctx.reply(
           `Unknown character: ${api.stripFormatting(subArgs)}. ` +
-            `Available: ${[...characters.keys()].join(', ')}`,
+            `Available: ${[...charMap.keys()].join(', ')}`,
         );
         return true;
       }
@@ -1117,7 +1160,8 @@ async function handleSubcommand(
       return true;
     }
     case 'characters': {
-      ctx.reply(`Available: ${[...characters.keys()].join(', ')}`);
+      const charMap = state?.characters ?? new Map();
+      ctx.reply(`Available: ${[...charMap.keys()].join(', ')}`);
       return true;
     }
     case 'model': {
@@ -1215,11 +1259,10 @@ export function teardown(): void {
   contextManager = null;
   sessionManager = null;
   provider = null;
-  characters = new Map();
   socialTracker = null;
   ambientEngine = null;
   moodEngine = null;
-  engagementMap.clear();
+  state = null;
   gamesDir = '';
 }
 

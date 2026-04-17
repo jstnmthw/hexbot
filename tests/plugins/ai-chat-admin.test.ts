@@ -2,11 +2,7 @@
 import { resolve } from 'node:path';
 import { type Mock, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Provider hook must come from the dist bundle so the module-local `let` the
-// test writes is the same one the plugin loader reads. Dist has no .d.ts
-// (see plugins/ai-chat/tsup.config.ts), so the import is untyped.
-// @ts-expect-error - dist has no .d.ts; value-only import
-import * as aiChatDist from '../../plugins/ai-chat/dist/index.js';
+import type { AIChatDeps } from '../../plugins/ai-chat/index';
 import type { AIProvider } from '../../plugins/ai-chat/providers/types';
 import { Permissions } from '../../src/core/permissions';
 import { BotDatabase } from '../../src/database';
@@ -14,10 +10,6 @@ import { EventDispatcher } from '../../src/dispatcher';
 import { BotEventBus } from '../../src/event-bus';
 import { PluginLoader } from '../../src/plugin-loader';
 import type { BotConfig, HandlerContext, PluginsConfig } from '../../src/types';
-
-const __setProviderOverrideForTesting = (
-  aiChatDist as { __setProviderOverrideForTesting: (f: (() => AIProvider) | null) => void }
-).__setProviderOverrideForTesting;
 
 const BOT_CONFIG: BotConfig = {
   irc: {
@@ -83,14 +75,17 @@ describe('ai-chat admin commands', () => {
   let mockProvider: AIProvider;
   let permissions: Permissions;
 
-  async function loadPlugin(pluginsConfig?: PluginsConfig): Promise<void> {
-    const result = await loader.load(resolve('./plugins/ai-chat/dist/index.js'), pluginsConfig);
+  async function loadPlugin(pluginsConfig?: PluginsConfig, deps?: AIChatDeps): Promise<void> {
+    const result = await loader.load(
+      resolve('./plugins/ai-chat/dist/index.js'),
+      pluginsConfig,
+      deps,
+    );
     expect(result.status).toBe('ok');
   }
 
   beforeEach(async () => {
     mockProvider = makeMockProvider();
-    __setProviderOverrideForTesting(() => mockProvider);
     db = new BotDatabase(':memory:');
     db.open();
     dispatcher = new EventDispatcher();
@@ -107,13 +102,12 @@ describe('ai-chat admin commands', () => {
       botConfig: BOT_CONFIG,
       ircClient: null,
     });
-    await loadPlugin();
+    await loadPlugin(undefined, { provider: mockProvider });
   });
 
   afterEach(async () => {
     if (loader.isLoaded('ai-chat')) await loader.unload('ai-chat');
     db.close();
-    __setProviderOverrideForTesting(null);
   });
 
   // ---- stats ----
@@ -262,7 +256,6 @@ describe('ai-chat without a provider', () => {
   let db: BotDatabase;
 
   beforeEach(async () => {
-    __setProviderOverrideForTesting(null);
     delete process.env.HEX_GEMINI_API_KEY;
     delete process.env.GEMINI_API_KEY;
     delete process.env.AI_CHAT_API_KEY;
@@ -302,7 +295,6 @@ describe('ai-chat sessions disabled', () => {
   let db: BotDatabase;
 
   beforeEach(async () => {
-    __setProviderOverrideForTesting(() => makeMockProvider());
     db = new BotDatabase(':memory:');
     db.open();
     dispatcher = new EventDispatcher();
@@ -316,16 +308,17 @@ describe('ai-chat sessions disabled', () => {
       botConfig: BOT_CONFIG,
       ircClient: null,
     });
-    const result = await loader.load(resolve('./plugins/ai-chat/dist/index.js'), {
-      'ai-chat': { config: { sessions: { enabled: false } } },
-    });
+    const result = await loader.load(
+      resolve('./plugins/ai-chat/dist/index.js'),
+      { 'ai-chat': { config: { sessions: { enabled: false } } } },
+      { provider: makeMockProvider() } satisfies AIChatDeps,
+    );
     expect(result.status).toBe('ok');
   });
 
   afterEach(async () => {
     if (loader.isLoaded('ai-chat')) await loader.unload('ai-chat');
     db.close();
-    __setProviderOverrideForTesting(null);
   });
 
   it('!ai games replies "Sessions are disabled"', async () => {
@@ -355,7 +348,6 @@ describe('ai-chat budget/session edge paths', () => {
 
   beforeEach(async () => {
     mockProvider = makeMockProvider();
-    __setProviderOverrideForTesting(() => mockProvider);
     db = new BotDatabase(':memory:');
     db.open();
     dispatcher = new EventDispatcher();
@@ -370,15 +362,16 @@ describe('ai-chat budget/session edge paths', () => {
       ircClient: null,
     });
     // Tiny per-user budget to force budget_exceeded
-    await loader.load(resolve('./plugins/ai-chat/dist/index.js'), {
-      'ai-chat': { config: { token_budgets: { per_user_daily: 1, global_daily: 100 } } },
-    });
+    await loader.load(
+      resolve('./plugins/ai-chat/dist/index.js'),
+      { 'ai-chat': { config: { token_budgets: { per_user_daily: 1, global_daily: 100 } } } },
+      { provider: mockProvider } satisfies AIChatDeps,
+    );
   });
 
   afterEach(async () => {
     if (loader.isLoaded('ai-chat')) await loader.unload('ai-chat');
     db.close();
-    __setProviderOverrideForTesting(null);
   });
 
   it('command user gets "budget exceeded" notice when over limit', async () => {
@@ -403,7 +396,6 @@ describe('ai-chat play subcommand edge cases', () => {
   let db: BotDatabase;
 
   beforeEach(async () => {
-    __setProviderOverrideForTesting(() => makeMockProvider());
     db = new BotDatabase(':memory:');
     db.open();
     dispatcher = new EventDispatcher();
@@ -417,13 +409,14 @@ describe('ai-chat play subcommand edge cases', () => {
       botConfig: BOT_CONFIG,
       ircClient: null,
     });
-    await loader.load(resolve('./plugins/ai-chat/dist/index.js'));
+    await loader.load(resolve('./plugins/ai-chat/dist/index.js'), undefined, {
+      provider: makeMockProvider(),
+    } satisfies AIChatDeps);
   });
 
   afterEach(async () => {
     if (loader.isLoaded('ai-chat')) await loader.unload('ai-chat');
     db.close();
-    __setProviderOverrideForTesting(null);
   });
 
   it('!ai play with no args shows usage', async () => {
@@ -441,7 +434,6 @@ describe('ai-chat channel_characters', () => {
 
   beforeEach(async () => {
     mockProvider = makeMockProvider();
-    __setProviderOverrideForTesting(() => mockProvider);
     db = new BotDatabase(':memory:');
     db.open();
     dispatcher = new EventDispatcher();
@@ -455,23 +447,26 @@ describe('ai-chat channel_characters', () => {
       botConfig: BOT_CONFIG,
       ircClient: null,
     });
-    const result = await loader.load(resolve('./plugins/ai-chat/dist/index.js'), {
-      'ai-chat': {
-        config: {
-          channel_characters: {
-            '#sarcastic': 'sarcastic',
-            '#french': { character: 'friendly', language: 'French' },
+    const result = await loader.load(
+      resolve('./plugins/ai-chat/dist/index.js'),
+      {
+        'ai-chat': {
+          config: {
+            channel_characters: {
+              '#sarcastic': 'sarcastic',
+              '#french': { character: 'friendly', language: 'French' },
+            },
           },
         },
       },
-    });
+      { provider: mockProvider } satisfies AIChatDeps,
+    );
     expect(result.status).toBe('ok');
   });
 
   afterEach(async () => {
     if (loader.isLoaded('ai-chat')) await loader.unload('ai-chat');
     db.close();
-    __setProviderOverrideForTesting(null);
   });
 
   it('uses string-form channel_characters map', async () => {

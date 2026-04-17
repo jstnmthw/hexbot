@@ -254,4 +254,34 @@ describe('RateLimiter', () => {
       expect(rl.check('alice', 1_100).allowed).toBe(true);
     });
   });
+
+  describe('initialState seed', () => {
+    it('pre-populates every window + bucket via constructor seed', () => {
+      const now = 1_000_000;
+      const rl = new RateLimiter(
+        {
+          userBurst: 3,
+          userRefillSeconds: 12,
+          globalRpm: 2,
+          globalRpd: 3,
+          rpmBackpressurePct: 80,
+          ambientPerChannelPerHour: 2,
+          ambientGlobalPerHour: 2,
+        },
+        {
+          userBuckets: [['alice', { tokens: 0, lastRefill: now }]],
+          minuteWindow: [now - 1_000, now - 500],
+          dayWindow: [now - 1_000, now - 500, now - 100],
+          ambientChannelWindows: [['#chan', [now - 1_000, now - 500]]],
+          ambientGlobalWindow: [now - 1_000, now - 500],
+        },
+      );
+      // RPD (3 already) is the first limit hit.
+      const res = rl.check('bob', now);
+      expect(res.allowed).toBe(false);
+      expect(res.limitedBy).toBe('rpd');
+      // Ambient budgets are also pre-filled — both channel and global caps hit.
+      expect(rl.checkAmbient('#chan', now)).toBe(false);
+    });
+  });
 });

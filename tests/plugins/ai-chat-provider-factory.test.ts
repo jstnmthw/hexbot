@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { createProvider } from '../../plugins/ai-chat/providers';
+import { createProvider, createResilientProvider } from '../../plugins/ai-chat/providers';
 import { GeminiProvider } from '../../plugins/ai-chat/providers/gemini';
+import { ResilientProvider } from '../../plugins/ai-chat/providers/resilient';
 import { AIProviderError } from '../../plugins/ai-chat/providers/types';
 
 describe('createProvider', () => {
@@ -11,5 +12,20 @@ describe('createProvider', () => {
 
   it('throws AIProviderError for unknown types', () => {
     expect(() => createProvider('unknown')).toThrow(AIProviderError);
+  });
+});
+
+describe('createResilientProvider', () => {
+  it('initializes the provider and wraps it in ResilientProvider', async () => {
+    const initSpy = vi.spyOn(GeminiProvider.prototype, 'initialize').mockResolvedValue(undefined);
+    const wrapped = await createResilientProvider('gemini', {
+      apiKey: 'x',
+      model: 'm',
+      maxOutputTokens: 32,
+      temperature: 0.5,
+    });
+    expect(wrapped).toBeInstanceOf(ResilientProvider);
+    expect(initSpy).toHaveBeenCalledOnce();
+    initSpy.mockRestore();
   });
 });

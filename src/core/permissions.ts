@@ -99,10 +99,22 @@ export class Permissions {
   private casemapping: Casemapping = 'rfc1459';
   private accountLookup: AccountLookup | null = null;
 
-  constructor(db?: BotDatabase | null, logger?: LoggerLike | null, eventBus?: BotEventBus | null) {
+  /**
+   * @param initialUsers Optional seed for the in-memory user map. Keys must
+   *   be lowercase handles (the same key space `addUser` uses). Lets tests
+   *   pre-load a permission matrix in one constructor call instead of
+   *   chaining multiple `addUser`/`addHostmask`/`setGlobalFlags` calls.
+   */
+  constructor(
+    db?: BotDatabase | null,
+    logger?: LoggerLike | null,
+    eventBus?: BotEventBus | null,
+    initialUsers?: Iterable<readonly [string, UserRecord]>,
+  ) {
     this.db = db ?? null;
     this.logger = logger?.child('permissions') ?? null;
     this.eventBus = eventBus ?? null;
+    if (initialUsers) this.users = new Map(initialUsers);
   }
 
   setCasemapping(cm: Casemapping): void {

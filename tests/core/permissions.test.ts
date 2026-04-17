@@ -970,4 +970,24 @@ describe('Permissions', () => {
       expect(keys).toEqual(['alice']);
     });
   });
+
+  describe('initialUsers seed', () => {
+    it('pre-populates the user map from the constructor seed', () => {
+      const seeded = new Permissions(null, null, null, [
+        [
+          'admin',
+          {
+            handle: 'admin',
+            hostmasks: ['*!admin@example.com'],
+            global: 'nm',
+            channels: { '#chan': 'o' },
+          },
+        ],
+      ]);
+      const user = seeded.getUser('admin');
+      expect(user).not.toBeNull();
+      expect(user!.global).toBe('nm');
+      expect(user!.channels['#chan']).toBe('o');
+    });
+  });
 });

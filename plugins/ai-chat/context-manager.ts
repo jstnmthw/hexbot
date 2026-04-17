@@ -36,7 +36,14 @@ export class ContextManager {
   constructor(
     private config: ContextManagerConfig,
     private now: () => number = Date.now,
-  ) {}
+    initialChannels?: Iterable<readonly [string, readonly ContextEntry[]]>,
+  ) {
+    if (initialChannels) {
+      // Copy each entry array so the caller's arrays stay immutable and our
+      // internal buffers remain mutable (splice/push during add/prune).
+      this.channels = new Map(Array.from(initialChannels, ([k, v]) => [k, [...v]]));
+    }
+  }
 
   /** Update the active tunables. */
   setConfig(config: ContextManagerConfig): void {

@@ -74,7 +74,10 @@ export class SocialTracker {
   constructor(
     private db: PluginDB | null = null,
     private now: () => number = Date.now,
-  ) {}
+    initialChannels?: Iterable<readonly [string, ChannelSocialState]>,
+  ) {
+    if (initialChannels) this.channels = new Map(initialChannels);
+  }
 
   /** Record a message in a channel. Updates activity, user stats, and question tracking. */
   onMessage(channel: string, nick: string, text: string, isBot: boolean): void {
@@ -140,7 +143,7 @@ export class SocialTracker {
   }
 
   /** Get full social state for a channel (for ambient engine integration). */
-  getState(channel: string): ChannelSocialState | undefined {
+  getState(channel: string): Readonly<ChannelSocialState> | undefined {
     return this.channels.get(channel.toLowerCase());
   }
 

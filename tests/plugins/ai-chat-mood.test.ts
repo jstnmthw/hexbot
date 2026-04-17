@@ -134,4 +134,16 @@ describe('MoodEngine', () => {
       expect(drained).toBeLessThan(fresh);
     });
   });
+
+  describe('initialMood seed', () => {
+    it('honours a partial initialMood, falling back to defaults for the rest', () => {
+      const engine = new MoodEngine(() => 1_000_000, { energy: 0.1, humor: 0.9 });
+      const mood = engine.getMood();
+      expect(mood.energy).toBe(0.1);
+      expect(mood.humor).toBe(0.9);
+      // Unspecified fields retain their default values.
+      expect(mood.engagement).toBe(0.5);
+      expect(mood.patience).toBe(0.8);
+    });
+  });
 });
