@@ -2,9 +2,11 @@
 
 AI-powered chat plugin. The bot listens for direct address (e.g. `hexbot: hi`), the `!ai <message>` command, or configured triggers, and replies using an LLM. It also acts as a channel _regular_ — an opinionated character with mood and social awareness — rather than a help-desk bot.
 
-Ships with a pluggable provider adapter — Gemini (free tier) is built in; Claude/OpenAI/Ollama adapters can be added without touching plugin logic.
+Ships with a pluggable provider adapter — Gemini (hosted free tier) and Ollama (self-hosted) are built in; Claude/OpenAI adapters can be added without touching plugin logic.
 
 ## Setup
+
+### Gemini (hosted)
 
 1. Get a free Gemini API key: <https://aistudio.google.com/apikey>. No credit card required.
 
@@ -28,6 +30,46 @@ Ships with a pluggable provider adapter — Gemini (free tier) is built in; Clau
    ```
 
 No key? The plugin loads in degraded mode (every trigger replies with "AI chat is currently unavailable").
+
+### Ollama (self-hosted, private)
+
+Ollama keeps every prompt and response on your own hardware. No API key, no per-request quota — only latency and VRAM.
+
+1. Install Ollama and pull a model. See `docs/plans/ollama-self-hosting.md` for the server-side setup.
+
+2. Point the plugin at the daemon in `config/plugins.json`:
+
+   ```json
+   {
+     "ai-chat": {
+       "config": {
+         "provider": "ollama",
+         "model": "llama3:8b-instruct-q4_K_M",
+         "ollama": {
+           "base_url": "http://127.0.0.1:11434",
+           "request_timeout_ms": 60000,
+           "use_server_tokenizer": false
+         }
+       }
+     }
+   }
+   ```
+
+3. Because local inference has no external quota but is latency-bound, raise the rate-limit ceilings so one slow reply doesn't drain the per-user bucket:
+
+   ```json
+   "rate_limits": {
+     "user_burst": 5,
+     "user_refill_seconds": 6,
+     "global_rpm": 60,
+     "global_rpd": 20000,
+     "rpm_backpressure_pct": 90
+   }
+   ```
+
+4. Reload the plugin — `.reload ai-chat`. Flipping `provider` between `gemini` and `ollama` needs a reload, not a bot restart.
+
+Token counting defaults to a conservative 4-chars-per-token heuristic (no server round-trip). Set `use_server_tokenizer: true` to use `/api/tokenize` instead — slightly more accurate, one extra request per budget check.
 
 ## Triggers
 
@@ -165,6 +207,8 @@ The provider is wrapped in a retry + circuit-breaker layer:
 - 5 consecutive hard failures → circuit opens for 5 minutes (the bot responds "AI is temporarily unavailable" until it closes).
 - Safety-blocked responses get a polite refusal.
 
+With Ollama, `network` errors almost always mean the daemon is down (ECONNREFUSED) rather than an intermittent hiccup, so the circuit trips fast. Recover by bringing the daemon back up (`docker compose up -d` / `systemctl start ollama`) — the breaker half-opens on the next request and closes on success. No bot restart needed. `other`-kind errors (404 model not pulled, 400 bad prompt) are deterministic and do not trip the breaker; fix the config and try again.
+
 ## Security — ChanServ fantasy-command defense
 
 Any channel message starting with `.`, `!`, `/`, `~`, `@`, `%`, `$`, `&`, or `+` can be parsed by IRC services (Atheme ChanServ, Anope BotServ, etc.) as a **fantasy command** and executed against the **sender's** ACL. Since the bot typically has ChanServ op access (for auto-op and takeover recovery), a prompt-injected LLM emitting `.deop admin` would have ChanServ deop the admin on the bot's behalf.
@@ -199,7 +243,7 @@ Operator responsibilities:
 
 ## Privacy
 
-Gemini's free tier may use submitted content to improve models. Don't send sensitive data. If you need stricter privacy, switch to a paid tier (Vertex AI) or a local provider (Ollama adapter planned).
+Gemini's free tier may use submitted content to improve models. Don't send sensitive data. For strict privacy, switch `provider` to `ollama` — every prompt and response stays on your own hardware. The hosted Gemini path remains available for deployments where self-hosting isn't practical (e.g. running the bot off a laptop during travel).
 
 ## Configuration reference
 

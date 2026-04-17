@@ -17,7 +17,12 @@ import { listGames, loadGamePrompt, resolveGamesDir } from './games-loader';
 import { MoodEngine } from './mood';
 import { applyCharacterStyle, formatResponse } from './output-formatter';
 import { createResilientProvider } from './providers';
-import { type AIMessage, type AIProvider, isAIProviderError } from './providers/types';
+import {
+  type AIMessage,
+  type AIProvider,
+  type AIProviderConfig,
+  isAIProviderError,
+} from './providers/types';
 import { RateLimiter } from './rate-limiter';
 import { type SessionIdentity, SessionManager } from './session-manager';
 import { SocialTracker } from './social-tracker';
@@ -154,6 +159,11 @@ interface AiChatConfig {
     disableWhenFounder: boolean;
   };
   sessions: { enabled: boolean; inactivityMs: number; gamesDir: string };
+  ollama: {
+    baseUrl: string;
+    requestTimeoutMs: number;
+    useServerTokenizer: boolean;
+  };
 }
 
 export function parseConfig(raw: Record<string, unknown>): AiChatConfig {
@@ -253,6 +263,14 @@ export function parseConfig(raw: Record<string, unknown>): AiChatConfig {
       inactivityMs: asNum(asRecord(raw.sessions).inactivity_timeout_minutes, 10) * 60_000,
       gamesDir: asString(asRecord(raw.sessions).games_dir, 'games'),
     },
+    ollama: (() => {
+      const o = asRecord(raw.ollama);
+      return {
+        baseUrl: asString(o.base_url, 'http://127.0.0.1:11434'),
+        requestTimeoutMs: asNum(o.request_timeout_ms, 60_000),
+        useServerTokenizer: asBool(o.use_server_tokenizer, false),
+      };
+    })(),
   };
 }
 
@@ -270,6 +288,55 @@ function asString(v: unknown, dflt: string): string {
 }
 function asStringArr(v: unknown, dflt: string[]): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : dflt;
+}
+
+/**
+ * Build an AIProviderConfig for the configured provider, or return null to
+ * signal degraded mode (provider couldn't be initialized). Each provider
+ * branch pulls only the fields it understands — Gemini needs `apiKey`,
+ * Ollama needs `baseUrl`. A missing required field logs a clear warning and
+ * drops the provider instead of throwing, mirroring the prior behaviour
+ * where a missing API key put the plugin in degraded mode.
+ */
+function buildProviderConfig(
+  cfg: AiChatConfig,
+  warn: (msg: string) => void,
+): AIProviderConfig | null {
+  const base = {
+    model: cfg.model,
+    maxOutputTokens: cfg.maxOutputTokens,
+    temperature: cfg.temperature,
+  };
+  switch (cfg.provider) {
+    case 'gemini': {
+      if (!cfg.apiKey) {
+        warn(
+          'No Gemini API key found (set api_key_env → HEX_GEMINI_API_KEY) — ' +
+            'ai-chat plugin is in degraded mode (no LLM calls).',
+        );
+        return null;
+      }
+      return { ...base, apiKey: cfg.apiKey };
+    }
+    case 'ollama': {
+      if (!cfg.ollama.baseUrl) {
+        warn(
+          'Ollama provider requires ollama.base_url — ai-chat plugin is in ' +
+            'degraded mode (no LLM calls).',
+        );
+        return null;
+      }
+      return {
+        ...base,
+        baseUrl: cfg.ollama.baseUrl,
+        requestTimeoutMs: cfg.ollama.requestTimeoutMs,
+        useServerTokenizer: cfg.ollama.useServerTokenizer,
+      };
+    }
+    default:
+      warn(`Unknown ai-chat provider "${cfg.provider}" — plugin is in degraded mode.`);
+      return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -684,19 +751,10 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
     if (provider) api.log(`Using injected provider: ${provider.name}`);
   } else {
     provider = null;
-    const apiKey = cfg.apiKey;
-    if (!apiKey) {
-      api.warn(
-        'No API key found in HEX_GEMINI_API_KEY — ai-chat plugin is in degraded mode (no LLM calls).',
-      );
-    } else {
+    const providerConfig = buildProviderConfig(cfg, (msg) => api.warn(msg));
+    if (providerConfig) {
       try {
-        provider = await createResilientProvider(cfg.provider, {
-          apiKey,
-          model: cfg.model,
-          maxOutputTokens: cfg.maxOutputTokens,
-          temperature: cfg.temperature,
-        });
+        provider = await createResilientProvider(cfg.provider, providerConfig);
         api.log(`Initialized ${cfg.provider} provider with model ${cfg.model}`);
       } catch (err) {
         api.error(`Failed to initialize provider: ${err instanceof Error ? err.message : err}`);

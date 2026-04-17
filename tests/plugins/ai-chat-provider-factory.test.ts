@@ -2,12 +2,17 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createProvider, createResilientProvider } from '../../plugins/ai-chat/providers';
 import { GeminiProvider } from '../../plugins/ai-chat/providers/gemini';
+import { OllamaProvider } from '../../plugins/ai-chat/providers/ollama';
 import { ResilientProvider } from '../../plugins/ai-chat/providers/resilient';
 import { AIProviderError } from '../../plugins/ai-chat/providers/types';
 
 describe('createProvider', () => {
   it('returns a GeminiProvider for "gemini"', () => {
     expect(createProvider('gemini')).toBeInstanceOf(GeminiProvider);
+  });
+
+  it('returns an OllamaProvider for "ollama"', () => {
+    expect(createProvider('ollama')).toBeInstanceOf(OllamaProvider);
   });
 
   it('throws AIProviderError for unknown types', () => {

@@ -87,5 +87,11 @@
     "enabled": true,
     "inactivity_timeout_minutes": 10,
     "games_dir": "games"
+  },
+
+  "ollama": {
+    "base_url": "http://127.0.0.1:11434",
+    "request_timeout_ms": 60000,
+    "use_server_tokenizer": false
   }
 }

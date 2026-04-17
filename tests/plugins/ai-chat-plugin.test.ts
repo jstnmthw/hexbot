@@ -405,6 +405,11 @@ describe('shouldRespond logic', () => {
       disableWhenFounder: true,
     },
     sessions: { enabled: true, inactivityMs: 600_000, gamesDir: 'games' },
+    ollama: {
+      baseUrl: 'http://127.0.0.1:11434',
+      requestTimeoutMs: 60_000,
+      useServerTokenizer: false,
+    },
   };
 
   const baseCtx = {

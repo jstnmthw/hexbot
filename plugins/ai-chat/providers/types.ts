@@ -23,10 +23,19 @@ export interface AIResponse {
 
 /** Configuration passed to a provider's initialize(). */
 export interface AIProviderConfig {
-  apiKey: string;
   model: string;
   maxOutputTokens: number;
   temperature: number;
+  /** API key — required by hosted providers (Gemini, Claude, OpenAI); ignored by Ollama. */
+  apiKey?: string;
+  /** Base URL — required by Ollama; ignored by hosted providers. */
+  baseUrl?: string;
+  /** Per-request timeout in ms. Defaults vary by provider. */
+  requestTimeoutMs?: number;
+  /** Extra sampling options passed through to the provider. Free-form; each provider pulls what it understands. */
+  samplingOptions?: Record<string, number | string | boolean>;
+  /** Ollama-only: use the server's /api/tokenize endpoint instead of a length heuristic. */
+  useServerTokenizer?: boolean;
 }
 
 /**
