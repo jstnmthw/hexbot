@@ -1,8 +1,28 @@
-# ai-chat
+# ai-chat — give your channel a regular, not a chatbot
 
-AI-powered chat plugin. The bot listens for direct address (e.g. `hexbot: hi`), the `!ai <message>` command, or configured triggers, and replies using an LLM. It also acts as a channel _regular_ — an opinionated character with mood and social awareness — rather than a help-desk bot.
+A modern LLM plugin that makes your bot feel like someone who hangs out in the channel, not a help-desk behind a prompt. Pick a personality from the shipped roster — `sarcastic`, `chaotic`, `shitposter`, `nightowl`, `oldhead` — or drop in your own JSON character. A mood engine drifts energy, humor, and patience over time so replies don't feel like a stuck knob. An activity-aware ambient mode lets the bot chime in during dead hours, answer questions nobody else is picking up, or quietly stay out of the way when the channel's flooding. Play `20questions` or `trivia` with it as a proper game host. Address it by name, hit it with `!ai`, or let it read the room.
 
-Ships with a pluggable provider adapter — Gemini (hosted free tier) and Ollama (self-hosted) are built in; Claude/OpenAI adapters can be added without touching plugin logic.
+Pluggable providers — **Gemini** (hosted free tier, no credit card) and **Ollama** (self-hosted, everything stays on your box) ship built-in; Claude/OpenAI adapters slot in without touching plugin logic. Hardened against prompt-injected ChanServ fantasy commands so a rogue LLM output can't deop your admin. Rate-limited, circuit-broken, hot-reloadable, and just a few lines of config away from feeling exactly how you want it to.
+
+## Features
+
+**Characters that feel like people.** Nine shipped archetypes with backstory, style rules, and verbosity traits — `friendly`, `sarcastic`, `chaotic`, `shitposter`, `deadpan`, `minimal`, `gossip`, `nightowl`, `oldhead`. Drop a JSON file in `characters/` to add your own — schema is documented, template variables (`{nick}`, `{channel}`, `{users}`, `{channel_profile}`) render into the system prompt. Assign different characters per channel, or switch live with `!ai character <name>` — choice persists across reloads.
+
+**A mood engine, not a temperature slider.** Energy, engagement, patience, and humor drift over time and modulate every reply. A 0.5×–1.5× verbosity multiplier scales line caps dynamically — tired = terse, wired = chatty. Mood is ephemeral (not persisted), so the bot wakes up fresh each run.
+
+**Channel profiles.** Give any channel a topic, culture, role, and depth hint — rendered into the system prompt so the bot behaves like a `#linux-help` regular in one room and a `#offtopic` shitposter in another, same character or not.
+
+**Activity-aware ambient participation.** The bot classifies each channel as `dead` / `slow` / `normal` / `active` / `flooding` and picks its spots accordingly — idle remarks in quiet rooms, rescuing unanswered questions after N seconds, welcoming returning regulars, reacting to topic changes. No ambient during floods. Never speaks back-to-back without a human in between. Separate hourly budget so it can't run away.
+
+**Game sessions with the LLM as host.** `!ai play 20questions` or `!ai play trivia` — user messages route into the session instead of the shared channel context. Drop a `.txt` prompt in `games/` to author a new one.
+
+**Tune every knob.** Temperature, max tokens, context window, per-user and global RPM/RPD, daily token budgets, ambient hourly caps, engagement window, verbosity bounds, trigger mix (direct-address, command, keywords, random %), privilege gating, and more — all live-reloadable via `.reload ai-chat`.
+
+**Pluggable providers.** Gemini (hosted), Ollama (self-hosted). Swap with one config key; the rest of the plugin doesn't care.
+
+**Resilient.** Retry + exponential backoff on transient errors, circuit breaker after consecutive hard failures, polite refusal on safety-blocked responses. Ollama daemon down? Breaker half-opens on next request — no bot restart.
+
+**Hardened.** Fantasy-command dropper kills any LLM line starting with `.`/`!`/`/` before IRC services see it. Non-overridable safety clause in every system prompt. Opt-in privilege gating and founder-tier auto-disable so a compromised prompt can't leverage ChanServ ops.
 
 ## Setup
 
@@ -35,7 +55,20 @@ No key? The plugin loads in degraded mode (every trigger replies with "AI chat i
 
 Ollama keeps every prompt and response on your own hardware. No API key, no per-request quota — only latency and VRAM.
 
-1. Install Ollama and pull a model. See `docs/plans/ollama-self-hosting.md` for the server-side setup.
+**Requirements:** ~5 GB disk for a quantised 7–8B model, ~8 GB RAM free while it's loaded, and Docker (or a native Ollama install from <https://ollama.com/download>).
+
+1. Start Ollama and pull a model. The quickest local dev setup is Docker:
+
+   ```sh
+   docker run -d --name ollama --restart unless-stopped \
+     -p 127.0.0.1:11434:11434 \
+     -v ollama:/root/.ollama \
+     -e OLLAMA_KEEP_ALIVE=30m \
+     ollama/ollama:0.21.0
+   docker exec ollama ollama pull llama3:8b-instruct-q4_K_M
+   ```
+
+   The `127.0.0.1:` prefix keeps the port on loopback — Ollama ships with no auth, so **do not** expose it on a LAN or VPN. Pin a specific tag (above: `0.21.0`) rather than `:latest` to avoid surprise upgrades. For the operator playbook (persistent volumes, log rotation, GPU, model selection) see `docs/plans/ollama-self-hosting.md` and the upstream docs at <https://docs.ollama.com/docker> and <https://docs.ollama.com/faq>.
 
 2. Point the plugin at the daemon in `config/plugins.json`:
 
@@ -166,9 +199,18 @@ The rendered profile is appended to the system prompt.
 
 An internal mood engine (energy, engagement, patience, humor) drifts over time and modulates responses — longer when energetic, shorter when tired, more jokes when humor is high. Mood is ephemeral (not persisted). A one-line mood hint is injected into the system prompt, and the `maxLines` cap is scaled by a 0.5×–1.5× verbosity multiplier.
 
+## Games (sessions)
+
+A user-initiated alternate mode. Drop a `.txt` file into `plugins/ai-chat/games/` and it's playable via `!ai play <name>`. The file contents are used as the session's system prompt. Shipped games:
+
+- `20questions` — bot picks a thing; player asks yes/no questions.
+- `trivia` — bot generates questions, tracks score and streak.
+
+While in a game, the user's messages in that channel are routed to the game session (not the shared channel context), and the bot responds as the game host. End with `!ai endgame` or after `sessions.inactivity_timeout_minutes` (default 10) of inactivity. Game sessions bypass the per-user bucket (global RPM/RPD still enforced).
+
 ## Ambient participation
 
-Off by default. When `ambient.enabled: true`, the bot evaluates every 30s whether to speak unprompted based on channel activity and social state:
+The autonomous counterpart to Triggers — the bot speaking without being addressed. Off by default. When `ambient.enabled: true`, the bot evaluates every 30s whether to speak unprompted based on channel activity and social state:
 
 - **idle remarks** — in `dead` or `slow` channels after N minutes of silence (`ambient.idle.*`).
 - **unanswered questions** — if a human asks a question and nobody answers within `wait_seconds`, the bot may reply.
@@ -176,15 +218,6 @@ Off by default. When `ambient.enabled: true`, the bot evaluates every 30s whethe
 - **topic reactions** (`event_reactions.topic_change`) — bot may react to a new topic.
 
 All gated by an activity classifier (`dead`/`slow`/`normal`/`active`/`flooding`) — no ambient at all during `flooding`, idle remarks only in `slow`/`dead`. The bot never speaks back-to-back without a human in between, and hits a separate rate budget (`ambient_per_channel_per_hour`, `ambient_global_per_hour`).
-
-## Games (sessions)
-
-Drop a `.txt` file into `plugins/ai-chat/games/` and it's playable via `!ai play <name>`. The file contents are used as the session's system prompt. Shipped games:
-
-- `20questions` — bot picks a thing; player asks yes/no questions.
-- `trivia` — bot generates questions, tracks score and streak.
-
-While in a game, the user's messages in that channel are routed to the game session (not the shared channel context), and the bot responds as the game host. End with `!ai endgame` or after `sessions.inactivity_timeout_minutes` (default 10) of inactivity. Game sessions bypass the per-user bucket (global RPM/RPD still enforced).
 
 ## Rate limits and budgets
 
@@ -247,4 +280,228 @@ Gemini's free tier may use submitted content to improve models. Don't send sensi
 
 ## Configuration reference
 
-See `config.json` in this directory for the full default config with all keys. Top-level sections: `provider`, `model`, `triggers`, `character`, `channel_characters`, `channel_profiles`, `context`, `rate_limits`, `token_budgets`, `output`, `permissions`, `ambient`, `security`, `sessions`.
+Defaults live in `config.json` in this directory. Override per-channel or globally via `config/plugins.json`.
+
+### Top-level
+
+| Key                  | Type   | Default                   | Description                                                                               |
+| -------------------- | ------ | ------------------------- | ----------------------------------------------------------------------------------------- |
+| `provider`           | string | `"gemini"`                | LLM provider adapter. `gemini` or `ollama`.                                               |
+| `api_key_env`        | string | `"HEX_GEMINI_API_KEY"`    | Env var name holding the provider API key (Gemini only).                                  |
+| `model`              | string | `"gemini-2.5-flash-lite"` | Provider-specific model ID. For Ollama, the tag of a pulled model (e.g. `llama3:8b-...`). |
+| `temperature`        | number | `0.9`                     | Sampling temperature. Lower = more deterministic.                                         |
+| `max_output_tokens`  | number | `256`                     | Hard cap on generated tokens per reply.                                                   |
+| `character`          | string | `"friendly"`              | Default character for channels without an override.                                       |
+| `characters_dir`     | string | `"characters"`            | Directory (relative to plugin) to load character JSON files from.                         |
+| `channel_characters` | object | `{}`                      | Per-channel character override. Value is a name or `{ character, language }`.             |
+| `channel_profiles`   | object | `{}`                      | Per-channel hints appended to the system prompt — see _Channel profiles_.                 |
+
+### `triggers`
+
+| Key                  | Type     | Default | Description                                                                  |
+| -------------------- | -------- | ------- | ---------------------------------------------------------------------------- |
+| `direct_address`     | boolean  | `true`  | Respond when addressed by nick (`hexbot: ...`, `hey hexbot?`).               |
+| `command`            | boolean  | `true`  | Respond to the `!ai` command.                                                |
+| `command_prefix`     | string   | `"!ai"` | Command prefix for the command trigger.                                      |
+| `keywords`           | string[] | `[]`    | Substrings that trigger a reply on any message. Opt-in.                      |
+| `random_chance`      | number   | `0`     | Probability (0–1) of replying to any message. Opt-in.                        |
+| `engagement_seconds` | number   | `60`    | After a reply, the addressed user's next messages are treated as follow-ups. |
+
+### `context`
+
+| Key            | Type   | Default | Description                                          |
+| -------------- | ------ | ------- | ---------------------------------------------------- |
+| `max_messages` | number | `50`    | Max messages retained per channel context window.    |
+| `max_tokens`   | number | `4000`  | Max tokens of context sent to the model per request. |
+| `ttl_minutes`  | number | `60`    | Idle window after which channel context is evicted.  |
+
+### `rate_limits`
+
+| Key                            | Type   | Default | Description                                                     |
+| ------------------------------ | ------ | ------- | --------------------------------------------------------------- |
+| `user_burst`                   | number | `3`     | Per-user token bucket size.                                     |
+| `user_refill_seconds`          | number | `12`    | Seconds to refill one bucket token.                             |
+| `global_rpm`                   | number | `10`    | Global requests per minute cap.                                 |
+| `global_rpd`                   | number | `800`   | Global requests per day cap.                                    |
+| `rpm_backpressure_pct`         | number | `80`    | When global RPM usage crosses this %, per-user burst is halved. |
+| `ambient_per_channel_per_hour` | number | `5`     | Ambient replies allowed per channel per hour.                   |
+| `ambient_global_per_hour`      | number | `20`    | Ambient replies allowed globally per hour.                      |
+
+### `token_budgets`
+
+| Key              | Type   | Default  | Description                        |
+| ---------------- | ------ | -------- | ---------------------------------- |
+| `per_user_daily` | number | `50000`  | Daily token budget per user.       |
+| `global_daily`   | number | `200000` | Daily token budget across the bot. |
+
+### `output`
+
+| Key                   | Type    | Default | Description                                              |
+| --------------------- | ------- | ------- | -------------------------------------------------------- |
+| `max_lines`           | number  | `4`     | Max lines emitted per reply (scaled by mood verbosity).  |
+| `max_line_length`     | number  | `440`   | Max chars per line before truncation/wrapping.           |
+| `inter_line_delay_ms` | number  | `500`   | Delay between lines to feel human and avoid flood kicks. |
+| `strip_urls`          | boolean | `false` | If true, remove URLs from replies before sending.        |
+
+### `permissions`
+
+| Key                 | Type     | Default                    | Description                                            |
+| ------------------- | -------- | -------------------------- | ------------------------------------------------------ |
+| `required_flag`     | string   | `"-"`                      | Flag required to trigger AI replies. `-` = anyone.     |
+| `admin_flag`        | string   | `"m"`                      | Flag granting bucket bypass and admin commands.        |
+| `ignore_list`       | string[] | `[]`                       | Nicks or hostmasks the bot never replies to.           |
+| `ignore_bots`       | boolean  | `true`                     | Skip messages from nicks matching `bot_nick_patterns`. |
+| `bot_nick_patterns` | string[] | `["*bot", "*Bot", "*BOT"]` | Wildcard patterns for detecting other bots.            |
+
+### `ambient`
+
+| Key                                 | Type     | Default | Description                                               |
+| ----------------------------------- | -------- | ------- | --------------------------------------------------------- |
+| `enabled`                           | boolean  | `false` | Master switch for unprompted speaking.                    |
+| `idle.after_minutes`                | number   | `15`    | Minutes of silence before an idle remark is considered.   |
+| `idle.chance`                       | number   | `0.3`   | Probability (0–1) of speaking when the idle gate fires.   |
+| `idle.min_users`                    | number   | `2`     | Skip idle remarks below this active user count.           |
+| `unanswered_questions.enabled`      | boolean  | `true`  | Allow replies to unanswered human questions.              |
+| `unanswered_questions.wait_seconds` | number   | `90`    | Seconds to wait before considering a question unanswered. |
+| `chattiness`                        | number   | `0.08`  | Base per-tick chance of speaking in normal channels.      |
+| `interests`                         | string[] | `[]`    | Topics that bias the bot toward chiming in.               |
+| `event_reactions.join_wb`           | boolean  | `false` | React to returning users with a welcome-back.             |
+| `event_reactions.topic_change`      | boolean  | `false` | React to topic changes.                                   |
+
+### `security`
+
+| Key                         | Type    | Default | Description                                                              |
+| --------------------------- | ------- | ------- | ------------------------------------------------------------------------ |
+| `privilege_gating`          | boolean | `false` | Restrict AI replies to flagged users when the bot has elevated modes.    |
+| `privileged_mode_threshold` | string  | `"h"`   | Bot mode at/above which gating kicks in (`v`, `h`, `o`, `a`, `q`).       |
+| `privileged_required_flag`  | string  | `"m"`   | Flag required to trigger the bot while gating is active.                 |
+| `disable_when_privileged`   | boolean | `false` | Disable AI entirely (not just gate) when the bot is privileged.          |
+| `disable_when_founder`      | boolean | `true`  | Refuse responses in channels where the bot's ChanServ tier is `founder`. |
+
+### `sessions`
+
+| Key                          | Type    | Default   | Description                                               |
+| ---------------------------- | ------- | --------- | --------------------------------------------------------- |
+| `enabled`                    | boolean | `true`    | Master switch for game sessions.                          |
+| `inactivity_timeout_minutes` | number  | `10`      | End a game after this much user inactivity.               |
+| `games_dir`                  | string  | `"games"` | Directory (relative to plugin) to load game prompts from. |
+
+### `ollama`
+
+Only read when `provider` is `"ollama"`.
+
+| Key                    | Type    | Default                    | Description                                                               |
+| ---------------------- | ------- | -------------------------- | ------------------------------------------------------------------------- |
+| `base_url`             | string  | `"http://127.0.0.1:11434"` | Ollama daemon URL. Keep on loopback — Ollama has no auth.                 |
+| `request_timeout_ms`   | number  | `60000`                    | Abort a generate call after this many ms.                                 |
+| `use_server_tokenizer` | boolean | `false`                    | Call `/api/tokenize` for accurate counts instead of the 4-char heuristic. |
+
+### Full example
+
+Every key at its shipped default, wrapped in a `plugins.json` entry. Copy, trim to what you want to override, and drop unchanged keys — the plugin merges your overrides on top of `config.json`.
+
+```json
+{
+  "ai-chat": {
+    "enabled": true,
+    "channels": ["#mychannel"],
+    "config": {
+      "provider": "gemini",
+      "api_key_env": "HEX_GEMINI_API_KEY",
+      "model": "gemini-2.5-flash-lite",
+      "temperature": 0.9,
+      "max_output_tokens": 256,
+
+      "triggers": {
+        "direct_address": true,
+        "command": true,
+        "command_prefix": "!ai",
+        "keywords": [],
+        "random_chance": 0,
+        "engagement_seconds": 60
+      },
+
+      "channel_profiles": {},
+
+      "character": "friendly",
+      "characters_dir": "characters",
+      "channel_characters": {},
+
+      "context": {
+        "max_messages": 50,
+        "max_tokens": 4000,
+        "ttl_minutes": 60
+      },
+
+      "rate_limits": {
+        "user_burst": 3,
+        "user_refill_seconds": 12,
+        "global_rpm": 10,
+        "global_rpd": 800,
+        "rpm_backpressure_pct": 80,
+        "ambient_per_channel_per_hour": 5,
+        "ambient_global_per_hour": 20
+      },
+
+      "token_budgets": {
+        "per_user_daily": 50000,
+        "global_daily": 200000
+      },
+
+      "output": {
+        "max_lines": 4,
+        "max_line_length": 440,
+        "inter_line_delay_ms": 500,
+        "strip_urls": false
+      },
+
+      "permissions": {
+        "required_flag": "-",
+        "admin_flag": "m",
+        "ignore_list": [],
+        "ignore_bots": true,
+        "bot_nick_patterns": ["*bot", "*Bot", "*BOT"]
+      },
+
+      "ambient": {
+        "enabled": false,
+        "idle": {
+          "after_minutes": 15,
+          "chance": 0.3,
+          "min_users": 2
+        },
+        "unanswered_questions": {
+          "enabled": true,
+          "wait_seconds": 90
+        },
+        "chattiness": 0.08,
+        "interests": [],
+        "event_reactions": {
+          "join_wb": false,
+          "topic_change": false
+        }
+      },
+
+      "security": {
+        "privilege_gating": false,
+        "privileged_mode_threshold": "h",
+        "privileged_required_flag": "m",
+        "disable_when_privileged": false,
+        "disable_when_founder": true
+      },
+
+      "sessions": {
+        "enabled": true,
+        "inactivity_timeout_minutes": 10,
+        "games_dir": "games"
+      },
+
+      "ollama": {
+        "base_url": "http://127.0.0.1:11434",
+        "request_timeout_ms": 60000,
+        "use_server_tokenizer": false
+      }
+    }
+  }
+}
+```
