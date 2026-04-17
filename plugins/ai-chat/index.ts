@@ -17,7 +17,7 @@ import { listGames, loadGamePrompt, resolveGamesDir } from './games-loader';
 import { MoodEngine } from './mood';
 import { applyCharacterStyle, formatResponse } from './output-formatter';
 import { createResilientProvider } from './providers';
-import type { AIMessage, AIProvider, AIProviderError } from './providers/types';
+import { type AIMessage, type AIProvider, AIProviderError } from './providers/types';
 import { RateLimiter } from './rate-limiter';
 import { type SessionIdentity, SessionManager } from './session-manager';
 import { SocialTracker } from './social-tracker';
@@ -1054,8 +1054,9 @@ async function runSessionPipeline(
     if (isFounderPostGate(api, cfg, ctx.channel, 'session')) return;
     await sendLines(lines, (line) => ctx.reply(line), cfg.output.interLineDelayMs);
   } catch (err) {
-    const provErr = err as AIProviderError;
-    api.error(`session provider error (${provErr.kind ?? 'other'}): ${provErr.message ?? err}`);
+    const kind = err instanceof AIProviderError ? err.kind : 'other';
+    const message = err instanceof Error ? err.message : String(err);
+    api.error(`session provider error (${kind}): ${message}`);
     ctx.reply('AI is temporarily unavailable.');
   }
 }

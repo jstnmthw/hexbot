@@ -110,11 +110,10 @@ export async function respond(
     usageIn = res.usage.input;
     usageOut = res.usage.output;
   } catch (err) {
-    const provErr = err as AIProviderError;
     return {
       status: 'provider_error',
-      kind: provErr.kind ?? 'other',
-      message: provErr.message ?? 'unknown error',
+      kind: err instanceof AIProviderError ? err.kind : 'other',
+      message: err instanceof Error ? err.message : 'unknown error',
     };
   }
 
