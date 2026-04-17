@@ -217,5 +217,24 @@ export class RateLimiter {
     if (earned <= 0) return;
     bucket.tokens = Math.min(this.config.userBurst, bucket.tokens + earned);
     bucket.lastRefill += earned * refillMs;
+    // Opportunistic eviction: a fully-refilled bucket that hasn't been touched
+    // in over an hour is indistinguishable from a fresh one — drop it so
+    // nick-rotation doesn't grow `userBuckets` forever.
+    if (
+      bucket.tokens >= this.config.userBurst &&
+      now - bucket.lastRefill > 3_600_000 &&
+      this.userBuckets.size > 64
+    ) {
+      this.evictStaleBuckets(now);
+    }
+  }
+
+  private evictStaleBuckets(now: number): void {
+    const cutoff = now - 3_600_000;
+    for (const [key, b] of this.userBuckets) {
+      if (b.lastRefill < cutoff && b.tokens >= this.config.userBurst) {
+        this.userBuckets.delete(key);
+      }
+    }
   }
 }

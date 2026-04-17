@@ -16,6 +16,15 @@ import {
   type AIResponse,
 } from './types';
 
+/**
+ * Per-request timeout for Gemini API calls. A hung TCP body / slow-loris
+ * from the endpoint would otherwise stall generateContent forever — the
+ * ResilientProvider circuit-breaker only fires on thrown errors, not on
+ * hangs, so one stuck request starves the global RPM slot. 30s gives
+ * enough slack for legitimate cold-start latency while bounding worst case.
+ */
+const GEMINI_REQUEST_TIMEOUT_MS = 30_000;
+
 export class GeminiProvider implements AIProvider {
   readonly name = 'gemini';
   private client: GoogleGenerativeAI | null = null;
@@ -54,16 +63,19 @@ export class GeminiProvider implements AIProvider {
     }
 
     try {
-      const result = await this.model.generateContent({
-        contents,
-        systemInstruction: systemPrompt
-          ? { role: 'system', parts: [{ text: systemPrompt }] }
-          : undefined,
-        generationConfig: {
-          temperature: this.temperature,
-          maxOutputTokens: maxTokens,
-        },
-      });
+      const result = await withTimeout(
+        this.model.generateContent({
+          contents,
+          systemInstruction: systemPrompt
+            ? { role: 'system', parts: [{ text: systemPrompt }] }
+            : undefined,
+          generationConfig: {
+            temperature: this.temperature,
+            maxOutputTokens: maxTokens,
+          },
+        }),
+        GEMINI_REQUEST_TIMEOUT_MS,
+      );
 
       const response = result.response;
       const candidate = response.candidates?.[0];
@@ -126,6 +138,29 @@ function toGeminiContents(messages: AIMessage[]): Content[] {
     });
   }
   return out;
+}
+
+/**
+ * Race a promise against a timeout. On timeout, rejects with an AIProviderError
+ * tagged 'network' so the resilient wrapper's retry + circuit-breaker layers
+ * treat it like any other transient infrastructure failure.
+ */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new AIProviderError(`Gemini request timed out after ${ms}ms`, 'network'));
+    }, ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
 }
 
 /** Convert Gemini SDK errors into AIProviderError with a kind tag. */

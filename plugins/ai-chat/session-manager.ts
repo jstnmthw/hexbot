@@ -2,6 +2,21 @@
 // A session is identified by (userKey, channel) — only one active per user per channel.
 import type { AIMessage } from './providers/types';
 
+/** Bound on session.context length — caps per-turn token burn on long games. */
+const MAX_SESSION_TURNS = 40;
+
+/**
+ * Identity captured at session creation to prevent nick-takeover hijacks.
+ * A session is bound to the creator's account (when available) and their
+ * ident+host; a different caller using the same nick is refused.
+ */
+export interface SessionIdentity {
+  /** Services account name (from IRCv3 account-tag). null when unauthenticated. */
+  account: string | null;
+  /** `ident@host` at session-creation time. Used as a fallback when account is absent. */
+  identHost: string;
+}
+
 /** A single game session. */
 export interface Session {
   id: string;
@@ -12,6 +27,8 @@ export interface Session {
   context: AIMessage[];
   startedAt: number;
   lastActivityAt: number;
+  /** Creator identity — enforced on every subsequent retrieval. */
+  identity: SessionIdentity;
 }
 
 /** SessionManager tracks in-memory sessions with inactivity expiry. */
@@ -38,6 +55,7 @@ export class SessionManager {
     channel: string | null,
     type: string,
     systemPrompt: string,
+    identity: SessionIdentity,
   ): Session {
     const key = sessionKey(userKey, channel);
     const session: Session = {
@@ -49,13 +67,20 @@ export class SessionManager {
       context: [],
       startedAt: this.now(),
       lastActivityAt: this.now(),
+      identity,
     };
     this.sessions.set(key, session);
     return session;
   }
 
-  /** Fetch an active (non-expired) session. Returns null for missing/expired. */
-  getSession(userKey: string, channel: string | null): Session | null {
+  /**
+   * Fetch an active (non-expired) session for this caller. Returns null if
+   * there is none, the session expired, or the caller's identity doesn't
+   * match the creator's. Identity gate closes the nick-takeover attack where
+   * the creator disconnects and an attacker grabs the nick to inherit the
+   * live session (its prior context, cooldown bypass, and token accounting).
+   */
+  getSession(userKey: string, channel: string | null, identity?: SessionIdentity): Session | null {
     const key = sessionKey(userKey, channel);
     const s = this.sessions.get(key);
     if (!s) return null;
@@ -63,6 +88,7 @@ export class SessionManager {
       this.sessions.delete(key);
       return null;
     }
+    if (identity && !identityMatches(s.identity, identity)) return null;
     return s;
   }
 
@@ -71,15 +97,23 @@ export class SessionManager {
     return this.sessions.delete(sessionKey(userKey, channel));
   }
 
-  /** Append a message to the session's context and bump lastActivity. */
+  /**
+   * Append a message to the session's context and bump lastActivity. The
+   * context array is bounded at MAX_SESSION_TURNS — older turns are dropped
+   * (sliding window) so long trivia/20Q games don't scale quadratically in
+   * per-turn token cost.
+   */
   addMessage(session: Session, message: AIMessage): void {
     session.context.push(message);
+    if (session.context.length > MAX_SESSION_TURNS) {
+      session.context.splice(0, session.context.length - MAX_SESSION_TURNS);
+    }
     session.lastActivityAt = this.now();
   }
 
   /** True if a session exists for (userKey, channel) and is still active. */
-  isInSession(userKey: string, channel: string | null): boolean {
-    return this.getSession(userKey, channel) !== null;
+  isInSession(userKey: string, channel: string | null, identity?: SessionIdentity): boolean {
+    return this.getSession(userKey, channel, identity) !== null;
   }
 
   /** Remove all sessions past the inactivity timeout. Returns expired session IDs. */
@@ -108,4 +142,18 @@ export class SessionManager {
 
 function sessionKey(userKey: string, channel: string | null): string {
   return `${userKey.toLowerCase()}|${channel?.toLowerCase() ?? '*'}`;
+}
+
+/**
+ * Identity match: prefer services account (strong, services-verified), fall
+ * back to `ident@host` (works on networks without account-tag). On a network
+ * that writes account for some users and not others, the presence/absence of
+ * account itself counts — a session created by an authenticated user should
+ * not be resumable by an unauthenticated caller and vice-versa.
+ */
+function identityMatches(stored: SessionIdentity, caller: SessionIdentity): boolean {
+  if (stored.account !== null || caller.account !== null) {
+    return stored.account === caller.account;
+  }
+  return stored.identHost === caller.identHost;
 }

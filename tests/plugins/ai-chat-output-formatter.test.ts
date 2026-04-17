@@ -216,4 +216,29 @@ describe('formatResponse', () => {
     expect(out[2].endsWith('…')).toBe(true);
     expect(out[2].length).toBeLessThanOrEqual(40);
   });
+
+  // W14: combining marks can't hide a fantasy prefix.
+  it('drops a line whose fantasy prefix is preceded by a combining mark', () => {
+    // \u0301 (combining acute) before a `.deop` — strip path must drop the mark
+    // so the `.` is first, and isFantasyLine catches it.
+    expect(formatResponse('\u0301.deop admin', 4, 400)).toEqual([]);
+  });
+
+  // W15: fullwidth / compatibility prefixes fold via NFKC.
+  it('detects fullwidth fullstop as fantasy prefix via NFKC', () => {
+    // U+FF0E FULLWIDTH FULL STOP — renders as `．`; Atheme would match it if
+    // the client sent it, and certainly if the bot's own NFKC-folded client
+    // rendered it. NFKC-normalise before the check.
+    expect(isFantasyLine('\uFF0Edeop admin')).toBe(true);
+    expect(formatResponse('\uFF0Edeop admin', 4, 400)).toEqual([]);
+  });
+
+  // W16: Unicode line separators must split into separate logical lines.
+  it('treats U+2028 / U+2029 / NEL as line breaks for the fantasy check', () => {
+    // Without the normalisation, this would collapse into one line starting
+    // with "Sure", bypassing the fantasy-prefix test for ".deop".
+    expect(formatResponse('Sure thing\u2028.deop admin', 4, 400)).toEqual([]);
+    expect(formatResponse('ok\u2029!kick user', 4, 400)).toEqual([]);
+    expect(formatResponse('ok\u0085/mode +o evil', 4, 400)).toEqual([]);
+  });
 });

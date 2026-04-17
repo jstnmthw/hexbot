@@ -540,6 +540,30 @@ describe('ChanServ notice handler — Anope INFO (founder detection)', () => {
 
     expect(probeState.pendingInfoProbes.size).toBe(0);
   });
+
+  it('flushes deferredAnopeNoAccess when INFO probe times out', async () => {
+    const { api, notice } = createMockApi();
+    const { backend, calls } = createMockAnopeBackend();
+    const probeState = createProbeState();
+
+    setupChanServNotice({ api, config: createMockConfig('anope'), backend, probeState });
+    markProbePending(api, probeState, '#test', 'anope');
+    markProbePending(api, probeState, '#test', 'anope-info');
+
+    // ACCESS LIST resolves empty first — commit is deferred.
+    notice('ChanServ', '#test access list is empty.');
+    expect(calls).toHaveLength(0);
+    expect(probeState.deferredAnopeNoAccess.size).toBe(1);
+
+    // INFO never arrives — timeout must flush the deferred entry.
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(probeState.pendingInfoProbes.size).toBe(0);
+    expect(probeState.deferredAnopeNoAccess.size).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].channel).toBe('#test');
+    expect(calls[0].level).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

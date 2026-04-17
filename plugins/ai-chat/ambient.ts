@@ -81,7 +81,15 @@ export class AmbientEngine {
     if (!this.trackedChannels.has(channel.toLowerCase())) return;
     if (this.social.isLastMessageFromBot(channel)) return;
 
-    this.sender(channel, 'join_wb', `${nick} just joined the channel.`).catch(() => {});
+    // Reject anything that isn't a plausible IRC nick before handing it to
+    // the LLM, and delimit it so the model treats it as data, not instruction.
+    const safeNick = filterNick(nick);
+    if (!safeNick) return;
+    this.sender(
+      channel,
+      'join_wb',
+      `A user named <<<${safeNick}>>> just joined the channel.`,
+    ).catch(() => {});
   }
 
   /** Notify the engine that the channel topic changed. */
@@ -90,7 +98,14 @@ export class AmbientEngine {
     if (!this.trackedChannels.has(channel.toLowerCase())) return;
     if (this.social.isLastMessageFromBot(channel)) return;
 
-    this.sender(channel, 'topic', `${nick} changed the topic to: ${topic}`).catch(() => {});
+    // Delimit user-supplied topic text so the LLM treats it as data rather
+    // than as instructions. The system prompt's SAFETY_CLAUSE plus the
+    // output-formatter's fantasy-drop remain the primary defences; this
+    // just narrows the injection surface.
+    const safeNick = filterNick(nick);
+    const delimitedTopic = `<<<${sanitiseForPrompt(topic)}>>>`;
+    const who = safeNick ? `<<<${safeNick}>>>` : 'someone';
+    this.sender(channel, 'topic', `${who} changed the topic to: ${delimitedTopic}`).catch(() => {});
   }
 
   /** Get effective chattiness (config base × character trait). */
@@ -141,16 +156,41 @@ export class AmbientEngine {
         if (ready.length > 0) {
           const q = ready[0];
           this.social.consumeQuestion(channelKey, q);
+          const safeNick = filterNick(q.nick);
+          const who = safeNick ? `<<<${safeNick}>>>` : 'someone';
+          const delimited = `<<<${sanitiseForPrompt(q.text)}>>>`;
           this.sender(
             channelKey,
             'unanswered',
-            `${q.nick} asked: "${q.text}" — no one answered. You can respond if you have something to say.`,
+            `${who} asked: ${delimited} — no one answered. You can respond if you have something to say.`,
           ).catch(() => {});
           continue;
         }
       }
     }
   }
+}
+
+/**
+ * Strip characters that couldn't plausibly be in an IRC nick. Returns the
+ * filtered string, or empty when nothing survives (caller should then skip
+ * the ambient emission).
+ */
+function filterNick(nick: string): string {
+  const cleaned = nick.replace(/[^A-Za-z0-9_`{}[\]\\^|-]/g, '').slice(0, 30);
+  return cleaned;
+}
+
+/**
+ * Neutralise characters that could close our delimiter or inject prompt
+ * structure. The SAFETY_CLAUSE + fantasy-command dropper remain the primary
+ * defences; this is a narrow sanity filter on spans we interpolate raw.
+ */
+function sanitiseForPrompt(text: string): string {
+  return text
+    .replace(/[<>]/g, '')
+    .replace(/[\r\n]+/g, ' ')
+    .slice(0, 256);
 }
 
 /** Re-export question heuristic for tests that imported it from ambient. */

@@ -2,11 +2,17 @@
 import { resolve } from 'node:path';
 import { type Mock, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  __setProviderOverrideForTesting,
-  shouldBlockOnFounder,
-  shouldRespond,
-} from '../../plugins/ai-chat/index';
+// The provider-factory hook must come from the dist bundle so the
+// module-local let that the test writes is the same let the plugin loader
+// reads (both importers resolve to the same cached ESM URL). Importing from
+// the source would give a separate module instance and the override would
+// never reach init(). tsup does not emit .d.ts for ai-chat (the plugin
+// imports ../../src/types, which confuses tsup's dts rootDir), so the import
+// is untyped at the language level; the type is asserted locally.
+// @ts-expect-error - dist has no .d.ts; value-only import
+import * as aiChatDist from '../../plugins/ai-chat/dist/index.js';
+// Pure-function imports from source (typechecked, used in pure unit tests).
+import { shouldBlockOnFounder, shouldRespond } from '../../plugins/ai-chat/index';
 import type { AIProvider } from '../../plugins/ai-chat/providers/types';
 import { Permissions } from '../../src/core/permissions';
 import { BotDatabase } from '../../src/database';
@@ -14,6 +20,10 @@ import { EventDispatcher } from '../../src/dispatcher';
 import { BotEventBus } from '../../src/event-bus';
 import { PluginLoader } from '../../src/plugin-loader';
 import type { BotConfig, HandlerContext } from '../../src/types';
+
+const __setProviderOverrideForTesting = (
+  aiChatDist as { __setProviderOverrideForTesting: (f: (() => AIProvider) | null) => void }
+).__setProviderOverrideForTesting;
 
 const BOT_CONFIG: BotConfig = {
   irc: {
@@ -357,6 +367,7 @@ describe('ai-chat plugin (integration)', () => {
 describe('shouldRespond logic', () => {
   const baseConfig = {
     provider: 'gemini',
+    apiKey: '',
     model: 'test-model',
     temperature: 0.9,
     maxOutputTokens: 256,

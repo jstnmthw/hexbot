@@ -118,7 +118,10 @@ describe('AmbientEngine', () => {
       engine.tick();
       expect(sent).toHaveLength(1);
       expect(sent[0].kind).toBe('unanswered');
-      expect(sent[0].prompt).toContain('alice asked');
+      // Attacker-controlled nick/text are wrapped in delimiters so the LLM
+      // treats them as data, not instruction (W13 defence-in-depth).
+      expect(sent[0].prompt).toContain('<<<alice>>> asked');
+      expect(sent[0].prompt).toContain('<<<does anyone know how to do this?>>>');
     });
 
     it('does not fire if someone responded', () => {

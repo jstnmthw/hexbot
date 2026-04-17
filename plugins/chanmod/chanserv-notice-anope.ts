@@ -166,11 +166,23 @@ export function handleAnopeNotice(
       probeState.pendingInfoProbes.delete(key);
       probeState.activeInfoChannel = null;
       api.debug(`ChanServ INFO response for ${channel}: bot is not founder`);
-      // Flush a deferred 'none' commit now that INFO has ruled out founder.
-      const deferredWhy = probeState.deferredAnopeNoAccess.get(key);
-      if (deferredWhy !== undefined) {
+      // Flush a deferred 'none' commit now that INFO has ruled out founder —
+      // unless the operator wrote a manual `.chanset chanserv_access …`
+      // during the defer window. In that case the snapshot no longer matches
+      // current, and flushing would clobber the override and desync backend
+      // state from the chanset.
+      const entry = probeState.deferredAnopeNoAccess.get(key);
+      if (entry !== undefined) {
         probeState.deferredAnopeNoAccess.delete(key);
-        applyAccess(channel, 0, false, deferredWhy);
+        const current = api.channelSettings.getString(channel, 'chanserv_access');
+        if (current !== entry.chansetSnapshot) {
+          api.debug(
+            `ChanServ INFO for ${channel}: skipping deferred flush — chanset moved ` +
+              `${JSON.stringify(entry.chansetSnapshot)} → ${JSON.stringify(current)} during race`,
+          );
+        } else {
+          applyAccess(channel, 0, false, entry.why);
+        }
       }
       return;
     }
@@ -200,7 +212,8 @@ function deferOrApplyNoAccess(
 ): void {
   const key = api.ircLower(channel);
   if (probeState.pendingInfoProbes.has(key)) {
-    probeState.deferredAnopeNoAccess.set(key, why);
+    const chansetSnapshot = api.channelSettings.getString(channel, 'chanserv_access');
+    probeState.deferredAnopeNoAccess.set(key, { why, chansetSnapshot });
     api.debug(
       `ChanServ ACCESS response for ${channel}: ${why} — deferring commit until INFO probe resolves`,
     );

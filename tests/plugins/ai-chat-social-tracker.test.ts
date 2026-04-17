@@ -196,4 +196,79 @@ describe('SocialTracker', () => {
       expect(st.getState('#test')).toBeUndefined();
     });
   });
+
+  describe('dropChannel', () => {
+    it('drops a single channel without touching others', () => {
+      const st = new SocialTracker();
+      st.onMessage('#a', 'alice', 'hi', false);
+      st.onMessage('#b', 'bob', 'hi', false);
+      st.dropChannel('#a');
+      expect(st.getState('#a')).toBeUndefined();
+      expect(st.getState('#b')).toBeDefined();
+    });
+  });
+
+  describe('user-interaction retention sweep', () => {
+    it('drops rows older than 90 days on first access per day', () => {
+      const now = 1_700_000_000_000;
+      const db = makeDb();
+      // Seed an ancient row (>90d old) directly.
+      db.set(
+        'user-interaction:ancient',
+        JSON.stringify({
+          lastSeen: now - 100 * 24 * 60 * 60_000,
+          totalMessages: 1,
+          botInteractions: 0,
+          lastBotInteraction: 0,
+        }),
+      );
+      const st = new SocialTracker(db, () => now);
+      st.onMessage('#test', 'alice', 'hi', false);
+      // Retention sweep runs on the first recordUserInteraction per day.
+      expect(db.get('user-interaction:ancient')).toBeUndefined();
+      expect(db.get('user-interaction:alice')).toBeDefined();
+    });
+
+    it('drops corrupt rows and keeps the day guard', () => {
+      let now = 1_700_000_000_000;
+      const db = makeDb();
+      db.set('user-interaction:bad', 'not-json');
+      const st = new SocialTracker(db, () => now);
+      st.onMessage('#test', 'alice', 'hi', false);
+      expect(db.get('user-interaction:bad')).toBeUndefined();
+      // Second call same day — should be a no-op (day guard).
+      now += 1_000;
+      st.onMessage('#test', 'bob', 'hi', false);
+      expect(db.get('user-interaction:bob')).toBeDefined();
+    });
+  });
+
+  describe('activeUsers eviction', () => {
+    it('drops per-nick entries whose lastSeen is outside the activity window', () => {
+      let now = 1_000_000;
+      const st = new SocialTracker(null, () => now);
+      st.onMessage('#test', 'ghost', 'hello', false);
+      const before = st.getState('#test')!;
+      expect(before.activeUsers.has('ghost')).toBe(true);
+      // Jump past the 5-minute activity window.
+      now += 10 * 60_000;
+      st.onMessage('#test', 'fresh', 'hi', false);
+      const after = st.getState('#test')!;
+      expect(after.activeUsers.has('ghost')).toBe(false);
+      expect(after.activeUsers.has('fresh')).toBe(true);
+    });
+  });
+
+  describe('maintain sweep (idle channels + hard cap)', () => {
+    it('drops channels whose lastMessageAt is older than 24h once maintain fires', () => {
+      let now = 1_000_000;
+      const st = new SocialTracker(null, () => now);
+      st.onMessage('#old', 'alice', 'hi', false);
+      // Advance past the 24h retention AND the maintain throttle interval.
+      now += 25 * 60 * 60_000;
+      st.onMessage('#new', 'bob', 'hi', false);
+      expect(st.getState('#old')).toBeUndefined();
+      expect(st.getState('#new')).toBeDefined();
+    });
+  });
 });

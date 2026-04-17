@@ -125,6 +125,16 @@ describe('loadCharacters', () => {
     const chars = loadCharacters(TMP_DIR);
     expect(chars.has('mixedcase')).toBe(true);
   });
+
+  it('skips character files larger than the 64 KB cap', () => {
+    // Build a JSON blob that's > 64 KB by padding a long backstory field.
+    const bloat = 'x'.repeat(80 * 1024);
+    writeCharJson('huge', { name: 'huge', prompt: 'p', backstory: bloat });
+    const warnings: string[] = [];
+    const chars = loadCharacters(TMP_DIR, (msg) => warnings.push(msg));
+    expect(chars.has('huge')).toBe(false);
+    expect(warnings.some((w) => w.includes('over size cap'))).toBe(true);
+  });
 });
 
 describe('getCharacter', () => {

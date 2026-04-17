@@ -57,10 +57,25 @@ export class ResilientProvider implements AIProvider {
         // Retryable kinds: rate_limit (429) and network (5xx) only.
         const retryable = provErr.kind === 'rate_limit' || provErr.kind === 'network';
         if (!retryable || attempt >= this.config.maxRetries) {
-          this.recordFailure();
+          // Only transient/infrastructure failures count toward the circuit
+          // breaker. `safety` is deterministic policy rejection (a crafted
+          // prompt that trips Gemini's safety filter); `auth` is a config
+          // problem that won't resolve on its own. Either opening the circuit
+          // on these would let a single user DoS every channel for 5 minutes
+          // by triggering 5 deterministic rejections.
+          if (
+            provErr.kind === 'rate_limit' ||
+            provErr.kind === 'network' ||
+            provErr.kind === 'other'
+          ) {
+            this.recordFailure();
+          }
           throw provErr;
         }
-        await this.sleep(backoff);
+        // Jittered backoff: 0.5x to 1.5x of the current backoff value. Without
+        // jitter, multi-user 429s cause every caller to retry in lockstep
+        // and slam the provider the moment the window opens.
+        await this.sleep(Math.floor(backoff * (0.5 + Math.random())));
         backoff *= 2;
       }
     }

@@ -20,9 +20,16 @@
  */
 const FANTASY_PREFIXES = /^[.!/~@%$&+]/;
 
-/** Check if a line would be parsed as a fantasy command by IRC services. */
+/**
+ * Check if a line would be parsed as a fantasy command by IRC services.
+ *
+ * Normalises the line with NFKC before the prefix test so fullwidth / halfwidth /
+ * compatibility lookalikes (`！` U+FF01, `．` U+FF0E, `／` U+FF0F, `․` U+2024,
+ * `⁄` U+2044, `｡` U+FF61) fold back to their ASCII counterparts and are caught.
+ * The normalised form is used only for the check — not persisted to the output.
+ */
 export function isFantasyLine(line: string): boolean {
-  return FANTASY_PREFIXES.test(line);
+  return FANTASY_PREFIXES.test(line.normalize('NFKC'));
 }
 
 /** Strip characters that could inject IRC protocol lines or IRC formatting control codes. */
@@ -44,7 +51,17 @@ function stripProtocolUnsafe(text: string): string {
     // fantasy-command prefix (e.g. `\u200b.deop admin`) from the position-0
     // check in isFantasyLine(). Stripping them makes the first VISIBLE
     // character also the first byte inspected.
-    .replace(/\p{Cf}/gu, '');
+    .replace(/\p{Cf}/gu, '')
+    // Strip combining marks (\p{M} = Mn + Mc + Me). A leading combining mark
+    // would defeat the isFantasyLine check (e.g. "\u0301.deop admin" — the
+    // acute accent is the first code point, `.` is second). Strip them so the
+    // first surviving code point is the one Atheme/Anope would also dispatch on.
+    .replace(/\p{M}/gu, '')
+    // Normalise Unicode line-separator characters (U+2028 / U+2029 / U+0085 NEL)
+    // to LF so the downstream split('\n') sees them as real breaks. Some IRC
+    // clients render these as newlines — without this, an attacker could hide
+    // a fantasy-prefix line behind a U+2028 separator on line 1.
+    .replace(/[\u2028\u2029\u0085]/g, '\n');
   /* eslint-enable no-control-regex */
   return out;
 }

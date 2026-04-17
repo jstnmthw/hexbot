@@ -20,7 +20,7 @@ import { createProvider } from './providers';
 import { ResilientProvider } from './providers/resilient';
 import type { AIMessage, AIProvider, AIProviderError } from './providers/types';
 import { RateLimiter } from './rate-limiter';
-import { SessionManager } from './session-manager';
+import { type SessionIdentity, SessionManager } from './session-manager';
 import { SocialTracker } from './social-tracker';
 import { TokenTracker } from './token-tracker';
 import { type TriggerConfig, detectTrigger, isIgnored, isLikelyBot } from './triggers';
@@ -44,19 +44,31 @@ let ambientEngine: AmbientEngine | null = null;
 let moodEngine: MoodEngine | null = null;
 /** Tracks per-channel per-nick engagement timestamps (when bot last responded to them). */
 const engagementMap = new Map<string, number>();
+/** Periodic timer that expires idle game sessions. */
+let sessionExpiryInterval: ReturnType<typeof setInterval> | null = null;
 let gamesDir: string = '';
 
 /**
- * Test-only hook: inject a mock provider factory before init runs.
- * Stored on globalThis so it crosses the plugin-loader cache-bust boundary.
+ * Test-only hook: inject a mock provider factory before init runs. Module-local —
+ * tests must import this from the same bundle the plugin loader loads
+ * (`plugins/ai-chat/dist/index.js`) so the variable they write is the one
+ * init() reads. Reading/writing globalThis is forbidden by docs/SECURITY.md
+ * §4.1 (plugin isolation).
  */
-const TEST_HOOK_KEY = '__aichat_test_provider_factory__';
+let testProviderFactory: (() => AIProvider) | null = null;
 export function __setProviderOverrideForTesting(factory: (() => AIProvider) | null): void {
-  (globalThis as Record<string, unknown>)[TEST_HOOK_KEY] = factory ?? undefined;
+  testProviderFactory = factory;
 }
-function readTestOverride(): (() => AIProvider) | null {
-  const v = (globalThis as Record<string, unknown>)[TEST_HOOK_KEY];
-  return typeof v === 'function' ? (v as () => AIProvider) : null;
+
+/**
+ * Max bytes of channel text allowed into in-memory buffers (context, social
+ * tracker, session). Caps nick-rotation / multiline-capable-server floods
+ * from bloating unbounded state; response output is capped separately by
+ * `output.maxLines * output.maxLineLength`.
+ */
+const MAX_ENTRY_BYTES = 2048;
+function truncateForBuffer(text: string): string {
+  return text.length > MAX_ENTRY_BYTES ? text.slice(0, MAX_ENTRY_BYTES) + '…' : text;
 }
 
 // ---------------------------------------------------------------------------
@@ -65,6 +77,8 @@ function readTestOverride(): (() => AIProvider) | null {
 
 interface AiChatConfig {
   provider: string;
+  /** Resolved from `api_key_env` by the plugin loader. Empty string → degraded mode. */
+  apiKey: string;
   model: string;
   temperature: number;
   maxOutputTokens: number;
@@ -130,6 +144,7 @@ export function parseConfig(raw: Record<string, unknown>): AiChatConfig {
 
   return {
     provider: asString(raw.provider, 'gemini'),
+    apiKey: asString(raw.api_key, ''),
     model: asString(raw.model, 'gemini-2.5-flash-lite'),
     temperature: asNum(raw.temperature, 0.9),
     maxOutputTokens: asNum(raw.max_output_tokens, 256),
@@ -200,13 +215,16 @@ export function parseConfig(raw: Record<string, unknown>): AiChatConfig {
         },
       };
     })(),
-    security: {
-      privilegeGating: asBool(asRecord(raw.security).privilege_gating, false),
-      privilegedModeThreshold: asString(asRecord(raw.security).privileged_mode_threshold, 'h'),
-      privilegedRequiredFlag: asString(asRecord(raw.security).privileged_required_flag, 'm'),
-      disableWhenPrivileged: asBool(asRecord(raw.security).disable_when_privileged, false),
-      disableWhenFounder: asBool(asRecord(raw.security).disable_when_founder, true),
-    },
+    security: (() => {
+      const sec = asRecord(raw.security);
+      return {
+        privilegeGating: asBool(sec.privilege_gating, false),
+        privilegedModeThreshold: asString(sec.privileged_mode_threshold, 'h'),
+        privilegedRequiredFlag: asString(sec.privileged_required_flag, 'm'),
+        disableWhenPrivileged: asBool(sec.disable_when_privileged, false),
+        disableWhenFounder: asBool(sec.disable_when_founder, true),
+      };
+    })(),
     sessions: {
       enabled: asBool(asRecord(raw.sessions).enabled, true),
       inactivityMs: asNum(asRecord(raw.sessions).inactivity_timeout_minutes, 10) * 60_000,
@@ -391,7 +409,24 @@ function isEngaged(channel: string, nick: string, windowMs: number): boolean {
 }
 
 function recordEngagement(channel: string, nick: string): void {
-  engagementMap.set(`${channel.toLowerCase()}:${nick.toLowerCase()}`, Date.now());
+  const now = Date.now();
+  engagementMap.set(`${channel.toLowerCase()}:${nick.toLowerCase()}`, now);
+  // Opportunistic TTL eviction — entries that have aged past the typical
+  // engagement window aren't useful and would leak forever otherwise.
+  if (engagementMap.size > 1000) {
+    const cutoff = now - 10 * 60_000;
+    for (const [k, t] of engagementMap) {
+      if (t < cutoff) engagementMap.delete(k);
+    }
+  }
+}
+
+/** Build a SessionIdentity from a handler context for session identity gating. */
+function makeSessionIdentity(ctx: HandlerContext): SessionIdentity {
+  return {
+    account: ctx.account ?? null,
+    identHost: `${ctx.ident}@${ctx.hostname}`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -476,6 +511,16 @@ export async function init(api: PluginAPI): Promise<void> {
   sessionManager = cfg.sessions.enabled ? new SessionManager(cfg.sessions.inactivityMs) : null;
   gamesDir = resolveGamesDir(cfg.sessions.gamesDir);
 
+  // Periodic sweep: expire game sessions past the inactivity timeout. Without
+  // this, sessions only expire lazily on the user's next message, so a user
+  // who starts sessions in many channels and goes silent pins all that state
+  // until plugin teardown.
+  if (sessionManager) {
+    sessionExpiryInterval = setInterval(() => {
+      sessionManager?.expireInactive();
+    }, 60_000);
+  }
+
   // Load character definitions
   const charsDir = resolveCharactersDir(cfg.charactersDir);
   characters = loadCharacters(charsDir, (msg) => api.warn(msg));
@@ -489,16 +534,12 @@ export async function init(api: PluginAPI): Promise<void> {
 
   // Initialize provider
   provider = null;
-  const override = readTestOverride();
+  const override = testProviderFactory;
   if (override) {
     provider = override();
     api.log(`Using injected provider for testing: ${provider.name}`);
   } else {
-    const apiKey =
-      process.env.HEX_GEMINI_API_KEY ??
-      process.env.GEMINI_API_KEY ??
-      process.env.AI_CHAT_API_KEY ??
-      '';
+    const apiKey = cfg.apiKey;
     if (!apiKey) {
       api.warn(
         'No API key found in HEX_GEMINI_API_KEY — ai-chat plugin is in degraded mode (no LLM calls).',
@@ -608,6 +649,7 @@ export async function init(api: PluginAPI): Promise<void> {
     });
 
     // Register join/topic binds for event reactions
+    // (part/kick cleanup is registered unconditionally below.)
     if (cfg.ambient.eventReactions.joinWb) {
       api.bind('join', '-', '*', (ctx: HandlerContext) => {
         if (!ctx.channel) return;
@@ -618,6 +660,10 @@ export async function init(api: PluginAPI): Promise<void> {
     if (cfg.ambient.eventReactions.topicChange) {
       api.bind('topic', '-', '*', (ctx: HandlerContext) => {
         if (!ctx.channel) return;
+        // Skip bot-initiated topic changes — otherwise a .topic from REPL or
+        // chanmod topic-recovery would trigger an ambient reaction to the
+        // bot's own edit.
+        if (ctx.nick.toLowerCase() === botNick().toLowerCase()) return;
         ambientEngine?.onTopic(ctx.channel, ctx.nick, ctx.text);
       });
     }
@@ -625,25 +671,68 @@ export async function init(api: PluginAPI): Promise<void> {
     api.log(`Ambient participation enabled (chattiness=${cfg.ambient.chattiness})`);
   }
 
+  // Drop per-channel state when the bot itself leaves — otherwise social
+  // tracker and context buffers accumulate dead channels forever.
+  api.bind('part', '-', '*', (ctx: HandlerContext) => {
+    if (!ctx.channel) return;
+    if (!api.isBotNick(ctx.nick)) return;
+    socialTracker?.dropChannel(ctx.channel);
+    contextManager?.clearContext(ctx.channel);
+  });
+  api.bind('kick', '-', '*', (ctx: HandlerContext) => {
+    if (!ctx.channel) return;
+    if (!api.isBotNick(ctx.nick)) return;
+    socialTracker?.dropChannel(ctx.channel);
+    contextManager?.clearContext(ctx.channel);
+  });
+
   // -----------------------------------------------------------------------
   // pubm * — context feed + non-command trigger detection
   // -----------------------------------------------------------------------
   api.bind('pubm', '-', '*', async (ctx: HandlerContext) => {
     if (!ctx.channel) return;
 
+    // Cap message bytes before any in-memory buffer sees them.
+    const text = truncateForBuffer(ctx.text);
+
     // Feed every non-bot channel message into the context buffer.
     const isBotMsg = ctx.nick.toLowerCase() === botNick().toLowerCase();
     if (!isBotMsg) {
-      contextManager!.addMessage(ctx.channel, ctx.nick, ctx.text, false);
+      contextManager!.addMessage(ctx.channel, ctx.nick, text, false);
     }
 
-    // Feed social tracker (always active) and notify ambient of channel activity
-    socialTracker?.onMessage(ctx.channel, ctx.nick, ctx.text, isBotMsg);
+    // Compute the shouldRespond gate once — we use it both to decide whether
+    // to run the pipeline AND to gate social tracking. Gating social tracking
+    // closes the bypass where an ignored user's question would otherwise land
+    // in `pendingQuestions` and be amplified by the ambient LLM path.
+    const baseShouldRespondCtx = {
+      nick: ctx.nick,
+      ident: ctx.ident,
+      hostname: ctx.hostname,
+      channel: ctx.channel,
+      botNick: botNick(),
+      hasRequiredFlag: api.permissions.checkFlags(cfg.permissions.requiredFlag, ctx),
+      hasPrivilegedFlag: api.permissions.checkFlags(cfg.security.privilegedRequiredFlag, ctx),
+      botChannelModes: getBotChannelModes(api, ctx.channel),
+      botChanservAccess: getBotChanservAccess(api, ctx.channel),
+      config: cfg,
+      dynamicIgnoreList: getDynamicIgnoreList(api),
+    };
+    const allowed = shouldRespond(baseShouldRespondCtx);
+
+    // Ambient engine tracks every channel it sees activity in, so that
+    // join/topic reactions know the channel exists. Social-tracker state
+    // (activity level, pending questions, user stats), on the other hand,
+    // only counts senders we'd respond to — ignored users don't feed the
+    // unanswered-question amplification path.
     ambientEngine?.onChannelActivity(ctx.channel);
+    if (isBotMsg || allowed) {
+      socialTracker?.onMessage(ctx.channel, ctx.nick, text, isBotMsg);
+    }
 
     // Let the pub `!ai` handler own the command trigger.
     const cmdPrefix = cfg.triggers.commandPrefix.toLowerCase();
-    const lowerText = ctx.text.trim().toLowerCase();
+    const lowerText = text.trim().toLowerCase();
     if (
       cfg.triggers.command &&
       (lowerText === cmdPrefix || lowerText.startsWith(cmdPrefix + ' '))
@@ -652,33 +741,18 @@ export async function init(api: PluginAPI): Promise<void> {
     }
 
     // If user is in a session in this channel, route message as a game move.
+    const identity = makeSessionIdentity(ctx);
     if (
       sessionManager &&
-      ctx.nick.toLowerCase() !== botNick().toLowerCase() &&
-      sessionManager.isInSession(ctx.nick, ctx.channel)
+      !isBotMsg &&
+      sessionManager.isInSession(ctx.nick, ctx.channel, identity)
     ) {
-      if (
-        !shouldRespond({
-          nick: ctx.nick,
-          ident: ctx.ident,
-          hostname: ctx.hostname,
-          channel: ctx.channel,
-          botNick: botNick(),
-          hasRequiredFlag: api.permissions.checkFlags(cfg.permissions.requiredFlag, ctx),
-          hasPrivilegedFlag: api.permissions.checkFlags(cfg.security.privilegedRequiredFlag, ctx),
-          botChannelModes: getBotChannelModes(api, ctx.channel),
-          botChanservAccess: getBotChanservAccess(api, ctx.channel),
-          config: cfg,
-          dynamicIgnoreList: getDynamicIgnoreList(api),
-        })
-      ) {
-        return;
-      }
-      await runSessionPipeline(api, cfg, ctx, ctx.text, botNick(), network());
+      if (!allowed) return;
+      await runSessionPipeline(api, cfg, ctx, text, botNick(), network());
       return;
     }
 
-    let match = detectTrigger(ctx.text, botNick(), cfg.triggers);
+    let match = detectTrigger(text, botNick(), cfg.triggers);
     // Engagement fallback: if no trigger matched but the user recently talked
     // to the bot, treat this as a conversation continuation.
     if (
@@ -686,28 +760,12 @@ export async function init(api: PluginAPI): Promise<void> {
       ctx.channel &&
       isEngaged(ctx.channel, ctx.nick, cfg.triggers.engagementSeconds * 1_000)
     ) {
-      match = { kind: 'engaged', prompt: ctx.text.trim() };
+      match = { kind: 'engaged', prompt: text.trim() };
     }
     if (!match) return;
     if (match.kind === 'command') return;
 
-    if (
-      !shouldRespond({
-        nick: ctx.nick,
-        ident: ctx.ident,
-        hostname: ctx.hostname,
-        channel: ctx.channel,
-        botNick: botNick(),
-        hasRequiredFlag: api.permissions.checkFlags(cfg.permissions.requiredFlag, ctx),
-        hasPrivilegedFlag: api.permissions.checkFlags(cfg.security.privilegedRequiredFlag, ctx),
-        botChannelModes: getBotChannelModes(api, ctx.channel),
-        botChanservAccess: getBotChanservAccess(api, ctx.channel),
-        config: cfg,
-        dynamicIgnoreList: getDynamicIgnoreList(api),
-      })
-    ) {
-      return;
-    }
+    if (!allowed) return;
 
     const hasAdmin = api.permissions.checkFlags(cfg.permissions.adminFlag, ctx);
     await runPipeline(api, cfg, ctx, match.prompt, botNick(), network(), false, hasAdmin);
@@ -723,9 +781,19 @@ export async function init(api: PluginAPI): Promise<void> {
       cfg.triggers.commandPrefix,
       async (ctx: HandlerContext) => {
         if (!ctx.channel) return;
-        contextManager!.addMessage(ctx.channel, ctx.nick, ctx.text, false);
+        // Self-talk / bot-loop guard: the pubm bind has these checks, but a
+        // relayed event or test-harness replay could feed the bot's own nick
+        // into the pub handler. Admin subcommands run in here, so a match
+        // between the bot's own hostmask and the admin flag would let the
+        // bot execute its own ignore/reset/character commands.
+        if (ctx.nick.toLowerCase() === botNick().toLowerCase()) return;
+        if (isLikelyBot(ctx.nick, cfg.permissions.botNickPatterns, cfg.permissions.ignoreBots)) {
+          return;
+        }
+        const text = truncateForBuffer(ctx.text);
+        contextManager!.addMessage(ctx.channel, ctx.nick, text, false);
 
-        const args = ctx.args.trim();
+        const args = truncateForBuffer(ctx.args).trim();
 
         // Admin + info subcommands
         if (await handleSubcommand(api, cfg, ctx, args)) return;
@@ -889,7 +957,7 @@ async function runSessionPipeline(
   networkName: string,
 ): Promise<void> {
   if (!rateLimiter || !tokenTracker || !sessionManager) return;
-  const session = sessionManager.getSession(ctx.nick, ctx.channel);
+  const session = sessionManager.getSession(ctx.nick, ctx.channel, makeSessionIdentity(ctx));
   if (!session) return;
 
   const userKey = ctx.nick.toLowerCase();
@@ -986,7 +1054,7 @@ async function handleSubcommand(
         return true;
       }
       tokenTracker!.resetUser(target);
-      ctx.reply(`Reset token usage for ${target}.`);
+      ctx.reply(`Reset token usage for ${api.stripFormatting(target)}.`);
       return true;
     }
     case 'ignore': {
@@ -996,8 +1064,16 @@ async function handleSubcommand(
         ctx.reply('Usage: !ai ignore <nick|hostmask>');
         return true;
       }
+      // Shape + length validation: the target becomes a DB key that every
+      // subsequent channel message scans via isIgnored(). An unvalidated
+      // insert path is a slow-loris on the check loop (and a key-space
+      // fill attack).
+      if (target.length > 128 || !/^[$#&]?[\w[\]\\`^{}*?@!.-]+$/.test(target)) {
+        ctx.reply('Invalid ignore target.');
+        return true;
+      }
       api.db.set(`${IGNORE_PREFIX}${target}`, '1');
-      ctx.reply(`Now ignoring "${target}".`);
+      ctx.reply(`Now ignoring "${api.stripFormatting(target)}".`);
       return true;
     }
     case 'unignore': {
@@ -1008,7 +1084,7 @@ async function handleSubcommand(
         return true;
       }
       api.db.del(`${IGNORE_PREFIX}${target}`);
-      ctx.reply(`No longer ignoring "${target}".`);
+      ctx.reply(`No longer ignoring "${api.stripFormatting(target)}".`);
       return true;
     }
     case 'clear': {
@@ -1028,12 +1104,15 @@ async function handleSubcommand(
       if (!hasAdmin) return true;
       const name = subArgs.toLowerCase();
       if (!characters.has(name)) {
-        ctx.reply(`Unknown character: ${subArgs}. Available: ${[...characters.keys()].join(', ')}`);
+        ctx.reply(
+          `Unknown character: ${api.stripFormatting(subArgs)}. ` +
+            `Available: ${[...characters.keys()].join(', ')}`,
+        );
         return true;
       }
       if (ctx.channel) {
         api.db.set(`${CHARACTER_PREFIX}${ctx.channel.toLowerCase()}`, name);
-        ctx.reply(`Character set to ${name} for ${ctx.channel}.`);
+        ctx.reply(`Character set to ${api.stripFormatting(name)} for ${ctx.channel}.`);
       }
       return true;
     }
@@ -1071,7 +1150,27 @@ async function handleSubcommand(
         ctx.reply(`Unknown game: ${game}. Available: ${listGames(gamesDir).join(', ')}`);
         return true;
       }
-      sessionManager.createSession(ctx.nick, ctx.channel, game, prompt);
+      // Gate session creation on the same rules as the normal response path.
+      // Without this check, an ignored or founder-blocked user could spin up
+      // partial session state and trigger post-time-gate noise on every turn.
+      const allowed = shouldRespond({
+        nick: ctx.nick,
+        ident: ctx.ident,
+        hostname: ctx.hostname,
+        channel: ctx.channel,
+        botNick: api.botConfig.irc.nick,
+        hasRequiredFlag: api.permissions.checkFlags(cfg.permissions.requiredFlag, ctx),
+        hasPrivilegedFlag: api.permissions.checkFlags(cfg.security.privilegedRequiredFlag, ctx),
+        botChannelModes: getBotChannelModes(api, ctx.channel),
+        botChanservAccess: getBotChanservAccess(api, ctx.channel),
+        config: cfg,
+        dynamicIgnoreList: getDynamicIgnoreList(api),
+      });
+      if (!allowed) {
+        ctx.reply('AI chat is disabled here.');
+        return true;
+      }
+      sessionManager.createSession(ctx.nick, ctx.channel, game, prompt, makeSessionIdentity(ctx));
       ctx.reply(`Starting ${game}! Type \`${cfg.triggers.commandPrefix} endgame\` to quit.`);
       // Kick off the session with an empty move so the game sends its opening line.
       await runSessionPipeline(
@@ -1103,6 +1202,10 @@ async function handleSubcommand(
 // ---------------------------------------------------------------------------
 
 export function teardown(): void {
+  if (sessionExpiryInterval) {
+    clearInterval(sessionExpiryInterval);
+    sessionExpiryInterval = null;
+  }
   rateLimiter?.reset();
   sessionManager?.clear();
   ambientEngine?.stop();
@@ -1117,6 +1220,7 @@ export function teardown(): void {
   ambientEngine = null;
   moodEngine = null;
   engagementMap.clear();
+  gamesDir = '';
 }
 
 // Re-export so Phase 6 tests can still access the formatter.

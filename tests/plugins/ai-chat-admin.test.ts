@@ -2,7 +2,11 @@
 import { resolve } from 'node:path';
 import { type Mock, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { __setProviderOverrideForTesting } from '../../plugins/ai-chat/index';
+// Provider hook must come from the dist bundle so the module-local `let` the
+// test writes is the same one the plugin loader reads. Dist has no .d.ts
+// (see plugins/ai-chat/tsup.config.ts), so the import is untyped.
+// @ts-expect-error - dist has no .d.ts; value-only import
+import * as aiChatDist from '../../plugins/ai-chat/dist/index.js';
 import type { AIProvider } from '../../plugins/ai-chat/providers/types';
 import { Permissions } from '../../src/core/permissions';
 import { BotDatabase } from '../../src/database';
@@ -10,6 +14,10 @@ import { EventDispatcher } from '../../src/dispatcher';
 import { BotEventBus } from '../../src/event-bus';
 import { PluginLoader } from '../../src/plugin-loader';
 import type { BotConfig, HandlerContext, PluginsConfig } from '../../src/types';
+
+const __setProviderOverrideForTesting = (
+  aiChatDist as { __setProviderOverrideForTesting: (f: (() => AIProvider) | null) => void }
+).__setProviderOverrideForTesting;
 
 const BOT_CONFIG: BotConfig = {
   irc: {

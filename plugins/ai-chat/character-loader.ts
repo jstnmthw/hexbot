@@ -1,9 +1,12 @@
 // Load and validate character definitions from JSON files.
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { Character, CharacterJson } from './characters/types';
+
+/** Upper bound on character JSON file size — mirrors games-loader's cap. */
+const MAX_CHARACTER_FILE_BYTES = 64 * 1024;
 
 const DEFAULT_CHARACTER: Character = {
   name: 'friendly',
@@ -119,7 +122,13 @@ export function loadCharacters(dir: string, log?: (msg: string) => void): Map<st
 
   for (const file of files) {
     try {
-      const raw = JSON.parse(readFileSync(join(dir, file), 'utf-8')) as CharacterJson;
+      const path = join(dir, file);
+      const stat = statSync(path);
+      if (!stat.isFile() || stat.size > MAX_CHARACTER_FILE_BYTES) {
+        log?.(`Skipping character file (not a file or over size cap): ${file} (${stat.size}B)`);
+        continue;
+      }
+      const raw = JSON.parse(readFileSync(path, 'utf-8')) as CharacterJson;
       const character = validateCharacter(raw, file);
       if (character) {
         characters.set(character.name.toLowerCase(), character);

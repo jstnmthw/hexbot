@@ -100,7 +100,7 @@ describe('ResilientProvider', () => {
     expect(complete).toHaveBeenCalledTimes(3);
   });
 
-  it('uses exponential backoff', async () => {
+  it('uses jittered exponential backoff', async () => {
     const delays: number[] = [];
     const sleep = vi.fn(async (ms: number) => void delays.push(ms));
     const complete = vi.fn(async () => {
@@ -108,7 +108,13 @@ describe('ResilientProvider', () => {
     });
     const p = new ResilientProvider(makeInner(complete), CFG, Date.now, sleep);
     await expect(p.complete('sys', [{ role: 'user', content: 'q' }], 100)).rejects.toBeDefined();
-    expect(delays).toEqual([10, 20]); // initial 10, then doubled
+    // Jitter is 0.5x–1.5x on each backoff step. Base is 10 then 20, so
+    // sleeps land in [5, 15] then [10, 30]. Verify ranges, not exact values.
+    expect(delays).toHaveLength(2);
+    expect(delays[0]).toBeGreaterThanOrEqual(5);
+    expect(delays[0]).toBeLessThanOrEqual(15);
+    expect(delays[1]).toBeGreaterThanOrEqual(10);
+    expect(delays[1]).toBeLessThanOrEqual(30);
   });
 
   it('opens the circuit after N consecutive failures', async () => {

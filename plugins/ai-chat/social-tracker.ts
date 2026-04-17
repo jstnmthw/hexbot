@@ -38,6 +38,8 @@ export interface PendingQuestion {
 // ---------------------------------------------------------------------------
 
 const USER_INTERACTION_PREFIX = 'user-interaction:';
+/** Drop user-interaction rows whose lastSeen is older than this. */
+const USER_INTERACTION_RETENTION_MS = 90 * 24 * 60 * 60_000;
 
 export interface UserInteraction {
   lastSeen: number;
@@ -56,9 +58,18 @@ const ACTIVITY_WINDOW_MS = 5 * 60_000;
 const DEAD_THRESHOLD_MS = 30 * 60_000;
 /** Max age for pending questions before they're cleaned up. */
 const QUESTION_MAX_AGE_MS = 10 * 60_000;
+/** Channels whose last message is older than this are dropped by the sweep. */
+const IDLE_CHANNEL_MS = 24 * 60 * 60_000;
+/** Hard cap on tracked channels (defence against invite-spam / auto-join exhaustion). */
+const MAX_CHANNELS = 256;
+/** How often maintain() actually does work (opportunistically triggered from pruneAndRecalc). */
+const MAINTAIN_INTERVAL_MS = 60 * 60_000;
 
 export class SocialTracker {
   private channels = new Map<string, ChannelSocialState>();
+  private lastMaintainAt = 0;
+  /** Last calendar day we ran the user-interaction DB retention sweep. */
+  private lastUserRetentionDay: string | null = null;
 
   constructor(
     private db: PluginDB | null = null,
@@ -86,8 +97,10 @@ export class SocialTracker {
       state.activeUsers.set(nickKey, user);
     }
 
-    // Question tracking
+    // Question tracking — hard cap keeps the list bounded even inside the
+    // 10-min prune window (defence against a crafted `foo?` flood).
     if (!isBot && looksLikeQuestion(text)) {
+      if (state.pendingQuestions.length >= 50) state.pendingQuestions.shift();
       state.pendingQuestions.push({ nick, text, at: now });
     }
     // A human message from a DIFFERENT nick means someone responded — clear all
@@ -174,6 +187,11 @@ export class SocialTracker {
     this.channels.clear();
   }
 
+  /** Drop a single channel's ephemeral state (wire to bot part/kick events). */
+  dropChannel(channel: string): void {
+    this.channels.delete(channel.toLowerCase());
+  }
+
   // -------------------------------------------------------------------------
 
   private getOrCreate(channel: string): ChannelSocialState {
@@ -205,6 +223,13 @@ export class SocialTracker {
     // Prune old pending questions
     state.pendingQuestions = state.pendingQuestions.filter((q) => now - q.at < QUESTION_MAX_AGE_MS);
 
+    // Evict stale per-nick entries so a nick-rotation flood can't keep growing
+    // activeUsers forever. Anything outside the active window is dropped.
+    const userCutoff = now - ACTIVITY_WINDOW_MS;
+    for (const [nickKey, u] of state.activeUsers) {
+      if (u.lastSeen < userCutoff) state.activeUsers.delete(nickKey);
+    }
+
     // Calculate activity level based on messages in the last 5 minutes
     const count = state.messageTimestamps.length;
     const perMinute = count / (ACTIVITY_WINDOW_MS / 60_000);
@@ -222,10 +247,36 @@ export class SocialTracker {
     } else {
       state.activity = 'flooding';
     }
+
+    // Opportunistic global sweep: drop idle channels and enforce hard cap.
+    this.maintain(now);
+  }
+
+  /** Drop channels idle > 24h and enforce the channel-count hard cap. Throttled. */
+  private maintain(now: number): void {
+    if (now - this.lastMaintainAt < MAINTAIN_INTERVAL_MS) return;
+    this.lastMaintainAt = now;
+
+    const idleCutoff = now - IDLE_CHANNEL_MS;
+    for (const [key, state] of this.channels) {
+      if (state.lastMessageAt < idleCutoff) this.channels.delete(key);
+    }
+
+    // Hard cap: delete oldest-inserted entries (Map iteration is insertion-ordered).
+    if (this.channels.size > MAX_CHANNELS) {
+      const excess = this.channels.size - MAX_CHANNELS;
+      const iter = this.channels.keys();
+      for (let i = 0; i < excess; i++) {
+        const next = iter.next();
+        if (next.done) break;
+        this.channels.delete(next.value);
+      }
+    }
   }
 
   private recordUserInteraction(nick: string, wasBotInteraction: boolean): void {
     if (!this.db) return;
+    this.retainUserInteractionRows();
     const key = `${USER_INTERACTION_PREFIX}${nick.toLowerCase()}`;
     const now = this.now();
     let stats: UserInteraction;
@@ -249,6 +300,32 @@ export class SocialTracker {
     }
 
     this.db.set(key, JSON.stringify(stats));
+  }
+
+  /**
+   * Drop user-interaction rows whose lastSeen is older than 90 days. Runs at
+   * most once per calendar day (mirrors TokenTracker.cleanupIfNewDay) so a
+   * burst of onMessage calls doesn't hammer the DB.
+   */
+  private retainUserInteractionRows(): void {
+    if (!this.db) return;
+    const now = this.now();
+    const today = new Date(now).toISOString().slice(0, 10);
+    if (this.lastUserRetentionDay === today) return;
+    this.lastUserRetentionDay = today;
+
+    const cutoff = now - USER_INTERACTION_RETENTION_MS;
+    for (const row of this.db.list(USER_INTERACTION_PREFIX)) {
+      try {
+        const stats = JSON.parse(row.value) as Partial<UserInteraction>;
+        if (typeof stats.lastSeen === 'number' && stats.lastSeen < cutoff) {
+          this.db.del(row.key);
+        }
+      } catch {
+        // corrupt row — drop it
+        this.db.del(row.key);
+      }
+    }
   }
 }
 
