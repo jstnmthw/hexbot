@@ -24,7 +24,7 @@ export interface Character {
   triggers: string[]; // topics that make them chime in
   avoids: string[]; // topics rendered as "You avoid topics like: …" under Persona
 
-  /** Persona body — the "who you are" template with {nick}/{channel}/{network}/{users}
+  /** Persona body — the "who you are" template with {nick}/{channel}/{network}
    *  placeholders. No Rules block — security rules are appended by the assistant. */
   persona: string;
 

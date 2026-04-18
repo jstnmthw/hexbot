@@ -147,20 +147,6 @@ export class SocialTracker {
     return this.channels.get(channel.toLowerCase());
   }
 
-  /**
-   * Return nicks for a channel ordered by recent activity (most recent first).
-   * Nicks the tracker has never seen speak receive a lastSeen of 0, so they
-   * sort after any active speaker while preserving their input order. Used by
-   * the prompt builder to bias "Users present:" toward people the model
-   * actually just heard from — join-order alone leaks stale members up front.
-   */
-  orderByRecency(channel: string, nicks: readonly string[]): string[] {
-    const state = this.channels.get(channel.toLowerCase());
-    if (!state) return [...nicks];
-    const lastSeen = (n: string): number => state.activeUsers.get(n.toLowerCase())?.lastSeen ?? 0;
-    return [...nicks].sort((a, b) => lastSeen(b) - lastSeen(a));
-  }
-
   /** Check if the last message in the channel was from the bot. */
   isLastMessageFromBot(channel: string): boolean {
     return this.channels.get(channel.toLowerCase())?.lastWasBot ?? false;

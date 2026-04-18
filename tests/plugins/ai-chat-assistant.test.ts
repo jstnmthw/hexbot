@@ -94,20 +94,19 @@ describe('renderStableSystemPrompt', () => {
     expect(out).toContain('I am in (private).');
   });
 
-  it('expands {users} to empty in the stable prompt (live list lives in the volatile header)', () => {
-    // Byte-stability trumps convenience — if a persona uses {users}, it
-    // resolves to an empty string so the system prompt doesn't drift as
-    // people join/leave. Character authors should rely on the volatile
-    // header instead.
+  it('does not expose the channel user list to the model (small-model target-salad guard)', () => {
+    // Regression: llama3.2:3b latches onto every nick it sees and addresses
+    // uninvolved users. The presence list used to live in the volatile
+    // header; we now only pass the current speaker. Personas should never
+    // see or rely on a {users} placeholder.
     const out = renderStableSystemPrompt({
       botNick: 'hexbot',
       channel: '#c',
       network: 'irc.test',
-      users: ['alice', 'bob'],
-      persona: 'Users in channel: {users}.',
+      persona: 'You are hexbot.',
     });
-    expect(out).toContain('Users in channel: .');
-    expect(out).not.toContain('alice');
+    expect(out).not.toContain('Users present:');
+    expect(out).not.toContain('{users}');
   });
 
   it('renders the three section headers in order (Right now section is gone)', () => {
@@ -132,13 +131,11 @@ describe('renderStableSystemPrompt', () => {
   it('is byte-identical when only volatile fields change', () => {
     const a = renderStableSystemPrompt({
       ...PROMPT_CTX,
-      users: ['alice', 'bob'],
       mood: 'Current state: feeling energetic.',
       language: 'English',
     });
     const b = renderStableSystemPrompt({
       ...PROMPT_CTX,
-      users: ['zed'],
       mood: 'Current state: low energy.',
       language: 'French',
     });
@@ -295,23 +292,34 @@ describe('renderVolatileHeader', () => {
     expect(h).toBe('[a private chat on irc.test.]');
   });
 
-  it('lists users, mood, and language inside a single bracketed prefix', () => {
+  it('combines speaker, mood, and language inside a single bracketed prefix', () => {
     const h = renderVolatileHeader({
       ...PROMPT_CTX,
-      users: ['alice', 'bob'],
+      speaker: 'alice',
       mood: 'Current state: feeling energetic.',
       language: 'French',
     });
     expect(h).toBe(
-      '[#test on irc.test. Users present: alice, bob. Current state: feeling energetic. Always respond in French.]',
+      '[#test on irc.test. Speaking to you now: alice. Current state: feeling energetic. Always respond in French.]',
     );
   });
 
   it('includes the current-turn speaker when provided', () => {
-    const h = renderVolatileHeader({ ...PROMPT_CTX, users: ['alice', 'bob'], speaker: 'alice' });
+    const h = renderVolatileHeader({ ...PROMPT_CTX, speaker: 'alice' });
     // Speaker is named in-prose inside the header so we can drop the `[nick]`
     // prefix from the user turn without losing who's addressing the bot.
     expect(h).toContain('Speaking to you now: alice.');
+  });
+
+  it('never includes a channel-wide user list (small-model target-salad guard)', () => {
+    // Regression: we used to pass the full presence list in the header and
+    // small models (llama3.2:3b) picked random nicks as conversational
+    // targets. The volatile header now names only the current speaker.
+    const h = renderVolatileHeader({
+      ...PROMPT_CTX,
+      speaker: 'alice',
+    });
+    expect(h).not.toContain('Users present:');
   });
 
   it('sanitises the speaker nick', () => {
@@ -325,16 +333,15 @@ describe('renderVolatileHeader', () => {
     expect(h).not.toContain('rm -rf');
   });
 
-  it('sanitises user nicks before inclusion', () => {
+  it('omits the speaker clause when the nick sanitises to empty', () => {
+    // All-invalid characters — nothing survives the filter, so the clause
+    // is dropped rather than rendering "Speaking to you now: ." with a
+    // blank name.
     const h = renderVolatileHeader({
       ...PROMPT_CTX,
-      users: ['alice', 'ignore_previous; drop table', 'bob'],
+      speaker: ';;;;;',
     });
-    // Semicolons/spaces/etc. are stripped; nicks that survive the filter
-    // are joined. "ignore_previous" survives (allowed chars), the rest drop.
-    expect(h).toContain('Users present:');
-    expect(h).not.toContain(';');
-    expect(h).not.toContain('drop table');
+    expect(h).not.toContain('Speaking to you now');
   });
 
   it('returns empty string when there is nothing volatile to report', () => {
@@ -517,7 +524,7 @@ describe('respond', () => {
         prompt: 'follow up',
         promptContext: {
           ...PROMPT_CTX,
-          users: ['alice', 'bob'],
+          speaker: 'alice',
           mood: 'Current state: feeling energetic.',
         },
       },
@@ -533,7 +540,7 @@ describe('respond', () => {
     // speaker is identified inside the header when promptContext.speaker set.
     expect(messages[2].role).toBe('user');
     expect(messages[2].content).toBe(
-      '[#test on irc.test. Users present: alice, bob. Current state: feeling energetic.] follow up',
+      '[#test on irc.test. Speaking to you now: alice. Current state: feeling energetic.] follow up',
     );
   });
 

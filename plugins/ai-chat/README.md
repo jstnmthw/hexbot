@@ -6,7 +6,7 @@ Pluggable providers — **Gemini** (hosted free tier, no credit card) and **Olla
 
 ## Features
 
-**Characters that feel like people.** Nine shipped archetypes with backstory, style rules, and verbosity traits — `friendly`, `sarcastic`, `chaotic`, `shitposter`, `deadpan`, `minimal`, `gossip`, `nightowl`, `oldhead`. Drop a JSON file in `characters/` to add your own — schema is documented, template variables (`{nick}`, `{channel}`, `{network}`, `{users}`) render into the persona body. Assign different characters per channel, or switch live with `!ai character <name>` — choice persists across reloads.
+**Characters that feel like people.** Nine shipped archetypes with backstory, style rules, and verbosity traits — `friendly`, `sarcastic`, `chaotic`, `shitposter`, `deadpan`, `minimal`, `gossip`, `nightowl`, `oldhead`. Drop a JSON file in `characters/` to add your own — schema is documented, template variables (`{nick}`, `{channel}`, `{network}`) render into the persona body. Assign different characters per channel, or switch live with `!ai character <name>` — choice persists across reloads.
 
 **A mood engine, not a temperature slider.** Energy, engagement, patience, and humor drift over time and modulate every reply. A 0.5×–1.5× verbosity multiplier scales line caps dynamically — tired = terse, wired = chatty. Mood is ephemeral (not persisted), so the bot wakes up fresh each run.
 
@@ -173,7 +173,7 @@ Built-in roster (configurable per-channel):
 | `nightowl`   | 3am philosophical tangents, weird questions            |
 | `oldhead`    | online since '98, references old internet culture      |
 
-Drop another JSON file into `plugins/ai-chat/characters/` and it's loaded at init. See `characters/types.ts` for the schema. Template variables in `persona`: `{nick}`, `{channel}`, `{network}`, `{users}`. Channel profile no longer needs a placeholder — it's injected into `## Persona` automatically when one is configured for the channel.
+Drop another JSON file into `plugins/ai-chat/characters/` and it's loaded at init. See `characters/types.ts` for the schema. Template variables in `persona`: `{nick}`, `{channel}`, `{network}`. Channel profile no longer needs a placeholder — it's injected into `## Persona` automatically when one is configured for the channel. The channel's full user list is deliberately _not_ exposed to the model — small models treat it as a menu of targets and address uninvolved users; only the current speaker is named in the volatile header.
 
 ### Per-channel assignment
 

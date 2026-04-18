@@ -29,14 +29,13 @@ export interface PromptContext {
   botNick: string;
   channel: string | null;
   network: string;
-  users?: string[];
   language?: string;
   /** Rendered channel profile string (e.g. "This channel is about Linux..."). */
   channelProfile?: string;
   /** Rendered mood line (e.g. "Current state: feeling energetic, in a funny mood."). */
   mood?: string;
   /** Persona body — placed under "## Persona". May contain {nick}/{channel}/
-   *  {network}/{users} placeholders. Required. */
+   *  {network} placeholders. Required. */
   persona: string;
   /** Current-turn speaker nick. Rendered into the volatile header so the bot
    *  knows who's addressing it without needing a `[nick]` prefix on the turn
@@ -197,26 +196,30 @@ export const SAFETY_CLAUSE =
  *   ## Rules (these override Persona and Right now)
  *   1. …
  *
- * All volatile content (users present, mood, language) is lifted onto the
- * current user turn via `renderVolatileHeader` so the system prompt stays
+ * All volatile content (speaker, mood, language) is lifted onto the current
+ * user turn via `renderVolatileHeader` so the system prompt stays
  * byte-stable between calls. That maximises Ollama/llama.cpp KV-cache reuse
  * (prefill ~10-17× faster on hits) and Gemini implicit-caching odds.
  *
- * The persona body supports {nick}/{channel}/{network}/{users} placeholders;
- * {users} expands to empty in the stable prompt (put live user list in the
- * volatile header instead). SAFETY_CLAUSE is always last so the model's
- * recency bias keeps it weighted.
+ * The persona body supports {nick}/{channel}/{network} placeholders.
+ * SAFETY_CLAUSE is always last so the model's recency bias keeps it
+ * weighted.
+ *
+ * Intentional non-feature: the channel's full user list is never included
+ * in any prompt. Small models like llama3.2:3b treat a presence list as a
+ * menu of conversational targets and will latch onto names of people who
+ * never spoke, producing "d3m0n what's up?" replies to dark. The only
+ * per-turn identity the model sees is the current speaker via
+ * `renderVolatileHeader`.
  */
 export function renderStableSystemPrompt(ctx: PromptContext): string {
   const vars: Record<string, string> = {
     channel: ctx.channel ?? '(private)',
     network: ctx.network,
     nick: ctx.botNick,
-    // Live user list belongs in the volatile header — byte-stable here.
-    users: '',
   };
   const expand = (s: string): string =>
-    s.replace(/\{(channel|network|nick|users)\}/g, (_, key: string) => vars[key] ?? '');
+    s.replace(/\{(channel|network|nick)\}/g, (_, key: string) => vars[key] ?? '');
 
   const sections: string[] = [];
   sections.push(`You are ${ctx.botNick}.`);
@@ -243,30 +246,24 @@ export function renderStableSystemPrompt(ctx: PromptContext): string {
 /**
  * One-line volatile context prefix prepended to the current user turn:
  *
- *   [<channel> on <network>. Users present: X, Y, Z. <mood>. Always respond in <lang>.]
+ *   [<channel> on <network>. Speaking to you now: X. <mood>. Always respond in <lang>.]
  *
  * Only the pieces that are set are included; if every field is empty,
  * returns the empty string (caller skips the prefix entirely). Keeping the
  * anchor (channel/network) on every user turn gives the model context
  * without polluting the cached system prefix.
  *
- * User-list nicks are sanitised the same way they used to be in the system
- * prompt — a crafted nick shouldn't land verbatim in the transcript either.
+ * The channel's full user list is deliberately NOT included — see the
+ * non-feature note on `renderStableSystemPrompt`. Only the current speaker
+ * is named, so small models can't pick an uninvolved nick as a target.
  */
 export function renderVolatileHeader(ctx: PromptContext): string {
-  const safeUsers = (ctx.users ?? [])
-    .map((n) => n.replace(/[^A-Za-z0-9_`{}[\]\\^|-]/g, ''))
-    .filter((n) => n.length > 0 && n.length <= 30)
-    .slice(0, 50);
-  const usersStr = safeUsers.join(', ');
-
   const parts: string[] = [];
   if (ctx.channel && ctx.network) {
     parts.push(`${ctx.channel} on ${ctx.network}.`);
   } else if (ctx.network) {
     parts.push(`a private chat on ${ctx.network}.`);
   }
-  if (usersStr) parts.push(`Users present: ${usersStr}.`);
   if (ctx.speaker) {
     const safeSpeaker = ctx.speaker.replace(/[^A-Za-z0-9_`{}[\]\\^|-]/g, '').slice(0, 30);
     if (safeSpeaker) parts.push(`Speaking to you now: ${safeSpeaker}.`);

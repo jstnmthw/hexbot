@@ -853,12 +853,10 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
         maxOutputTokens,
       };
 
-      const channelNicks = api.getUsers(channel).map((u) => u.nick);
       const promptCtx: PromptContext = {
         botNick: botNick(),
         channel,
         network: network(),
-        users: socialTracker ? socialTracker.orderByRecency(channel, channelNicks) : channelNicks,
         language,
         channelProfile: renderChannelProfile(cfg, channel),
         mood: moodEngine?.renderMoodLine(),
@@ -1183,15 +1181,10 @@ async function runPipeline(
   // Notify mood engine of the interaction
   moodEngine?.onInteraction();
 
-  const channelNicks = ctx.channel ? api.getUsers(ctx.channel).map((u) => u.nick) : undefined;
   const promptCtx: PromptContext = {
     botNick,
     channel: ctx.channel,
     network,
-    users:
-      channelNicks && ctx.channel && socialTracker
-        ? socialTracker.orderByRecency(ctx.channel, channelNicks)
-        : channelNicks,
     language,
     channelProfile: renderChannelProfile(cfg, ctx.channel),
     mood: moodEngine?.renderMoodLine(),
