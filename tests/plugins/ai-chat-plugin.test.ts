@@ -370,7 +370,12 @@ describe('shouldRespond logic', () => {
       randomChance: 0,
       engagementSeconds: 60,
     },
-    context: { maxMessages: 50, maxTokens: 4000, ttlMs: 60_000 },
+    context: {
+      maxMessages: 25,
+      maxTokens: 2000,
+      ttlMs: 60_000,
+      pruneStrategy: 'bulk' as const,
+    },
     rateLimits: {
       userBurst: 3,
       userRefillSeconds: 12,
@@ -409,6 +414,8 @@ describe('shouldRespond logic', () => {
       baseUrl: 'http://127.0.0.1:11434',
       requestTimeoutMs: 60_000,
       useServerTokenizer: false,
+      keepAlive: '30m',
+      numCtx: 4096,
     },
   };
 

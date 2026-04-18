@@ -44,6 +44,8 @@ export class OllamaProvider implements AIProvider {
   private requestTimeoutMs = 60_000;
   private extraOptions: Record<string, number | string | boolean> = {};
   private useServerTokenizer = false;
+  private keepAlive: string | undefined;
+  private numCtx = 0;
 
   async initialize(config: AIProviderConfig): Promise<void> {
     if (!config.baseUrl) {
@@ -56,6 +58,8 @@ export class OllamaProvider implements AIProvider {
     this.requestTimeoutMs = config.requestTimeoutMs ?? 60_000;
     this.extraOptions = config.samplingOptions ?? {};
     this.useServerTokenizer = config.useServerTokenizer ?? false;
+    this.keepAlive = config.keepAlive;
+    this.numCtx = config.numCtx ?? 0;
 
     // Startup ping: fail fast if the daemon is unreachable, but only warn if
     // the configured model isn't pulled yet — operator may pull it after boot.
@@ -95,16 +99,24 @@ export class OllamaProvider implements AIProvider {
     if (systemPrompt) wire.push({ role: 'system', content: systemPrompt });
     for (const m of messages) wire.push({ role: m.role, content: m.content });
 
-    const body = {
+    // `keep_alive` goes at the top level (per Ollama API); `num_ctx` inside
+    // options only when configured > 0, otherwise we leave it unset so the
+    // daemon picks the model default. Both feed llama.cpp's KV-cache: a
+    // resident model + pinned ctx size is the difference between a 10-17×
+    // prefill-speed hit and a cold rebuild every call.
+    const options: Record<string, number | string | boolean> = {
+      temperature: this.temperature,
+      num_predict: maxTokens,
+      ...this.extraOptions,
+    };
+    if (this.numCtx > 0) options.num_ctx = this.numCtx;
+    const body: Record<string, unknown> = {
       model: this.modelName,
       messages: wire,
       stream: false,
-      options: {
-        temperature: this.temperature,
-        num_predict: maxTokens,
-        ...this.extraOptions,
-      },
+      options,
     };
+    if (this.keepAlive !== undefined) body.keep_alive = this.keepAlive;
 
     let res: OllamaChatResponse;
     try {

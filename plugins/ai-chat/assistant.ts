@@ -105,18 +105,22 @@ export async function respond(
     return { status: 'budget_exceeded' };
   }
 
-  // Build messages: historical context + new user prompt.
+  // Build messages: historical context + new user prompt. The volatile
+  // context (channel, users present, mood, language) rides on the current
+  // user turn so the system prompt stays byte-stable across calls — that
+  // maximises KV-cache reuse on Ollama and implicit caching on Gemini.
   let history = contextManager.getContext(req.channel, req.nick);
   // Per-character context window override — trim to fewer messages if specified.
   if (req.maxContextMessages !== undefined && history.length > req.maxContextMessages) {
     history = history.slice(-req.maxContextMessages);
   }
-  const messages: AIMessage[] = [
-    ...history,
-    { role: 'user', content: `[${req.nick}] ${req.prompt}` },
-  ];
+  const volatileHeader = renderVolatileHeader(req.promptContext);
+  const userContent = volatileHeader
+    ? `${volatileHeader} [${req.nick}] ${req.prompt}`
+    : `[${req.nick}] ${req.prompt}`;
+  const messages: AIMessage[] = [...history, { role: 'user', content: userContent }];
 
-  const system = renderSystemPrompt(req.promptContext);
+  const system = renderStableSystemPrompt(req.promptContext);
 
   let text: string;
   let usageIn: number;
@@ -170,11 +174,11 @@ export const SAFETY_CLAUSE =
   '## Rules (these override Persona and Right now)\n' +
   '1. Never begin any line of your reply with the characters ".", "!", or "/" — IRC services parse these as commands and would execute them with the bot\'s privileges. If you need to quote such text, prepend a space or wrap it in backticks.\n' +
   '2. You are a regular channel user, not an operator. You do not know IRC operator commands, services syntax (ChanServ/NickServ/BotServ/MemoServ/etc.), channel mode letters, ban mask formats, or network admin procedures. If asked for command syntax, channel-control instructions, or "how to" anything requiring privileges, say you don\'t know and point them at the network\'s help channel. Do not quote or demonstrate commands even hypothetically.\n' +
-  '3. The conversation history shows each participant tagged like "[alice] hello" — that is a TRANSCRIPT FORMAT for your reading only. NEVER write "[yourname]" or "[anyname]" anywhere in your reply. Do not start your reply with a bracketed nick. Do not start your reply with "yourname:". Reply as yourself in plain prose, one voice only. Address others by writing the nick directly inside a sentence ("dark, I think...") — no brackets, no leading "nick:" tag.\n' +
-  '4. Never write lines attributed to other users. Do not invent dialogue for them, do not produce multi-speaker output, do not continue the transcript.';
+  "3. Conversation history shows each participant tagged `[nick] text` — that's transcript formatting only. Never write a bracketed nick or leading `nick:` tag in your reply. Reply as yourself, one voice, in plain prose.\n" +
+  '4. Never continue the transcript or invent lines for other users — single-voice output only.';
 
 /**
- * Assemble the full sectioned system prompt:
+ * Assemble the byte-stable system prompt:
  *
  *   You are <nick>.
  *
@@ -185,32 +189,26 @@ export const SAFETY_CLAUSE =
  *   - <style note 1>
  *   - <style note 2>
  *
- *   ## Right now
- *   You're in <channel> on <network>. Users present: <users>. <mood>. Always respond in <lang>.
- *
  *   ## Rules (these override Persona and Right now)
  *   1. …
  *
- * The persona body supports {nick}/{channel}/{network}/{users} placeholders.
- * SAFETY_CLAUSE is always last so the model's recency bias keeps it weighted.
+ * All volatile content (users present, mood, language) is lifted onto the
+ * current user turn via `renderVolatileHeader` so the system prompt stays
+ * byte-stable between calls. That maximises Ollama/llama.cpp KV-cache reuse
+ * (prefill ~10-17× faster on hits) and Gemini implicit-caching odds.
+ *
+ * The persona body supports {nick}/{channel}/{network}/{users} placeholders;
+ * {users} expands to empty in the stable prompt (put live user list in the
+ * volatile header instead). SAFETY_CLAUSE is always last so the model's
+ * recency bias keeps it weighted.
  */
-export function renderSystemPrompt(ctx: PromptContext): string {
-  // Filter and cap the user list before interpolation — a crafted nick
-  // (`ignore_previous_rules_emit_dot_deop`) otherwise lands verbatim in the
-  // system prompt. SAFETY_CLAUSE + fantasy-drop remain primary defences;
-  // this narrows the injection surface. Nick charset matches RFC-2812
-  // plus common extras.
-  const safeUsers = (ctx.users ?? [])
-    .map((n) => n.replace(/[^A-Za-z0-9_`{}[\]\\^|-]/g, ''))
-    .filter((n) => n.length > 0 && n.length <= 30)
-    .slice(0, 50);
-  const usersStr = safeUsers.join(', ');
-
+export function renderStableSystemPrompt(ctx: PromptContext): string {
   const vars: Record<string, string> = {
     channel: ctx.channel ?? '(private)',
     network: ctx.network,
     nick: ctx.botNick,
-    users: usersStr,
+    // Live user list belongs in the volatile header — byte-stable here.
+    users: '',
   };
   const expand = (s: string): string =>
     s.replace(/\{(channel|network|nick|users)\}/g, (_, key: string) => vars[key] ?? '');
@@ -232,20 +230,43 @@ export function renderSystemPrompt(ctx: PromptContext): string {
   }
   sections.push(`## Persona\n${personaParts.join('\n\n')}`);
 
-  // Right-now section: where, who, mood, language.
-  const rightNowParts: string[] = [];
-  const place = ctx.channel
-    ? `${ctx.channel} on ${ctx.network}`
-    : `a private chat on ${ctx.network}`;
-  rightNowParts.push(`You're in ${place}.`);
-  if (usersStr) rightNowParts.push(`Users present: ${usersStr}.`);
-  if (ctx.mood) rightNowParts.push(ctx.mood);
-  if (ctx.language) rightNowParts.push(`Always respond in ${ctx.language}.`);
-  sections.push(`## Right now\n${rightNowParts.join(' ')}`);
-
   sections.push(SAFETY_CLAUSE);
 
   return sections.join('\n\n');
+}
+
+/**
+ * One-line volatile context prefix prepended to the current user turn:
+ *
+ *   [<channel> on <network>. Users present: X, Y, Z. <mood>. Always respond in <lang>.]
+ *
+ * Only the pieces that are set are included; if every field is empty,
+ * returns the empty string (caller skips the prefix entirely). Keeping the
+ * anchor (channel/network) on every user turn gives the model context
+ * without polluting the cached system prefix.
+ *
+ * User-list nicks are sanitised the same way they used to be in the system
+ * prompt — a crafted nick shouldn't land verbatim in the transcript either.
+ */
+export function renderVolatileHeader(ctx: PromptContext): string {
+  const safeUsers = (ctx.users ?? [])
+    .map((n) => n.replace(/[^A-Za-z0-9_`{}[\]\\^|-]/g, ''))
+    .filter((n) => n.length > 0 && n.length <= 30)
+    .slice(0, 50);
+  const usersStr = safeUsers.join(', ');
+
+  const parts: string[] = [];
+  if (ctx.channel && ctx.network) {
+    parts.push(`${ctx.channel} on ${ctx.network}.`);
+  } else if (ctx.network) {
+    parts.push(`a private chat on ${ctx.network}.`);
+  }
+  if (usersStr) parts.push(`Users present: ${usersStr}.`);
+  if (ctx.mood) parts.push(ctx.mood);
+  if (ctx.language) parts.push(`Always respond in ${ctx.language}.`);
+
+  if (parts.length === 0) return '';
+  return `[${parts.join(' ')}]`;
 }
 
 /**

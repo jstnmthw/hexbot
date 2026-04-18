@@ -36,6 +36,21 @@ export interface AIProviderConfig {
   samplingOptions?: Record<string, number | string | boolean>;
   /** Ollama-only: use the server's /api/tokenize endpoint instead of a length heuristic. */
   useServerTokenizer?: boolean;
+  /**
+   * Ollama-only: how long to keep the model loaded between requests
+   * (e.g. `"30m"`, `"-1"` for "forever", `"0"` to unload immediately).
+   * Default Ollama behaviour is 5 minutes — too short for low-traffic bots
+   * since every idle gap forces a cold reload and discards KV-cache.
+   */
+  keepAlive?: string;
+  /**
+   * Ollama-only: pinned context window size passed as `options.num_ctx`.
+   * When set, the daemon uses this value instead of the per-model default
+   * so subsequent calls with the same prefix reuse KV-cache (which is
+   * invalidated by num_ctx drift). `0` / undefined → leave unset and let
+   * Ollama pick.
+   */
+  numCtx?: number;
 }
 
 /**

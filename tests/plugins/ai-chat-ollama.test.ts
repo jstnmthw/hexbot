@@ -180,6 +180,56 @@ describe('OllamaProvider.complete', () => {
     expect(body.messages[0]).toEqual({ role: 'user', content: 'q' });
   });
 
+  it('omits keep_alive and options.num_ctx when they are not configured', async () => {
+    // Default config doesn't set either — we must NOT send them so the
+    // daemon picks its own defaults instead of pinning to zero.
+    const provider = await makeProvider();
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ message: { role: 'assistant', content: 'ok' } }),
+    );
+    await provider.complete('sys', [{ role: 'user', content: 'q' }], 64);
+    const [, init] = fetchMock.mock.calls[1];
+    const body = JSON.parse(String(init.body));
+    expect(body).not.toHaveProperty('keep_alive');
+    expect(body.options).not.toHaveProperty('num_ctx');
+  });
+
+  it('sends keep_alive at the top level of the request body when configured', async () => {
+    const provider = await makeProvider({ keepAlive: '30m' });
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ message: { role: 'assistant', content: 'ok' } }),
+    );
+    await provider.complete('sys', [{ role: 'user', content: 'q' }], 64);
+    const [, init] = fetchMock.mock.calls[1];
+    const body = JSON.parse(String(init.body));
+    expect(body.keep_alive).toBe('30m');
+  });
+
+  it('sends options.num_ctx when numCtx is a positive integer', async () => {
+    const provider = await makeProvider({ numCtx: 4096 });
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ message: { role: 'assistant', content: 'ok' } }),
+    );
+    await provider.complete('sys', [{ role: 'user', content: 'q' }], 64);
+    const [, init] = fetchMock.mock.calls[1];
+    const body = JSON.parse(String(init.body));
+    expect(body.options.num_ctx).toBe(4096);
+  });
+
+  it('omits num_ctx when numCtx is 0 (leave daemon default)', async () => {
+    // Operators who pass num_ctx: 0 explicitly want "no pin" — we must not
+    // send options.num_ctx: 0 since that would load the model with a 0-size
+    // context and fail. Only positive values get forwarded.
+    const provider = await makeProvider({ numCtx: 0 });
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ message: { role: 'assistant', content: 'ok' } }),
+    );
+    await provider.complete('sys', [{ role: 'user', content: 'q' }], 64);
+    const [, init] = fetchMock.mock.calls[1];
+    const body = JSON.parse(String(init.body));
+    expect(body.options).not.toHaveProperty('num_ctx');
+  });
+
   it('returns zero usage when the server omits eval counts', async () => {
     const provider = await makeProvider();
     fetchMock.mockResolvedValueOnce(

@@ -44,8 +44,42 @@ describe('ContextManager', () => {
     ]);
   });
 
-  it('caps channel buffers at maxMessages', () => {
-    const { mgr } = make({ maxMessages: 3 });
+  it('bulk-prunes channel buffers by halving when they exceed maxMessages', () => {
+    // Default strategy is 'bulk': when the buffer overflows, drop the oldest
+    // half in one step so the remaining prefix is byte-stable across calls.
+    // This is cache-friendly: Ollama/llama.cpp KV-cache and Gemini implicit
+    // cache hit every turn between prunes instead of drifting per-message.
+    const { mgr } = make({ maxMessages: 4 });
+    for (let i = 0; i < 5; i++) mgr.addMessage('#c', 'alice', `m${i}`, false);
+    // After overflow at i=4, buf had 5 entries → ceil(5/2) = 3 dropped,
+    // leaving 2 newest messages (m3, m4).
+    expect(mgr.size('#c')).toBe(2);
+    expect(mgr.getContext('#c', 'alice').map((m) => m.content)).toEqual([
+      '[alice] m3',
+      '[alice] m4',
+    ]);
+  });
+
+  it('does not re-prune until the buffer overflows again', () => {
+    // Adding one message after a bulk-prune must NOT trigger another prune —
+    // the prefix stays byte-stable until the buffer fills to maxMessages + 1
+    // again.
+    const { mgr } = make({ maxMessages: 4 });
+    for (let i = 0; i < 5; i++) mgr.addMessage('#c', 'alice', `m${i}`, false);
+    expect(mgr.size('#c')).toBe(2);
+    mgr.addMessage('#c', 'alice', 'after-prune', false);
+    expect(mgr.size('#c')).toBe(3);
+    mgr.addMessage('#c', 'alice', 'also-after', false);
+    expect(mgr.size('#c')).toBe(4);
+    // One more brings us to 5 > maxMessages=4: bulk-prune again.
+    mgr.addMessage('#c', 'alice', 'trigger', false);
+    expect(mgr.size('#c')).toBe(2);
+  });
+
+  it('sliding prune strategy drops exactly one per overflow', () => {
+    // Escape hatch for operators who want the original per-turn behaviour —
+    // pruneStrategy: 'sliding' is wired through addMessage.
+    const { mgr } = make({ maxMessages: 3, pruneStrategy: 'sliding' });
     for (let i = 0; i < 5; i++) mgr.addMessage('#c', 'alice', `m${i}`, false);
     expect(mgr.size('#c')).toBe(3);
     const msgs = mgr.getContext('#c', 'alice');
@@ -136,6 +170,16 @@ describe('ContextManager', () => {
     mgr.setConfig({ maxMessages: 10, maxTokens: 1000, ttlMs: 60_000 });
     for (let i = 5; i < 10; i++) mgr.addMessage('#c', 'a', `m${i}`, false);
     expect(mgr.size('#c')).toBe(10);
+  });
+
+  it('token-budget trim in getContext still acts as a safety net on oversized buffers', () => {
+    // Even with bulk-prune, the per-call token budget still enforces the
+    // upper bound on serialized output size (the two are complementary).
+    const { mgr } = make({ maxMessages: 100, maxTokens: 5 });
+    for (let i = 0; i < 50; i++) mgr.addMessage('#c', 'a', `msg${i}`, false);
+    const msgs = mgr.getContext('#c', 'a');
+    const totalChars = msgs.reduce((sum, m) => sum + m.content.length, 0);
+    expect(totalChars).toBeLessThanOrEqual(20);
   });
 
   describe('initialChannels seed', () => {

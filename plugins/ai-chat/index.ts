@@ -6,7 +6,8 @@ import { AmbientEngine } from './ambient';
 import {
   type AssistantConfig,
   type PromptContext,
-  renderSystemPrompt,
+  renderStableSystemPrompt,
+  renderVolatileHeader,
   respond,
   sendLines,
 } from './assistant';
@@ -114,7 +115,12 @@ interface AiChatConfig {
   charactersDir: string;
   channelCharacters: Record<string, string | { character?: string; language?: string }>;
   triggers: TriggerConfig;
-  context: { maxMessages: number; maxTokens: number; ttlMs: number };
+  context: {
+    maxMessages: number;
+    maxTokens: number;
+    ttlMs: number;
+    pruneStrategy: 'bulk' | 'sliding';
+  };
   rateLimits: {
     userBurst: number;
     userRefillSeconds: number;
@@ -163,6 +169,10 @@ interface AiChatConfig {
     baseUrl: string;
     requestTimeoutMs: number;
     useServerTokenizer: boolean;
+    /** Ollama `keep_alive` — empty string means "use Ollama's default". */
+    keepAlive: string;
+    /** Pinned context window. `0` leaves it unset (daemon default). */
+    numCtx: number;
   };
 }
 
@@ -197,6 +207,7 @@ export function parseConfig(raw: Record<string, unknown>): AiChatConfig {
       maxMessages: asNum(context.max_messages, 50),
       maxTokens: asNum(context.max_tokens, 4000),
       ttlMs: asNum(context.ttl_minutes, 60) * 60_000,
+      pruneStrategy: asString(context.prune_strategy, 'bulk') === 'sliding' ? 'sliding' : 'bulk',
     },
     rateLimits: {
       userBurst: asNum(rl.user_burst, 3),
@@ -269,6 +280,8 @@ export function parseConfig(raw: Record<string, unknown>): AiChatConfig {
         baseUrl: asString(o.base_url, 'http://127.0.0.1:11434'),
         requestTimeoutMs: asNum(o.request_timeout_ms, 60_000),
         useServerTokenizer: asBool(o.use_server_tokenizer, false),
+        keepAlive: asString(o.keep_alive, '30m'),
+        numCtx: asNum(o.num_ctx, 4096),
       };
     })(),
   };
@@ -331,6 +344,10 @@ function buildProviderConfig(
         baseUrl: cfg.ollama.baseUrl,
         requestTimeoutMs: cfg.ollama.requestTimeoutMs,
         useServerTokenizer: cfg.ollama.useServerTokenizer,
+        // Empty keep_alive string → leave it out of the request so Ollama
+        // uses its own default (5m). Any non-empty string is passed through.
+        keepAlive: cfg.ollama.keepAlive || undefined,
+        numCtx: cfg.ollama.numCtx,
       };
     }
     default:
@@ -704,6 +721,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
       maxMessages: cfg.context.maxMessages,
       maxTokens: cfg.context.maxTokens,
       ttlMs: cfg.context.ttlMs,
+      pruneStrategy: cfg.context.pruneStrategy,
     });
   sessionManager =
     merged.sessionManager !== undefined
@@ -1253,15 +1271,22 @@ async function runSessionPipeline(
     return;
   }
 
-  const userMsg: AIMessage = { role: 'user', content: `[${ctx.nick}] ${text}` };
   // Game sessions use the game-defined prompt as the persona body. No style
   // notes / avoids / channel profile / mood — the game owns the framing.
-  const systemPrompt = renderSystemPrompt({
+  // Split stable/volatile the same way the regular pipeline does so sessions
+  // get the same KV-cache benefits.
+  const sessionPromptCtx: PromptContext = {
     botNick: botNickValue,
     channel: ctx.channel,
     network: networkName,
     persona: session.systemPrompt,
-  });
+  };
+  const systemPrompt = renderStableSystemPrompt(sessionPromptCtx);
+  const volatileHeader = renderVolatileHeader(sessionPromptCtx);
+  const userMsg: AIMessage = {
+    role: 'user',
+    content: volatileHeader ? `${volatileHeader} [${ctx.nick}] ${text}` : `[${ctx.nick}] ${text}`,
+  };
 
   try {
     const res = await provider.complete(

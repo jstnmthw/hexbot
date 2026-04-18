@@ -18,6 +18,16 @@ export interface ContextManagerConfig {
   maxTokens: number;
   /** Messages older than this are pruned on access. */
   ttlMs: number;
+  /**
+   * How to shrink the buffer when it overflows `maxMessages`.
+   * - `'bulk'` (default) — halve the buffer in one step. The history
+   *   prefix is then byte-stable until the NEXT overflow, so downstream
+   *   KV-cache / implicit-cache hits every turn between prunes.
+   * - `'sliding'` — drop exactly the oldest-over-cap on each add. Prefix
+   *   drifts every turn; every call is a cache miss. Escape hatch for
+   *   operators who want the old behaviour.
+   */
+  pruneStrategy?: 'bulk' | 'sliding';
 }
 
 /** Rough char→token ratio used for trimming — ~4 chars per token for English. */
@@ -68,7 +78,19 @@ export class ContextManager {
       this.channels.set(key, buf);
     }
     buf.push(entry);
-    if (buf.length > this.config.maxMessages) buf.splice(0, buf.length - this.config.maxMessages);
+    if (buf.length > this.config.maxMessages) {
+      // Bulk-prune (default): halve the buffer atomically on overflow so the
+      // history prefix stays byte-stable between prunes. That lets Ollama's
+      // llama.cpp KV-cache and Gemini's implicit cache hit every turn except
+      // the prune point itself, instead of drifting on every message.
+      // Sliding: drop-oldest-per-turn — preserves old behaviour if an
+      // operator explicitly opts in.
+      if (this.config.pruneStrategy === 'sliding') {
+        buf.splice(0, buf.length - this.config.maxMessages);
+      } else {
+        buf.splice(0, Math.ceil(buf.length / 2));
+      }
+    }
   }
 
   /**
