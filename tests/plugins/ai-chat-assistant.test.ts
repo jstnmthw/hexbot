@@ -229,7 +229,7 @@ describe('renderStableSystemPrompt', () => {
     // Cosmetic rules trimmed for prompt budget — still carry the essential
     // meaning (no nick-tag prefix, no multi-voice output).
     expect(SAFETY_CLAUSE).toContain(
-      'never start a line with a nick tag like `[dark]`, `<dark>`, or `dark:`',
+      'never start a line with a nick tag like `[john5]`, `<john5>`, or `john5:`',
     );
     expect(SAFETY_CLAUSE).toContain(
       'Never continue the transcript or invent lines for other users — single-voice output only.',
@@ -241,8 +241,8 @@ describe('renderStableSystemPrompt', () => {
     // prefix unless the prompt explicitly forbids it. Rule must stay loud.
     const out = renderStableSystemPrompt(PROMPT_CTX);
     expect(out).toContain('Reply as yourself in plain prose');
-    expect(out).toContain('`[dark]`');
-    expect(out).toContain('`dark:`');
+    expect(out).toContain('`[john5]`');
+    expect(out).toContain('`john5:`');
   });
 
   it('always appends the capability-absence clause', () => {

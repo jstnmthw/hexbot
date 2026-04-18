@@ -1020,7 +1020,14 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
 
     // Unified reply decision.
     const { character } = activeCharacter(api, cfg, ctx.channel);
-    const trigger = detectTrigger(text, botNick(), cfg.triggers);
+    // Merge the active character's topic triggers into the effective keyword
+    // list. Plugin config keywords apply to every character; character-level
+    // triggers are the topics *this* persona chimes in on.
+    const effectiveTriggers: typeof cfg.triggers = {
+      ...cfg.triggers,
+      keywords: [...cfg.triggers.keywords, ...character.triggers],
+    };
+    const trigger = detectTrigger(text, botNick(), effectiveTriggers);
     const engaged = engagementTracker?.isEngaged(ctx.channel, ctx.nick) ?? false;
     const social: SocialSnapshot = {
       activity: socialTracker?.getActivity(ctx.channel) ?? 'slow',

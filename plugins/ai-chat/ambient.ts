@@ -182,7 +182,7 @@ export class AmbientEngine {
           this.sender(
             channelKey,
             'unanswered',
-            `${who} asked: ${delimited} — no one answered. You can respond if you have something to say.`,
+            `Earlier ${who} asked: ${delimited} — the thread went quiet. Chime in if you have something worth saying, or steer to something else. Only name them if it genuinely clarifies who you're replying to; otherwise just speak.`,
           ).catch((err) => this.warn(`ambient unanswered sender rejected: ${describeError(err)}`));
           continue;
         }
