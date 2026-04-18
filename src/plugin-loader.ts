@@ -140,6 +140,13 @@ export class PluginLoader {
   private permissionsChangedListeners: Map<string, Array<(handle: string) => void>> = new Map();
   /** Absolute paths of plugin entry files already imported in this process. */
   private importedOnce: Set<string> = new Set();
+  /**
+   * Path to `plugins.json` captured by the most recent `loadAll()`. Used by
+   * `reload()` to re-read the user's overrides — without it, reload would
+   * fall back to each plugin's `config.json` defaults (e.g. ai-chat would
+   * flip from ollama to gemini on reload).
+   */
+  private pluginsConfigPath: string | null = null;
 
   constructor(deps: PluginLoaderDeps) {
     this.pluginDir = resolve(deps.pluginDir);
@@ -171,6 +178,7 @@ export class PluginLoader {
   async loadAll(pluginsConfigPath?: string): Promise<LoadResult[]> {
     /* v8 ignore next -- ?? fallback: tests always pass an explicit path; default production path unreachable */
     const cfgPath = pluginsConfigPath ?? resolve('./config/plugins.json');
+    this.pluginsConfigPath = cfgPath;
     const pluginsConfig = this.readPluginsConfig(cfgPath) ?? {};
 
     // Build the full set of plugin names: configured plugins first, then
@@ -433,7 +441,13 @@ export class PluginLoader {
     const filePath = plugin.filePath;
     await this.unload(pluginName);
 
-    const result = await this.load(filePath);
+    // Re-read plugins.json so reload picks up the user's current overrides
+    // (and any edits made since the last load). Without this, reload would
+    // fall back to the plugin's shipped config.json defaults.
+    const pluginsConfig = this.pluginsConfigPath
+      ? (this.readPluginsConfig(this.pluginsConfigPath) ?? undefined)
+      : undefined;
+    const result = await this.load(filePath, pluginsConfig);
 
     if (result.status === 'ok') {
       this.eventBus.emit('plugin:reloaded', pluginName);

@@ -561,6 +561,43 @@ describe('PluginLoader', () => {
       expect(reloadedListener).not.toHaveBeenCalled();
       delete (globalThis as Record<string, unknown>).__reloadFailCount;
     });
+
+    it('preserves plugins.json overrides across reload', async () => {
+      // Regression: before this fix, reload() called load() without the
+      // plugins.json overrides, so ai-chat would silently flip from the
+      // configured provider (e.g. ollama) back to its config.json default
+      // (gemini) and enter degraded mode when no Gemini key was set.
+      writePluginConfig(tempDir, 'cfg-reload', { greeting: 'default' });
+      writePlugin(
+        tempDir,
+        'cfg-reload',
+        `
+        export const name = 'cfg-reload';
+        export const version = '1.0.0';
+        export const description = '';
+        export function init(api) {
+          api.db.set('seen-greeting', String(api.config.greeting ?? ''));
+        }
+      `,
+      );
+
+      const cfgPath = writePluginsJson(tempDir, {
+        'cfg-reload': { enabled: true, config: { greeting: 'override' } },
+      });
+
+      const db = new BotDatabase(':memory:');
+      db.open();
+      const { loader } = createLoader(tempDir, db);
+      await loader.loadAll(cfgPath);
+
+      expect(db.get('cfg-reload', 'seen-greeting')).toBe('override');
+
+      const result = await loader.reload('cfg-reload');
+      expect(result.status).toBe('ok');
+      expect(db.get('cfg-reload', 'seen-greeting')).toBe('override');
+
+      db.close();
+    });
   });
 
   describe('loadAll', () => {
