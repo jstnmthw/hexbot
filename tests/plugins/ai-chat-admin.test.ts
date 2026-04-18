@@ -478,7 +478,8 @@ describe('ai-chat channel_characters', () => {
   it('uses object-form channel_characters with language override', async () => {
     const ctx = makePubCtx('alice', '!ai hi', 'user', 'host.com', '#french');
     await dispatcher.dispatch('pub', ctx);
-    const [systemPrompt] = (mockProvider.complete as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(systemPrompt).toContain('Always respond in French.');
+    const [, messages] = (mockProvider.complete as ReturnType<typeof vi.fn>).mock.calls[0];
+    const lastUserTurn = messages[messages.length - 1].content;
+    expect(lastUserTurn).toContain('Always respond in French.');
   });
 });
