@@ -230,7 +230,7 @@ Defaults sit well under Gemini's free tier (15 RPM / 1000 RPD):
 - **Global daily tokens** — `global_daily: 200000`.
 - **Ambient budgets** — `ambient_per_channel_per_hour: 5`, `ambient_global_per_hour: 20`.
 
-Admins (flagged `+m` by default) bypass the per-user bucket.
+Admins (flagged `+m` by default) bypass the per-user rate bucket **and** the per-user daily token budget. The global RPM/RPD limits and the `global_daily` token ceiling still apply, so a runaway prompt loop can't exhaust the whole bot. Usage is still recorded, so `.ai stats` stays accurate.
 
 ## Resilience
 

@@ -375,6 +375,40 @@ describe('respond', () => {
     expect(res.status).toBe('budget_exceeded');
   });
 
+  it('admins bypass the per-user daily budget but still hit the global cap', async () => {
+    const deps = makeDeps();
+    // Per-user cap already exceeded for alice; global cap far from hit.
+    deps.tokenTracker.setConfig({ perUserDaily: 10, globalDaily: 100_000 });
+    deps.tokenTracker.recordUsage('alice', { input: 5, output: 5 });
+    const ok = await respond(
+      {
+        nick: 'alice',
+        channel: '#test',
+        prompt: 'hi',
+        promptContext: PROMPT_CTX,
+        isAdmin: true,
+      },
+      deps,
+    );
+    expect(ok.status).toBe('ok');
+
+    // But if the global cap is also exhausted, even admins are refused.
+    const deps2 = makeDeps();
+    deps2.tokenTracker.setConfig({ perUserDaily: 10_000, globalDaily: 10 });
+    deps2.tokenTracker.recordUsage('someone-else', { input: 5, output: 5 });
+    const blocked = await respond(
+      {
+        nick: 'alice',
+        channel: '#test',
+        prompt: 'hi',
+        promptContext: PROMPT_CTX,
+        isAdmin: true,
+      },
+      deps2,
+    );
+    expect(blocked.status).toBe('budget_exceeded');
+  });
+
   it('returns provider_error on provider throw', async () => {
     const provider = makeProvider();
     (provider.complete as ReturnType<typeof vi.fn>).mockRejectedValueOnce(

@@ -78,6 +78,26 @@ describe('TokenTracker', () => {
     expect(tracker.canSpend('alice', 999_999)).toBe(true);
   });
 
+  it('canSpendGlobal ignores per-user caps (admin path)', () => {
+    const { tracker } = makeTracker({ perUserDaily: 10, globalDaily: 10_000 });
+    tracker.recordUsage('alice', { input: 5, output: 5 });
+    // canSpend refuses (per-user exhausted) but canSpendGlobal still allows.
+    expect(tracker.canSpend('alice', 1)).toBe(false);
+    expect(tracker.canSpendGlobal(1)).toBe(true);
+  });
+
+  it('canSpendGlobal still enforces the global cap', () => {
+    const { tracker } = makeTracker({ perUserDaily: 10_000, globalDaily: 100 });
+    tracker.recordUsage('someone', { input: 60, output: 40 });
+    expect(tracker.canSpendGlobal(1)).toBe(false);
+  });
+
+  it('canSpendGlobal returns true when globalDaily is 0 (disabled)', () => {
+    const { tracker } = makeTracker({ perUserDaily: 10, globalDaily: 0 });
+    tracker.recordUsage('alice', { input: 1_000_000, output: 1_000_000 });
+    expect(tracker.canSpendGlobal(999_999)).toBe(true);
+  });
+
   it('uses a separate bucket per day', () => {
     const { tracker, clock } = makeTracker(
       { perUserDaily: 1000, globalDaily: 10_000 },

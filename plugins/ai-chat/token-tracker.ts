@@ -70,6 +70,18 @@ export class TokenTracker {
     return true;
   }
 
+  /**
+   * Check only the global daily cap — used for admin calls that bypass the
+   * per-user budget. Usage is still recorded via {@link recordUsage} so
+   * `.ai stats` stays accurate.
+   */
+  canSpendGlobal(estimatedTokens: number): boolean {
+    this.cleanupIfNewDay();
+    if (this.config.globalDaily <= 0) return true;
+    const global = this.read(this.dateStr(), GLOBAL_KEY);
+    return global.input + global.output + estimatedTokens <= this.config.globalDaily;
+  }
+
   /** Record actual usage after a completed API call. */
   recordUsage(nick: string, usage: TokenUsage): void {
     this.cleanupIfNewDay();

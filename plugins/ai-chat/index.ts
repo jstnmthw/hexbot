@@ -1231,6 +1231,7 @@ async function runSessionPipeline(
   if (!session) return;
 
   const userKey = ctx.nick.toLowerCase();
+  const isAdmin = api.permissions.checkFlags(cfg.permissions.adminFlag, ctx);
   // Sessions bypass the per-user bucket — only enforce global RPM/RPD.
   const rl = rateLimiter.checkGlobal();
   if (!rl.allowed) {
@@ -1243,7 +1244,11 @@ async function runSessionPipeline(
     return;
   }
   const estimate = Math.ceil(text.length / 4) + 64;
-  if (!tokenTracker.canSpend(ctx.nick, estimate)) {
+  // Admins bypass the per-user daily cap — global cap still enforced.
+  const budgetOk = isAdmin
+    ? tokenTracker.canSpendGlobal(estimate)
+    : tokenTracker.canSpend(ctx.nick, estimate);
+  if (!budgetOk) {
     ctx.replyPrivate('Daily token budget exceeded — try again tomorrow.');
     return;
   }

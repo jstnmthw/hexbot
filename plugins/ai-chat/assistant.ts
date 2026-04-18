@@ -96,7 +96,12 @@ export async function respond(
   // Rough estimate: assume the user's new prompt costs ~prompt.length/4 tokens.
   // We'll check the full budget again after the call with actual usage.
   const estimate = Math.ceil(req.prompt.length / 4) + 64; // small padding
-  if (!tokenTracker.canSpend(req.nick, estimate)) {
+  // Admins bypass the per-user daily cap — global cap still enforced to
+  // prevent runaway spend from a compromised prompt loop.
+  const budgetOk = req.isAdmin
+    ? tokenTracker.canSpendGlobal(estimate)
+    : tokenTracker.canSpend(req.nick, estimate);
+  if (!budgetOk) {
     return { status: 'budget_exceeded' };
   }
 
