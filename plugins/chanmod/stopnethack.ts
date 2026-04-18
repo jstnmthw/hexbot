@@ -14,7 +14,15 @@ const SPLIT_WINDOW_MS = 5000;
 /** Number of split-quits within SPLIT_WINDOW_MS that triggers netsplit mode. */
 const SPLIT_THRESHOLD = 3;
 
-/** Returns true if a quit message looks like a netsplit (e.g. "hub.net leaf.net"). */
+/**
+ * Returns true if a quit message looks like a netsplit.
+ *
+ * Netsplit quits have the convention `"<server1> <server2>"` — the two
+ * servers on either side of the break. This is the de-facto standard across
+ * ircd-hybrid/InspIRCd/UnrealIRCd; individual user quits never match this
+ * shape because they're free-text. We require both tokens to parse as
+ * hostnames (letters/digits/dots, a TLD of at least 2 chars).
+ */
 function isSplitQuit(text: string): boolean {
   const parts = text.trim().split(/\s+/);
   if (parts.length !== 2) return false;

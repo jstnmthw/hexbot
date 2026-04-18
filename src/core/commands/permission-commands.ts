@@ -7,7 +7,18 @@ import { formatTable } from '../../utils/table';
 import { OWNER_FLAG, type Permissions } from '../permissions';
 
 /**
- * Register permission management commands on the given command handler.
+ * Register permission management commands (`.adduser`, `.deluser`,
+ * `.flags`, `.users`) on the given command handler.
+ *
+ * These commands write to the permissions database via {@link Permissions},
+ * which is itself responsible for writing `mod_log` rows — the handlers
+ * here therefore don't call `tryAudit` directly. Mutations carry the
+ * audit source via {@link getAuditSource} so `mod_log` entries attribute
+ * the caller correctly across REPL / DCC / botlink transports.
+ *
+ * `.adduser` and `.deluser` require `+n` (owner). `.flags` accepts `+n|+m`
+ * because viewing is cheap, but an inline check inside the handler
+ * tightens the grant path so only owners can promote to master.
  */
 export function registerPermissionCommands(
   handler: CommandHandler,

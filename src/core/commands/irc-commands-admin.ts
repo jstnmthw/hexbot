@@ -175,7 +175,10 @@ export function registerIRCAdminCommands(
       category: 'irc',
     },
     (_args, ctx) => {
-      // Reject raw args containing control characters (\r, \n) before splitting
+      // Reject raw args containing control characters (\r, \n) before
+      // splitting — we pass `nick` and `channel` into a `raw()` INVITE
+      // line, and CRLF in either one would let a caller inject arbitrary
+      // IRC commands. See docs/SECURITY.md on raw-line construction.
       if (/[\r\n]/.test(_args)) {
         ctx.reply('Invalid nick.');
         return;

@@ -19,8 +19,15 @@ interface BanRecord {
 }
 
 export interface EnforcementConfig {
+  /**
+   * Escalation ladder by offence count. Index 0 = first offence, last entry
+   * applied for every subsequent offence. Supported values: `'warn'`,
+   * `'kick'`, `'tempban'`.
+   */
   actions: string[];
+  /** Offence-counter rolling window. Entries older than this are pruned. */
   offenceWindowMs: number;
+  /** Duration of a tempban in minutes; 0 means "permanent until operator lifts". */
   banDurationMinutes: number;
 }
 
@@ -41,6 +48,11 @@ const MAX_ACTIONS_PER_CHANNEL_WINDOW = 10;
 /** Rolling window over which {@link MAX_ACTIONS_PER_CHANNEL_WINDOW} applies. */
 const CHANNEL_WINDOW_MS = 5_000;
 
+/**
+ * Given a flood hit, decide what action to take (warn/kick/tempban), run it,
+ * and persist tempbans so they survive reloads. Also owns the per-channel
+ * action-rate cap and the timed-ban lift sweep.
+ */
 export class EnforcementExecutor {
   private offenceTracker = new Map<string, OffenceEntry>();
   /**

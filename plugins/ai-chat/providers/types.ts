@@ -79,7 +79,20 @@ export interface AIProvider {
   getModelName(): string;
 }
 
-/** Error classes providers can throw so callers can discriminate. */
+/**
+ * Provider-side error envelope with a coarse `kind` tag the Resilient wrapper
+ * uses to decide retry vs. fail-fast vs. circuit-break. See
+ * `providers/resilient.ts` for the routing matrix:
+ *
+ *   - `rate_limit` (429)      — retryable; counts toward breaker
+ *   - `network`   (5xx, DNS)  — retryable; counts toward breaker
+ *   - `safety`                — NOT retryable, does NOT trip breaker (policy)
+ *   - `auth`                  — NOT retryable, does NOT trip breaker (config)
+ *   - `other` (404/400/etc.)  — NOT retryable; counts toward breaker
+ *
+ * Keeping this a blacklist in the breaker logic means any *new* transient
+ * kind added later defaults to counting — safer than an allowlist.
+ */
 export class AIProviderError extends Error {
   constructor(
     message: string,

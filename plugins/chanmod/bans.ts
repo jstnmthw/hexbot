@@ -20,6 +20,14 @@ export function migrateBansToCore(api: PluginAPI): number {
   return count;
 }
 
+/**
+ * Start the periodic ban-expiry sweep.
+ *
+ * Schedules a one-shot pass 5 seconds after load (to lift bans that expired
+ * while the bot was offline — only effective once the bot has rejoined and
+ * regained ops) plus a 60s cadence bind for steady-state expiry. Lifts are
+ * skipped for channels where the bot lacks ops; the next tick re-checks.
+ */
 export function setupBans(api: PluginAPI, _config: ChanmodConfig, state: SharedState): () => void {
   const hasOps = (ch: string) => botHasOps(api, ch);
   const setMode = (ch: string, modes: string, param: string) => api.mode(ch, modes, param);

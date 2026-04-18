@@ -3,6 +3,13 @@ import type { PluginAPI } from '../../src/types';
 import { hasAnyFlag } from './helpers';
 import type { ChanmodConfig, SharedState } from './state';
 
+/**
+ * Register the INVITE bind. When `invite` is enabled per-channel, accept
+ * IRC INVITEs from identified users with the `n`/`m`/`o` flag and auto-join
+ * the invited channel. The dispatcher flag mask (`+n|+m|+o`) is load-bearing
+ * here — it gates on NickServ-verified identity before the handler runs so
+ * an attacker who races an admin's nick cannot trick the bot into joining.
+ */
 export function setupInvite(
   api: PluginAPI,
   _config: ChanmodConfig,

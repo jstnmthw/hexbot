@@ -7,6 +7,12 @@ import type { PluginAPI } from '../../src/types';
 import { botHasOps, buildBanMask, formatExpiry, isValidNick } from './helpers';
 import type { ChanmodConfig } from './state';
 
+/**
+ * Register `!ban`, `!unban`, `!kickban`, `!bans` command binds with the core
+ * help registry and the dispatcher. All require the caller to hold `+o` and
+ * the bot to be opped. Ban durations are persisted via `api.banStore`; the
+ * periodic expiry sweep lives in `bans.ts`.
+ */
 export function registerBanCommands(api: PluginAPI, config: ChanmodConfig): void {
   api.registerHelp([
     {

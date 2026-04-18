@@ -7,6 +7,11 @@ export const description = 'Greets users when they join; lets registered users s
 
 /** Flag hierarchy order: n > m > o > v (lower index = higher privilege). */
 const FLAG_ORDER = 'nmov';
+/**
+ * Hard cap on stored greet length. Comfortably under the IRC line limit
+ * after `{nick}`/`{channel}` substitution and leaves headroom for server
+ * prefixes so a user-set greet can never truncate mid-UTF-8-codepoint.
+ */
 const MAX_GREET_LEN = 200;
 
 /**

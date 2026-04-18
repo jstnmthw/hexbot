@@ -6,7 +6,11 @@ import { stripFormatting } from '../../utils/strip-formatting';
 import { formatTable } from '../../utils/table';
 
 /**
- * Register dispatcher inspection commands on the given command handler.
+ * Register dispatcher inspection commands (`.binds`) on the given command
+ * handler. `+o` is sufficient because the command is read-only; output
+ * is sanitized with `stripFormatting` since plugin IDs and bind masks
+ * originate from plugin code and could otherwise smuggle IRC control
+ * codes into an operator's console.
  */
 export function registerDispatcherCommands(
   handler: CommandHandler,

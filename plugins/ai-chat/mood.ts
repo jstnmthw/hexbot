@@ -30,6 +30,16 @@ const QUIET_WINDOW_MS = 15 * 60_000;
 
 const DEFAULT_MOOD: BotMood = { energy: 0.7, engagement: 0.5, patience: 0.8, humor: 0.5 };
 
+/**
+ * Ephemeral mood state. Drifts autonomously with wall-clock time (energy
+ * decays, patience recharges, humor random-walks) and nudges on interaction
+ * events. Consumers read `renderMoodLine()` for a prompt-friendly hint and
+ * `getVerbosityMultiplier()` to scale the maxLines cap.
+ *
+ * Lazy drift: time-based decay is applied on every read via `applyTimeDrift`
+ * rather than on a timer, so a paused / test-frozen clock produces stable
+ * output and there's no interval to tear down.
+ */
 export class MoodEngine {
   private mood: BotMood;
   private lastUpdate: number;

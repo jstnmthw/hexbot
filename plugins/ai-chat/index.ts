@@ -185,6 +185,14 @@ interface AiChatConfig {
   };
 }
 
+/**
+ * Parse a raw `ai-chat` config object (from plugins.json / config.json)
+ * into the strongly-typed internal shape. Every field has a default — an
+ * empty `{}` input yields a fully-populated config. `warn` is invoked with
+ * a human message for removed-key migrations (pre-0.5.0 `engagement_seconds`
+ * / `triggers.command`); callers wire it to the plugin API warn log so
+ * operators see the message without a bot restart.
+ */
 export function parseConfig(
   raw: Record<string, unknown>,
   warn: (msg: string) => void = () => {},
@@ -501,6 +509,11 @@ export function shouldRespondReason(ctx: ShouldRespondCtx): ShouldRespondReason 
   return 'allowed';
 }
 
+/**
+ * True when every gate (self/bot-nick/ignore/flag/privilege/founder) passes.
+ * Thin wrapper over `shouldRespondReason` for call sites that don't care
+ * which gate fired.
+ */
 export function shouldRespond(ctx: ShouldRespondCtx): boolean {
   return shouldRespondReason(ctx) === 'allowed';
 }
@@ -1324,6 +1337,13 @@ async function runSessionPipeline(
   };
   const systemPrompt = renderStableSystemPrompt(sessionPromptCtx);
   const volatileHeader = renderVolatileHeader(sessionPromptCtx);
+  // NOTE: session path uses `[nick] text` bracket-tag attribution — this
+  // intentionally differs from the regular chat path, which uses `nick: text`
+  // for history and no nick prefix on the current turn (see
+  // context-manager.ts and assistant.renderVolatileHeader). Game prompts
+  // treat the player as a distinct entity ("the player said: …") and the
+  // bracket tag makes that boundary obvious to the model even inside games
+  // with multi-role transcripts (trivia host / contestant).
   const userMsg: AIMessage = {
     role: 'user',
     content: volatileHeader ? `${volatileHeader} [${ctx.nick}] ${text}` : `[${ctx.nick}] ${text}`,

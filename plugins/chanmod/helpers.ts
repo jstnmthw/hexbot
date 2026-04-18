@@ -2,10 +2,12 @@
 import type { PluginAPI } from '../../src/types';
 import { INTENTIONAL_TTL_MS, type SharedState } from './state';
 
+/** Configured bot nick from bot.json (desired nick, not necessarily the current nick during recovery). */
 export function getBotNick(api: PluginAPI): string {
   return api.botConfig.irc.nick;
 }
 
+/** True if the bot currently holds `+o` in `channel` per tracked channel state. */
 export function botHasOps(api: PluginAPI, channel: string): boolean {
   const ch = api.getChannel(channel);
   if (!ch) return false;
@@ -14,6 +16,7 @@ export function botHasOps(api: PluginAPI, channel: string): boolean {
   return botUser?.modes.includes('o') ?? false;
 }
 
+/** True if the bot can apply halfop modes — holds either `+o` or `+h` in `channel`. */
 export function botCanHalfop(api: PluginAPI, channel: string): boolean {
   const ch = api.getChannel(channel);
   if (!ch) return false;
@@ -23,6 +26,17 @@ export function botCanHalfop(api: PluginAPI, channel: string): boolean {
   return modes.includes('o') || modes.includes('h');
 }
 
+/**
+ * Validate a candidate nick against RFC 2812 nickname rules (plus a 50-char
+ * cap — modern networks vary but 50 is a safe ceiling).
+ *
+ * First char: letter or one of the "special" chars `[]\` ` _^{|}`.
+ * Remaining:  letters, digits, specials, or `-`.
+ *
+ * Used to reject shell-injection-style input before it reaches `kick`/`mode`
+ * payloads. Networks with stricter NICKLEN (via ISUPPORT) will reject long
+ * nicks themselves; this only catches structurally invalid input.
+ */
 export function isValidNick(nick: string): boolean {
   return /^[a-zA-Z[\]\\`_^{|}][a-zA-Z0-9[\]\\`_^{|}\\-]{0,49}$/.test(nick);
 }
@@ -36,6 +50,12 @@ export function isValidNick(nick: string): boolean {
  */
 const INTENTIONAL_INLINE_SWEEP_AT = 10_000;
 
+/**
+ * Record a (channel, nick) as a bot-initiated mode change with a short TTL.
+ * Prevents the bot's own `!deop`/`!devoice`/punishment deops from triggering
+ * re-enforcement (which would fight itself into a mode war). Paired with
+ * {@link wasIntentional}, which consumes the marker on read.
+ */
 export function markIntentional(
   state: SharedState,
   api: PluginAPI,
@@ -52,6 +72,11 @@ export function markIntentional(
   state.intentionalModeChanges.set(key, Date.now() + INTENTIONAL_TTL_MS);
 }
 
+/**
+ * Check and consume an intentional-mode-change marker. Returns `true` if a
+ * non-expired marker existed for the pair (the entry is deleted either way
+ * so a single event consumes a single marker).
+ */
 export function wasIntentional(
   state: SharedState,
   api: PluginAPI,
@@ -84,6 +109,12 @@ export function hasAnyFlag(flags: string | null, required: Iterable<string>): bo
   return false;
 }
 
+/**
+ * Resolve the concatenated (global + channel-local) flag string for `nick`
+ * in `channel`. Returns `null` when the nick is unknown or not in channel
+ * state — callers treat "no flags" and "unknown user" identically for
+ * authorization purposes.
+ */
 export function getUserFlags(api: PluginAPI, channel: string, nick: string): string | null {
   const hostmask = api.getUserHostmask(channel, nick);
   if (!hostmask) return null;

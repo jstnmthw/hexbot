@@ -143,7 +143,17 @@ export interface CharacterStyleOptions {
   verbosity: 'terse' | 'normal' | 'verbose';
 }
 
-/** Apply character-specific style overrides to formatted lines. */
+/**
+ * Apply character-specific style overrides to already-formatted lines. Runs
+ * AFTER `formatResponse()` so the fantasy-prefix / markdown / protocol-unsafe
+ * scrubs have already fired — transforming text here (e.g. lowercasing) will
+ * never re-introduce a fantasy prefix, since those pass on NFKC-normalised
+ * first-char matching which is case-insensitive for the punctuation set.
+ *
+ * - `verbosity: 'terse'`    — keep only the first line.
+ * - `verbosity: 'verbose'`  — cap at 6 lines (may exceed caller's maxLines).
+ * - `casing: 'lowercase' | 'uppercase'` — mapped per-line.
+ */
 export function applyCharacterStyle(lines: string[], style: CharacterStyleOptions): string[] {
   if (lines.length === 0) return lines;
 

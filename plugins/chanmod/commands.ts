@@ -64,6 +64,13 @@ function createModeCommandHandler(
   };
 }
 
+/**
+ * Register all user-facing moderation commands (`!op`, `!deop`, `!halfop`,
+ * `!dehalfop`, `!voice`, `!devoice`, `!kick`) and delegate ban-related
+ * commands to {@link registerBanCommands}. Returns a teardown function; the
+ * dispatcher auto-cleans the binds on unload, so teardown is a no-op kept
+ * for symmetry with other `setup*` helpers.
+ */
 export function setupCommands(
   api: PluginAPI,
   config: ChanmodConfig,

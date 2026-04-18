@@ -23,19 +23,39 @@ interface RejoinRecord {
   windowStart: number;
 }
 
-/** Structural guard for ban-attempt records persisted in `api.db`. */
+/** Structural guard for rejoin-attempt records persisted in `api.db`. */
 function isRejoinRecord(value: unknown): value is RejoinRecord {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
   return typeof v.count === 'number' && typeof v.windowStart === 'number';
 }
 
-/** Extract the kicker's nick from kick ctx.args ("reason (by Nick)" or "by Nick"). */
+/**
+ * Extract the kicker's nick from a kick ctx.args payload.
+ *
+ * The IRC bridge serialises the kicker into the `args` field in one of two
+ * shapes depending on whether a kick reason was provided:
+ *   - `"the reason here (by Nick)"` — reason plus trailing attribution
+ *   - `"by Nick"`                   — no reason, just attribution
+ * Returns an empty string when neither shape matches (kicker unknown — we
+ * skip revenge/threat-scoring on empty).
+ */
 function parseKicker(args: string): string {
   const m = args.match(/\(by ([^)]+)\)$/) ?? args.match(/^by (.+)$/);
   return m?.[1]?.trim() ?? '';
 }
 
+/**
+ * Register the adversarial-protection binds:
+ *   - kick handler: rejoin-on-kick with rate limit, backend-assisted UNBAN
+ *     + INVITE, scheduled revenge after `revenge_delay_ms`
+ *   - nick handler / quit handler: nick recovery (optionally via NickServ
+ *     GHOST) when the configured nick is released
+ *   - stopnethack: delegated to {@link setupStopnethack}
+ *
+ * Rate-limit state is persisted in `api.db` under `rejoin_attempts:<chan>`
+ * so a restart loop cannot bypass `max_rejoin_attempts`.
+ */
 export function setupProtection(
   api: PluginAPI,
   config: ChanmodConfig,

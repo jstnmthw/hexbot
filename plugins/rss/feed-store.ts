@@ -8,12 +8,22 @@ import type Parser from 'rss-parser';
 
 import type { PluginAPI } from '../../src/types';
 
+/**
+ * Shape of a single feed, both in plugins.json config and in the KV store
+ * for runtime-added feeds (dual-audience: developers editing TS + operators
+ * editing JSON rely on IDE hover here).
+ */
 export interface FeedConfig {
+  /** Stable identifier; used as the KV namespace and in user-facing commands. */
   id: string;
+  /** Feed URL. Re-validated on every fetch — see `url-validator.ts`. */
   url: string;
+  /** Optional display name shown in announcements; falls back to `id`. */
   name?: string;
+  /** Channels that receive announcements for this feed. */
   channels: string[];
-  interval?: number; // seconds, default 3600
+  /** Poll interval in seconds. Default 3600 (1 hour). */
+  interval?: number;
 }
 
 /** Minimal shape of a feed entry consumed by this plugin. */
@@ -36,11 +46,18 @@ export function isFeedConfig(value: unknown): value is FeedConfig {
 // Dedup
 // ---------------------------------------------------------------------------
 
+/**
+ * Stable dedup fingerprint for a feed item. Prefers `guid` (publisher's own
+ * identity) and falls back to `title+link` when absent. 16-hex-char truncation
+ * of sha1 gives ~64 bits — collision risk is negligible per-feed at the
+ * {@link MAX_SEEN_PER_FEED} cap.
+ */
 export function hashItem(item: FeedItem): string {
   const input = item.guid || `${item.title ?? ''}${item.link ?? ''}`;
   return createHash('sha1').update(input).digest('hex').substring(0, 16);
 }
 
+/** True if the fingerprint for `feedId`/`hash` is already recorded as seen. */
 export function hasSeen(api: PluginAPI, feedId: string, hash: string): boolean {
   return api.db.get(`rss:seen:${feedId}:${hash}`) !== undefined;
 }
@@ -54,6 +71,11 @@ export function hasSeen(api: PluginAPI, feedId: string, hash: string): boolean {
  */
 export const MAX_SEEN_PER_FEED = 1000;
 
+/**
+ * Mark `hash` as seen for `feedId`, stamping the current ISO time as the
+ * value (used later by {@link cleanupSeen} to age rows out). Trims oldest
+ * entries over the per-feed cap in the same call.
+ */
 export function markSeen(api: PluginAPI, feedId: string, hash: string): void {
   api.db.set(`rss:seen:${feedId}:${hash}`, new Date().toISOString());
   trimSeenToCap(api, feedId);
@@ -69,6 +91,7 @@ function trimSeenToCap(api: PluginAPI, feedId: string): void {
   }
 }
 
+/** Last successful poll time as epoch ms; 0 if never polled or corrupt. */
 export function getLastPoll(api: PluginAPI, feedId: string): number {
   const raw = api.db.get(`rss:last_poll:${feedId}`);
   if (!raw) return 0;
@@ -76,6 +99,7 @@ export function getLastPoll(api: PluginAPI, feedId: string): number {
   return Number.isNaN(ts) ? 0 : ts;
 }
 
+/** Record the current wall-clock time as the last poll for `feedId`. */
 export function setLastPoll(api: PluginAPI, feedId: string): void {
   api.db.set(`rss:last_poll:${feedId}`, new Date().toISOString());
 }
@@ -98,6 +122,10 @@ export function cleanupSeen(api: PluginAPI, dedupWindowDays: number): void {
 // Runtime feed persistence
 // ---------------------------------------------------------------------------
 
+/**
+ * Load runtime-added feeds (those added via `!rss add`) from the KV store.
+ * Corrupt or shape-invalid entries are dropped during load and warned about.
+ */
 export function loadRuntimeFeeds(api: PluginAPI): FeedConfig[] {
   const entries = api.db.list('rss:feed:');
   const feeds: FeedConfig[] = [];
@@ -119,14 +147,17 @@ export function loadRuntimeFeeds(api: PluginAPI): FeedConfig[] {
   return feeds;
 }
 
+/** Persist a runtime-added feed so it survives plugin reload / bot restart. */
 export function saveRuntimeFeed(api: PluginAPI, feed: FeedConfig): void {
   api.db.set(`rss:feed:${feed.id}`, JSON.stringify(feed));
 }
 
+/** Delete a runtime-added feed from persistence. */
 export function deleteRuntimeFeed(api: PluginAPI, id: string): void {
   api.db.del(`rss:feed:${id}`);
 }
 
+/** True if `id` was added at runtime (vs. defined in plugins.json config). */
 export function isRuntimeFeed(api: PluginAPI, id: string): boolean {
   return api.db.get(`rss:feed:${id}`) !== undefined;
 }

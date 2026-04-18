@@ -1083,7 +1083,6 @@ export class Bot {
     console.log();
   }
 
-  /** Print a status line with a lime green check mark. */
   /** Read the version field from package.json. */
   private readPackageVersion(): string {
     try {

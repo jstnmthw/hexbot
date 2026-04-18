@@ -22,6 +22,7 @@ export interface BindEntry {
   mask: string;
   handler: BindHandler;
   pluginId: string;
+  /** Dispatch count (or timer fires for `time` binds). Surfaced via `.binds`. */
   hits: number;
   /**
    * Consecutive timer-handler errors. Only used on `time` binds.

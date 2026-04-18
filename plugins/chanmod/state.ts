@@ -7,16 +7,23 @@ import type { PluginAPI } from '../../src/types';
 
 /** A single threat event recorded during a potential takeover. */
 export interface ThreatEvent {
+  /** Event type name (e.g. `bot_banned`, `friendly_deopped`) — see takeover-detect.ts. */
   type: string;
+  /** Nick that caused the event (the hostile actor). */
   actor: string;
+  /** Nick that the event acted on, if any (e.g. victim of a deop). */
   target?: string;
+  /** `Date.now()` when the event was recorded. */
   timestamp: number;
 }
 
 /** Per-channel threat scoring state. */
 export interface ThreatState {
+  /** Running score accumulated within the current window. */
   score: number;
+  /** Ring buffer of recorded events (capped in assessThreat). */
   events: ThreatEvent[];
+  /** `Date.now()` when the window started — used to decay the score. */
   windowStart: number;
 }
 

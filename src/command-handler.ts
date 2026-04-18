@@ -135,7 +135,13 @@ export class CommandHandler {
     this.preExecuteHook = hook;
   }
 
-  /** Parse and execute a command string. */
+  /**
+   * Parse and execute a command string. No-ops silently when the input is
+   * empty or missing the configured prefix — this lets transports pipe every
+   * inbound line through unconditionally without pre-filtering. Handler
+   * exceptions are caught and reported back via `ctx.reply` so one bad
+   * command can't take down the caller.
+   */
   async execute(commandString: string, ctx: CommandContext): Promise<void> {
     const trimmed = commandString.trim();
     if (!trimmed) return;

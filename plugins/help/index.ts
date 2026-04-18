@@ -123,7 +123,9 @@ export function init(api: PluginAPI): void {
       return; // silently drop — still in cooldown
     }
     // Inline sweep: cap map size and drop any entries past their cooldown
-    // window so the set is bounded by recent activity, not all-time !help users.
+    // window so the set is bounded by recent activity, not all-time !help
+    // users. Threshold of 1000 is well above any realistic concurrent-user
+    // count so the sweep almost never runs in normal operation.
     if (cooldowns.size > 1000) {
       for (const [k, t] of cooldowns) {
         if (now - t >= cooldownMs) cooldowns.delete(k);

@@ -158,6 +158,11 @@ export class RateLimiter {
   /**
    * Check whether an ambient message is allowed for this channel.
    * Ambient messages have their own budget separate from user-initiated requests.
+   *
+   * INVARIANT: ambient budget is independent of `check()` — ambient callers
+   * must gate on BOTH this and the global RPM/RPD bucket (via `checkGlobal()`
+   * or `check()`) before dispatching. `rolled` pipeline replies also count
+   * here, matching ambient's "unprompted utterance" accounting class.
    */
   checkAmbient(channelKey: string, now = Date.now()): boolean {
     const perCh = this.config.ambientPerChannelPerHour ?? 5;

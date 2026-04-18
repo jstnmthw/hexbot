@@ -22,6 +22,16 @@ function validatePluginName(ctx: CommandContext, name: string): boolean {
   return true;
 }
 
+/**
+ * Register plugin lifecycle commands (`.plugins`, `.load`, `.unload`,
+ * `.reload`) on the given command handler.
+ *
+ * `.load`/`.unload`/`.reload` require `+n` (owner) — they execute arbitrary
+ * plugin code and must not be delegated to masters. `.plugins` is open to
+ * anyone with a command session since it's read-only. Every lifecycle
+ * action writes a `plugin-{load,unload,reload}` row to `mod_log` via
+ * `tryAudit` (both success and failure paths through `replyFailure`).
+ */
 export function registerPluginCommands(
   handler: CommandHandler,
   pluginLoader: PluginLoader,

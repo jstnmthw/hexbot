@@ -8,8 +8,14 @@
 import type { PluginAPI } from '../../src/types';
 
 export interface LockdownConfig {
+  /**
+   * Distinct-flooder threshold within `lockWindowMs` that triggers
+   * channel-wide lockdown. 0 disables lockdown entirely.
+   */
   lockCount: number;
+  /** Rolling window over which distinct flooders accumulate toward `lockCount`. */
   lockWindowMs: number;
+  /** How long the lockdown mode stays active before auto-unlock. */
   lockDurationMs: number;
 }
 

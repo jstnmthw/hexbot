@@ -145,7 +145,7 @@ export function registerChannelCommands(
         return;
       }
 
-      // Set value (string/int — flags require +/- prefix)
+      // Set value (string/int — flags require +/- prefix and were handled above).
       if (def.type === 'flag') {
         ctx.reply(
           `Use \`.chanset ${channel} +${key}\` or \`.chanset ${channel} -${key}\` for flags`,

@@ -4,6 +4,13 @@ import type { PluginAPI } from '../../src/types';
 import { botHasOps } from './helpers';
 import { COOLDOWN_WINDOW_MS, MAX_ENFORCEMENTS, type SharedState } from './state';
 
+/**
+ * Bind a `-b` watcher that re-applies any ban marked `sticky: true` in the
+ * ban store. Rate-limited via the shared `enforcementCooldown` so a hostile
+ * op flipping `-b/+b` in a loop saturates after {@link MAX_ENFORCEMENTS}
+ * re-applies per {@link COOLDOWN_WINDOW_MS}; further flips in the same
+ * window are logged and ignored.
+ */
 export function setupStickyBans(api: PluginAPI, state: SharedState): () => void {
   api.bind('mode', '-', '*', (ctx) => {
     const { channel } = ctx;

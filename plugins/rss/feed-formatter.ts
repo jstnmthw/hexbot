@@ -30,6 +30,13 @@ export function stripHtmlTags(input: string): string {
   return result;
 }
 
+/**
+ * Render a feed item as a single IRC line with a bold `[feedName]` prefix.
+ * Titles are HTML-tag-stripped and truncated to `maxTitleLength` (with a
+ * horizontal-ellipsis). All user-visible fields pass through
+ * `api.stripFormatting` so publisher-injected color/bold codes can't
+ * spoof bot formatting in the channel.
+ */
 export function formatItem(
   api: PluginAPI,
   feed: FeedConfig,
@@ -45,6 +52,12 @@ export function formatItem(
   return `\x02[${feedName}]\x02 ${title}${link ? ` \u2014 ${link}` : ''}`;
 }
 
+/**
+ * Drip-feed a batch of items to every channel configured on `feed`, sleeping
+ * 500ms between items so a large batch doesn't flood the channel or trip
+ * the server's own rate limiter. The `signal` is honored at each sleep and
+ * each item boundary so `teardown()` interrupts mid-batch cleanly.
+ */
 export async function announceItems(
   api: PluginAPI,
   feed: FeedConfig,

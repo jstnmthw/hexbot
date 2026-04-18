@@ -41,7 +41,14 @@ export function resolveCharactersDir(relative = 'characters'): string {
   return resolve(pluginRoot, relative);
 }
 
-/** Validate and fill defaults for a parsed character JSON. */
+/**
+ * Validate and fill defaults for a parsed character JSON. Returns null when
+ * the JSON is missing a `name` or has a blank `persona` — a missing persona
+ * ungates the Persona section of the assembled system prompt, which is the
+ * only anchor the SAFETY_CLAUSE rules are in contrast to. The `_filename`
+ * param is unused today; kept on the signature so a future loader pass can
+ * attach file context to validation warnings without a call-site churn.
+ */
 export function validateCharacter(raw: CharacterJson, _filename: string): Character | null {
   if (!raw || typeof raw !== 'object') return null;
   if (typeof raw.name !== 'string' || !raw.name) return null;

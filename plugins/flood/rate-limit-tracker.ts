@@ -36,6 +36,12 @@ export interface RateLimitTrackerInitialCounters {
   nick?: SlidingWindowCounter;
 }
 
+/**
+ * Groups four independent sliding-window counters (one per event class) so the
+ * plugin's bind handlers can ask "did this user flood X" without knowing
+ * which counter belongs to which event. Sweep and reset are fanned out
+ * across all four in a single call.
+ */
 export class RateLimitTracker {
   private readonly counters: Record<RateLimitKind, SlidingWindowCounter>;
 

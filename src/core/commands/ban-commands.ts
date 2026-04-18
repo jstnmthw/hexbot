@@ -19,6 +19,17 @@ export interface BanCommandsDeps {
   ircLower: (s: string) => string;
 }
 
+/**
+ * Register channel ban admin commands (`.bans`, `.ban`, `.unban`, `.stick`,
+ * `.unstick`) on the given command handler.
+ *
+ * Mutating commands both push the MODE to IRC via {@link BanOperator} and
+ * persist the ban in {@link BanStore} so sticky-ban re-application survives
+ * restarts. When `hub` is non-null the same events are broadcast over the
+ * bot link so shared-ban state converges across leaves. Every mutation
+ * writes a `mod_log` row via `tryAudit` — see CLAUDE.md for the audit
+ * convention.
+ */
 export function registerBanCommands(deps: BanCommandsDeps): void {
   const { commandHandler, banStore, ircCommands, db, hub, sharedBanList, ircLower } = deps;
 
@@ -38,7 +49,9 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
       const channelArg = args.trim() || undefined;
       const localBans = channelArg ? banStore.getChannelBans(channelArg) : banStore.getAllBans();
 
-      // Collect shared-only bans (not in local DB)
+      // Collect shared-only bans (bans we heard about over botlink but
+      // never wrote to our local store). Presented with a [shared] tag so
+      // operators can tell at a glance which side owns a given entry.
       const sharedEntries: Array<{
         channel: string;
         mask: string;
@@ -119,7 +132,8 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
       banStore.storeBan(channel, mask, ctx.nick, durationMs);
       ircCommands.ban(channel, mask);
 
-      // Propagate via botlink if hub is active
+      // Propagate via botlink if hub is active — leaves apply the ban to
+      // their local stores so a rejoin on another bot still bounces.
       if (hub) {
         hub.broadcast({
           type: 'CHAN_BAN_ADD',
