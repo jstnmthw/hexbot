@@ -6,7 +6,7 @@ Pluggable providers — **Gemini** (hosted free tier, no credit card) and **Olla
 
 ## Features
 
-**Characters that feel like people.** Nine shipped archetypes with backstory, style rules, and verbosity traits — `friendly`, `sarcastic`, `chaotic`, `shitposter`, `deadpan`, `minimal`, `gossip`, `nightowl`, `oldhead`. Drop a JSON file in `characters/` to add your own — schema is documented, template variables (`{nick}`, `{channel}`, `{users}`, `{channel_profile}`) render into the system prompt. Assign different characters per channel, or switch live with `!ai character <name>` — choice persists across reloads.
+**Characters that feel like people.** Nine shipped archetypes with backstory, style rules, and verbosity traits — `friendly`, `sarcastic`, `chaotic`, `shitposter`, `deadpan`, `minimal`, `gossip`, `nightowl`, `oldhead`. Drop a JSON file in `characters/` to add your own — schema is documented, template variables (`{nick}`, `{channel}`, `{network}`, `{users}`) render into the persona body. Assign different characters per channel, or switch live with `!ai character <name>` — choice persists across reloads.
 
 **A mood engine, not a temperature slider.** Energy, engagement, patience, and humor drift over time and modulate every reply. A 0.5×–1.5× verbosity multiplier scales line caps dynamically — tired = terse, wired = chatty. Mood is ephemeral (not persisted), so the bot wakes up fresh each run.
 
@@ -143,7 +143,7 @@ Users with the admin flag (`+m` by default) bypass the per-user token bucket; gl
 
 ## Characters
 
-Characters are channel _regulars_, not AI assistants. Each one has an archetype, backstory, style rules (casing, punctuation, slang, verbosity), chattiness trait, and a `prompt` template with a strict "you are a person in a chat room, not an AI" framing.
+Characters are channel _regulars_, not AI assistants. Each one has an archetype, backstory, style rules (casing, punctuation, slang, verbosity, dash-bullet `style.notes`), chattiness, an `avoids` list of topics they steer away from, and a `persona` body that frames "you are a person in a chat room, not an AI." Persona, avoids, channel profile, and style notes all land under the `## Persona` section of the assembled system prompt; mood, language, and the user list go under `## Right now`; the non-overridable security rules close the prompt under `## Rules`.
 
 Built-in roster (configurable per-channel):
 
@@ -159,7 +159,7 @@ Built-in roster (configurable per-channel):
 | `nightowl`   | 3am philosophical tangents, weird questions            |
 | `oldhead`    | online since '98, references old internet culture      |
 
-Drop another JSON file into `plugins/ai-chat/characters/` and it's loaded at init. See `characters/types.ts` for the schema. Template variables in `prompt`: `{nick}`, `{channel}`, `{network}`, `{users}`, `{channel_profile}`.
+Drop another JSON file into `plugins/ai-chat/characters/` and it's loaded at init. See `characters/types.ts` for the schema. Template variables in `persona`: `{nick}`, `{channel}`, `{network}`, `{users}`. Channel profile no longer needs a placeholder — it's injected into `## Persona` automatically when one is configured for the channel.
 
 ### Per-channel assignment
 
@@ -193,7 +193,7 @@ Give the LLM hints about what a channel is for and how to answer there:
 }
 ```
 
-The rendered profile is appended to the system prompt.
+The rendered profile lands under the `## Persona` section of the system prompt.
 
 ## Mood
 
@@ -248,7 +248,7 @@ Any channel message starting with `.`, `!`, `/`, `~`, `@`, `%`, `$`, `&`, or `+`
 
 **Defense (automatic):** `output-formatter.ts` scans every line of the LLM response for fantasy-command prefixes. If **any** line starts with one, the **entire response is dropped** and a WARNING is logged. This is intentionally aggressive — if the LLM produced a fantasy prefix, the response is considered compromised. Unicode format characters (`\p{Cf}`) are stripped before the check to prevent invisible character smuggling.
 
-**Defense-in-depth (`SAFETY_CLAUSE`):** Every system prompt is suffixed with a non-overridable two-part clause appended last in `renderSystemPrompt()`, so no character template can pre-empt it. The first sentence tells the model never to begin a line with `.`, `!`, or `/` (closes the machine-execution path even before the output-formatter drops it). The second sentence frames the bot as a regular channel user with no knowledge of operator commands, services syntax (ChanServ/NickServ/BotServ/etc.), channel mode letters, or ban masks — so when a human asks "what's the command to transfer founder?" the bot answers with honest ignorance instead of a working recipe an unwary admin might paste.
+**Defense-in-depth (`SAFETY_CLAUSE`):** Every system prompt closes with a non-overridable `## Rules (these override Persona and Right now)` section appended last in `renderSystemPrompt()`, so no character config can pre-empt it. Rule 1 tells the model never to begin a line with `.`, `!`, or `/` (closes the machine-execution path even before the output-formatter drops it). Rule 2 frames the bot as a regular channel user with no knowledge of operator commands, services syntax (ChanServ/NickServ/BotServ/etc.), channel mode letters, or ban masks — so when a human asks "what's the command to transfer founder?" the bot answers with honest ignorance instead of a working recipe an unwary admin might paste. Rules 3-4 prevent the model from imitating the internal `[nick]` transcript format or speaking for other users.
 
 **Privilege gating (opt-in):** When the bot has elevated channel modes (half-op or above), you can restrict AI responses to users with a specific bot flag:
 

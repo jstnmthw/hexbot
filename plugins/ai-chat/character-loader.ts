@@ -18,20 +18,20 @@ const DEFAULT_CHARACTER: Character = {
     slang: [],
     catchphrases: [],
     verbosity: 'normal',
+    notes: [
+      'you are a person in a chat room, not an AI assistant',
+      'responses are 1-3 lines maximum, like a real IRC message',
+      'do not offer help unless someone is obviously stuck and asks',
+      'react to conversations naturally — agree, disagree, joke, riff',
+      'never break character to be "helpful" or "informative"',
+    ],
   },
   chattiness: 0,
   triggers: [],
   avoids: [],
-  prompt:
+  persona:
     'You are {nick}, someone who hangs out in {channel} on {network}. ' +
-    'You are friendly, approachable, and concise.\n\n' +
-    'Rules:\n' +
-    '- you are a person in a chat room, not an AI assistant\n' +
-    '- responses are 1-3 lines maximum, like a real IRC message\n' +
-    '- do not offer help unless someone is obviously stuck and asks\n' +
-    '- react to conversations naturally — agree, disagree, joke, riff\n' +
-    '- never break character to be "helpful" or "informative"\n' +
-    '- users in channel: {users}',
+    'You are friendly, approachable, and concise.',
 };
 
 /** Resolve the characters directory relative to the plugin root. */
@@ -45,9 +45,9 @@ export function resolveCharactersDir(relative = 'characters'): string {
 export function validateCharacter(raw: CharacterJson, _filename: string): Character | null {
   if (!raw || typeof raw !== 'object') return null;
   if (typeof raw.name !== 'string' || !raw.name) return null;
-  // Reject empty/whitespace prompts — an unanchored system prompt effectively
+  // Reject empty/whitespace personas — an unanchored persona effectively
   // ungates the safety/persona rules the rest of the pipeline relies on.
-  if (typeof raw.prompt !== 'string' || raw.prompt.trim().length === 0) return null;
+  if (typeof raw.persona !== 'string' || raw.persona.trim().length === 0) return null;
 
   const style: Partial<Character['style']> = raw.style ?? {};
   return {
@@ -62,11 +62,14 @@ export function validateCharacter(raw: CharacterJson, _filename: string): Charac
         ? style.catchphrases.filter((s) => typeof s === 'string')
         : [],
       verbosity: isValidVerbosity(style.verbosity) ? style.verbosity : 'normal',
+      notes: Array.isArray(style.notes)
+        ? style.notes.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+        : [],
     },
     chattiness: typeof raw.chattiness === 'number' ? Math.max(0, Math.min(1, raw.chattiness)) : 0,
     triggers: Array.isArray(raw.triggers) ? raw.triggers.filter((s) => typeof s === 'string') : [],
     avoids: Array.isArray(raw.avoids) ? raw.avoids.filter((s) => typeof s === 'string') : [],
-    prompt: raw.prompt,
+    persona: raw.persona,
     generation: parseGeneration(raw.generation),
   };
 }
@@ -135,7 +138,7 @@ export function loadCharacters(dir: string, log?: (msg: string) => void): Map<st
       if (character) {
         characters.set(character.name.toLowerCase(), character);
       } else {
-        log?.(`Invalid character file (missing name or prompt): ${file}`);
+        log?.(`Invalid character file (missing name or persona): ${file}`);
       }
     } catch (err) {
       log?.(`Failed to parse character file ${file}: ${err instanceof Error ? err.message : err}`);

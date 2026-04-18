@@ -818,6 +818,9 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
         language,
         channelProfile: renderChannelProfile(cfg, channel),
         mood: moodEngine?.renderMoodLine(),
+        persona: character.persona,
+        styleNotes: character.style.notes,
+        avoids: character.avoids,
       };
 
       const result = await respond(
@@ -825,7 +828,6 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
           nick: botNick(),
           channel,
           prompt,
-          systemPrompt: character.prompt,
           promptContext: promptCtx,
           maxContextMessages: character.generation?.maxContextMessages,
         },
@@ -967,12 +969,25 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
       return;
     }
 
+    // Treat anything starting with a command sigil (`!foo`, `.bar`, `/quit`,
+    // `~something`, `@op`, etc.) as a command for another plugin or services
+    // — not casual conversation. Without this, the engagement / keyword /
+    // random paths happily reply to a user typing `!help ai` or `.deop`.
+    // Direct address (`neo: ...`) and the bot's own `!ai` were handled above,
+    // so they still fire normally.
+    const startsWithCommandSigil = /^[!./~@%$&+]/.test(text.trim());
+
     let match = detectTrigger(text, botNick(), cfg.triggers);
+    if (startsWithCommandSigil && match && (match.kind === 'keyword' || match.kind === 'random')) {
+      match = null;
+    }
     // Engagement fallback: if no trigger matched but the user recently talked
-    // to the bot, treat this as a conversation continuation.
+    // to the bot, treat this as a conversation continuation. Skipped for
+    // command-style messages so an engaged user's `!help` doesn't re-trigger.
     if (
       !match &&
       ctx.channel &&
+      !startsWithCommandSigil &&
       isEngaged(ctx.channel, ctx.nick, cfg.triggers.engagementSeconds * 1_000)
     ) {
       match = { kind: 'engaged', prompt: text.trim() };
@@ -1111,6 +1126,9 @@ async function runPipeline(
     language,
     channelProfile: renderChannelProfile(cfg, ctx.channel),
     mood: moodEngine?.renderMoodLine(),
+    persona: character.persona,
+    styleNotes: character.style.notes,
+    avoids: character.avoids,
   };
 
   // Use per-character context window if specified
@@ -1120,7 +1138,6 @@ async function runPipeline(
       nick: ctx.nick,
       channel: ctx.channel,
       prompt,
-      systemPrompt: character.prompt,
       promptContext: promptCtx,
       maxContextMessages,
       isAdmin,
@@ -1232,10 +1249,13 @@ async function runSessionPipeline(
   }
 
   const userMsg: AIMessage = { role: 'user', content: `[${ctx.nick}] ${text}` };
-  const systemPrompt = renderSystemPrompt(session.systemPrompt, {
+  // Game sessions use the game-defined prompt as the persona body. No style
+  // notes / avoids / channel profile / mood — the game owns the framing.
+  const systemPrompt = renderSystemPrompt({
     botNick: botNickValue,
     channel: ctx.channel,
     network: networkName,
+    persona: session.systemPrompt,
   });
 
   try {

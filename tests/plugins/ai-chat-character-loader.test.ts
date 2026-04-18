@@ -23,15 +23,15 @@ describe('validateCharacter', () => {
   });
 
   it('returns null when name is missing', () => {
-    expect(validateCharacter({ prompt: 'hi' }, 'noname.json')).toBeNull();
+    expect(validateCharacter({ persona: 'hi' }, 'noname.json')).toBeNull();
   });
 
-  it('returns null when prompt is missing', () => {
-    expect(validateCharacter({ name: 'test' }, 'noprompt.json')).toBeNull();
+  it('returns null when persona is missing', () => {
+    expect(validateCharacter({ name: 'test' }, 'nopersona.json')).toBeNull();
   });
 
   it('fills defaults for optional fields', () => {
-    const c = validateCharacter({ name: 'test', prompt: 'hi {nick}' }, 'test.json');
+    const c = validateCharacter({ name: 'test', persona: 'hi {nick}' }, 'test.json');
     expect(c).not.toBeNull();
     expect(c!.archetype).toBe('regular');
     expect(c!.backstory).toBe('');
@@ -40,18 +40,31 @@ describe('validateCharacter', () => {
     expect(c!.style.verbosity).toBe('normal');
     expect(c!.style.slang).toEqual([]);
     expect(c!.style.catchphrases).toEqual([]);
+    expect(c!.style.notes).toEqual([]);
     expect(c!.chattiness).toBe(0);
     expect(c!.triggers).toEqual([]);
     expect(c!.avoids).toEqual([]);
     expect(c!.generation).toBeUndefined();
   });
 
-  it('clamps chattiness to 0-1', () => {
-    expect(validateCharacter({ name: 'a', prompt: 'p', chattiness: 5 }, 'a.json')!.chattiness).toBe(
-      1,
+  it('parses style.notes as a string array', () => {
+    const c = validateCharacter(
+      {
+        name: 'test',
+        persona: 'p',
+        style: { notes: ['one note', 'two notes', '   ', 42 as unknown as string] },
+      },
+      'test.json',
     );
+    expect(c!.style.notes).toEqual(['one note', 'two notes']);
+  });
+
+  it('clamps chattiness to 0-1', () => {
     expect(
-      validateCharacter({ name: 'a', prompt: 'p', chattiness: -2 }, 'a.json')!.chattiness,
+      validateCharacter({ name: 'a', persona: 'p', chattiness: 5 }, 'a.json')!.chattiness,
+    ).toBe(1);
+    expect(
+      validateCharacter({ name: 'a', persona: 'p', chattiness: -2 }, 'a.json')!.chattiness,
     ).toBe(0);
   });
 
@@ -59,7 +72,7 @@ describe('validateCharacter', () => {
     const c = validateCharacter(
       {
         name: 'test',
-        prompt: 'p',
+        persona: 'p',
         generation: { temperature: 0.9, maxOutputTokens: 64 },
       },
       'test.json',
@@ -69,7 +82,7 @@ describe('validateCharacter', () => {
 
   it('ignores invalid generation values', () => {
     const c = validateCharacter(
-      { name: 'test', prompt: 'p', generation: { temperature: 'hot' as unknown as number } },
+      { name: 'test', persona: 'p', generation: { temperature: 'hot' as unknown as number } },
       'test.json',
     );
     expect(c!.generation).toBeUndefined();
@@ -92,14 +105,14 @@ describe('loadCharacters', () => {
   });
 
   it('loads valid character JSON files', () => {
-    writeCharJson('testchar', { name: 'testchar', prompt: 'I am test' });
+    writeCharJson('testchar', { name: 'testchar', persona: 'I am test' });
     const chars = loadCharacters(TMP_DIR);
     expect(chars.has('testchar')).toBe(true);
-    expect(chars.get('testchar')!.prompt).toBe('I am test');
+    expect(chars.get('testchar')!.persona).toBe('I am test');
   });
 
   it('skips invalid character files', () => {
-    writeCharJson('bad', { prompt: 'no name field' });
+    writeCharJson('bad', { persona: 'no name field' });
     const warnings: string[] = [];
     const chars = loadCharacters(TMP_DIR, (msg) => warnings.push(msg));
     expect(chars.has('bad')).toBe(false);
@@ -121,7 +134,7 @@ describe('loadCharacters', () => {
   });
 
   it('keys are lowercased', () => {
-    writeCharJson('MixedCase', { name: 'MixedCase', prompt: 'p' });
+    writeCharJson('MixedCase', { name: 'MixedCase', persona: 'p' });
     const chars = loadCharacters(TMP_DIR);
     expect(chars.has('mixedcase')).toBe(true);
   });
@@ -129,7 +142,7 @@ describe('loadCharacters', () => {
   it('skips character files larger than the 64 KB cap', () => {
     // Build a JSON blob that's > 64 KB by padding a long backstory field.
     const bloat = 'x'.repeat(80 * 1024);
-    writeCharJson('huge', { name: 'huge', prompt: 'p', backstory: bloat });
+    writeCharJson('huge', { name: 'huge', persona: 'p', backstory: bloat });
     const warnings: string[] = [];
     const chars = loadCharacters(TMP_DIR, (msg) => warnings.push(msg));
     expect(chars.has('huge')).toBe(false);

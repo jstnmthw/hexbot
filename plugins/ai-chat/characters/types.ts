@@ -1,6 +1,6 @@
 // Character definition for the ai-chat plugin.
 // A character is a channel regular, not an AI agent. The structured fields
-// control runtime behaviour (speech formatting, when to speak); the prompt
+// control runtime behaviour (speech formatting, when to speak); the persona
 // carries the actual personality.
 
 /** A loaded character definition. */
@@ -15,13 +15,18 @@ export interface Character {
     slang: string[];
     catchphrases: string[];
     verbosity: 'terse' | 'normal' | 'verbose';
+    /** Dash-bullet style notes rendered under the Persona section of the
+     *  system prompt (e.g. "responses are 1-3 lines max"). */
+    notes: string[];
   };
 
   chattiness: number; // 0-1: how often they speak unprompted
   triggers: string[]; // topics that make them chime in
-  avoids: string[]; // topics they ignore or deflect
+  avoids: string[]; // topics rendered as "You avoid topics like: …" under Persona
 
-  prompt: string; // system prompt template (Rules format)
+  /** Persona body — the "who you are" template with {nick}/{channel}/{network}/{users}
+   *  placeholders. No Rules block — security rules are appended by the assistant. */
+  persona: string;
 
   /** Per-character generation overrides. All optional — falls back to
    *  global plugin config. */
@@ -36,7 +41,10 @@ export interface Character {
   };
 }
 
-/** Raw JSON shape before validation — all fields optional for lenient parsing. */
-export type CharacterJson = Partial<Character> & {
+/** Raw JSON shape before validation — all fields optional for lenient parsing.
+ *  `style` is omitted from the top-level Partial and re-added as a deep-Partial
+ *  so authors can supply any subset of style fields without TS demanding the
+ *  whole object. */
+export type CharacterJson = Omit<Partial<Character>, 'style'> & {
   style?: Partial<Character['style']>;
 };
