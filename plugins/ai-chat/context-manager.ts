@@ -109,7 +109,9 @@ export class ContextManager {
     let chars = 0;
     for (let i = buf.length - 1; i >= 0; i--) {
       const e = buf[i];
-      const content = e.isBot ? e.text : `[${e.nick}] ${e.text}`;
+      // `nick: text` prose prefix rather than `[nick] text` — small local
+      // models (llama3 family) mirror the bracket pattern into their output.
+      const content = e.isBot ? e.text : `${e.nick}: ${e.text}`;
       if (chars + content.length > maxChars && messages.length > 0) break;
       messages.push({ role: e.isBot ? 'assistant' : 'user', content });
       chars += content.length;

@@ -187,6 +187,25 @@ describe('SocialTracker', () => {
     });
   });
 
+  describe('orderByRecency', () => {
+    it('sorts known speakers newest-first and preserves input order for unseen nicks', () => {
+      let now = 1_000_000;
+      const st = new SocialTracker(null, () => now);
+      // d3m0n speaks first (oldest), then dark (newest). "ghost" never speaks.
+      st.onMessage('#c', 'd3m0n', 'hi', false);
+      now += 10_000;
+      st.onMessage('#c', 'dark', 'hello', false);
+
+      const ordered = st.orderByRecency('#c', ['d3m0n', 'dark', 'ghost']);
+      expect(ordered).toEqual(['dark', 'd3m0n', 'ghost']);
+    });
+
+    it('returns the input unchanged when the channel is unknown', () => {
+      const st = new SocialTracker();
+      expect(st.orderByRecency('#nope', ['a', 'b', 'c'])).toEqual(['a', 'b', 'c']);
+    });
+  });
+
   describe('clear', () => {
     it('clears all ephemeral state', () => {
       const st = new SocialTracker();

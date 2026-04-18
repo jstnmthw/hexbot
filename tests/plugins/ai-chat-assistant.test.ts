@@ -227,21 +227,22 @@ describe('renderStableSystemPrompt', () => {
 
   it('rules 3 & 4 of SAFETY_CLAUSE are one-sentence tightenings', () => {
     // Cosmetic rules trimmed for prompt budget — still carry the essential
-    // meaning (no bracketed-nick transcript format, no multi-voice output).
+    // meaning (no nick-tag prefix, no multi-voice output).
     expect(SAFETY_CLAUSE).toContain(
-      "Conversation history shows each participant tagged `[nick] text` — that's transcript formatting only.",
+      'never start a line with a nick tag like `[dark]`, `<dark>`, or `dark:`',
     );
     expect(SAFETY_CLAUSE).toContain(
       'Never continue the transcript or invent lines for other users — single-voice output only.',
     );
   });
 
-  it('forbids the bracketed-nick transcript format in the safety clause', () => {
-    // Local models (llama3.2:3b) imitate the [nick] transcript format unless
-    // the prompt explicitly forbids it. This rule must stay loud.
+  it('forbids the bracketed- and colon-nick prefix formats in the safety clause', () => {
+    // Local models (llama3.2:3b) imitate any transcript-style attribution
+    // prefix unless the prompt explicitly forbids it. Rule must stay loud.
     const out = renderStableSystemPrompt(PROMPT_CTX);
-    expect(out).toContain('transcript formatting only');
-    expect(out).toContain('bracketed nick');
+    expect(out).toContain('Reply as yourself in plain prose');
+    expect(out).toContain('`[dark]`');
+    expect(out).toContain('`dark:`');
   });
 
   it('always appends the capability-absence clause', () => {
@@ -304,6 +305,24 @@ describe('renderVolatileHeader', () => {
     expect(h).toBe(
       '[#test on irc.test. Users present: alice, bob. Current state: feeling energetic. Always respond in French.]',
     );
+  });
+
+  it('includes the current-turn speaker when provided', () => {
+    const h = renderVolatileHeader({ ...PROMPT_CTX, users: ['alice', 'bob'], speaker: 'alice' });
+    // Speaker is named in-prose inside the header so we can drop the `[nick]`
+    // prefix from the user turn without losing who's addressing the bot.
+    expect(h).toContain('Speaking to you now: alice.');
+  });
+
+  it('sanitises the speaker nick', () => {
+    const h = renderVolatileHeader({
+      ...PROMPT_CTX,
+      speaker: 'alice; rm -rf /',
+    });
+    // Non-nick characters stripped — matches the user-list sanitiser behaviour.
+    expect(h).toContain('Speaking to you now: alice');
+    expect(h).not.toContain(';');
+    expect(h).not.toContain('rm -rf');
   });
 
   it('sanitises user nicks before inclusion', () => {
@@ -508,12 +527,13 @@ describe('respond', () => {
     const messages = callArgs[1];
     expect(messages).toHaveLength(3);
     // Historical messages are byte-stable — no volatile prefix on them.
-    expect(messages[0]).toEqual({ role: 'user', content: '[alice] prior message' });
+    expect(messages[0]).toEqual({ role: 'user', content: 'alice: prior message' });
     expect(messages[1]).toEqual({ role: 'assistant', content: 'earlier reply' });
-    // Latest user turn carries the volatile header + nick tag.
+    // Latest user turn carries the volatile header only — no nick tag. The
+    // speaker is identified inside the header when promptContext.speaker set.
     expect(messages[2].role).toBe('user');
     expect(messages[2].content).toBe(
-      '[#test on irc.test. Users present: alice, bob. Current state: feeling energetic.] [alice] follow up',
+      '[#test on irc.test. Users present: alice, bob. Current state: feeling energetic.] follow up',
     );
   });
 
@@ -559,7 +579,7 @@ describe('respond', () => {
     );
     const callArgs = (deps.provider.complete as ReturnType<typeof vi.fn>).mock.calls[0];
     const messages = callArgs[1];
-    expect(messages[messages.length - 1].content).toBe('[alice] hi');
+    expect(messages[messages.length - 1].content).toBe('hi');
   });
 });
 

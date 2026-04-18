@@ -38,9 +38,9 @@ describe('ContextManager', () => {
 
     const msgs = mgr.getContext('#c', 'alice');
     expect(msgs).toEqual([
-      { role: 'user', content: '[alice] hi' },
+      { role: 'user', content: 'alice: hi' },
       { role: 'assistant', content: 'hey' },
-      { role: 'user', content: '[alice] how are you' },
+      { role: 'user', content: 'alice: how are you' },
     ]);
   });
 
@@ -54,10 +54,7 @@ describe('ContextManager', () => {
     // After overflow at i=4, buf had 5 entries → ceil(5/2) = 3 dropped,
     // leaving 2 newest messages (m3, m4).
     expect(mgr.size('#c')).toBe(2);
-    expect(mgr.getContext('#c', 'alice').map((m) => m.content)).toEqual([
-      '[alice] m3',
-      '[alice] m4',
-    ]);
+    expect(mgr.getContext('#c', 'alice').map((m) => m.content)).toEqual(['alice: m3', 'alice: m4']);
   });
 
   it('does not re-prune until the buffer overflows again', () => {
@@ -83,7 +80,7 @@ describe('ContextManager', () => {
     for (let i = 0; i < 5; i++) mgr.addMessage('#c', 'alice', `m${i}`, false);
     expect(mgr.size('#c')).toBe(3);
     const msgs = mgr.getContext('#c', 'alice');
-    expect(msgs.map((m) => m.content)).toEqual(['[alice] m2', '[alice] m3', '[alice] m4']);
+    expect(msgs.map((m) => m.content)).toEqual(['alice: m2', 'alice: m3', 'alice: m4']);
   });
 
   it('silently ignores PM messages (PM support removed)', () => {
@@ -108,7 +105,7 @@ describe('ContextManager', () => {
     expect(totalChars).toBeLessThanOrEqual(40);
     expect(msgs.length).toBeGreaterThan(0);
     // Newest message is always preserved
-    expect(msgs.at(-1)?.content).toBe('[a] msg9');
+    expect(msgs.at(-1)?.content).toBe('a: msg9');
   });
 
   it('always keeps at least one message even if over budget', () => {
@@ -129,7 +126,7 @@ describe('ContextManager', () => {
     clock.advance(11_000);
     mgr.addMessage('#c', 'alice', 'new', false);
     const msgs = mgr.getContext('#c', 'alice');
-    expect(msgs.map((m) => m.content)).toEqual(['[alice] new']);
+    expect(msgs.map((m) => m.content)).toEqual(['alice: new']);
   });
 
   it('deletes the buffer entirely when all messages age out', () => {

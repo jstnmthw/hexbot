@@ -832,11 +832,12 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
         maxOutputTokens,
       };
 
+      const channelNicks = api.getUsers(channel).map((u) => u.nick);
       const promptCtx: PromptContext = {
         botNick: botNick(),
         channel,
         network: network(),
-        users: api.getUsers(channel).map((u) => u.nick),
+        users: socialTracker ? socialTracker.orderByRecency(channel, channelNicks) : channelNicks,
         language,
         channelProfile: renderChannelProfile(cfg, channel),
         mood: moodEngine?.renderMoodLine(),
@@ -1140,17 +1141,22 @@ async function runPipeline(
   // Notify mood engine of the interaction
   moodEngine?.onInteraction();
 
+  const channelNicks = ctx.channel ? api.getUsers(ctx.channel).map((u) => u.nick) : undefined;
   const promptCtx: PromptContext = {
     botNick,
     channel: ctx.channel,
     network,
-    users: ctx.channel ? api.getUsers(ctx.channel).map((u) => u.nick) : undefined,
+    users:
+      channelNicks && ctx.channel && socialTracker
+        ? socialTracker.orderByRecency(ctx.channel, channelNicks)
+        : channelNicks,
     language,
     channelProfile: renderChannelProfile(cfg, ctx.channel),
     mood: moodEngine?.renderMoodLine(),
     persona: character.persona,
     styleNotes: character.style.notes,
     avoids: character.avoids,
+    speaker: ctx.nick,
   };
 
   // Use per-character context window if specified
