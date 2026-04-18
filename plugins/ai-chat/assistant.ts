@@ -1,6 +1,7 @@
 // Assistant — orchestrates provider + context + rate limit + token budget + output formatting.
 // Kept separate from the plugin entry so it can be unit-tested with a mock provider.
 import type { ContextManager } from './context-manager';
+import type { IterStats } from './iter-stats';
 import { formatResponse } from './output-formatter';
 import {
   type AIMessage,
@@ -78,9 +79,10 @@ export async function respond(
     tokenTracker: TokenTracker;
     contextManager: ContextManager;
     config: AssistantConfig;
+    iterStats?: IterStats | null;
   },
 ): Promise<AssistantResult> {
-  const { provider, rateLimiter, tokenTracker, contextManager, config } = deps;
+  const { provider, rateLimiter, tokenTracker, contextManager, config, iterStats } = deps;
   const userKey = req.nick.toLowerCase();
 
   // Admins bypass the per-user bucket; global RPM/RPD still enforced.
@@ -141,6 +143,7 @@ export async function respond(
   // Record even on empty output — the call still cost tokens.
   if (usageIn > 0 || usageOut > 0) {
     tokenTracker.recordUsage(req.nick, { input: usageIn, output: usageOut });
+    iterStats?.record({ input: usageIn, output: usageOut });
   }
   rateLimiter.record(userKey);
 

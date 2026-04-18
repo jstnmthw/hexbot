@@ -133,6 +133,8 @@ The bot ignores its own messages, likely-bot nicks (pattern match), users in the
 | `!ai play <game>`       | anyone | start a game session                          |
 | `!ai endgame`           | anyone | end current game session                      |
 | `!ai stats`             | `+m`   | today's request and token totals              |
+| `!ai iter`              | `+m`   | in-memory totals since last `iter reset`      |
+| `!ai iter reset`        | `+m`   | zero the in-memory iteration counter          |
 | `!ai ignore <target>`   | `+m`   | add nick or hostmask to ignore list           |
 | `!ai unignore <target>` | `+m`   | remove from ignore list                       |
 | `!ai clear`             | `+m`   | clear the channel's context window            |

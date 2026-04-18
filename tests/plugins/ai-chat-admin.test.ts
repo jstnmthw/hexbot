@@ -248,6 +248,45 @@ describe('ai-chat admin commands', () => {
     await dispatcher.dispatch('pub', ctx);
     expect(ctx.reply).not.toHaveBeenCalled();
   });
+
+  // ---- iter ----
+  it('!ai iter shows cumulative totals since last reset', async () => {
+    await dispatcher.dispatch('pub', makePubCtx('alice', '!ai one'));
+    await dispatcher.dispatch('pub', makePubCtx('bob', '!ai two'));
+    const ctx = makePubCtx('admin', '!ai iter', 'admin', 'adm.host');
+    await dispatcher.dispatch('pub', ctx);
+    expect(ctx.reply.mock.calls[0][0]).toMatch(/2 requests/);
+    expect(ctx.reply.mock.calls[0][0]).toMatch(/10 tokens/);
+    expect(ctx.reply.mock.calls[0][0]).toMatch(/in:6 out:4/);
+  });
+
+  it('!ai iter reset zeroes the counter without touching daily stats', async () => {
+    await dispatcher.dispatch('pub', makePubCtx('alice', '!ai hello'));
+    const resetCtx = makePubCtx('admin', '!ai iter reset', 'admin', 'adm.host');
+    await dispatcher.dispatch('pub', resetCtx);
+    expect(resetCtx.reply.mock.calls[0][0]).toMatch(/Iteration stats reset/);
+
+    const iterCtx = makePubCtx('admin', '!ai iter', 'admin', 'adm.host');
+    await dispatcher.dispatch('pub', iterCtx);
+    expect(iterCtx.reply.mock.calls[0][0]).toMatch(/0 requests/);
+
+    // Daily stats untouched — still has the one seeded request.
+    const statsCtx = makePubCtx('admin', '!ai stats', 'admin', 'adm.host');
+    await dispatcher.dispatch('pub', statsCtx);
+    expect(statsCtx.reply.mock.calls[0][0]).toMatch(/1 requests/);
+  });
+
+  it('!ai iter silently ignored for non-admins', async () => {
+    const ctx = makePubCtx('alice', '!ai iter');
+    await dispatcher.dispatch('pub', ctx);
+    expect(ctx.reply).not.toHaveBeenCalled();
+  });
+
+  it('!ai iter rejects unknown sub-args', async () => {
+    const ctx = makePubCtx('admin', '!ai iter wat', 'admin', 'adm.host');
+    await dispatcher.dispatch('pub', ctx);
+    expect(ctx.reply.mock.calls[0][0]).toMatch(/Usage: !ai iter/);
+  });
 });
 
 describe('ai-chat without a provider', () => {

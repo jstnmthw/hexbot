@@ -15,6 +15,7 @@ import { getCharacter, loadCharacters, resolveCharactersDir } from './character-
 import type { Character } from './characters/types';
 import { ContextManager } from './context-manager';
 import { listGames, loadGamePrompt, resolveGamesDir } from './games-loader';
+import { IterStats } from './iter-stats';
 import { MoodEngine } from './mood';
 import { applyCharacterStyle, formatResponse } from './output-formatter';
 import { createResilientProvider } from './providers';
@@ -62,6 +63,7 @@ export interface AIChatDeps {
   contextManager?: ContextManager;
   rateLimiter?: RateLimiter;
   tokenTracker?: TokenTracker;
+  iterStats?: IterStats;
   sessionManager?: SessionManager | null;
   socialTracker?: SocialTracker;
   moodEngine?: MoodEngine;
@@ -72,6 +74,7 @@ export interface AIChatDeps {
 let contextManager: ContextManager | null = null;
 let rateLimiter: RateLimiter | null = null;
 let tokenTracker: TokenTracker | null = null;
+let iterStats: IterStats | null = null;
 let sessionManager: SessionManager | null = null;
 let provider: AIProvider | null = null;
 let socialTracker: SocialTracker | null = null;
@@ -715,6 +718,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
 
   rateLimiter = merged.rateLimiter ?? new RateLimiter(cfg.rateLimits);
   tokenTracker = merged.tokenTracker ?? new TokenTracker(api.db, cfg.tokenBudgets);
+  iterStats = merged.iterStats ?? new IterStats();
   contextManager =
     merged.contextManager ??
     new ContextManager({
@@ -849,7 +853,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
           promptContext: promptCtx,
           maxContextMessages: character.generation?.maxContextMessages,
         },
-        { provider, rateLimiter, tokenTracker, contextManager, config: assistantCfg },
+        { provider, rateLimiter, tokenTracker, contextManager, config: assistantCfg, iterStats },
       );
 
       if (result.status === 'fantasy_dropped') {
@@ -1160,7 +1164,7 @@ async function runPipeline(
       maxContextMessages,
       isAdmin,
     },
-    { provider, rateLimiter, tokenTracker, contextManager, config: assistantCfg },
+    { provider, rateLimiter, tokenTracker, contextManager, config: assistantCfg, iterStats },
   );
 
   switch (result.status) {
@@ -1295,6 +1299,7 @@ async function runSessionPipeline(
       cfg.maxOutputTokens,
     );
     tokenTracker.recordUsage(ctx.nick, res.usage);
+    iterStats?.record(res.usage);
     rateLimiter.record(userKey);
 
     const lines = formatResponse(
@@ -1335,6 +1340,17 @@ async function runSessionPipeline(
 // Admin + info subcommands (return true if handled).
 // ---------------------------------------------------------------------------
 
+function formatIterDuration(ms: number): string {
+  const secs = Math.floor(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const remSec = secs % 60;
+  if (mins < 60) return remSec > 0 ? `${mins}m ${remSec}s` : `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remMin = mins % 60;
+  return remMin > 0 ? `${hours}h ${remMin}m` : `${hours}h`;
+}
+
 async function handleSubcommand(
   api: PluginAPI,
   cfg: AiChatConfig,
@@ -1356,6 +1372,24 @@ async function handleSubcommand(
       ctx.reply(
         `Today: ${total.requests} requests, ${total.input + total.output} tokens ` +
           `(in:${total.input} out:${total.output})`,
+      );
+      return true;
+    }
+    case 'iter': {
+      if (!hasAdmin) return true;
+      if (subArgs === 'reset') {
+        iterStats!.reset();
+        ctx.reply('Iteration stats reset.');
+        return true;
+      }
+      if (subArgs !== '') {
+        ctx.reply('Usage: !ai iter [reset]');
+        return true;
+      }
+      const s = iterStats!.snapshot();
+      ctx.reply(
+        `Since reset (${formatIterDuration(s.sinceMs)}): ${s.requests} requests, ` +
+          `${s.input + s.output} tokens (in:${s.input} out:${s.output})`,
       );
       return true;
     }
@@ -1536,6 +1570,7 @@ export function teardown(): void {
   socialTracker?.clear();
   rateLimiter = null;
   tokenTracker = null;
+  iterStats = null;
   contextManager = null;
   sessionManager = null;
   provider = null;
