@@ -113,7 +113,7 @@ describe('ai-chat admin commands', () => {
   // ---- stats ----
   it("!ai stats shows today's totals for admins", async () => {
     // Trigger one request so there is usage to report
-    await dispatcher.dispatch('pub', makePubCtx('alice', '!ai hello'));
+    await dispatcher.dispatch('pubm', makePubCtx('alice', 'hexbot: hello'));
     const ctx = makePubCtx('admin', '!ai stats', 'admin', 'adm.host');
     await dispatcher.dispatch('pub', ctx);
     expect(ctx.reply).toHaveBeenCalledOnce();
@@ -130,7 +130,7 @@ describe('ai-chat admin commands', () => {
   // ---- reset ----
   it('!ai reset <nick> works for owner', async () => {
     // Seed usage
-    await dispatcher.dispatch('pub', makePubCtx('alice', '!ai hello'));
+    await dispatcher.dispatch('pubm', makePubCtx('alice', 'hexbot: hello'));
     const ctx = makePubCtx('admin', '!ai reset alice', 'admin', 'adm.host');
     await dispatcher.dispatch('pub', ctx);
     expect(ctx.reply.mock.calls[0][0]).toMatch(/Reset token usage for alice/);
@@ -148,10 +148,14 @@ describe('ai-chat admin commands', () => {
     await dispatcher.dispatch('pub', ctx1);
     expect(ctx1.reply.mock.calls[0][0]).toMatch(/ignoring "spammer"/);
 
-    // Now "spammer" should be ignored
-    const ctx2 = makePubCtx('spammer', '!ai hi');
-    await dispatcher.dispatch('pub', ctx2);
+    // Now "spammer" should be ignored — both for chat and for the !ai console.
+    const ctx2 = makePubCtx('spammer', 'hexbot: hi');
+    await dispatcher.dispatch('pubm', ctx2);
     expect(ctx2.reply).not.toHaveBeenCalled();
+
+    const ctx3 = makePubCtx('spammer', '!ai help');
+    await dispatcher.dispatch('pub', ctx3);
+    expect(ctx3.reply).not.toHaveBeenCalled();
   });
 
   it('!ai ignore requires a target', async () => {
@@ -197,8 +201,8 @@ describe('ai-chat admin commands', () => {
       makePubCtx('admin', '!ai character sarcastic', 'admin', 'adm.host'),
     );
     // Next query should use the sarcastic character prompt
-    const ctx = makePubCtx('alice', '!ai hi');
-    await dispatcher.dispatch('pub', ctx);
+    const ctx = makePubCtx('alice', 'hexbot: hi');
+    await dispatcher.dispatch('pubm', ctx);
     const [systemPrompt] = (mockProvider.complete as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(systemPrompt).toContain('sarcastic');
   });
@@ -251,8 +255,8 @@ describe('ai-chat admin commands', () => {
 
   // ---- iter ----
   it('!ai iter shows cumulative totals since last reset', async () => {
-    await dispatcher.dispatch('pub', makePubCtx('alice', '!ai one'));
-    await dispatcher.dispatch('pub', makePubCtx('bob', '!ai two'));
+    await dispatcher.dispatch('pubm', makePubCtx('alice', 'hexbot: one'));
+    await dispatcher.dispatch('pubm', makePubCtx('bob', 'hexbot: two'));
     const ctx = makePubCtx('admin', '!ai iter', 'admin', 'adm.host');
     await dispatcher.dispatch('pub', ctx);
     expect(ctx.reply.mock.calls[0][0]).toMatch(/2 requests/);
@@ -261,7 +265,7 @@ describe('ai-chat admin commands', () => {
   });
 
   it('!ai iter reset zeroes the counter without touching daily stats', async () => {
-    await dispatcher.dispatch('pub', makePubCtx('alice', '!ai hello'));
+    await dispatcher.dispatch('pubm', makePubCtx('alice', 'hexbot: hello'));
     const resetCtx = makePubCtx('admin', '!ai iter reset', 'admin', 'adm.host');
     await dispatcher.dispatch('pub', resetCtx);
     expect(resetCtx.reply.mock.calls[0][0]).toMatch(/Iteration stats reset/);
@@ -321,8 +325,8 @@ describe('ai-chat without a provider', () => {
   });
 
   it('replies "unavailable" when no provider is configured', async () => {
-    const ctx = makePubCtx('alice', '!ai hi');
-    await dispatcher.dispatch('pub', ctx);
+    const ctx = makePubCtx('alice', 'hexbot: hi');
+    await dispatcher.dispatch('pubm', ctx);
     expect(ctx.reply).toHaveBeenCalledOnce();
     expect(ctx.reply.mock.calls[0][0]).toMatch(/unavailable/i);
   });
@@ -413,9 +417,9 @@ describe('ai-chat budget/session edge paths', () => {
     db.close();
   });
 
-  it('command user gets "budget exceeded" notice when over limit', async () => {
-    const ctx = makePubCtx('alice', '!ai hi');
-    await dispatcher.dispatch('pub', ctx);
+  it('triggered user gets "budget exceeded" notice when over limit', async () => {
+    const ctx = makePubCtx('alice', 'hexbot: hi');
+    await dispatcher.dispatch('pubm', ctx);
     expect(ctx.replyPrivate.mock.calls[0][0]).toMatch(/budget exceeded/i);
   });
 
@@ -515,8 +519,8 @@ describe('ai-chat channel_characters', () => {
   });
 
   it('uses object-form channel_characters with language override', async () => {
-    const ctx = makePubCtx('alice', '!ai hi', 'user', 'host.com', '#french');
-    await dispatcher.dispatch('pub', ctx);
+    const ctx = makePubCtx('alice', 'hexbot: hi', 'user', 'host.com', '#french');
+    await dispatcher.dispatch('pubm', ctx);
     const [, messages] = (mockProvider.complete as ReturnType<typeof vi.fn>).mock.calls[0];
     const lastUserTurn = messages[messages.length - 1].content;
     expect(lastUserTurn).toContain('Always respond in French.');

@@ -14,6 +14,7 @@ import {
 import { getCharacter, loadCharacters, resolveCharactersDir } from './character-loader';
 import type { Character } from './characters/types';
 import { ContextManager } from './context-manager';
+import { EngagementTracker } from './engagement-tracker';
 import { listGames, loadGamePrompt, resolveGamesDir } from './games-loader';
 import { IterStats } from './iter-stats';
 import { MoodEngine } from './mood';
@@ -26,6 +27,7 @@ import {
   isAIProviderError,
 } from './providers/types';
 import { RateLimiter } from './rate-limiter';
+import { type ReplyDecision, type SocialSnapshot, decideReply } from './reply-policy';
 import { type SessionIdentity, SessionManager } from './session-manager';
 import { SocialTracker } from './social-tracker';
 import { TokenTracker } from './token-tracker';
@@ -46,8 +48,6 @@ export const description = 'AI-powered chat with pluggable LLM providers';
  * isolation without a full teardown/init cycle.
  */
 export interface PluginState {
-  /** Tracks per-channel per-nick engagement timestamps (when bot last responded). */
-  engagement: Map<string, number>;
   /** Loaded character definitions, keyed by character name. */
   characters: Map<string, Character>;
 }
@@ -68,6 +68,7 @@ export interface AIChatDeps {
   socialTracker?: SocialTracker;
   moodEngine?: MoodEngine;
   ambientEngine?: AmbientEngine | null;
+  engagementTracker?: EngagementTracker;
   state?: PluginState;
 }
 
@@ -80,6 +81,7 @@ let provider: AIProvider | null = null;
 let socialTracker: SocialTracker | null = null;
 let ambientEngine: AmbientEngine | null = null;
 let moodEngine: MoodEngine | null = null;
+let engagementTracker: EngagementTracker | null = null;
 let state: PluginState | null = null;
 /** Periodic timer that expires idle game sessions. */
 let sessionExpiryInterval: ReturnType<typeof setInterval> | null = null;
@@ -118,6 +120,10 @@ interface AiChatConfig {
   charactersDir: string;
   channelCharacters: Record<string, string | { character?: string; language?: string }>;
   triggers: TriggerConfig;
+  engagement: {
+    softTimeoutMs: number;
+    hardCeilingMs: number;
+  };
   context: {
     maxMessages: number;
     maxTokens: number;
@@ -179,7 +185,10 @@ interface AiChatConfig {
   };
 }
 
-export function parseConfig(raw: Record<string, unknown>): AiChatConfig {
+export function parseConfig(
+  raw: Record<string, unknown>,
+  warn: (msg: string) => void = () => {},
+): AiChatConfig {
   const triggers = asRecord(raw.triggers);
   const context = asRecord(raw.context);
   const rl = asRecord(raw.rate_limits);
@@ -187,6 +196,22 @@ export function parseConfig(raw: Record<string, unknown>): AiChatConfig {
   const perm = asRecord(raw.permissions);
   const output = asRecord(raw.output);
   const channelCharacters = asRecord(raw.channel_characters);
+
+  // Legacy config migration warnings. Retained values are ignored; the
+  // replacement keys (`engagement.*`, always-on `!ai` console) are used.
+  if ('engagement_seconds' in triggers) {
+    warn(
+      'triggers.engagement_seconds is removed — replace with ' +
+        'engagement.soft_timeout_minutes / engagement.hard_ceiling_minutes ' +
+        '(see CHANGELOG 0.5.0).',
+    );
+  }
+  if ('command' in triggers) {
+    warn(
+      'triggers.command is removed — the !ai subcommand console is always ' +
+        'enabled. Remove this key from your config.',
+    );
+  }
 
   return {
     provider: asString(raw.provider, 'gemini'),
@@ -200,12 +225,17 @@ export function parseConfig(raw: Record<string, unknown>): AiChatConfig {
     channelProfiles: asRecord(raw.channel_profiles) as AiChatConfig['channelProfiles'],
     triggers: {
       directAddress: asBool(triggers.direct_address, true),
-      command: asBool(triggers.command, true),
       commandPrefix: asString(triggers.command_prefix, '!ai'),
       keywords: asStringArr(triggers.keywords, []),
       randomChance: asNum(triggers.random_chance, 0),
-      engagementSeconds: asNum(triggers.engagement_seconds, 60),
     },
+    engagement: (() => {
+      const e = asRecord(raw.engagement);
+      return {
+        softTimeoutMs: asNum(e.soft_timeout_minutes, 10) * 60_000,
+        hardCeilingMs: asNum(e.hard_ceiling_minutes, 30) * 60_000,
+      };
+    })(),
     context: {
       maxMessages: asNum(context.max_messages, 50),
       maxTokens: asNum(context.max_tokens, 4000),
@@ -549,37 +579,6 @@ function gatedSender(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Engagement tracking — conversation stickiness
-// ---------------------------------------------------------------------------
-
-function isEngaged(channel: string, nick: string, windowMs: number): boolean {
-  if (windowMs <= 0 || !state) return false;
-  const key = `${channel.toLowerCase()}:${nick.toLowerCase()}`;
-  const lastAt = state.engagement.get(key);
-  if (lastAt === undefined) return false;
-  return Date.now() - lastAt < windowMs;
-}
-
-const ENGAGEMENT_MAP_CAP = 1000;
-
-function recordEngagement(channel: string, nick: string, engagementWindowMs: number): void {
-  if (!state) return;
-  const now = Date.now();
-  const map = state.engagement;
-  map.set(`${channel.toLowerCase()}:${nick.toLowerCase()}`, now);
-  // TTL tied to the configured engagement window — entries older than that
-  // are no longer functionally meaningful (isEngaged() would reject them).
-  // Floor at 60s so a misconfigured 0 doesn't churn the map every insert.
-  if (map.size >= ENGAGEMENT_MAP_CAP) {
-    const ttlMs = Math.max(60_000, engagementWindowMs);
-    const cutoff = now - ttlMs;
-    for (const [k, t] of map) {
-      if (t < cutoff) map.delete(k);
-    }
-  }
-}
-
 /**
  * One-line debug summary of a pubm decision. Lets `api.debug` show why a
  * given message was skipped or routed without dumping full context. Text is
@@ -709,7 +708,7 @@ function activeCharacter(
 // ---------------------------------------------------------------------------
 
 export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
-  const cfg = parseConfig(api.config);
+  const cfg = parseConfig(api.config, (msg) => api.warn(msg));
   // `deps` is typed as unknown at the plugin-loader boundary (the loader
   // forwards whatever the caller passed without inspecting it). Cast to the
   // narrow AIChatDeps here — the loader is the only caller that supplies a
@@ -745,21 +744,28 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
     }, 60_000);
   }
 
-  // Plugin state: engagement map + loaded characters. When a test injects
-  // state, we honour it as-is (including an empty characters map); when not
-  // injected, build a fresh state and populate characters from disk.
+  // Plugin state: loaded characters. When a test injects state, we honour it
+  // as-is (including an empty characters map); when not injected, build a
+  // fresh state and populate characters from disk.
   if (merged.state) {
     state = merged.state;
   } else {
     const charsDir = resolveCharactersDir(cfg.charactersDir);
     state = {
-      engagement: new Map(),
       characters: loadCharacters(charsDir, (msg) => api.warn(msg)),
     };
   }
   api.log(
     `Loaded ${state.characters.size} character(s): ${[...state.characters.keys()].join(', ')}`,
   );
+
+  // Engagement tracker — replaces the old timer-based engagement map.
+  engagementTracker =
+    merged.engagementTracker ??
+    new EngagementTracker({
+      softTimeoutMs: cfg.engagement.softTimeoutMs,
+      hardCeilingMs: cfg.engagement.hardCeilingMs,
+    });
 
   // Social tracker for channel activity + per-user interaction stats
   socialTracker = merged.socialTracker ?? new SocialTracker(api.db);
@@ -791,11 +797,12 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
     {
       command: cfg.triggers.commandPrefix,
       flags: cfg.permissions.requiredFlag,
-      usage: `${cfg.triggers.commandPrefix} <message>`,
-      description: 'Ask the AI chat bot a question',
+      usage: `${cfg.triggers.commandPrefix} <subcommand>`,
+      description: `AI chat admin + game console (talk to the bot by nick to chat)`,
       detail: [
-        `Subcommands (admin): stats, reset <nick>, ignore <nick>, unignore <nick>, clear, character [name]`,
-        `Subcommands (anyone): characters, model`,
+        `Anyone: help, character, characters, model, games`,
+        `Admin:  stats, iter, ignore, unignore, clear, character <name>, play, endgame`,
+        `Owner:  reset <nick>`,
       ],
       category: 'ai',
     },
@@ -803,7 +810,8 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
 
   api.log(
     `Loaded ai-chat v${version} provider=${cfg.provider} model=${cfg.model} ` +
-      `(triggers direct:${cfg.triggers.directAddress} cmd:${cfg.triggers.command})`,
+      `(direct:${cfg.triggers.directAddress} roll:${cfg.triggers.randomChance} ` +
+      `engagement=${cfg.engagement.softTimeoutMs / 60_000}m/${cfg.engagement.hardCeilingMs / 60_000}m)`,
   );
 
   // -----------------------------------------------------------------------
@@ -912,16 +920,18 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
     if (!api.isBotNick(ctx.nick)) return;
     socialTracker?.dropChannel(ctx.channel);
     contextManager?.clearContext(ctx.channel);
+    engagementTracker?.dropChannel(ctx.channel);
   });
   api.bind('kick', '-', '*', (ctx: HandlerContext) => {
     if (!ctx.channel) return;
     if (!api.isBotNick(ctx.nick)) return;
     socialTracker?.dropChannel(ctx.channel);
     contextManager?.clearContext(ctx.channel);
+    engagementTracker?.dropChannel(ctx.channel);
   });
 
   // -----------------------------------------------------------------------
-  // pubm * — context feed + non-command trigger detection
+  // pubm * — context feed, engagement updates, unified reply decision
   // -----------------------------------------------------------------------
   api.bind('pubm', '-', '*', async (ctx: HandlerContext) => {
     if (!ctx.channel) return;
@@ -965,13 +975,22 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
       socialTracker?.onMessage(ctx.channel, ctx.nick, text, isBotMsg);
     }
 
-    // Let the pub `!ai` handler own the command trigger.
+    // Feed the engagement tracker on every non-bot, allowed channel message.
+    // Engagement state is IRC-floor semantics — done before the session and
+    // reply-policy branches so a 3rd-party speaking always ends other users'
+    // engagement even if we're about to skip this message for other reasons.
+    const channelNicks = api.getUsers(ctx.channel).map((u) => u.nick);
+    if (!isBotMsg && allowed && engagementTracker) {
+      engagementTracker.onHumanMessage(ctx.channel, ctx.nick, text, channelNicks);
+    }
+
+    // Let the pub `!ai` handler own the subcommand console — `!ai ...` never
+    // routes through the reply policy. Matches the prefix exactly or as a
+    // space-prefixed command; anything else (e.g. text that happens to start
+    // with `!ai` as a word) falls through to the normal reply path.
     const cmdPrefix = cfg.triggers.commandPrefix.toLowerCase();
     const lowerText = text.trim().toLowerCase();
-    if (
-      cfg.triggers.command &&
-      (lowerText === cmdPrefix || lowerText.startsWith(cmdPrefix + ' '))
-    ) {
+    if (lowerText === cmdPrefix || lowerText.startsWith(cmdPrefix + ' ')) {
       api.debug(traceLine(ctx, text, { trigger: 'command', reason, action: 'defer-to-pub' }));
       return;
     }
@@ -992,111 +1011,97 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
       return;
     }
 
-    // Treat anything starting with a command sigil (`!foo`, `.bar`, `/quit`,
-    // `~something`, `@op`, etc.) as a command for another plugin or services
-    // — not casual conversation. Without this, the engagement / keyword /
-    // random paths happily reply to a user typing `!help ai` or `.deop`.
-    // Direct address (`neo: ...`) and the bot's own `!ai` were handled above,
-    // so they still fire normally.
-    const startsWithCommandSigil = /^[!./~@%$&+]/.test(text.trim());
-
-    let match = detectTrigger(text, botNick(), cfg.triggers);
-    if (startsWithCommandSigil && match && (match.kind === 'keyword' || match.kind === 'random')) {
-      match = null;
-    }
-    // Engagement fallback: if no trigger matched but the user recently talked
-    // to the bot, treat this as a conversation continuation. Skipped for
-    // command-style messages so an engaged user's `!help` doesn't re-trigger.
-    if (
-      !match &&
-      ctx.channel &&
-      !startsWithCommandSigil &&
-      isEngaged(ctx.channel, ctx.nick, cfg.triggers.engagementSeconds * 1_000)
-    ) {
-      match = { kind: 'engaged', prompt: text.trim() };
-    }
-    if (!match) {
+    if (isBotMsg || !allowed) {
       if (!isBotMsg) {
         api.debug(traceLine(ctx, text, { trigger: 'none', reason, action: 'skip' }));
       }
       return;
     }
-    if (match.kind === 'command') return;
 
-    if (!allowed) {
-      api.debug(traceLine(ctx, text, { trigger: match.kind, reason, action: 'skip' }));
+    // Unified reply decision.
+    const { character } = activeCharacter(api, cfg, ctx.channel);
+    const trigger = detectTrigger(text, botNick(), cfg.triggers);
+    const engaged = engagementTracker?.isEngaged(ctx.channel, ctx.nick) ?? false;
+    const social: SocialSnapshot = {
+      activity: socialTracker?.getActivity(ctx.channel) ?? 'slow',
+      lastWasBot: socialTracker?.isLastMessageFromBot(ctx.channel) ?? false,
+      recentBotInteraction: hasRecentBotInteraction(socialTracker, ctx.nick),
+    };
+
+    const decision = decideReply({
+      text,
+      trigger,
+      engaged,
+      social,
+      characterChattiness: character.chattiness,
+      randomChance: cfg.triggers.randomChance,
+    });
+
+    if (decision === 'skip') {
+      api.debug(traceLine(ctx, text, { trigger: trigger?.kind ?? 'none', reason, action: 'skip' }));
       return;
     }
 
-    api.debug(traceLine(ctx, text, { trigger: match.kind, reason, action: 'pipeline' }));
+    const prompt = trigger?.prompt ?? text.trim();
+    api.debug(
+      traceLine(ctx, text, {
+        trigger: trigger?.kind ?? decision,
+        reason,
+        action: `pipeline:${decision}`,
+      }),
+    );
     const hasAdmin = api.permissions.checkFlags(cfg.permissions.adminFlag, ctx);
-    await runPipeline(api, cfg, ctx, match.prompt, botNick(), network(), false, hasAdmin);
+    await runPipeline(api, cfg, ctx, prompt, botNick(), network(), decision, hasAdmin);
   });
 
   // -----------------------------------------------------------------------
-  // pub !ai — command trigger + admin subcommands
+  // pub !ai — subcommand console (help / admin / games).
+  // No freeform chat path — talk to the bot by nick instead.
   // -----------------------------------------------------------------------
-  if (cfg.triggers.command) {
-    api.bind(
-      'pub',
-      cfg.permissions.requiredFlag,
-      cfg.triggers.commandPrefix,
-      async (ctx: HandlerContext) => {
-        if (!ctx.channel) return;
-        // Self-talk / bot-loop guard: the pubm bind has these checks, but a
-        // relayed event or test-harness replay could feed the bot's own nick
-        // into the pub handler. Admin subcommands run in here, so a match
-        // between the bot's own hostmask and the admin flag would let the
-        // bot execute its own ignore/reset/character commands.
-        if (ctx.nick.toLowerCase() === botNick().toLowerCase()) return;
-        if (isLikelyBot(ctx.nick, cfg.permissions.botNickPatterns, cfg.permissions.ignoreBots)) {
-          return;
-        }
-        const text = truncateForBuffer(ctx.text);
-        contextManager!.addMessage(ctx.channel, ctx.nick, text, false);
+  api.bind(
+    'pub',
+    cfg.permissions.requiredFlag,
+    cfg.triggers.commandPrefix,
+    async (ctx: HandlerContext) => {
+      if (!ctx.channel) return;
+      // Self-talk / bot-loop guard: the pubm bind has these checks, but a
+      // relayed event or test-harness replay could feed the bot's own nick
+      // into the pub handler. Admin subcommands run in here, so a match
+      // between the bot's own hostmask and the admin flag would let the
+      // bot execute its own ignore/reset/character commands.
+      if (ctx.nick.toLowerCase() === botNick().toLowerCase()) return;
+      if (isLikelyBot(ctx.nick, cfg.permissions.botNickPatterns, cfg.permissions.ignoreBots)) {
+        return;
+      }
+      // Ignored users can't invoke the console either — otherwise a spammer
+      // placed on ignore could still trigger per-reply chatter ("Unknown
+      // subcommand 'x'") by flooding `!ai <garbage>`.
+      const hostmask = `${ctx.nick}!${ctx.ident}@${ctx.hostname}`;
+      const fullIgnore = [...cfg.permissions.ignoreList, ...getDynamicIgnoreList(api)];
+      if (isIgnored(ctx.nick, hostmask, fullIgnore)) return;
 
-        const args = truncateForBuffer(ctx.args).trim();
+      const text = truncateForBuffer(ctx.text);
+      contextManager!.addMessage(ctx.channel, ctx.nick, text, false);
 
-        // Admin + info subcommands
-        if (await handleSubcommand(api, cfg, ctx, args)) return;
-
-        const prompt = args;
-        if (!prompt) {
-          ctx.reply(`Usage: ${cfg.triggers.commandPrefix} <message>`);
-          return;
-        }
-        const cmdReason = shouldRespondReason({
-          nick: ctx.nick,
-          ident: ctx.ident,
-          hostname: ctx.hostname,
-          channel: ctx.channel,
-          botNick: botNick(),
-          hasRequiredFlag: true,
-          hasPrivilegedFlag: api.permissions.checkFlags(cfg.security.privilegedRequiredFlag, ctx),
-          botChannelModes: getBotChannelModes(api, ctx.channel),
-          botChanservAccess: getBotChanservAccess(api, ctx.channel),
-          config: cfg,
-          dynamicIgnoreList: getDynamicIgnoreList(api),
-        });
-        if (cmdReason !== 'allowed') {
-          api.debug(
-            traceLine(ctx, text, { trigger: 'command', reason: cmdReason, action: 'skip' }),
-          );
-          return;
-        }
-        api.debug(
-          traceLine(ctx, text, { trigger: 'command', reason: cmdReason, action: 'pipeline' }),
-        );
-        const cmdAdmin = api.permissions.checkFlags(cfg.permissions.adminFlag, ctx);
-        await runPipeline(api, cfg, ctx, prompt, botNick(), network(), true, cmdAdmin);
-      },
-    );
-  }
+      const args = truncateForBuffer(ctx.args).trim();
+      await handleSubcommand(api, cfg, ctx, args);
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
 // Pipeline: call Assistant, format output, send with inter-line delay.
 // ---------------------------------------------------------------------------
+
+/** Recency window for the rolled-reply boost — 15 minutes. */
+const RECENT_BOT_INTERACTION_MS = 15 * 60_000;
+
+function hasRecentBotInteraction(tracker: SocialTracker | null, nick: string): boolean {
+  if (!tracker) return false;
+  const stats = tracker.getUserInteraction(nick);
+  if (!stats || stats.botInteractions === 0) return false;
+  return Date.now() - stats.lastBotInteraction < RECENT_BOT_INTERACTION_MS;
+}
 
 async function runPipeline(
   api: PluginAPI,
@@ -1105,10 +1110,27 @@ async function runPipeline(
   prompt: string,
   botNick: string,
   network: string,
-  noticeOnBlock: boolean,
+  source: ReplyDecision,
   isAdmin = false,
 ): Promise<void> {
   if (!rateLimiter || !tokenTracker || !contextManager) return;
+  // Rolled replies count against the ambient budget — a random-chance reply
+  // is an unprompted utterance, same class as idle / unanswered-question
+  // ambient. Address/engaged replies are direct responses and keep the
+  // per-user bucket pathway (inside respond()).
+  if (source === 'rolled' && ctx.channel) {
+    if (!rateLimiter.checkAmbient(ctx.channel)) {
+      api.debug(
+        `pipeline rolled-skip ch=${ctx.channel} nick=${ctx.nick} reason=ambient_budget_full`,
+      );
+      return;
+    }
+  }
+  // Rolled replies are unprompted — stay quiet on user-bucket / budget
+  // blocks so we don't spam noticeOps or reveal limiter state to the
+  // channel. Address/engaged replies came from an explicit user action, so
+  // they get the private rate-limit notice.
+  const noticeOnBlock = source !== 'rolled';
 
   const { character, language } = activeCharacter(api, cfg, ctx.channel);
 
@@ -1223,9 +1245,11 @@ async function runPipeline(
         verbosity: character.style.verbosity,
       });
       contextManager.addMessage(ctx.channel, botNick, styled.join(' '), true);
-      // Record engagement so the user's next messages are treated as continuations
+      // Record engagement so the user's next messages are treated as
+      // continuations. Also record ambient budget tick for rolled replies.
       if (ctx.channel) {
-        recordEngagement(ctx.channel, ctx.nick, cfg.triggers.engagementSeconds * 1000);
+        engagementTracker?.onBotReply(ctx.channel, ctx.nick);
+        if (source === 'rolled') rateLimiter.recordAmbient(ctx.channel);
       }
       socialTracker?.recordBotInteraction(ctx.nick);
       api.log(
@@ -1357,13 +1381,29 @@ function formatIterDuration(ms: number): string {
   return remMin > 0 ? `${hours}h ${remMin}m` : `${hours}h`;
 }
 
+/**
+ * Short usage hint shown for bare `!ai` / unknown subcommands. Points the
+ * user at conversational addressing (`<botnick>: hi`) as the chat entry
+ * point and at `!ai help` for the full subcommand listing.
+ */
+function subcommandUsageHint(cfg: AiChatConfig, botNick: string): string {
+  return (
+    `${cfg.triggers.commandPrefix} is a subcommand console — talk to the bot by nick ` +
+    `("${botNick}: hello"). Try "${cfg.triggers.commandPrefix} help" for subcommands.`
+  );
+}
+
 async function handleSubcommand(
   api: PluginAPI,
   cfg: AiChatConfig,
   ctx: HandlerContext,
   args: string,
 ): Promise<boolean> {
-  if (!args) return false;
+  const botNickValue = api.botConfig.irc.nick;
+  if (!args) {
+    ctx.reply(subcommandUsageHint(cfg, botNickValue));
+    return true;
+  }
   const [sub, ...rest] = args.split(/\s+/);
   const subLower = sub.toLowerCase();
   const adminFlag = cfg.permissions.adminFlag;
@@ -1372,6 +1412,16 @@ async function handleSubcommand(
   const subArgs = rest.join(' ').trim();
 
   switch (subLower) {
+    case 'help': {
+      const anyone = 'help, character, characters, model, games';
+      const admin = 'stats, iter, ignore, unignore, clear, character <name>, play, endgame';
+      const owner = 'reset <nick>';
+      ctx.reply(`Subcommands — anyone: ${anyone}`);
+      ctx.reply(`[admin]: ${admin}`);
+      ctx.reply(`[owner]: ${owner}`);
+      ctx.reply(`Talk to the bot by nick ("${botNickValue}: hello") to chat.`);
+      return true;
+    }
     case 'stats': {
       if (!hasAdmin) return true; // silently ignore
       const total = tokenTracker!.getDailyTotal();
@@ -1557,7 +1607,10 @@ async function handleSubcommand(
       return true;
     }
     default:
-      return false;
+      ctx.reply(
+        `Unknown subcommand "${api.stripFormatting(sub)}". Try "${cfg.triggers.commandPrefix} help".`,
+      );
+      return true;
   }
 }
 
@@ -1574,6 +1627,7 @@ export function teardown(): void {
   sessionManager?.clear();
   ambientEngine?.stop();
   socialTracker?.clear();
+  engagementTracker?.clear();
   rateLimiter = null;
   tokenTracker = null;
   iterStats = null;
@@ -1583,6 +1637,7 @@ export function teardown(): void {
   socialTracker = null;
   ambientEngine = null;
   moodEngine = null;
+  engagementTracker = null;
   state = null;
   gamesDir = '';
   lastRateLimitOpNoticeAt.clear();

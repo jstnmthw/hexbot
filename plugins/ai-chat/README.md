@@ -1,6 +1,6 @@
 # ai-chat — give your channel a regular, not a chatbot
 
-A modern LLM plugin that makes your bot feel like someone who hangs out in the channel, not a help-desk behind a prompt. Pick a personality from the shipped roster — `sarcastic`, `chaotic`, `shitposter`, `nightowl`, `oldhead` — or drop in your own JSON character. A mood engine drifts energy, humor, and patience over time so replies don't feel like a stuck knob. An activity-aware ambient mode lets the bot chime in during dead hours, answer questions nobody else is picking up, or quietly stay out of the way when the channel's flooding. Play `20questions` or `trivia` with it as a proper game host. Address it by name, hit it with `!ai`, or let it read the room.
+A modern LLM plugin that makes your bot feel like someone who hangs out in the channel, not a help-desk behind a prompt. Pick a personality from the shipped roster — `sarcastic`, `chaotic`, `shitposter`, `nightowl`, `oldhead` — or drop in your own JSON character. A mood engine drifts energy, humor, and patience over time so replies don't feel like a stuck knob. An activity-aware ambient mode lets the bot chime in during dead hours, answer questions nobody else is picking up, or quietly stay out of the way when the channel's flooding. Play `20questions` or `trivia` with it as a proper game host. Address it by name, let it roll the dice on an unprompted reply, or let it keep a thread alive as long as no one else takes the floor.
 
 Pluggable providers — **Gemini** (hosted free tier, no credit card) and **Ollama** (self-hosted, everything stays on your box) ship built-in; Claude/OpenAI adapters slot in without touching plugin logic. Hardened against prompt-injected ChanServ fantasy commands so a rogue LLM output can't deop your admin. Rate-limited, circuit-broken, hot-reloadable, and just a few lines of config away from feeling exactly how you want it to.
 
@@ -16,7 +16,7 @@ Pluggable providers — **Gemini** (hosted free tier, no credit card) and **Olla
 
 **Game sessions with the LLM as host.** `!ai play 20questions` or `!ai play trivia` — user messages route into the session instead of the shared channel context. Drop a `.txt` prompt in `games/` to author a new one.
 
-**Tune every knob.** Temperature, max tokens, context window, per-user and global RPM/RPD, daily token budgets, ambient hourly caps, engagement window, verbosity bounds, trigger mix (direct-address, command, keywords, random %), privilege gating, and more — all live-reloadable via `.reload ai-chat`.
+**Tune every knob.** Temperature, max tokens, context window, per-user and global RPM/RPD, daily token budgets, ambient hourly caps, engagement soft/hard timeouts, verbosity bounds, trigger mix (direct-address, keywords, random %), privilege gating, and more — all live-reloadable via `.reload ai-chat`.
 
 **Pluggable providers.** Gemini (hosted), Ollama (self-hosted). Swap with one config key; the rest of the plugin doesn't care.
 
@@ -106,16 +106,28 @@ Token counting defaults to a conservative 4-chars-per-token heuristic (no server
 
 ## Triggers
 
-| Trigger          | Example                                                              |
-| ---------------- | -------------------------------------------------------------------- |
-| Direct address   | `hexbot: what's up?`, `hey hexbot?`                                  |
-| Command          | `!ai tell me a joke` (prefix configurable)                           |
-| Engagement       | bot's own reply window — the addressed user's next messages continue |
-| Keyword (opt-in) | any configured substring match                                       |
-| Random (opt-in)  | small % chance on any message                                        |
-| Ambient (opt-in) | bot speaks unprompted — see _Ambient participation_                  |
+The bot decides whether to reply on a three-tier policy, in this order:
 
-After the bot replies to someone, that user's next messages in the same channel are treated as conversation continuations for `triggers.engagement_seconds` (default 60s) — no re-address needed.
+1. **Address** — direct mention by nick (`hexbot: what's up?`, `hey hexbot?`) or a configured keyword match.
+2. **Engaged** — the bot and user are still holding the conversational floor (see _Engagement_ below).
+3. **Rolled** — a low-probability unprompted reply gated by `triggers.random_chance`, channel activity, and a per-channel hourly budget. Off by default.
+
+Ambient participation (idle remarks, unanswered-question rescues, join/topic reactions) is a separate feature — see _Ambient participation_ below.
+
+### Engagement
+
+After the bot replies to a user, that user is **engaged** — their next messages are treated as conversation continuations without needing to re-address. Engagement ends when any of the following happens:
+
+- Another human takes the floor (different nick speaks in the channel).
+- The engaged user addresses someone else by name (`alice: hey check this`).
+- `engagement.soft_timeout_minutes` (default 10) elapses with no exchange.
+- `engagement.hard_ceiling_minutes` (default 30) elapses from the first reply, even with continuous exchange.
+
+Multiple users can be engaged in one channel at the same time (e.g. both Alice and Bob chatting with the bot); each ends independently. A third human speaking ends engagement for all engaged users in that channel.
+
+### `!ai` is a subcommand console, not a chat command
+
+Typing `!ai hello` no longer produces a chat reply. Talk to the bot by nick instead (`<botnick>: hello`). `!ai` dispatches subcommands only — try `!ai help` for the full listing.
 
 Private messaging is not supported — the bot responds only in channels. This is intentional: PMs are a reconnaissance vector for testing prompt injection without channel visibility.
 
@@ -125,7 +137,7 @@ The bot ignores its own messages, likely-bot nicks (pattern match), users in the
 
 | Command                 | Access | Description                                   |
 | ----------------------- | ------ | --------------------------------------------- |
-| `!ai <message>`         | anyone | ask a question                                |
+| `!ai help`              | anyone | list available subcommands                    |
 | `!ai character`         | anyone | show current character for this channel       |
 | `!ai characters`        | anyone | list available characters                     |
 | `!ai model`             | anyone | show provider and model                       |
@@ -141,7 +153,7 @@ The bot ignores its own messages, likely-bot nicks (pattern match), users in the
 | `!ai character <name>`  | `+m`   | switch character for this channel (persisted) |
 | `!ai reset <nick>`      | `+n`   | reset a user's daily token budget             |
 
-Users with the admin flag (`+m` by default) bypass the per-user token bucket; global RPM/RPD still apply.
+Bare `!ai` and unknown subcommands print a usage hint pointing at `!ai help` and the direct-address chat path. Users with the admin flag (`+m` by default) bypass the per-user token bucket; global RPM/RPD still apply.
 
 ## Characters
 
@@ -300,14 +312,19 @@ Defaults live in `config.json` in this directory. Override per-channel or global
 
 ### `triggers`
 
-| Key                  | Type     | Default | Description                                                                  |
-| -------------------- | -------- | ------- | ---------------------------------------------------------------------------- |
-| `direct_address`     | boolean  | `true`  | Respond when addressed by nick (`hexbot: ...`, `hey hexbot?`).               |
-| `command`            | boolean  | `true`  | Respond to the `!ai` command.                                                |
-| `command_prefix`     | string   | `"!ai"` | Command prefix for the command trigger.                                      |
-| `keywords`           | string[] | `[]`    | Substrings that trigger a reply on any message. Opt-in.                      |
-| `random_chance`      | number   | `0`     | Probability (0–1) of replying to any message. Opt-in.                        |
-| `engagement_seconds` | number   | `60`    | After a reply, the addressed user's next messages are treated as follow-ups. |
+| Key              | Type     | Default | Description                                                                                                                                                                                                 |
+| ---------------- | -------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `direct_address` | boolean  | `true`  | Respond when addressed by nick (`hexbot: ...`, `hey hexbot?`).                                                                                                                                              |
+| `command_prefix` | string   | `"!ai"` | Subcommand console prefix. The `!ai <freeform>` chat command was removed in 0.5.0 — this only drives the subcommand router.                                                                                 |
+| `keywords`       | string[] | `[]`    | Substrings that trigger a reply on any message. Opt-in.                                                                                                                                                     |
+| `random_chance`  | number   | `0`     | Base probability (0–1) of a rolled unprompted reply. Multiplied by character chattiness, activity scale, and recency boost. Suggested starting range `0.02–0.05`. Counts against the ambient hourly budget. |
+
+### `engagement`
+
+| Key                    | Type   | Default | Description                                                                                                    |
+| ---------------------- | ------ | ------- | -------------------------------------------------------------------------------------------------------------- |
+| `soft_timeout_minutes` | number | `10`    | How long an engaged user can stay silent before engagement lapses.                                             |
+| `hard_ceiling_minutes` | number | `30`    | Hard cap on thread duration even with continuous exchanges — stops a long back-and-forth from running forever. |
 
 ### `context`
 
@@ -416,11 +433,14 @@ Every key at its shipped default, wrapped in a `plugins.json` entry. Copy, trim 
 
       "triggers": {
         "direct_address": true,
-        "command": true,
         "command_prefix": "!ai",
         "keywords": [],
-        "random_chance": 0,
-        "engagement_seconds": 60
+        "random_chance": 0
+      },
+
+      "engagement": {
+        "soft_timeout_minutes": 10,
+        "hard_ceiling_minutes": 30
       },
 
       "channel_profiles": {},

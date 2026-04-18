@@ -7,11 +7,14 @@
 
   "triggers": {
     "direct_address": true,
-    "command": true,
     "command_prefix": "!ai",
     "keywords": [],
-    "random_chance": 0,
-    "engagement_seconds": 60
+    "random_chance": 0
+  },
+
+  "engagement": {
+    "soft_timeout_minutes": 10,
+    "hard_ceiling_minutes": 30
   },
 
   "channel_profiles": {},

@@ -1,22 +1,33 @@
 // Trigger detection for the AI chat plugin.
 // Pure functions — no plugin API access. Safe to unit-test in isolation.
+//
+// Scope note: `detectTrigger` is only concerned with "does the text contain a
+// direct signal that the bot is being addressed?" It does NOT decide whether
+// to reply — that's `decideReply` in `reply-policy.ts`. In particular, this
+// module no longer handles:
+//
+//   - `!ai <freeform>` freeform command (removed in 0.5.0 — `!ai` is a
+//     subcommand console, see `handleSubcommand`).
+//   - Random-chance rolls (moved to `reply-policy.ts`, gated by activity /
+//     recency / back-to-back guard).
+//   - Engagement fallback (moved to `EngagementTracker` + `decideReply`).
 
 /** Configured trigger policy. */
 export interface TriggerConfig {
   directAddress: boolean;
-  command: boolean;
+  /**
+   * Subcommand console prefix (e.g. `!ai`). Retained so `handleSubcommand`
+   * can bind to it; `detectTrigger` itself ignores the prefix now.
+   */
   commandPrefix: string;
   keywords: string[];
   randomChance: number;
-  /** Seconds after a bot response during which the same user's messages are
-   *  treated as conversation continuations (no re-address needed). 0 = disabled. */
-  engagementSeconds: number;
 }
 
 /** The kind of trigger that matched, plus the user's actual question/text. */
 export interface TriggerMatch {
-  kind: 'direct' | 'command' | 'keyword' | 'random' | 'engaged';
-  /** The user's message with trigger prefix (nick/command) stripped. */
+  kind: 'direct' | 'keyword';
+  /** The user's message with trigger prefix (nick) stripped. */
   prompt: string;
 }
 
@@ -67,31 +78,21 @@ function hostmaskMatches(hostmask: string, pattern: string): boolean {
 }
 
 /**
- * Detect whether a channel message should trigger a response.
+ * Detect whether a channel message contains an explicit trigger (direct
+ * address by nick, or keyword hit). Returns null if no trigger matched —
+ * the caller decides whether to reply anyway (engagement / rolled path).
  *
  * @param text     — raw message text
  * @param botNick  — bot's current nick
  * @param config   — active trigger config
- * @param rng      — random source for randomChance (0..1)
  */
 export function detectTrigger(
   text: string,
   botNick: string,
   config: TriggerConfig,
-  rng: () => number = Math.random,
 ): TriggerMatch | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
-
-  // Command trigger: e.g. "!ai what's up"
-  if (config.command && config.commandPrefix) {
-    const prefix = config.commandPrefix.toLowerCase();
-    const lower = trimmed.toLowerCase();
-    if (lower === prefix) return { kind: 'command', prompt: '' };
-    if (lower.startsWith(prefix + ' ')) {
-      return { kind: 'command', prompt: trimmed.substring(config.commandPrefix.length).trim() };
-    }
-  }
 
   // Direct address: "hexbot: …" / "hexbot, …" / "hexbot …"
   if (config.directAddress) {
@@ -120,11 +121,6 @@ export function detectTrigger(
         return { kind: 'keyword', prompt: trimmed };
       }
     }
-  }
-
-  // Random interjection
-  if (config.randomChance > 0 && rng() < config.randomChance) {
-    return { kind: 'random', prompt: trimmed };
   }
 
   return null;

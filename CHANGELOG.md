@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0]
+
+### Breaking
+
+- **ai-chat `!ai <freeform>` chat command removed.** Talk to the bot by nick instead (`<botnick>: hello`). `!ai` is now a subcommand console — bare `!ai` or unknown subcommands print a usage hint pointing at `!ai help`. The old `!ai` freeform path bypassed the conversational floor-holding signals the bot now uses to decide when to reply.
+- **`triggers.engagement_seconds` removed.** Replaced by `engagement.soft_timeout_minutes` (default `10`) and `engagement.hard_ceiling_minutes` (default `30`). Legacy key logs a one-time warning on plugin load and is otherwise ignored.
+- **`triggers.command` config field removed.** The `!ai` subcommand console is always enabled (it only dispatches known subcommands, so there's nothing to toggle off). Legacy key logs a one-time warning and is ignored.
+
+### Added
+
+- **Thread-based engagement** (`plugins/ai-chat/engagement-tracker.ts`): replaces the old 60-second timer with IRC-native floor-holding semantics. An engaged user stays engaged until another human speaks (floor lost), they address a third nick by name (`alice: hey ...`), or `soft_timeout_minutes` / `hard_ceiling_minutes` elapses. Two users can be concurrently engaged in the same channel; each ends independently. State is ephemeral (per-plugin-instance), size-capped at 8 engaged users per channel and 256 channels total.
+- **Unified reply policy** (`plugins/ai-chat/reply-policy.ts`): `decideReply()` collapses the old three overlapping paths (direct-address / engagement-timer / random-chance) into `'address' | 'engaged' | 'rolled' | 'skip'`. Rolled replies are probabilistic unprompted replies gated by `triggers.random_chance` × character chattiness × activity scale × recency boost, with a back-to-back guard and a command-sigil guard. Rolled replies count against the existing ambient hourly budget (`ambient_per_channel_per_hour`, `ambient_global_per_hour`) — semantically the same class as idle / unanswered-question ambient.
+- **`!ai help` subcommand** — lists the full subcommand set with permission tiers.
+
+### Changed
+
+- **`triggers.random_chance` is now the primary unprompted-reply path.** Default stays `0` (opt-in). Suggested starting range for operators who want the bot to feel alive: `0.02–0.05`.
+
+### Fixed
+
+- **Ignored users can no longer trigger per-reply chatter through `!ai` garbage.** The pub-bind handler now checks the ignore list before dispatching subcommands, closing the gap where an ignored user's `!ai hello` would still get a "Unknown subcommand" reply.
+
 ## [Unreleased]
 
 Branch `feature/ai-chat-plugin` — expands the ai-chat plugin substantially beyond the one-line mention under 0.3.0. Pending merge into `main`.

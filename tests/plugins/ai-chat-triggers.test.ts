@@ -9,11 +9,9 @@ import {
 
 const BASE: TriggerConfig = {
   directAddress: true,
-  command: true,
   commandPrefix: '!ai',
   keywords: [],
   randomChance: 0,
-  engagementSeconds: 60,
 };
 
 describe('isLikelyBot', () => {
@@ -70,26 +68,9 @@ describe('detectTrigger', () => {
     expect(detectTrigger('   ', 'hexbot', BASE)).toBeNull();
   });
 
-  it('matches command trigger with prefix + space', () => {
-    expect(detectTrigger('!ai tell me a joke', 'hexbot', BASE)).toEqual({
-      kind: 'command',
-      prompt: 'tell me a joke',
-    });
-  });
-
-  it('matches bare command prefix', () => {
-    expect(detectTrigger('!ai', 'hexbot', BASE)).toEqual({ kind: 'command', prompt: '' });
-  });
-
-  it('is case-insensitive on command prefix', () => {
-    expect(detectTrigger('!AI hi', 'hexbot', BASE)).toEqual({
-      kind: 'command',
-      prompt: 'hi',
-    });
-  });
-
-  it('does not match command when command trigger is disabled', () => {
-    expect(detectTrigger('!ai hi', 'hexbot', { ...BASE, command: false })).toBeNull();
+  it('does NOT match !ai <freeform> (subcommand console only now)', () => {
+    expect(detectTrigger('!ai tell me a joke', 'hexbot', BASE)).toBeNull();
+    expect(detectTrigger('!ai', 'hexbot', BASE)).toBeNull();
   });
 
   it('matches direct address with colon', () => {
@@ -126,7 +107,6 @@ describe('detectTrigger', () => {
   });
 
   it('does not match when nick is just a prefix of another word', () => {
-    // "hexbotter" should NOT match "hexbot"
     expect(detectTrigger('hexbotter hello', 'hexbot', BASE)).toBeNull();
   });
 
@@ -135,12 +115,11 @@ describe('detectTrigger', () => {
   });
 
   it('returns null when direct address has no prompt', () => {
-    // "hexbot:" alone shouldn't fire a response
     expect(detectTrigger('hexbot:', 'hexbot', BASE)).toBeNull();
   });
 
   it('matches keyword triggers case-insensitively', () => {
-    const cfg = { ...BASE, directAddress: false, command: false, keywords: ['typescript'] };
+    const cfg = { ...BASE, directAddress: false, keywords: ['typescript'] };
     expect(detectTrigger('I love TypeScript', 'hexbot', cfg)).toEqual({
       kind: 'keyword',
       prompt: 'I love TypeScript',
@@ -148,26 +127,7 @@ describe('detectTrigger', () => {
   });
 
   it('ignores blank keyword entries', () => {
-    const cfg = { ...BASE, directAddress: false, command: false, keywords: [''] };
+    const cfg = { ...BASE, directAddress: false, keywords: [''] };
     expect(detectTrigger('anything', 'hexbot', cfg)).toBeNull();
-  });
-
-  it('fires random trigger when rng under threshold', () => {
-    const cfg = { ...BASE, directAddress: false, command: false, randomChance: 0.5 };
-    expect(detectTrigger('just chatting', 'hexbot', cfg, () => 0.1)?.kind).toBe('random');
-  });
-
-  it('does not fire random trigger when rng above threshold', () => {
-    const cfg = { ...BASE, directAddress: false, command: false, randomChance: 0.5 };
-    expect(detectTrigger('just chatting', 'hexbot', cfg, () => 0.9)).toBeNull();
-  });
-
-  it('command trigger beats direct address when prefix matches nick', () => {
-    // e.g. bot's command prefix "hexbot" and nick "hexbot" — command wins
-    const cfg = { ...BASE, commandPrefix: 'hexbot' };
-    expect(detectTrigger('hexbot hi', 'hexbot', cfg)).toEqual({
-      kind: 'command',
-      prompt: 'hi',
-    });
   });
 });
