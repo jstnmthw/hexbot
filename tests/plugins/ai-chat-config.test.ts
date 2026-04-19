@@ -238,7 +238,7 @@ describe('parseConfig', () => {
   it('uses ollama defaults', () => {
     const cfg = parseConfig({});
     expect(cfg.ollama.baseUrl).toBe('http://127.0.0.1:11434');
-    expect(cfg.ollama.requestTimeoutMs).toBe(60_000);
+    expect(cfg.ollama.requestTimeoutMs).toBe(150_000);
     expect(cfg.ollama.useServerTokenizer).toBe(false);
     expect(cfg.ollama.keepAlive).toBe('30m');
     // Default model is gemini-2.5-flash-lite → large tier → numCtx=8192.
@@ -384,7 +384,7 @@ describe('buildProviderConfig', () => {
       maxOutputTokens: cfg.maxOutputTokens,
       temperature: cfg.temperature,
       baseUrl: 'http://127.0.0.1:11434',
-      requestTimeoutMs: 60_000,
+      requestTimeoutMs: 150_000,
       useServerTokenizer: false,
       keepAlive: '2h',
       numCtx: 2048,
@@ -424,7 +424,7 @@ describe('buildProviderConfig', () => {
     });
     const out = buildProviderConfig(cfg, vi.fn());
     expect(out).toMatchObject({
-      samplingOptions: { repeat_penalty: 1.15, repeat_last_n: 64 },
+      samplingOptions: { repeat_penalty: 1.2, repeat_last_n: 64 },
     });
     // Small-tier stop list is populated from the tier defaults.
     expect(Array.isArray((out as { stop?: unknown }).stop)).toBe(true);
@@ -480,7 +480,7 @@ describe('parseConfig model_class', () => {
     expect(cfg.output.maxLines).toBe(1);
     expect(cfg.output.promptLeakThreshold).toBe(60);
     expect(cfg.ollama.numCtx).toBe(4096);
-    expect(cfg.ollama.repeatPenalty).toBe(1.15);
+    expect(cfg.ollama.repeatPenalty).toBe(1.2);
     expect(cfg.ollama.repeatLastN).toBe(64);
     expect(cfg.ollama.stop.length).toBeGreaterThan(0);
     expect(cfg.engagement.softTimeoutMs).toBe(2 * 60_000);

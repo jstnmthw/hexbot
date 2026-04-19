@@ -104,6 +104,30 @@ function collapseWhitespace(line: string): string {
 }
 
 /**
+ * Merge soft-wrapped lines emitted by the model. Small instruct models
+ * (Llama 3.2 3B, Gemma 3 1B) habitually break mid-sentence at ~80-char
+ * widths inherited from the way training data is rendered. Without this
+ * join, IRC sees three fragments per logical sentence, e.g. the model
+ * output `"...others claim that was\njust the beginning of a whole new era
+ * in human\nhistory."` becomes three separate PRIVMSGs.
+ *
+ * Heuristic: collapse `\n` to a space when the previous non-whitespace
+ * character is a continuation char (letter, digit, comma, apostrophe,
+ * hyphen) AND the next line does not start with a list marker (`-`, `*`,
+ * `1.`) or a fantasy-command prefix (`.`, `!`, `/`, `~`, `@`, `%`, `$`,
+ * `&`, `+`). Lines ending in sentence terminators (`.`, `!`, `?`, `:`,
+ * `…`, close-quote/paren) are kept as breaks. The fantasy-prefix exclusion
+ * preserves the per-line drop in `formatResponse` — merging across into a
+ * "safe-prefix" line would otherwise smuggle a `.deop` past it. The input
+ * is NFKC-normalised in `formatResponse` before this runs, so fullwidth
+ * compat forms (`．`, `！`, `／`) fold to ASCII and are caught by the
+ * lookahead too.
+ */
+function joinSoftWraps(text: string): string {
+  return text.replace(/([\p{L}\p{N},'’-])[ \t]*\n(?!\s*[-*.!/~@%$&+]|\s*\d+\.)/gu, '$1 ');
+}
+
+/**
  * Encoder reused across calls — TextEncoder is stateless and per-spec safe to
  * share. Allocating one per `formatResponse` call adds noticeable GC pressure
  * on chatty channels.
@@ -292,10 +316,20 @@ export function formatResponse(
 ): string[] {
   if (!text) return [];
 
-  const cleaned = stripMarkdown(stripProtocolUnsafe(text));
+  // NFKC-normalise once at entry so the soft-wrap join's lookahead and the
+  // per-line fantasy check both see ASCII-equivalent prefixes (fullwidth
+  // `．` → `.`, `！` → `!`, etc.). Without this, a soft-wrap merge could
+  // glue a fullwidth-prefix fantasy line onto a safe line and bypass
+  // isFantasyLine.
+  const cleaned = stripMarkdown(stripProtocolUnsafe(text.normalize('NFKC')));
 
-  // Split at original newlines, clean each line, drop empties.
-  const rawLines = cleaned.split('\n');
+  // Merge soft-wrapped mid-sentence newlines from the model BEFORE
+  // splitting on `\n`, so a single logical sentence becomes one IRC line
+  // and `splitLongLine` can re-split at proper sentence boundaries.
+  const merged = joinSoftWraps(cleaned);
+
+  // Split at remaining newlines, clean each line, drop empties.
+  const rawLines = merged.split('\n');
   const lines: string[] = [];
 
   for (const raw of rawLines) {

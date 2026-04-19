@@ -19,7 +19,10 @@ describe('formatResponse', () => {
   });
 
   it('strips headers', () => {
-    expect(formatResponse('# Heading\nbody', 4, 400)).toEqual(['Heading', 'body']);
+    // After header strip, "Heading" ends with a letter so the soft-wrap
+    // join merges it with the next line. The point of this test is the
+    // `#` strip, which still holds.
+    expect(formatResponse('# Heading\nbody', 4, 400)).toEqual(['Heading body']);
   });
 
   it('strips block quotes', () => {
@@ -48,8 +51,29 @@ describe('formatResponse', () => {
     expect(formatResponse('too     many    spaces', 4, 400)).toEqual(['too many spaces']);
   });
 
-  it('collapses blank lines', () => {
-    expect(formatResponse('one\n\n\ntwo', 4, 400)).toEqual(['one', 'two']);
+  it('collapses blank lines and merges the soft-wrapped remainder', () => {
+    // Multi-newline collapses to a single \n in stripProtocolUnsafe, then
+    // joinSoftWraps merges across because "one" ends with a letter and
+    // "two" doesn't start with a list/fantasy marker.
+    expect(formatResponse('one\n\n\ntwo', 4, 400)).toEqual(['one two']);
+  });
+
+  it('merges mid-sentence soft-wrapped newlines (small-model habit)', () => {
+    // Llama 3.2 3B emits soft wraps around 80 chars from training-data
+    // line widths. Without joinSoftWraps these become 3 IRC PRIVMSGs.
+    const text = 'others claim that was\njust the beginning of a whole new era in human\nhistory.';
+    expect(formatResponse(text, 4, 400)).toEqual([
+      'others claim that was just the beginning of a whole new era in human history.',
+    ]);
+  });
+
+  it('keeps line breaks after sentence terminators (paragraph intent)', () => {
+    // Lines that end with . ! ? : are treated as deliberate breaks.
+    expect(formatResponse('first thought.\nsecond thought.', 4, 400)).toEqual([
+      'first thought.',
+      'second thought.',
+    ]);
+    expect(formatResponse('really?\nyeah!', 4, 400)).toEqual(['really?', 'yeah!']);
   });
 
   it('splits long line at sentence boundary when possible', () => {
@@ -78,15 +102,17 @@ describe('formatResponse', () => {
   });
 
   it('truncates to maxLines with ellipsis', () => {
-    const text = 'line1\nline2\nline3\nline4\nline5\nline6';
+    // Use sentence-terminated lines so joinSoftWraps doesn't fold them
+    // into one logical line — the test is about the maxLines truncation.
+    const text = 'line1.\nline2.\nline3.\nline4.\nline5.\nline6.';
     const out = formatResponse(text, 3, 400);
     expect(out).toHaveLength(3);
     expect(out[2]).toContain('…');
   });
 
   it('does not add ellipsis when lines fit within maxLines', () => {
-    const out = formatResponse('a\nb\nc', 4, 400);
-    expect(out).toEqual(['a', 'b', 'c']);
+    const out = formatResponse('a.\nb.\nc.', 4, 400);
+    expect(out).toEqual(['a.', 'b.', 'c.']);
   });
 
   it('handles unicode correctly', () => {

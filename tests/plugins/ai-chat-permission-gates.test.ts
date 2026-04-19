@@ -88,7 +88,7 @@ const BASE_CONFIG: AiChatConfig = {
     stripUrls: false,
     promptLeakThreshold: 80,
   },
-  input: { maxPromptChars: 2000, maxInflight: 4 },
+  input: { maxPromptChars: 2000, maxInflight: 4, coalesceWindowMs: 0 },
   ambient: {
     enabled: false,
     idle: { afterMinutes: 15, chance: 0.3, minUsers: 2 },

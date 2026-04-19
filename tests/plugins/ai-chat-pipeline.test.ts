@@ -97,7 +97,7 @@ const BASE_CONFIG: AiChatConfig = {
     stripUrls: false,
     promptLeakThreshold: 80,
   },
-  input: { maxPromptChars: 2000, maxInflight: 4 },
+  input: { maxPromptChars: 2000, maxInflight: 4, coalesceWindowMs: 0 },
   ambient: {
     enabled: false,
     idle: { afterMinutes: 15, chance: 0.3, minUsers: 2 },
@@ -420,7 +420,10 @@ describe('runPipeline prompt cap', () => {
     const api = createMockPluginAPI();
     const ctx = makeCtx();
     const deps = makeDeps();
-    const cfg = { ...BASE_CONFIG, input: { maxPromptChars: 10, maxInflight: 4 } };
+    const cfg = {
+      ...BASE_CONFIG,
+      input: { maxPromptChars: 10, maxInflight: 4, coalesceWindowMs: 0 },
+    };
     await runPipeline(api, cfg, deps, ctx, 'this is too long', 'hexbot', 'irc.test', 'address');
     expect(respondMock).not.toHaveBeenCalled();
     expect(ctx.replyPrivate).toHaveBeenCalledWith('Message too long — keep it under 10 chars.');
@@ -431,7 +434,10 @@ describe('runPipeline prompt cap', () => {
     const api = createMockPluginAPI();
     const ctx = makeCtx();
     const deps = makeDeps();
-    const cfg = { ...BASE_CONFIG, input: { maxPromptChars: 10, maxInflight: 4 } };
+    const cfg = {
+      ...BASE_CONFIG,
+      input: { maxPromptChars: 10, maxInflight: 4, coalesceWindowMs: 0 },
+    };
     await runPipeline(api, cfg, deps, ctx, 'this is too long', 'hexbot', 'irc.test', 'rolled');
     expect(respondMock).not.toHaveBeenCalled();
     expect(ctx.reply).not.toHaveBeenCalled();
@@ -442,7 +448,10 @@ describe('runPipeline prompt cap', () => {
     const api = createMockPluginAPI();
     const ctx = makeCtx();
     const deps = makeDeps();
-    const cfg = { ...BASE_CONFIG, input: { maxPromptChars: 5, maxInflight: 4 } };
+    const cfg = {
+      ...BASE_CONFIG,
+      input: { maxPromptChars: 5, maxInflight: 4, coalesceWindowMs: 0 },
+    };
     await runPipeline(api, cfg, deps, ctx, 'hello', 'hexbot', 'irc.test', 'address');
     expect(respondMock).toHaveBeenCalledTimes(1);
   });

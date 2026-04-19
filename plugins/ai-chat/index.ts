@@ -12,6 +12,7 @@ import { ContextManager } from './context-manager';
 import { EngagementTracker } from './engagement-tracker';
 import { listGames, loadGamePrompt, resolveGamesDir } from './games-loader';
 import { IterStats } from './iter-stats';
+import { type CoalescedMessage, MessageCoalescer } from './message-coalescer';
 import { MoodEngine } from './mood';
 import { applyCharacterStyle, formatResponse } from './output-formatter';
 import {
@@ -100,6 +101,7 @@ let socialTracker: SocialTracker | null = null;
 let ambientEngine: AmbientEngine | null = null;
 let moodEngine: MoodEngine | null = null;
 let engagementTracker: EngagementTracker | null = null;
+let coalescer: MessageCoalescer | null = null;
 let state: PluginState | null = null;
 /** Periodic timer that expires idle game sessions. */
 let sessionExpiryInterval: ReturnType<typeof setInterval> | null = null;
@@ -522,17 +524,34 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
   // -----------------------------------------------------------------------
   // pubm * — context feed, engagement updates, unified reply decision
   // -----------------------------------------------------------------------
-  api.bind('pubm', '-', '*', async (ctx: HandlerContext) => {
+  //
+  // The handler splits into an eager prologue (cheap, idempotent things that
+  // must fire per-fragment for liveness signalling) and a deferred body
+  // (everything that touches context, trackers, or the AI pipeline). The
+  // deferred body runs once per coalesced burst — see message-coalescer.ts
+  // for the wire-fragment problem this solves.
+  if (!coalescer && cfg.input.coalesceWindowMs > 0) {
+    // 8 KB cap = 4× the per-entry truncate limit. Generous enough to merge
+    // four max-sized fragments; runPipeline's `maxPromptChars` enforces the
+    // real upper bound on the merged prompt.
+    coalescer = new MessageCoalescer(cfg.input.coalesceWindowMs, 8192);
+  }
+
+  /**
+   * Per-message body — runs once per coalesced burst (or once per raw
+   * message when coalescing is disabled). All the per-burst trackers and
+   * the AI pipeline live here so a fragmented message produces one set of
+   * side effects, not N.
+   */
+  const processIncomingMessage = async (
+    ctx: HandlerContext,
+    text: string,
+    fragmentCount: number,
+  ): Promise<void> => {
     if (!ctx.channel) return;
 
-    // Cap message bytes before any in-memory buffer sees them.
-    const text = truncateForBuffer(ctx.text);
-
-    // Feed every non-bot channel message into the context buffer.
-    const isBotMsg = ctx.nick.toLowerCase() === botNick().toLowerCase();
-    if (!isBotMsg) {
-      contextManager?.addMessage(ctx.channel, ctx.nick, text, false);
-    }
+    // Feed the merged user message into the context buffer as one entry.
+    contextManager?.addMessage(ctx.channel, ctx.nick, text, false);
 
     // Compute the shouldRespond gate once — we use it both to decide whether
     // to run the pipeline AND to gate social tracking. Gating social tracking
@@ -554,43 +573,22 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
     const reason = shouldRespondReason(baseShouldRespondCtx);
     const allowed = reason === 'allowed';
 
-    // Ambient engine tracks every channel it sees activity in, so that
-    // join/topic reactions know the channel exists. Social-tracker state
-    // (activity level, pending questions, user stats), on the other hand,
-    // only counts senders we'd respond to — ignored users don't feed the
-    // unanswered-question amplification path.
-    ambientEngine?.onChannelActivity(ctx.channel);
-    if (isBotMsg || allowed) {
-      socialTracker?.onMessage(ctx.channel, ctx.nick, text, isBotMsg);
+    if (allowed) {
+      socialTracker?.onMessage(ctx.channel, ctx.nick, text, false);
     }
 
-    // Feed the engagement tracker on every non-bot, allowed channel message.
-    // Engagement state is IRC-floor semantics — done before the session and
-    // reply-policy branches so a 3rd-party speaking always ends other users'
+    // Feed the engagement tracker on allowed channel messages. Engagement
+    // state is IRC-floor semantics — done before the session and reply-
+    // policy branches so a 3rd-party speaking always ends other users'
     // engagement even if we're about to skip this message for other reasons.
     const channelNicks = api.getUsers(ctx.channel).map((u) => u.nick);
-    if (!isBotMsg && allowed && engagementTracker) {
+    if (allowed && engagementTracker) {
       engagementTracker.onHumanMessage(ctx.channel, ctx.nick, text, channelNicks);
-    }
-
-    // Let the pub `!ai` handler own the subcommand console — `!ai ...` never
-    // routes through the reply policy. Matches the prefix exactly or as a
-    // space-prefixed command; anything else (e.g. text that happens to start
-    // with `!ai` as a word) falls through to the normal reply path.
-    const cmdPrefix = cfg.triggers.commandPrefix.toLowerCase();
-    const lowerText = text.trim().toLowerCase();
-    if (lowerText === cmdPrefix || lowerText.startsWith(cmdPrefix + ' ')) {
-      api.debug(traceLine(ctx, text, { trigger: 'command', reason, action: 'defer-to-pub' }));
-      return;
     }
 
     // If user is in a session in this channel, route message as a game move.
     const identity = makeSessionIdentity(ctx);
-    if (
-      sessionManager &&
-      !isBotMsg &&
-      sessionManager.isInSession(ctx.nick, ctx.channel, identity)
-    ) {
+    if (sessionManager && sessionManager.isInSession(ctx.nick, ctx.channel, identity)) {
       if (!allowed) {
         api.debug(traceLine(ctx, text, { trigger: 'session', reason, action: 'skip' }));
         return;
@@ -608,10 +606,8 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
       return;
     }
 
-    if (isBotMsg || !allowed) {
-      if (!isBotMsg) {
-        api.debug(traceLine(ctx, text, { trigger: 'none', reason, action: 'skip' }));
-      }
+    if (!allowed) {
+      api.debug(traceLine(ctx, text, { trigger: 'none', reason, action: 'skip' }));
       return;
     }
 
@@ -647,11 +643,12 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
     }
 
     const prompt = trigger?.prompt ?? text.trim();
+    const fragNote = fragmentCount > 1 ? ` coalesced=${fragmentCount}` : '';
     api.debug(
       traceLine(ctx, text, {
         trigger: trigger?.kind ?? decision,
         reason,
-        action: `pipeline:${decision}`,
+        action: `pipeline:${decision}${fragNote}`,
       }),
     );
     const hasAdmin = api.permissions.checkFlags(cfg.permissions.adminFlag, ctx);
@@ -666,6 +663,52 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
       decision,
       hasAdmin,
     );
+  };
+
+  api.bind('pubm', '-', '*', (ctx: HandlerContext) => {
+    if (!ctx.channel) return;
+
+    // Cap message bytes before any in-memory buffer sees them.
+    const text = truncateForBuffer(ctx.text);
+
+    // Eager: ambient channel-liveness ping. Idempotent and cheap — fine to
+    // fire per-fragment so the ambient engine sees the channel as alive
+    // during the coalesce window.
+    ambientEngine?.onChannelActivity(ctx.channel);
+
+    // Bot-originated messages bypass the coalescer entirely. They need to
+    // land in context immediately so the next user prompt sees the latest
+    // bot reply, and they have no AI-pipeline path to debounce.
+    const isBotMsg = ctx.nick.toLowerCase() === botNick().toLowerCase();
+    if (isBotMsg) {
+      contextManager?.addMessage(ctx.channel, ctx.nick, text, false);
+      socialTracker?.onMessage(ctx.channel, ctx.nick, text, true);
+      return;
+    }
+
+    // Eager: defer to pub `!ai` handler for subcommands. The pub bind fires
+    // independently for the same wire event, so returning here just stops
+    // the pubm path from racing it. Matches the prefix exactly or as a
+    // space-prefixed command; bare prefix-as-word falls through.
+    const cmdPrefix = cfg.triggers.commandPrefix.toLowerCase();
+    const lowerText = text.trim().toLowerCase();
+    if (lowerText === cmdPrefix || lowerText.startsWith(cmdPrefix + ' ')) {
+      api.debug(
+        traceLine(ctx, text, { trigger: 'command', reason: 'allowed', action: 'defer-to-pub' }),
+      );
+      return;
+    }
+
+    // Coalesce same-(channel, nick) wire fragments into one logical message
+    // before running the per-message body. Disabled (window=0) → process
+    // each fragment independently.
+    if (coalescer) {
+      coalescer.submit(ctx.channel, ctx.nick, text, ctx, (msg: CoalescedMessage) => {
+        void processIncomingMessage(msg.ctx, msg.text, msg.fragmentCount);
+      });
+    } else {
+      void processIncomingMessage(ctx, text, 1);
+    }
   });
 
   // -----------------------------------------------------------------------
@@ -1001,6 +1044,7 @@ export function teardown(): void {
   ambientEngine?.stop();
   socialTracker?.clear();
   engagementTracker?.clear();
+  coalescer?.teardown();
   rateLimiter = null;
   tokenTracker = null;
   semaphore = null;
@@ -1012,6 +1056,7 @@ export function teardown(): void {
   ambientEngine = null;
   moodEngine = null;
   engagementTracker = null;
+  coalescer = null;
   state = null;
   gamesDir = '';
   lastRateLimitOpNoticeAt.clear();

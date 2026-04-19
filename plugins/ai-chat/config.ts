@@ -107,6 +107,16 @@ export interface AiChatConfig {
      * channel. Defaults to 4.
      */
     maxInflight: number;
+    /**
+     * Coalesce same-(channel, nick) PRIVMSG fragments arriving within this
+     * window into one logical message before downstream processing. The
+     * IRC server splits any PRIVMSG over ~440 bytes, so a long paste shows
+     * up as N events; without coalescing each fires the AI pipeline with
+     * partial text. `0` disables coalescing (every fragment processed
+     * independently). Defaults to 250 ms — well above wire-fragment latency,
+     * well below human-perceptible.
+     */
+    coalesceWindowMs: number;
   };
   channelProfiles: Record<
     string,
@@ -300,6 +310,7 @@ export function parseConfig(
       return {
         maxPromptChars: asNum(inp.max_prompt_chars, 2000),
         maxInflight: asNum(inp.max_inflight, 4),
+        coalesceWindowMs: asNum(inp.coalesce_window_ms, 250),
       };
     })(),
     ambient: (() => {
@@ -348,7 +359,7 @@ export function parseConfig(
     },
     ollama: {
       baseUrl: asString(ollama.base_url, 'http://127.0.0.1:11434'),
-      requestTimeoutMs: asNum(ollama.request_timeout_ms, 60_000),
+      requestTimeoutMs: asNum(ollama.request_timeout_ms, 150_000),
       useServerTokenizer: asBool(ollama.use_server_tokenizer, false),
       keepAlive: asString(ollama.keep_alive, '30m'),
       numCtx: 'num_ctx' in ollama ? asNum(ollama.num_ctx, t.numCtx) : t.numCtx,
@@ -418,7 +429,11 @@ const TIER_DEFAULTS: Record<ModelClass, TierDefaults> = {
     maxTokens: 1000,
     maxLines: 1,
     numCtx: 4096,
-    repeatPenalty: 1.15,
+    // Small instruct models echo input tokens back when uncertain
+    // (gibberish prompts produce mirrored gibberish replies). Bumping above
+    // the llama default of 1.1 trades some lexical variety for less
+    // verbatim mimicry — important on 1B/3B where the safety net is thin.
+    repeatPenalty: 1.2,
     repeatLastN: 64,
     stop: SMALL_STOP_DEFAULTS,
     engagementSoftMin: 2,

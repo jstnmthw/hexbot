@@ -95,7 +95,7 @@
 
   "ollama": {
     "base_url": "http://127.0.0.1:11434",
-    "request_timeout_ms": 60000,
+    "request_timeout_ms": 150000,
     "use_server_tokenizer": false,
     "keep_alive": "30m",
     "num_ctx": 4096
