@@ -33,6 +33,15 @@ export class GeminiProvider implements AIProvider {
   private modelName = '';
   private temperature = 0.9;
   private maxOutputTokens = 256;
+  /**
+   * Per-request AbortControllers tracked for {@link abort}. The Google SDK
+   * doesn't expose a cancel API, so we can't stop the underlying HTTP POST
+   * — but we can reject the outer {@link withTimeout} race so the plugin's
+   * awaiters see an AbortError and release their captured refs. The SDK
+   * call finishes on its own and its result is dropped. See audit 2026-04-19
+   * CRITICAL #2.
+   */
+  private inflightControllers = new Set<AbortController>();
 
   async initialize(config: AIProviderConfig): Promise<void> {
     if (!config.apiKey) {
@@ -73,6 +82,8 @@ export class GeminiProvider implements AIProvider {
       generationConfig.stopSequences = sampling.stop.slice(0, 5);
     }
 
+    const controller = new AbortController();
+    this.inflightControllers.add(controller);
     try {
       const result = await withTimeout(
         this.model.generateContent({
@@ -83,6 +94,7 @@ export class GeminiProvider implements AIProvider {
           generationConfig,
         }),
         GEMINI_REQUEST_TIMEOUT_MS,
+        controller.signal,
       );
 
       const response = result.response;
@@ -117,7 +129,20 @@ export class GeminiProvider implements AIProvider {
       };
     } catch (err) {
       throw mapGeminiError(err);
+    } finally {
+      this.inflightControllers.delete(controller);
     }
+  }
+
+  /**
+   * Reject the outer withTimeout race for every outstanding call. Underlying
+   * Google SDK fetches keep running but their results are dropped on arrival.
+   */
+  abort(): void {
+    for (const controller of this.inflightControllers) {
+      controller.abort();
+    }
+    this.inflightControllers.clear();
   }
 
   async countTokens(text: string): Promise<number> {
@@ -151,20 +176,36 @@ function toGeminiContents(messages: AIMessage[]): Content[] {
 /**
  * Race a promise against a timeout. On timeout, rejects with an AIProviderError
  * tagged 'network' so the resilient wrapper's retry + circuit-breaker layers
- * treat it like any other transient infrastructure failure.
+ * treat it like any other transient infrastructure failure. When `abortSignal`
+ * is provided, its abort event also rejects the race with a tagged 'network'
+ * error — lets plugin teardown release outer awaiters without waiting for
+ * the SDK's opaque request promise to settle on its own.
  */
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+function withTimeout<T>(p: Promise<T>, ms: number, abortSignal?: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new AIProviderError(`Gemini request timed out after ${ms}ms`, 'network'));
     }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(new AIProviderError('Gemini request aborted', 'network'));
+    };
+    if (abortSignal) {
+      if (abortSignal.aborted) {
+        onAbort();
+        return;
+      }
+      abortSignal.addEventListener('abort', onAbort, { once: true });
+    }
     p.then(
       (v) => {
         clearTimeout(timer);
+        abortSignal?.removeEventListener('abort', onAbort);
         resolve(v);
       },
       (err) => {
         clearTimeout(timer);
+        abortSignal?.removeEventListener('abort', onAbort);
         reject(err);
       },
     );

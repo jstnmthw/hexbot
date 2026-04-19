@@ -181,6 +181,7 @@ export async function init(api: PluginAPI): Promise<void> {
     parser,
     cfg,
     abortSignal: () => abortController?.signal,
+    circuitBreaker,
   };
   api.bind('pub', 'm', '!rss', async (ctx) => {
     const parts = ctx.args.trim().split(/\s+/);

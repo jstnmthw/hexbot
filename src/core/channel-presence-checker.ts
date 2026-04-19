@@ -78,7 +78,7 @@ export function startChannelPresenceCheck(
   const { client, configuredChannels, channelState, logger, retrySchedule } = deps;
   const warnedChannels = new Set<string>();
 
-  return setInterval(() => {
+  const handle = setInterval(() => {
     for (const ch of configuredChannels) {
       const inChannel = channelState.getChannel(ch.name) !== undefined;
       if (inChannel) {
@@ -118,4 +118,10 @@ export function startChannelPresenceCheck(
       client.join(ch.name, ch.key);
     }
   }, deps.intervalMs);
+  // Defensive unref: if any reconnect path ever forgets to clear this
+  // interval, the captured `configuredChannels` / `retrySchedule` /
+  // `permanentFailureChannels` scope won't pin the process indefinitely.
+  // The checker doesn't need to keep the event loop alive on its own.
+  handle.unref();
+  return handle;
 }

@@ -143,9 +143,15 @@ export class ChannelSettings {
   /**
    * Register a callback that fires when any per-channel setting is set or unset.
    * Keyed by pluginId for automatic cleanup on plugin unload.
+   *
+   * Dedup is by reference: if a plugin's `init()` is re-invoked with the
+   * same closure (e.g. a reload retry loop that keeps the same module
+   * instance), we skip the duplicate instead of stacking N copies that
+   * would all fire on every change.
    */
   onChange(pluginId: string, callback: ChannelSettingChangeCallback): void {
     const list = this.changeListeners.get(pluginId) ?? [];
+    if (list.includes(callback)) return;
     list.push(callback);
     this.changeListeners.set(pluginId, list);
   }

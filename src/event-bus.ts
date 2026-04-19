@@ -92,6 +92,17 @@ export class BotEventBus extends EventEmitter {
     Array<{ event: keyof BotEvents; fn: (...args: never[]) => void }>
   >();
 
+  constructor() {
+    super();
+    // Four-plus plugins routinely subscribe to the same event (e.g.
+    // `user:added`, `user:flagsChanged`), which trips Node's default
+    // 10-listener warning even when every subscription is legitimate and
+    // tracked. Raise to 50 explicitly — high enough for the MVP plugin
+    // set plus core subsystems, low enough to still catch a real leak.
+    // Do NOT set this to Infinity; that would silence genuine leaks.
+    this.setMaxListeners(50);
+  }
+
   override emit<K extends keyof BotEvents>(event: K, ...args: BotEvents[K]): boolean;
   override emit(event: string | symbol, ...args: unknown[]): boolean {
     return super.emit(event, ...args);

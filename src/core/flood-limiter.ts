@@ -47,6 +47,15 @@ const FLOOD_DEFAULTS: Required<FloodWindowConfig> = { count: 5, window: 10 };
 /** How often the sweep fires (ms). Cheap short-circuit in the hot path. */
 const SWEEP_INTERVAL_MS = 300_000;
 
+/**
+ * Hard cap on the `warned` set size. Matches the SlidingWindowCounter
+ * MAX_KEYS ceiling so the two companion structures share a failure
+ * mode — an attacker rotating hostmasks can't inflate `warned` past the
+ * counters it mirrors, and an idle bot that floods once at boot and then
+ * goes silent can't pin peak warn-state until the next sweep.
+ */
+const MAX_WARNED_KEYS = 8192;
+
 // ---------------------------------------------------------------------------
 // FloodLimiter
 // ---------------------------------------------------------------------------
@@ -135,6 +144,12 @@ export class FloodLimiter {
 
     // User is flooding.
     if (!this.warned.has(key)) {
+      // FIFO-evict the oldest entry before adding when capped. Sets preserve
+      // insertion order, so `values().next()` yields the earliest-warned key.
+      if (this.warned.size >= MAX_WARNED_KEYS) {
+        const oldest = this.warned.values().next().value;
+        if (oldest !== undefined) this.warned.delete(oldest);
+      }
       this.warned.add(key);
       this.noticeProvider?.sendNotice(
         ctx.nick,

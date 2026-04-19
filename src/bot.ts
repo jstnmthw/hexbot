@@ -91,6 +91,14 @@ export class Bot {
   private _reconnectDriver: ReconnectDriver | null = null;
   private botLogger: LoggerLike;
   private _casemapping: Casemapping = 'rfc1459';
+  /**
+   * Set on the first call to {@link shutdown}. Guards against a second
+   * SIGINT/SIGTERM (or a direct test-harness invocation) racing the first
+   * tear-down: every step is idempotent, but the 500ms QUIT-drain wait is
+   * not — without this flag a double-shutdown would stack two waits and
+   * double-close the db after one already ran.
+   */
+  private _isShuttingDown = false;
 
   /** Snapshot of the reconnect driver state — used by the `.status` command. */
   getReconnectState(): ReconnectState | null {
@@ -520,9 +528,6 @@ export class Bot {
       dccManager: this._dccManager,
       db: this.db,
     });
-    this.eventBus.on('user:removed', (handle: string) => {
-      this.db.del('dcc', `console_flags:${handle}`);
-    });
     this.botLogger.info('DCC CHAT enabled');
   }
 
@@ -593,6 +598,8 @@ export class Bot {
 
   /** Graceful shutdown. */
   async shutdown(): Promise<void> {
+    if (this._isShuttingDown) return;
+    this._isShuttingDown = true;
     this.botLogger.info('Shutting down...');
 
     // Each step is independent of the others — a throw in one subsystem's

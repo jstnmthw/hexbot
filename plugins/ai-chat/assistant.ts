@@ -374,27 +374,48 @@ export function renderVolatileHeader(ctx: PromptContext): string {
 /**
  * Send a multi-line response to IRC with a delay between lines, using the supplied
  * sender. Returns a Promise that resolves when all lines have been scheduled/sent.
+ *
+ * `signal` is optional: when provided, an abort mid-drip clears the pending
+ * setTimeout and resolves immediately so the plugin's teardown path can
+ * reclaim the captured `sendLine`/`ctx.reply` closures without waiting the
+ * full `(lines-1) × interLineDelayMs` interval.
  */
 export function sendLines(
   lines: string[],
   sendLine: (text: string) => void,
   interLineDelayMs: number,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (lines.length === 0) return Promise.resolve();
+  if (signal?.aborted) return Promise.resolve();
   if (lines.length === 1 || interLineDelayMs <= 0) {
     for (const line of lines) sendLine(line);
     return Promise.resolve();
   }
   return new Promise<void>((resolve) => {
     let i = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onAbort = (): void => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      resolve();
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
     const step = (): void => {
-      sendLine(lines[i]);
-      i++;
-      if (i >= lines.length) {
+      if (signal?.aborted) {
         resolve();
         return;
       }
-      setTimeout(step, interLineDelayMs);
+      sendLine(lines[i]);
+      i++;
+      if (i >= lines.length) {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+        return;
+      }
+      timer = setTimeout(step, interLineDelayMs);
     };
     step();
   });

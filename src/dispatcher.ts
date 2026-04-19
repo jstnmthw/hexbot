@@ -248,8 +248,13 @@ export class EventDispatcher {
 
   /** Remove a specific handler. */
   unbind(type: BindType, mask: string, handler: BindHandler): void {
+    // Mask comparison must match `bind()`'s case-folding. Using raw `===`
+    // would silently no-op when the caller supplied `!FOO` while the
+    // bind was registered as `!foo`, leaking both the entry and any
+    // associated timer until process exit.
     const idx = this.binds.findIndex(
-      (b) => b.type === type && b.mask === mask && b.handler === handler,
+      (b) =>
+        b.type === type && caseCompare(b.mask, mask, this.casemapping) && b.handler === handler,
     );
     if (idx !== -1) {
       const entry = this.binds[idx];

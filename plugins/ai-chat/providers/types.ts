@@ -113,6 +113,16 @@ export interface AIProvider {
 
   /** Return the model identifier currently in use. */
   getModelName(): string;
+
+  /**
+   * Abort every in-flight {@link complete} / {@link countTokens} call.
+   * Implementations must reject pending promises immediately — the plugin's
+   * teardown path invokes this so awaiters release their captured closures
+   * (prompt, session, rateLimiter refs) instead of running to resolution
+   * against a torn-down module graph. Optional so stub/mock providers in
+   * tests don't have to implement it; real providers should.
+   */
+  abort?(): void;
 }
 
 /**

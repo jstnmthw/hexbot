@@ -71,6 +71,16 @@ export interface PipelineDeps {
   makeSessionIdentity: (ctx: HandlerContext) => SessionIdentity;
   /** Notice ops when the provider is rate-limited (debounced per channel). */
   noticeOpsRateLimited: (channel: string | null, detail: string) => void;
+  /**
+   * Thunk returning the plugin's teardown AbortSignal. Plumbed through to
+   * sendLinesGated so a reload mid-response doesn't leak the drip-fed
+   * setTimeout chain and the `ctx.reply` closure it captures. Built as a
+   * thunk so buildPipelineDeps can stay a one-shot snapshot — the signal
+   * is resolved lazily at send time and correctly reflects the current
+   * teardown state even if an earlier-created deps bundle is reused.
+   * Optional: unit tests that don't care about teardown may omit it.
+   */
+  teardownSignal?: () => AbortSignal | undefined;
 }
 
 /** Render a channel profile string for prompt injection, or undefined if none configured. */
@@ -374,6 +384,7 @@ export async function runPipeline(
         'pipeline',
         (line) => ctx.reply(line),
         cfg.output.interLineDelayMs,
+        deps.teardownSignal?.(),
       );
       return;
     }
@@ -521,6 +532,7 @@ export async function runSessionPipeline(
       'session',
       (line) => ctx.reply(line),
       cfg.output.interLineDelayMs,
+      deps.teardownSignal?.(),
     );
   } catch (err) {
     const kind = isAIProviderError(err) ? err.kind : 'other';

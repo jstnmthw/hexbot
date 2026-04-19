@@ -103,6 +103,11 @@ export class ResilientProvider implements AIProvider {
     return this.inner.getModelName();
   }
 
+  /** Forward to the inner provider so teardown can cancel in-flight calls. */
+  abort(): void {
+    this.inner.abort?.();
+  }
+
   /** True if the circuit is currently open. */
   isOpen(): boolean {
     if (this.circuitOpenedAt === null) return false;

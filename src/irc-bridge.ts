@@ -57,6 +57,16 @@ interface IRCBridgeOptions {
  */
 const STARTUP_GRACE_MS = 5000;
 
+/**
+ * CTCP rate-limit window (ms). Matches {@link IRCBridge.ctcpAllowed} —
+ * hoisted to module scope so {@link IRCBridge.attach} can pin a periodic
+ * sweep at the same cadence. Without a scheduled sweep the counter relies
+ * on the emergency-FIFO path in SlidingWindowCounter, which only fires
+ * once the 8192-key cap is hit.
+ */
+const CTCP_WINDOW_MS = 10_000;
+const CTCP_MAX_RESPONSES = 3;
+
 // IRCv3 caps that irc-framework requests on our behalf but we deliberately
 // do NOT consume here:
 //
@@ -91,6 +101,13 @@ export class IRCBridge {
   private logger: LoggerLike | null;
   private listeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
   private ctcpRateLimiter = new SlidingWindowCounter();
+  /**
+   * Sweeps {@link ctcpRateLimiter} at the window cadence so expired
+   * per-sender entries are evicted without waiting for the 8192-key
+   * emergency cap. Created in {@link attach}, cleared in {@link detach};
+   * `.unref()`'d so it never pins the event loop on its own.
+   */
+  private ctcpSweepTimer: NodeJS.Timeout | null = null;
   private topicStartupGrace = false;
   private topicStartupGraceTimer: NodeJS.Timeout | null = null;
   private capabilities: ServerCapabilities = defaultServerCapabilities();
@@ -144,6 +161,15 @@ export class IRCBridge {
       this.topicStartupGraceTimer = null;
     }, STARTUP_GRACE_MS);
 
+    // Periodic CTCP rate-limit sweep. Runs at the window cadence so any
+    // key whose last event aged past CTCP_WINDOW_MS is evicted in the
+    // same tick it becomes stale. `unref()` so the sweep never keeps the
+    // process alive on its own.
+    this.ctcpSweepTimer = setInterval(() => {
+      this.ctcpRateLimiter.sweep(CTCP_WINDOW_MS);
+    }, CTCP_WINDOW_MS);
+    this.ctcpSweepTimer.unref();
+
     this.logger?.info('Attached to IRC client');
   }
 
@@ -152,6 +178,10 @@ export class IRCBridge {
     if (this.topicStartupGraceTimer) {
       clearTimeout(this.topicStartupGraceTimer);
       this.topicStartupGraceTimer = null;
+    }
+    if (this.ctcpSweepTimer) {
+      clearInterval(this.ctcpSweepTimer);
+      this.ctcpSweepTimer = null;
     }
     this.topicStartupGrace = false;
     for (const { event, fn } of this.listeners) {
@@ -179,9 +209,7 @@ export class IRCBridge {
    * See §11 of `docs/audits/irc-logic-2026-04-11.md`.
    */
   private ctcpAllowed(senderKey: string): boolean {
-    const WINDOW_MS = 10_000;
-    const MAX_RESPONSES = 3;
-    return !this.ctcpRateLimiter.check(senderKey, WINDOW_MS, MAX_RESPONSES);
+    return !this.ctcpRateLimiter.check(senderKey, CTCP_WINDOW_MS, CTCP_MAX_RESPONSES);
   }
 
   // -------------------------------------------------------------------------

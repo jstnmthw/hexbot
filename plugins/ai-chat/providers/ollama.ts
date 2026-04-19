@@ -52,6 +52,13 @@ export class OllamaProvider implements AIProvider {
   private keepAlive: string | undefined;
   private numCtx = 0;
   private stopSequences: string[] = [];
+  /**
+   * Every {@link fetchJson} call registers its AbortController here for the
+   * duration of the request so {@link abort} can cancel a torn-down-plugin's
+   * outstanding 60s /api/chat call instead of letting it drain against the
+   * old captured prompt/context closures. Entries are removed in `finally`.
+   */
+  private inflightControllers = new Set<AbortController>();
 
   async initialize(config: AIProviderConfig): Promise<void> {
     if (!config.baseUrl) {
@@ -205,12 +212,26 @@ export class OllamaProvider implements AIProvider {
   }
 
   /**
+   * Cancel every in-flight fetch. The `fetch()` promise rejects with
+   * AbortError, which {@link mapOllamaError} converts to an
+   * `AIProviderError('network')` — the pipeline's catch path then releases
+   * its semaphore permit and rateLimiter reservation cleanly.
+   */
+  abort(): void {
+    for (const controller of this.inflightControllers) {
+      controller.abort();
+    }
+    this.inflightControllers.clear();
+  }
+
+  /**
    * POST JSON to `path`. When `body` is undefined, sends a GET. Enforces
    * `timeoutMs` via AbortController. On non-2xx, throws an Error carrying the
    * HTTP status so `mapOllamaError` can triage without us re-parsing.
    */
   private async fetchJson<T>(path: string, body: unknown, timeoutMs: number): Promise<T> {
     const controller = new AbortController();
+    this.inflightControllers.add(controller);
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const init: RequestInit = {
@@ -229,6 +250,7 @@ export class OllamaProvider implements AIProvider {
       return (await response.json()) as T;
     } finally {
       clearTimeout(timer);
+      this.inflightControllers.delete(controller);
     }
   }
 }

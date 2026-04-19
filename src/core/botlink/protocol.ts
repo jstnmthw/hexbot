@@ -211,6 +211,13 @@ export class BotLinkProtocol {
     socket.on('close', () => {
       this.closed = true;
       this.onClose?.();
+      // Drop callback refs now that the final close notification has
+      // fired — see comment in close(). Nulling here (rather than in
+      // close()) keeps the close-event path working for explicit
+      // teardown callers that rely on onClose firing exactly once.
+      this.onFrame = null;
+      this.onClose = null;
+      this.onError = null;
     });
 
     /* v8 ignore next 3 -- socket error event only fires on real TCP errors; Duplex mocks don't trigger it */
@@ -248,6 +255,10 @@ export class BotLinkProtocol {
     this.closed = true;
     this.rl?.close();
     this.socket.destroy(); // destroy() is idempotent
+    // Callback refs are released by the socket 'close' listener, not
+    // here — that path fires onClose one last time before nulling, so
+    // explicit-close callers (hub/leaf teardown) still get their
+    // notification. Nulling synchronously here would suppress it.
   }
 
   get isClosed(): boolean {

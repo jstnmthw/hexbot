@@ -106,6 +106,15 @@ let coalescer: MessageCoalescer | null = null;
 let state: PluginState | null = null;
 /** Periodic timer that expires idle game sessions. */
 let sessionExpiryInterval: ReturnType<typeof setInterval> | null = null;
+/**
+ * Aborted in {@link teardown} to cut short every drip-fed sendLines chain
+ * and the ambient sender closure at its await boundaries. Without this, a
+ * reload during a 5-line response with a 500ms inter-line gap would hold
+ * the captured `ctx.reply` / `api.say` closures (and the IRC client behind
+ * them) alive for up to 2s after the plugin was unloaded. See audit
+ * 2026-04-19 W-29 and W-30.
+ */
+let teardownController: AbortController | null = null;
 let gamesDir: string = '';
 /**
  * Per-channel timestamp of the last "API rate-limited" op-notice we sent.
@@ -198,6 +207,7 @@ function buildPipelineDeps(api: PluginAPI, cfg: AiChatConfig): PipelineDeps {
     activeCharacter: (channel) => activeCharacter(api, cfg, channel),
     makeSessionIdentity,
     noticeOpsRateLimited: (channel, detail) => noticeOpsRateLimited(api, channel, detail),
+    teardownSignal: () => teardownController?.signal,
   };
 }
 
@@ -278,6 +288,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
   // value, and production callers pass nothing.
   const merged: AIChatDeps = (deps as AIChatDeps | undefined) ?? {};
 
+  teardownController = new AbortController();
   rateLimiter = merged.rateLimiter ?? new RateLimiter(cfg.rateLimits);
   tokenTracker = merged.tokenTracker ?? new TokenTracker(api.db, cfg.tokenBudgets);
   semaphore = merged.semaphore ?? new ProviderSemaphore(cfg.input.maxInflight);
@@ -398,6 +409,10 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
   }
   if (ambientEngine && cfg.ambient.enabled) {
     ambientEngine.start(async (channel, kind, prompt) => {
+      // Bail early if teardown already fired — the captured module refs may
+      // be nullified after the next microtask and the sender holds them by
+      // closure. Checked again after each await to catch a mid-flight reload.
+      if (teardownController?.signal.aborted) return;
       if (!rateLimiter || !rateLimiter.checkAmbient(channel)) return;
       const { character, language } = activeCharacter(api, cfg, channel);
       if (!provider || !contextManager || !tokenTracker) return;
@@ -450,6 +465,9 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
         },
       );
 
+      if (teardownController?.signal.aborted) return;
+      if (!rateLimiter || !contextManager) return;
+
       if (result.status === 'fantasy_dropped') {
         api.warn(
           `ambient ${kind}: dropped response containing fantasy-prefix line ${result.index}: ` +
@@ -478,6 +496,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
           `ambient ${kind}`,
           (line) => api.say(channel, line),
           cfg.output.interLineDelayMs,
+          teardownController?.signal,
         );
       }
     });
@@ -1042,6 +1061,17 @@ export function teardown(): void {
     clearInterval(sessionExpiryInterval);
     sessionExpiryInterval = null;
   }
+  // Cancel in-flight provider calls FIRST, before nulling the state refs
+  // awaiters might touch on resolution. Without this, a 60s Ollama fetch
+  // (or a 30s Gemini withTimeout) outlives the reload and, when it
+  // resolves against the old closure, touches torn-down tokenTracker /
+  // rateLimiter / semaphore instances. See audit 2026-04-19 CRITICAL #2.
+  provider?.abort?.();
+  // Same rationale for the drip-send path and ambient sender closure:
+  // abort cuts the setTimeout chain in sendLines and short-circuits the
+  // ambient closure at its await boundaries. See audit 2026-04-19 W-29, W-30.
+  teardownController?.abort();
+  teardownController = null;
   rateLimiter?.reset();
   sessionManager?.clear();
   ambientEngine?.stop();

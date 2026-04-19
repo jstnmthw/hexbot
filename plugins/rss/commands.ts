@@ -7,6 +7,7 @@
 import type Parser from 'rss-parser';
 
 import type { ChannelHandlerContext, PluginAPI } from '../../src/types';
+import type { CircuitBreaker } from './circuit-breaker';
 import { type FetchFeedOpts, pollFeed } from './feed-fetcher';
 import { announceItems } from './feed-formatter';
 import { type FeedConfig, deleteRuntimeFeed, isRuntimeFeed, saveRuntimeFeed } from './feed-store';
@@ -28,6 +29,13 @@ export interface RssCommandsDeps {
   parser: Parser<Record<string, never>, Record<string, never>>;
   cfg: RssCommandsConfig;
   abortSignal: () => AbortSignal | undefined;
+  /**
+   * Per-feed circuit breaker state owned by the plugin lifecycle. Passed
+   * in so `handleRemove` can drop a feed's failure tracking alongside the
+   * runtime-feed DB row — without this, `!rss add X … !rss remove X …
+   * !rss add X` cycles leak state forever.
+   */
+  circuitBreaker: CircuitBreaker;
 }
 
 type CmdOutcome = 'attempt' | 'rejected' | 'ok' | 'error';
@@ -286,6 +294,7 @@ export function handleRemove(
 
   deleteRuntimeFeed(api, id);
   activeFeeds.delete(id);
+  deps.circuitBreaker.forget(id);
   api.notice(ctx.nick, `Feed "${id}" removed.`);
   logCmd(api, ctx, 'remove', 'ok', `id=${id}`);
   api.audit.log('rss-feed-remove', { channel: ctx.channel, target: id });

@@ -58,6 +58,7 @@ export function sendLinesGated(
   reason: string,
   send: (line: string) => void,
   interLineDelayMs: number,
+  signal?: AbortSignal,
 ): Promise<void> {
-  return sendLines(lines, gatedSender(postGate, reason, send), interLineDelayMs);
+  return sendLines(lines, gatedSender(postGate, reason, send), interLineDelayMs, signal);
 }

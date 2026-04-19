@@ -56,6 +56,19 @@ export class CircuitBreaker {
     this.brokenNotified.delete(feedId);
   }
 
+  /**
+   * Drop every scrap of state tied to a feed id. Semantically distinct
+   * from {@link recordSuccess}: a forgotten feed isn't "succeeding", it's
+   * gone — callers use this from `!rss remove` so an add/remove churn of
+   * unique ids can't leave stale `failureCount`/`backoffUntil`/`brokenNotified`
+   * entries that accumulate forever.
+   */
+  forget(feedId: string): void {
+    this.failureCount.delete(feedId);
+    this.backoffUntil.delete(feedId);
+    this.brokenNotified.delete(feedId);
+  }
+
   /** Reset every feed's state — called from plugin teardown. */
   reset(): void {
     this.failureCount.clear();
