@@ -106,6 +106,8 @@ When a user joins a channel:
 
 **Rule:** When `config.identity.require_acc_for` includes a flag level, the bot MUST wait for the verification response (with timeout) before granting that privilege. The dispatcher enforces this automatically. Never bypass the dispatcher for privileged actions.
 
+**Bot-side identify-before-join:** SASL (PLAIN or EXTERNAL) is the supported mechanism for the bot to be identified before it joins its configured channels. On SASL networks the server authenticates the bot before IRC registration completes, so the subsequent JOINs are issued by an already-identified, cloaked session. On non-SASL networks the bot sends `PRIVMSG NickServ :IDENTIFY <pw>` from the `registered` handler immediately before the first JOIN (see `src/core/connection-lifecycle.ts`), but the IDENTIFY and JOIN lines still race on the server — this is best-effort, not deterministic. Operators of `+r` (registered-only) channels or networks that rely on ChanServ auto-op must use SASL; the legacy IDENTIFY path is a convenience, not a guarantee.
+
 ### 3.3 Flag checking
 
 - The dispatcher MUST check flags before calling any handler that has a flag requirement

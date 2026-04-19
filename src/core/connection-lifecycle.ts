@@ -101,6 +101,14 @@ export interface ConnectionLifecycleDeps {
   logger: LoggerLike;
   /** Channel state tracker — required for periodic presence check. */
   channelState?: PresenceCheckChannelState;
+  /**
+   * Optional NickServ identify hook. When the bot is registered but not
+   * using SASL, this runs before `joinConfiguredChannels()` so the IDENTIFY
+   * line reaches NickServ before the first JOIN. On SASL networks the bot
+   * is already authenticated at registration time, so this is a no-op.
+   * Safe to omit in tests that don't exercise services.
+   */
+  identifyWithServices?: () => void;
 }
 
 /** Handle returned by registerConnectionEvents for cleanup on shutdown. */
@@ -227,6 +235,14 @@ export function registerConnectionEvents(
     applyCasemapping(deps);
     applyServerCapabilities(deps);
     ingestSTSDirective(deps);
+
+    // Send NickServ IDENTIFY before JOIN on non-SASL networks so the
+    // account-bind / cloak has a chance to be applied before the bot hits
+    // a +r channel or ChanServ auto-op check. The two messages still race
+    // over the wire (they're separate server-routed commands), but in
+    // practice NickServ processes IDENTIFY fast enough that the bind
+    // lands first. See docs/services-identify-before-join.md.
+    deps.identifyWithServices?.();
 
     joinConfiguredChannels(deps);
 

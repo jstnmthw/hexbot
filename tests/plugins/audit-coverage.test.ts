@@ -85,6 +85,8 @@ function buildApi(pluginId: string): { api: PluginAPI; db: BotDatabase } {
     getServerSupports: () => ({}),
     modesReadyListeners: new Map(),
     permissionsChangedListeners: new Map(),
+    userIdentifiedListeners: new Map(),
+    userDeidentifiedListeners: new Map(),
   };
 
   const { api } = createPluginApi(deps, pluginId, {});

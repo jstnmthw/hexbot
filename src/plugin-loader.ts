@@ -144,6 +144,12 @@ export class PluginLoader {
   private getServerSupports: () => Record<string, string>;
   private modesReadyListeners: Map<string, Array<(channel: string) => void>> = new Map();
   private permissionsChangedListeners: Map<string, Array<(handle: string) => void>> = new Map();
+  private userIdentifiedListeners: Map<string, Array<(nick: string, account: string) => void>> =
+    new Map();
+  private userDeidentifiedListeners: Map<
+    string,
+    Array<(nick: string, previousAccount: string) => void>
+  > = new Map();
   /** Absolute paths of plugin entry files already imported in this process. */
   private importedOnce: Set<string> = new Set();
   /**
@@ -561,6 +567,37 @@ export class PluginLoader {
       }
       this.permissionsChangedListeners.delete(pluginName);
     }
+
+    // Drain the per-plugin `onUserIdentified` / `onUserDeidentified` listeners.
+    // Same shape as the modesReady drain above — one wrapper per callback,
+    // attached to a single event, with a try/catch so a bad off() doesn't
+    // strand siblings.
+    const identifiedListeners = this.userIdentifiedListeners.get(pluginName);
+    if (identifiedListeners) {
+      for (const fn of identifiedListeners) {
+        try {
+          this.eventBus.off('user:identified', fn);
+        } catch (err) {
+          this.logger?.error(`[plugin-loader] user:identified off() for ${pluginName} threw:`, err);
+        }
+      }
+      this.userIdentifiedListeners.delete(pluginName);
+    }
+
+    const deidentifiedListeners = this.userDeidentifiedListeners.get(pluginName);
+    if (deidentifiedListeners) {
+      for (const fn of deidentifiedListeners) {
+        try {
+          this.eventBus.off('user:deidentified', fn);
+        } catch (err) {
+          this.logger?.error(
+            `[plugin-loader] user:deidentified off() for ${pluginName} threw:`,
+            err,
+          );
+        }
+      }
+      this.userDeidentifiedListeners.delete(pluginName);
+    }
   }
 
   private createPluginApi(
@@ -588,6 +625,8 @@ export class PluginLoader {
         getServerSupports: this.getServerSupports,
         modesReadyListeners: this.modesReadyListeners,
         permissionsChangedListeners: this.permissionsChangedListeners,
+        userIdentifiedListeners: this.userIdentifiedListeners,
+        userDeidentifiedListeners: this.userDeidentifiedListeners,
       },
       pluginId,
       config,

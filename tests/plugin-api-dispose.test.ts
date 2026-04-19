@@ -51,6 +51,8 @@ function makeDeps(): PluginApiDeps {
     getServerSupports: () => ({}),
     modesReadyListeners: new Map(),
     permissionsChangedListeners: new Map(),
+    userIdentifiedListeners: new Map(),
+    userDeidentifiedListeners: new Map(),
   };
 }
 

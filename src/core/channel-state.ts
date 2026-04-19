@@ -592,6 +592,10 @@ export class ChannelState {
       event.account === false || event.account === null ? null : String(event.account);
 
     const lower = this.lowerNick(nick);
+    // Capture the previous account BEFORE the map write so the transition
+    // check below sees the real delta. `undefined` means we've never
+    // tracked this nick (treat as null for the purposes of firing events).
+    const previous = this.networkAccounts.get(lower) ?? null;
     this.networkAccounts.set(lower, accountName);
 
     // Update accountName on all per-channel UserInfo objects for this nick
@@ -603,6 +607,23 @@ export class ChannelState {
       this.logger?.debug(`account-notify: ${nick} identified as ${accountName}`);
     } else {
       this.logger?.debug(`account-notify: ${nick} deidentified`);
+    }
+
+    // Fire typed events on actual transitions so subscribers (chanmod's
+    // auto-op reconciler, future auth-aware plugins) can react to late
+    // identification / deidentification the same way they react to
+    // explicit `verifyUser` results. A pure no-op (A→A) is suppressed so
+    // a duplicate account-notify line from a buggy server doesn't trigger
+    // spurious reconciles. An account switch (A→B) is treated as logout
+    // then login and emits both events in order — this matches the rare
+    // but real case on services that support re-identification mid-session.
+    // See docs/services-identify-before-join.md.
+    if (previous === accountName) return;
+    if (previous !== null) {
+      this.eventBus.emit('user:deidentified', nick, previous);
+    }
+    if (accountName !== null) {
+      this.eventBus.emit('user:identified', nick, accountName);
     }
   }
 

@@ -251,6 +251,25 @@ export function setupAutoOp(
     });
   });
 
+  // React to late authentication / deauthentication for already-joined users.
+  // `channel-state.onAccount` emits these on IRCv3 account-notify transitions,
+  // and `services.verifyUser` emits `user:identified` from its resolve path —
+  // both flows end up here. The reconciler looks up each per-channel user
+  // against the *current* identification (the channel-state account map is
+  // already updated by the time these events fire) so a deidentifying
+  // `$a:accountname`-only user naturally loses their auto-granted prefix
+  // modes. See docs/services-identify-before-join.md.
+  api.onUserIdentified((nick) => {
+    reconcileNickInAllChannels(api, config, nick).catch((err) => {
+      api.error(`onUserIdentified reconciler failed for ${nick}:`, err);
+    });
+  });
+  api.onUserDeidentified((nick) => {
+    reconcileNickInAllChannels(api, config, nick).catch((err) => {
+      api.error(`onUserDeidentified reconciler failed for ${nick}:`, err);
+    });
+  });
+
   // When the bot joins a channel that already has users, those users come in
   // via NAMES (userlist), not as individual `join` events — so the join bind
   // above never sees them. Hook onModesReady (fires after self-join +
@@ -262,6 +281,70 @@ export function setupAutoOp(
   });
 
   return () => {};
+}
+
+/**
+ * Reconcile a single `nick`'s prefix modes in every configured channel they
+ * are currently present in. Used by the identify/deidentify event handlers.
+ *
+ * Resolution uses the live account lookup (not the old account) because
+ * what we want is the user's flags *right now*: on identify the new
+ * account is already in the channel-state map, on deidentify the map
+ * holds null. When the resolve yields no record — typically the
+ * deidentify case where the user only matched via `$a:accountname` —
+ * strip every auto-granted prefix mode the user currently carries, since
+ * we can no longer defend any of them on this user.
+ *
+ * Channels with `auto_op` off are skipped, matching the other reconcilers.
+ */
+async function reconcileNickInAllChannels(
+  api: PluginAPI,
+  config: ChanmodConfig,
+  nick: string,
+): Promise<void> {
+  for (const channel of api.botConfig.irc.channels) {
+    if (!api.channelSettings.getFlag(channel, 'auto_op')) continue;
+    const ch = api.getChannel(channel);
+    if (!ch) continue;
+    const chanUser = Array.from(ch.users.values()).find(
+      (u) => api.ircLower(u.nick) === api.ircLower(nick),
+    );
+    if (!chanUser) continue;
+    const hostmask = api.buildHostmask(chanUser);
+    // Pass the per-channel accountName explicitly so `$a:` patterns can
+    // resolve against the current account — findByHostmask does not fall
+    // back to the channel-state account lookup on its own.
+    const record = api.permissions.findByHostmask(hostmask, chanUser.accountName);
+    if (record) {
+      await reconcileUserInChannel(api, config, record, channel, chanUser.nick, chanUser.modes);
+      continue;
+    }
+    // No record matches under current identification. If the user carries
+    // any auto-grantable prefix mode, revoke it — we cannot justify the
+    // mode against any flagged record any more.
+    revokeAutoGrants(api, channel, chanUser.nick, chanUser.modes);
+  }
+}
+
+/** Strip any +o/+h/+v the user carries, within the bot's current privileges. */
+function revokeAutoGrants(
+  api: PluginAPI,
+  channel: string,
+  nick: string,
+  currentModes: string,
+): void {
+  if (currentModes.includes('o') && botHasOps(api, channel)) {
+    api.deop(channel, nick);
+    api.log(`Auto-deopped ${nick} in ${channel} — no longer identified to a flagged account`);
+  }
+  if (currentModes.includes('h') && botCanHalfop(api, channel)) {
+    api.dehalfop(channel, nick);
+    api.log(`Auto-dehalfopped ${nick} in ${channel} — no longer identified to a flagged account`);
+  }
+  if (currentModes.includes('v') && botHasOps(api, channel)) {
+    api.devoice(channel, nick);
+    api.log(`Auto-devoiced ${nick} in ${channel} — no longer identified to a flagged account`);
+  }
 }
 
 /**

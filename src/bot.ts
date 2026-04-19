@@ -402,11 +402,11 @@ export class Bot {
       );
     }
 
-    // Connect to IRC (all handlers are registered — safe to receive events)
+    // Connect to IRC (all handlers are registered — safe to receive events).
+    // NickServ IDENTIFY (non-SASL fallback) is triggered from the `registered`
+    // handler in connection-lifecycle, before joinConfiguredChannels — see
+    // docs/services-identify-before-join.md.
     await this.connect();
-
-    // Authenticate with NickServ (non-SASL fallback, needs active connection)
-    this.services.identify();
 
     this.startTime = Date.now();
   }
@@ -812,6 +812,7 @@ export class Bot {
           dispatcher: this.dispatcher,
           channelState: this.channelState,
           logger: this.logger.child('connection'),
+          identifyWithServices: () => this.services.identify(),
         },
         resolve,
         reject,

@@ -421,6 +421,164 @@ describe('chanmod plugin — auto-op', () => {
     }
   });
 
+  it('should voice a user via $a:account when they identify after joining', async () => {
+    const liveBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(liveBot, '#test');
+    try {
+      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      // Permission record is keyed on the services account pattern — the only
+      // way to match this user is once they've identified.
+      liveBot.permissions.addUser('blueangel', '$a:BlueAngelAcct', 'v', 'test');
+
+      // BlueAngel joins unidentified — auto-op's join handler finds no record
+      // (hostmask doesn't match, account tag is false) and does nothing.
+      liveBot.client.simulateEvent('join', {
+        nick: 'BlueAngel',
+        ident: 'blue',
+        hostname: 'blue.host',
+        channel: '#test',
+        account: false,
+      });
+      await tick();
+      expect(liveBot.client.messages.find((m) => m.type === 'mode')).toBeUndefined();
+
+      liveBot.client.clearMessages();
+      // They now identify — channel-state emits user:identified, chanmod
+      // reconciles, and +v should land.
+      liveBot.client.simulateEvent('account', {
+        nick: 'BlueAngel',
+        account: 'BlueAngelAcct',
+      });
+      await tick();
+
+      expect(
+        liveBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '+v' && m.args?.includes('BlueAngel'),
+        ),
+      ).toBeDefined();
+    } finally {
+      liveBot.cleanup();
+    }
+  });
+
+  it('should deop and dehalfop a user via $a:account when they deidentify', async () => {
+    const liveBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(liveBot, '#test');
+    try {
+      await liveBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: { enabled: true, config: { halfop_flags: ['l'] } },
+      });
+      // Two separate users — one +o via $a:, one +h via $a:
+      liveBot.permissions.addUser('opacct', '$a:OpAcct', 'o', 'test');
+      liveBot.permissions.addUser('hopacct', '$a:HopAcct', 'l', 'test');
+
+      liveBot.client.simulateEvent('join', {
+        nick: 'OpUser',
+        ident: 'op',
+        hostname: 'op.host',
+        channel: '#test',
+        account: 'OpAcct',
+      });
+      liveBot.client.simulateEvent('join', {
+        nick: 'HopUser',
+        ident: 'hop',
+        hostname: 'hop.host',
+        channel: '#test',
+        account: 'HopAcct',
+      });
+      await tick();
+      // Seed the prefix modes so channel-state sees them as carrying +o / +h.
+      simulateMode(liveBot, 'hexbot', '#test', '+o', 'OpUser');
+      simulateMode(liveBot, 'hexbot', '#test', '+h', 'HopUser');
+      liveBot.client.clearMessages();
+
+      liveBot.client.simulateEvent('account', { nick: 'OpUser', account: false });
+      liveBot.client.simulateEvent('account', { nick: 'HopUser', account: false });
+      await tick();
+
+      expect(
+        liveBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '-o' && m.args?.includes('OpUser'),
+        ),
+      ).toBeDefined();
+      expect(
+        liveBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '-h' && m.args?.includes('HopUser'),
+        ),
+      ).toBeDefined();
+    } finally {
+      liveBot.cleanup();
+    }
+  });
+
+  it('should devoice a user via $a:account when they deidentify after being voiced', async () => {
+    const liveBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(liveBot, '#test');
+    try {
+      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      liveBot.permissions.addUser('blueangel', '$a:BlueAngelAcct', 'v', 'test');
+
+      // Join already identified — auto-op voices them immediately.
+      liveBot.client.simulateEvent('join', {
+        nick: 'BlueAngel',
+        ident: 'blue',
+        hostname: 'blue.host',
+        channel: '#test',
+        account: 'BlueAngelAcct',
+      });
+      await tick();
+      // Mark them as voiced in channel-state so reconcile sees the mode to revoke.
+      simulateMode(liveBot, 'hexbot', '#test', '+v', 'BlueAngel');
+      liveBot.client.clearMessages();
+
+      // They deidentify. The event carries previousAccount so chanmod can
+      // still resolve the $a:account record and decide to demote.
+      liveBot.client.simulateEvent('account', { nick: 'BlueAngel', account: false });
+      await tick();
+
+      expect(
+        liveBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '-v' && m.args?.includes('BlueAngel'),
+        ),
+      ).toBeDefined();
+    } finally {
+      liveBot.cleanup();
+    }
+  });
+
+  it('should swallow errors raised inside the identify/deidentify reconcile paths', async () => {
+    const errBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(errBot, '#test');
+    try {
+      await errBot.pluginLoader.load(PLUGIN_PATH);
+      errBot.permissions.addUser('acctuser', '$a:Acct', 'v', 'test');
+      errBot.client.simulateEvent('join', {
+        nick: 'AcctUser',
+        ident: 'u',
+        hostname: 'u.host',
+        channel: '#test',
+        account: false,
+      });
+      await tick();
+      errBot.client.clearMessages();
+
+      const spy = vi.spyOn(errBot.permissions, 'findByHostmask').mockImplementation(() => {
+        throw new Error('boom');
+      });
+
+      errBot.client.simulateEvent('account', { nick: 'AcctUser', account: 'Acct' });
+      await tick();
+      errBot.client.simulateEvent('account', { nick: 'AcctUser', account: false });
+      await tick();
+
+      spy.mockRestore();
+      // No crash; exception was caught and logged.
+      expect(errBot.client.messages).toBeDefined();
+    } finally {
+      errBot.cleanup();
+    }
+  });
+
   it('should no-op modesReady reconcile when auto_op is disabled for the channel', async () => {
     const offBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(offBot, '#test');

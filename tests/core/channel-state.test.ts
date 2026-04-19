@@ -835,6 +835,84 @@ describe('ChannelState', () => {
     });
   });
 
+  describe('IRCv3 account-notify event emissions', () => {
+    // These tests exercise the event-bus surface added for late-authentication
+    // reconciliation (docs/services-identify-before-join.md). The old behaviour
+    // just updated cache state silently; now the transition itself is surfaced
+    // to chanmod and other subscribers.
+    it('emits user:identified when a nick transitions from no account to an account', () => {
+      const seen: Array<[string, string]> = [];
+      eventBus.on('user:identified', (nick, account) => seen.push([nick, account]));
+
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        channel: '#test',
+        account: false,
+      });
+      client.simulateEvent('account', { nick: 'Alice', account: 'AliceAcct' });
+
+      expect(seen).toEqual([['Alice', 'AliceAcct']]);
+    });
+
+    it('emits user:deidentified with previous account when a nick deidentifies', () => {
+      const seen: Array<[string, string]> = [];
+      eventBus.on('user:deidentified', (nick, prev) => seen.push([nick, prev]));
+
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        channel: '#test',
+        account: 'AliceAcct',
+      });
+      client.simulateEvent('account', { nick: 'Alice', account: false });
+
+      expect(seen).toEqual([['Alice', 'AliceAcct']]);
+    });
+
+    it('suppresses events on a no-op duplicate account-notify', () => {
+      const idents: unknown[] = [];
+      const deidents: unknown[] = [];
+      eventBus.on('user:identified', (...a) => idents.push(a));
+      eventBus.on('user:deidentified', (...a) => deidents.push(a));
+
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        channel: '#test',
+        account: 'AliceAcct',
+      });
+      // The join already seeded the account — a duplicate notify must not re-fire.
+      client.simulateEvent('account', { nick: 'Alice', account: 'AliceAcct' });
+
+      expect(idents).toEqual([]);
+      expect(deidents).toEqual([]);
+    });
+
+    it('account switch A→B fires both deidentify(prev) and identify(new) in order', () => {
+      const log: Array<['id' | 'de', string, string]> = [];
+      eventBus.on('user:identified', (n, a) => log.push(['id', n, a]));
+      eventBus.on('user:deidentified', (n, p) => log.push(['de', n, p]));
+
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'host',
+        channel: '#test',
+        account: 'AcctA',
+      });
+      client.simulateEvent('account', { nick: 'Alice', account: 'AcctB' });
+
+      expect(log).toEqual([
+        ['de', 'Alice', 'AcctA'],
+        ['id', 'Alice', 'AcctB'],
+      ]);
+    });
+  });
+
   describe('IRCv3 account-notify edge cases', () => {
     it('account event for nick not in a tracked channel still updates networkAccounts', () => {
       // Bob is in the channel; Ghost is not — covers the if(user) false branch in the loop

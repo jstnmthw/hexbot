@@ -86,6 +86,10 @@ export interface PluginApiDeps {
   modesReadyListeners: Map<string, Array<(channel: string) => void>>;
   /** Shared map of onPermissionsChanged listeners, keyed by pluginId, for cleanup on unload. */
   permissionsChangedListeners: Map<string, Array<(handle: string) => void>>;
+  /** Shared map of onUserIdentified listeners, keyed by pluginId, for cleanup on unload. */
+  userIdentifiedListeners: Map<string, Array<(nick: string, account: string) => void>>;
+  /** Shared map of onUserDeidentified listeners, keyed by pluginId, for cleanup on unload. */
+  userDeidentifiedListeners: Map<string, Array<(nick: string, previousAccount: string) => void>>;
 }
 
 /** Internal fan-out list for the permissions-change listener wiring. */
@@ -254,6 +258,8 @@ export function createPluginApi(
       pluginId,
       deps.modesReadyListeners,
       deps.permissionsChangedListeners,
+      deps.userIdentifiedListeners,
+      deps.userDeidentifiedListeners,
     ),
     permissions: createPluginPermissionsApi(deps.permissions),
     services: createPluginServicesApi(deps.services),
@@ -594,6 +600,8 @@ function createPluginChannelStateApi(
   pluginId: string,
   modesReadyListeners: Map<string, Array<(channel: string) => void>>,
   permissionsChangedListeners: Map<string, Array<(handle: string) => void>>,
+  userIdentifiedListeners: Map<string, Array<(nick: string, account: string) => void>>,
+  userDeidentifiedListeners: Map<string, Array<(nick: string, previousAccount: string) => void>>,
 ): Pick<
   PluginAPI,
   | 'getChannel'
@@ -603,6 +611,10 @@ function createPluginChannelStateApi(
   | 'offModesReady'
   | 'onPermissionsChanged'
   | 'offPermissionsChanged'
+  | 'onUserIdentified'
+  | 'offUserIdentified'
+  | 'onUserDeidentified'
+  | 'offUserDeidentified'
 > {
   // Per-plugin callback→wrapper maps used by off*() to look up the actual
   // listener that was installed on the event bus. Keyed by the plugin's
@@ -612,6 +624,14 @@ function createPluginChannelStateApi(
   const permissionsByCallback = new Map<
     (handle: string) => void,
     (handle: string, ...rest: unknown[]) => void
+  >();
+  const userIdentifiedByCallback = new Map<
+    (nick: string, account: string) => void,
+    (nick: string, account: string) => void
+  >();
+  const userDeidentifiedByCallback = new Map<
+    (nick: string, previousAccount: string) => void,
+    (nick: string, previousAccount: string) => void
   >();
 
   // Error-boundary wrapper — mirrors the dispatcher's handler try/catch.
@@ -673,6 +693,50 @@ function createPluginChannelStateApi(
       }
       permissionsByCallback.delete(callback);
       const list = permissionsChangedListeners.get(pluginId);
+      if (list) {
+        const idx = list.indexOf(wrapped);
+        if (idx !== -1) list.splice(idx, 1);
+      }
+    },
+    onUserIdentified(callback: (nick: string, account: string) => void): void {
+      if (userIdentifiedByCallback.has(callback)) return; // idempotent
+      const wrappedListener = (nick: string, account: string): void => {
+        safeInvoke('user:identified', pluginId, () => callback(nick, account));
+      };
+      eventBus.on('user:identified', wrappedListener);
+      userIdentifiedByCallback.set(callback, wrappedListener);
+      const list = userIdentifiedListeners.get(pluginId) ?? [];
+      list.push(wrappedListener);
+      userIdentifiedListeners.set(pluginId, list);
+    },
+    offUserIdentified(callback: (nick: string, account: string) => void): void {
+      const wrapped = userIdentifiedByCallback.get(callback);
+      if (!wrapped) return;
+      eventBus.off('user:identified', wrapped);
+      userIdentifiedByCallback.delete(callback);
+      const list = userIdentifiedListeners.get(pluginId);
+      if (list) {
+        const idx = list.indexOf(wrapped);
+        if (idx !== -1) list.splice(idx, 1);
+      }
+    },
+    onUserDeidentified(callback: (nick: string, previousAccount: string) => void): void {
+      if (userDeidentifiedByCallback.has(callback)) return; // idempotent
+      const wrappedListener = (nick: string, previousAccount: string): void => {
+        safeInvoke('user:deidentified', pluginId, () => callback(nick, previousAccount));
+      };
+      eventBus.on('user:deidentified', wrappedListener);
+      userDeidentifiedByCallback.set(callback, wrappedListener);
+      const list = userDeidentifiedListeners.get(pluginId) ?? [];
+      list.push(wrappedListener);
+      userDeidentifiedListeners.set(pluginId, list);
+    },
+    offUserDeidentified(callback: (nick: string, previousAccount: string) => void): void {
+      const wrapped = userDeidentifiedByCallback.get(callback);
+      if (!wrapped) return;
+      eventBus.off('user:deidentified', wrapped);
+      userDeidentifiedByCallback.delete(callback);
+      const list = userDeidentifiedListeners.get(pluginId);
       if (list) {
         const idx = list.indexOf(wrapped);
         if (idx !== -1) list.splice(idx, 1);

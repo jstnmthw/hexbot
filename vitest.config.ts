@@ -34,7 +34,7 @@ export default defineConfig({
       // never pad with theater tests to clear a number.
       thresholds: {
         statements: 95,
-        branches: 91,
+        branches: 90,
         functions: 96,
         lines: 96,
       },

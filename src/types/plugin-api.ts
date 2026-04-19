@@ -217,6 +217,28 @@ export interface PluginAPI {
   /** Remove a callback previously registered with {@link onPermissionsChanged}. No-op if not registered. */
   offPermissionsChanged(callback: (handle: string) => void): void;
 
+  /**
+   * Register a callback for when the bot observes that a nick is identified
+   * to services — fires on IRCv3 `account-notify` transitions (null → account)
+   * and on explicit `verifyUser()` success. Use this to react to users
+   * identifying after they've already joined. Auto-cleaned on unload.
+   */
+  onUserIdentified(callback: (nick: string, account: string) => void): void;
+  /** Remove a callback previously registered with {@link onUserIdentified}. No-op if not registered. */
+  offUserIdentified(callback: (nick: string, account: string) => void): void;
+
+  /**
+   * Register a callback for when a nick deidentifies from services
+   * (IRCv3 `account-notify` transition from account → null). The
+   * `previousAccount` argument is the account the nick was identified to
+   * immediately before — useful for looking up handles by `$a:account`
+   * pattern even though the nick is no longer identified. Auto-cleaned
+   * on unload.
+   */
+  onUserDeidentified(callback: (nick: string, previousAccount: string) => void): void;
+  /** Remove a callback previously registered with {@link onUserDeidentified}. No-op if not registered. */
+  offUserDeidentified(callback: (nick: string, previousAccount: string) => void): void;
+
   // Permissions (read-only)
   permissions: PluginPermissions;
 

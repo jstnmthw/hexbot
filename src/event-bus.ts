@@ -40,7 +40,24 @@ export interface BotEvents {
   'mod:op': [channel: string, nick: string, by: string];
   'mod:kick': [channel: string, nick: string, by: string, reason: string];
   'mod:ban': [channel: string, mask: string, by: string];
+  /**
+   * Emitted when the bot observes that a nick is identified to services.
+   * Two paths can fire this: an explicit `verifyUser` ACC/STATUS round-trip
+   * succeeding, and — passively — `channel-state.onAccount` noticing an
+   * IRCv3 `account-notify` transition from unidentified to identified. The
+   * `handle` field carries the services account name. See
+   * docs/services-identify-before-join.md.
+   */
   'user:identified': [nick: string, handle: string];
+  /**
+   * Symmetric counterpart to `user:identified`. Emitted from
+   * `channel-state.onAccount` when a nick transitions from identified to
+   * unidentified (services logout). Carries the previous account name so
+   * reconcilers can look up handles by account pattern even though the
+   * nick is no longer identified. No explicit verify path emits this —
+   * `verifyUser` only fires the positive event.
+   */
+  'user:deidentified': [nick: string, previousAccount: string];
   'user:added': [handle: string];
   'user:removed': [handle: string];
   'user:flagsChanged': [handle: string, globalFlags: string, channelFlags: Record<string, string>];
