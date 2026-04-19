@@ -82,14 +82,37 @@ describe('HelpRegistry', () => {
     expect(reg.get('!unknown')).toBeUndefined();
   });
 
-  it('re-registering the same pluginId replaces prior entries (no duplicates)', () => {
+  it('multiple register() calls from the same plugin append entries (no clobber)', () => {
     const reg = new HelpRegistry();
     reg.register('chanmod', [entryA]);
     reg.register('chanmod', [entryB]);
 
     const all = reg.getAll();
+    expect(all).toHaveLength(2);
+    expect(all).toContainEqual(expect.objectContaining(entryA));
+    expect(all).toContainEqual(expect.objectContaining(entryB));
+  });
+
+  it('re-registering the same command upserts in place (no duplicate)', () => {
+    const reg = new HelpRegistry();
+    reg.register('chanmod', [entryA]);
+    const updated: HelpEntry = { ...entryA, description: 'Op a nick (updated)' };
+    reg.register('chanmod', [updated]);
+
+    const all = reg.getAll();
     expect(all).toHaveLength(1);
-    expect(all[0]).toMatchObject(entryB);
+    expect(all[0]).toMatchObject(updated);
+  });
+
+  it('upsert is case- and prefix-insensitive on the command name', () => {
+    const reg = new HelpRegistry();
+    reg.register('chanmod', [entryA]);
+    const aliased: HelpEntry = { ...entryA, command: 'OP', description: 'Aliased' };
+    reg.register('chanmod', [aliased]);
+
+    const all = reg.getAll();
+    expect(all).toHaveLength(1);
+    expect(all[0]).toMatchObject({ description: 'Aliased' });
   });
 
   it('getAll() returns empty array when no entries are registered', () => {
