@@ -106,8 +106,40 @@ describe('detectTrigger', () => {
     expect(match?.kind).toBe('direct');
   });
 
+  it('matches trailing nick with no punctuation', () => {
+    expect(detectTrigger('Welcome hexbot', 'hexbot', BASE)).toEqual({
+      kind: 'direct',
+      prompt: 'Welcome hexbot',
+    });
+  });
+
+  it('matches trailing nick with a period', () => {
+    expect(detectTrigger('Wake up, hexbot.', 'hexbot', BASE)).toEqual({
+      kind: 'direct',
+      prompt: 'Wake up, hexbot.',
+    });
+  });
+
+  it('matches mid-sentence nick mention', () => {
+    expect(detectTrigger('i wonder what hexbot would think', 'hexbot', BASE)).toEqual({
+      kind: 'direct',
+      prompt: 'i wonder what hexbot would think',
+    });
+  });
+
+  it('matches nick glued to em-dash-style punctuation', () => {
+    expect(detectTrigger('what are your thoughts hexbot--i had a dream', 'hexbot', BASE)).toEqual({
+      kind: 'direct',
+      prompt: 'what are your thoughts hexbot--i had a dream',
+    });
+  });
+
   it('does not match when nick is just a prefix of another word', () => {
     expect(detectTrigger('hexbotter hello', 'hexbot', BASE)).toBeNull();
+  });
+
+  it('does not match when nick is embedded in another word', () => {
+    expect(detectTrigger('neonatal care', 'neo', BASE)).toBeNull();
   });
 
   it('does not match direct address when disabled', () => {

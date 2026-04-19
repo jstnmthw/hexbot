@@ -101,24 +101,28 @@ export function detectTrigger(
   const trimmed = text.trim();
   if (!trimmed) return null;
 
-  // Direct address: "hexbot: …" / "hexbot, …" / "hexbot …"
+  // Direct address: bot nick appears as a whole word anywhere in the message.
+  // `\b<nick>\b` covers every shape that actually addresses the bot in practice
+  // — "neo: hi", "neo hi", "hey neo?", "Welcome neo", "Wake up, neo.",
+  // "what neo thinks about X" — without having to enumerate punctuation
+  // variants. The word-boundary prevents false positives on "hexbotter"
+  // or "neonatal". Occasional false positives ("neo-classical") are
+  // absorbed by the reply-policy rate/back-to-back guards downstream.
   if (config.directAddress) {
-    const nickLow = botNick.toLowerCase();
-    const lower = trimmed.toLowerCase();
-    if (lower.startsWith(nickLow)) {
-      const rest = trimmed.substring(botNick.length);
-      const firstChar = rest.charAt(0);
-      if (firstChar === ':' || firstChar === ',' || firstChar === ' ' || rest === '') {
-        const prompt = rest.replace(/^[:,\s]+/, '').trim();
-        if (prompt) return { kind: 'direct', prompt };
+    const nickRe = new RegExp(`\\b${escapeRe(botNick)}\\b`, 'i');
+    const m = nickRe.exec(trimmed);
+    if (m) {
+      // Nick at start followed by a separator — strip it so the prompt is
+      // the user's actual question (e.g. "neo: what's up" → "what's up").
+      // Any other shape: hand the full text to the LLM so it has context.
+      if (m.index === 0) {
+        const rest = trimmed.substring(botNick.length);
+        if (rest === '') return null;
+        if (/^[:,\s]/.test(rest)) {
+          const prompt = rest.replace(/^[:,\s]+/, '').trim();
+          return prompt ? { kind: 'direct', prompt } : null;
+        }
       }
-    }
-    // "… hexbot?" / "… hexbot!" style — bot-nick at a word boundary followed
-    // by `?` or `!`, anywhere in the message. Catches "hey hexbot?" and
-    // "I think hexbot!" without false-positive on "hexbots" (the \b prevents
-    // matching `hexbots?` as a word).
-    const questionRe = new RegExp(`\\b${escapeRe(nickLow)}[?!]`, 'i');
-    if (questionRe.test(lower)) {
       return { kind: 'direct', prompt: trimmed };
     }
   }
