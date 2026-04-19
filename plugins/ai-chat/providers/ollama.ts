@@ -11,6 +11,7 @@ import {
   type AIProviderConfig,
   AIProviderError,
   type AIResponse,
+  type SamplingOptions,
 } from './types';
 
 /** Short timeout for the startup /api/tags ping — we just want "is the daemon alive?". */
@@ -50,6 +51,7 @@ export class OllamaProvider implements AIProvider {
   private useServerTokenizer = false;
   private keepAlive: string | undefined;
   private numCtx = 0;
+  private stopSequences: string[] = [];
 
   async initialize(config: AIProviderConfig): Promise<void> {
     if (!config.baseUrl) {
@@ -71,6 +73,7 @@ export class OllamaProvider implements AIProvider {
     this.useServerTokenizer = config.useServerTokenizer ?? false;
     this.keepAlive = config.keepAlive;
     this.numCtx = config.numCtx ?? 0;
+    this.stopSequences = config.stop ?? [];
 
     // SSRF guard. Without this, an operator who misconfigures (or a
     // config-write attacker) can point `base_url` at `169.254.169.254`
@@ -108,6 +111,7 @@ export class OllamaProvider implements AIProvider {
     systemPrompt: string,
     messages: AIMessage[],
     maxTokens: number,
+    sampling?: SamplingOptions,
   ): Promise<AIResponse> {
     if (!this.modelName) {
       throw new AIProviderError('Ollama provider not initialized', 'other');
@@ -124,12 +128,19 @@ export class OllamaProvider implements AIProvider {
     // daemon picks the model default. Both feed llama.cpp's KV-cache: a
     // resident model + pinned ctx size is the difference between a 10-17×
     // prefill-speed hit and a cold rebuild every call.
-    const options: Record<string, number | string | boolean> = {
-      temperature: this.temperature,
+    const options: Record<string, number | string | boolean | string[]> = {
+      temperature: sampling?.temperature ?? this.temperature,
       num_predict: maxTokens,
       ...this.extraOptions,
     };
+    if (sampling?.topP !== undefined) options.top_p = sampling.topP;
+    if (sampling?.repeatPenalty !== undefined) options.repeat_penalty = sampling.repeatPenalty;
     if (this.numCtx > 0) options.num_ctx = this.numCtx;
+    // Per-call stop overrides the init-time stop list; otherwise fall back to
+    // the operator-/tier-configured list. llama.cpp has historical bugs with
+    // very large stop lists — cap defensively at 10.
+    const stopList = (sampling?.stop ?? this.stopSequences).slice(0, 10);
+    if (stopList.length > 0) options.stop = stopList;
     const body: Record<string, unknown> = {
       model: this.modelName,
       messages: wire,
@@ -151,6 +162,16 @@ export class OllamaProvider implements AIProvider {
         throw new AIProviderError(`Ollama error: ${res.error}`, 'other');
       }
       throw new AIProviderError('Ollama returned no content', 'other');
+    }
+
+    // Context-window headroom warning. When prompt tokens cross 90% of the
+    // pinned num_ctx, the next turn will likely truncate — operators need
+    // this in the log without correlating stats by hand.
+    if (this.numCtx > 0 && res.prompt_eval_count && res.prompt_eval_count > this.numCtx * 0.9) {
+      console.warn(
+        `[ollama] prompt_eval_count=${res.prompt_eval_count} exceeds 90% of ` +
+          `num_ctx=${this.numCtx} — reduce context.max_messages or raise ollama.num_ctx.`,
+      );
     }
 
     return {

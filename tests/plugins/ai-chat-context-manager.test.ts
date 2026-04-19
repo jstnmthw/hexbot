@@ -245,4 +245,63 @@ describe('ContextManager', () => {
       expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant']);
     });
   });
+
+  describe('per-character cap and dropNickPrefix option', () => {
+    it('bulk-prunes when buffer exceeds maxMessages*1.5 and returns exactly maxMessages', () => {
+      const { mgr } = make({ maxMessages: 100, maxTokens: 10_000 });
+      for (let i = 0; i < 20; i++) mgr.addMessage('#c', 'a', `msg${i}`, false);
+      // Per-call cap of 5 triggers the 1.5× bulk-prune (20 > 7.5).
+      const msgs = mgr.getContext('#c', 'a', 5);
+      expect(msgs.length).toBe(5);
+      // Newest 5 messages after bulk-prune down to cap.
+      expect(msgs[msgs.length - 1].content).toContain('msg19');
+    });
+
+    it('does NOT prune the buffer when the per-call cap sits inside the 1.5× threshold', () => {
+      const { mgr } = make({ maxMessages: 100, maxTokens: 10_000 });
+      for (let i = 0; i < 6; i++) mgr.addMessage('#c', 'a', `msg${i}`, false);
+      // Cap=5, buffer=6. 6 < 5*1.5=7.5, so the buffer is NOT pruned; but the
+      // returned messages are still capped via the effectiveCap walk.
+      const msgs = mgr.getContext('#c', 'a', 5);
+      expect(msgs.length).toBe(5);
+      expect(mgr.size('#c')).toBe(6);
+    });
+
+    it('dropNickPrefix: true emits raw text on user entries', () => {
+      const { mgr } = make({ maxMessages: 10, maxTokens: 1_000 });
+      mgr.addMessage('#c', 'alice', 'hi there', false);
+      mgr.addMessage('#c', 'hexbot', 'hello', true);
+      const msgs = mgr.getContext('#c', 'alice', undefined, { dropNickPrefix: true });
+      expect(msgs[0]).toEqual({ role: 'user', content: 'hi there' });
+      expect(msgs[1]).toEqual({ role: 'assistant', content: 'hello' });
+    });
+  });
+
+  describe('recentSpeakers', () => {
+    it('returns distinct non-bot speakers newest-first, excluding the provided nick', () => {
+      const { mgr } = make({ maxMessages: 20, maxTokens: 1_000 });
+      mgr.addMessage('#c', 'alice', 'a1', false);
+      mgr.addMessage('#c', 'bob', 'b1', false);
+      mgr.addMessage('#c', 'hexbot', 'h1', true);
+      mgr.addMessage('#c', 'carol', 'c1', false);
+      mgr.addMessage('#c', 'bob', 'b2', false);
+      const recent = mgr.recentSpeakers('#c', 5, 'bob');
+      expect(recent).toEqual(['carol', 'alice']);
+    });
+
+    it('caps at the requested count and preserves case of the first occurrence', () => {
+      const { mgr } = make({ maxMessages: 20, maxTokens: 1_000 });
+      mgr.addMessage('#c', 'Alice', 'hi', false);
+      mgr.addMessage('#c', 'Bob', 'hey', false);
+      mgr.addMessage('#c', 'carol', 'yo', false);
+      mgr.addMessage('#c', 'dave', 'sup', false);
+      const recent = mgr.recentSpeakers('#c', 2);
+      expect(recent).toEqual(['dave', 'carol']);
+    });
+
+    it('returns empty array for an unknown channel', () => {
+      const { mgr } = make();
+      expect(mgr.recentSpeakers('#nope', 3)).toEqual([]);
+    });
+  });
 });

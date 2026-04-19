@@ -57,6 +57,7 @@ const BASE_CONFIG: AiChatConfig = {
   provider: 'gemini',
   apiKey: 'k',
   model: 'm',
+  modelClass: 'medium',
   temperature: 0.9,
   maxOutputTokens: 256,
   character: 'friendly',
@@ -89,7 +90,13 @@ const BASE_CONFIG: AiChatConfig = {
     ignoreBots: true,
     botNickPatterns: ['*bot', '*Bot', '*BOT'],
   },
-  output: { maxLines: 4, maxLineLength: 440, interLineDelayMs: 0, stripUrls: false },
+  output: {
+    maxLines: 4,
+    maxLineLength: 440,
+    interLineDelayMs: 0,
+    stripUrls: false,
+    promptLeakThreshold: 80,
+  },
   input: { maxPromptChars: 2000, maxInflight: 4 },
   ambient: {
     enabled: false,
@@ -116,7 +123,12 @@ const BASE_CONFIG: AiChatConfig = {
     keepAlive: '30m',
     numCtx: 4096,
     allowPrivateUrl: false,
+    repeatPenalty: 0,
+    repeatLastN: 0,
+    stop: [],
   },
+  dropInlineNickPrefix: false,
+  defensiveVolatileHeader: false,
 };
 
 const BASE_CHARACTER: Character = {
@@ -596,6 +608,62 @@ describe('runPipeline result-status branches', () => {
     expect(ctx.reply).not.toHaveBeenCalled();
   });
 
+  it("'prompt_leaked' logs a warn with overlap size + preview and does not reply", async () => {
+    respondMock.mockResolvedValue({
+      status: 'prompt_leaked',
+      overlap: 95,
+      preview: 'You are a regular channel user, not an operator.',
+    });
+    const warn = vi.fn();
+    const api = createMockPluginAPI({ warn });
+    const ctx = makeCtx();
+    const deps = makeDeps();
+    await runPipeline(api, BASE_CONFIG, deps, ctx, 'hi', 'hexbot', 'irc.test', 'address');
+    expect(warn).toHaveBeenCalledTimes(1);
+    const msg = warn.mock.calls[0][0] as string;
+    expect(msg).toContain('prompt_leaked');
+    expect(msg).toContain('overlap=95');
+    expect(msg).toContain('regular channel user');
+    expect(ctx.reply).not.toHaveBeenCalled();
+  });
+
+  it('small-tier strips fabricated speaker prefixes before storing the bot reply in context', async () => {
+    respondMock.mockResolvedValue({
+      status: 'ok',
+      lines: ['alice: here is my response'],
+      tokensIn: 10,
+      tokensOut: 5,
+    });
+    const api = createMockPluginAPI();
+    const ctx = makeCtx();
+    const deps = makeDeps();
+    const addMessage = vi.spyOn(deps.contextManager as ContextManager, 'addMessage');
+    // Small tier: stored reply is just styled[0] with speaker prefix stripped.
+    const smallCfg = { ...BASE_CONFIG, modelClass: 'small' as const };
+    await runPipeline(api, smallCfg, deps, ctx, 'hi', 'hexbot', 'irc.test', 'address');
+    // Last addMessage call is the bot reply; text should have lost 'alice: '.
+    const botCall = addMessage.mock.calls.find((c) => c[3] === true);
+    expect(botCall).toBeDefined();
+    expect(botCall![2]).toBe('here is my response');
+  });
+
+  it('strips angle-bracket speaker prefixes from stored bot reply on medium tier', async () => {
+    respondMock.mockResolvedValue({
+      status: 'ok',
+      lines: ['<bob> something'],
+      tokensIn: 10,
+      tokensOut: 5,
+    });
+    const api = createMockPluginAPI();
+    const ctx = makeCtx();
+    const deps = makeDeps();
+    const addMessage = vi.spyOn(deps.contextManager as ContextManager, 'addMessage');
+    await runPipeline(api, BASE_CONFIG, deps, ctx, 'hi', 'hexbot', 'irc.test', 'address');
+    const botCall = addMessage.mock.calls.find((c) => c[3] === true);
+    expect(botCall).toBeDefined();
+    expect(botCall![2]).toBe('something');
+  });
+
   it("'ok' applies character style, records context, engagement, social, and sends gated lines", async () => {
     respondMock.mockResolvedValue({
       status: 'ok',
@@ -767,6 +835,18 @@ describe('runSessionPipeline bail-outs', () => {
     await runSessionPipeline(api, BASE_CONFIG, deps, ctx, 'go', 'hexbot', 'irc.test');
     expect(ctx.reply).not.toHaveBeenCalled();
     // Provider must not have been called.
+    expect((deps.provider as AIProvider).complete).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized session text with a private notice and does not call the provider', async () => {
+    const api = createMockPluginAPI();
+    const ctx = makeCtx();
+    const deps = makeDeps();
+    const oversized = 'a'.repeat(BASE_CONFIG.input.maxPromptChars + 1);
+    await runSessionPipeline(api, BASE_CONFIG, deps, ctx, oversized, 'hexbot', 'irc.test');
+    expect(ctx.replyPrivate).toHaveBeenCalledTimes(1);
+    const msg = (ctx.replyPrivate as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(msg).toContain('Message too long');
     expect((deps.provider as AIProvider).complete).not.toHaveBeenCalled();
   });
 });

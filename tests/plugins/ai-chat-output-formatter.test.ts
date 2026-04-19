@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatResponse, isFantasyLine } from '../../plugins/ai-chat/output-formatter';
+import {
+  detectPromptEcho,
+  formatResponse,
+  isFantasyLine,
+} from '../../plugins/ai-chat/output-formatter';
 
 describe('formatResponse', () => {
   it('returns empty array for empty input', () => {
@@ -280,5 +284,59 @@ describe('formatResponse', () => {
       expect(byteLen(lines[lines.length - 1])).toBeLessThanOrEqual(30);
       expect(lines[lines.length - 1].endsWith('…')).toBe(true);
     });
+  });
+});
+
+describe('detectPromptEcho', () => {
+  const SYS =
+    'You are a regular channel user, not an operator. You do not know IRC operator commands, ' +
+    'services syntax, channel mode letters, ban mask formats, or network admin procedures.';
+
+  it('returns null when threshold is 0 (detector disabled)', () => {
+    expect(detectPromptEcho('anything', SYS, 0)).toBeNull();
+  });
+
+  it('returns null when the output is shorter than the threshold', () => {
+    expect(detectPromptEcho('too short', SYS, 60)).toBeNull();
+  });
+
+  it('returns null when the system prompt is shorter than the threshold', () => {
+    expect(detectPromptEcho('some output'.repeat(10), 'tiny', 60)).toBeNull();
+  });
+
+  it('returns null when output has no contiguous overlap with system prompt', () => {
+    expect(
+      detectPromptEcho(
+        'The quick brown fox jumped over the lazy dog in the middle of town today.',
+        SYS,
+        60,
+      ),
+    ).toBeNull();
+  });
+
+  it('detects a verbatim chunk of the system prompt in the output', () => {
+    const leaked = 'Preamble. You are a regular channel user, not an operator. You do not know IRC';
+    const match = detectPromptEcho(leaked, SYS, 60);
+    expect(match).not.toBeNull();
+    expect(match!.length).toBeGreaterThanOrEqual(60);
+  });
+
+  it('normalises whitespace differences — multiple spaces, tabs, newlines collapse', () => {
+    const leaked =
+      'Preamble. You are a regular   channel\tuser,\n\nnot an operator. You do not know IRC';
+    const match = detectPromptEcho(leaked, SYS, 60);
+    expect(match).not.toBeNull();
+  });
+
+  it('caps the preview slice at 200 characters', () => {
+    const echo = SYS.slice(0, 180);
+    const match = detectPromptEcho(echo.repeat(2), SYS, 60);
+    expect(match).not.toBeNull();
+    expect(match!.length).toBeLessThanOrEqual(200);
+  });
+
+  it('returns null when post-normalisation lengths fall below threshold', () => {
+    // 70 spaces collapses to 1 — normalised length drops below the threshold.
+    expect(detectPromptEcho(' '.repeat(70), SYS, 60)).toBeNull();
   });
 });

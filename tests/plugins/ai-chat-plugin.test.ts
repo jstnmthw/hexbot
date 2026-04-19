@@ -357,6 +357,7 @@ describe('shouldRespond logic', () => {
     provider: 'gemini',
     apiKey: '',
     model: 'test-model',
+    modelClass: 'medium' as const,
     temperature: 0.9,
     maxOutputTokens: 256,
     character: 'friendly',
@@ -397,7 +398,13 @@ describe('shouldRespond logic', () => {
       ignoreBots: true,
       botNickPatterns: ['*bot', '*Bot', '*BOT'],
     },
-    output: { maxLines: 4, maxLineLength: 440, interLineDelayMs: 0, stripUrls: false },
+    output: {
+      maxLines: 4,
+      maxLineLength: 440,
+      interLineDelayMs: 0,
+      stripUrls: false,
+      promptLeakThreshold: 80,
+    },
     input: { maxPromptChars: 2000, maxInflight: 4 },
     ambient: {
       enabled: false,
@@ -422,7 +429,12 @@ describe('shouldRespond logic', () => {
       keepAlive: '30m',
       numCtx: 4096,
       allowPrivateUrl: false,
+      repeatPenalty: 0,
+      repeatLastN: 0,
+      stop: [],
     },
+    dropInlineNickPrefix: false,
+    defensiveVolatileHeader: false,
   };
 
   const baseCtx = {

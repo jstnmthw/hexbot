@@ -31,7 +31,7 @@ import {
   runSessionPipeline,
 } from './pipeline';
 import { createResilientProvider } from './providers';
-import type { AIProvider } from './providers/types';
+import type { AIProvider, SamplingOptions } from './providers/types';
 import { RateLimiter } from './rate-limiter';
 import { type SocialSnapshot, decideReply } from './reply-policy';
 import { sendLinesGated } from './sender';
@@ -147,6 +147,23 @@ function noticeOpsRateLimited(api: PluginAPI, channel: string | null, detail: st
   api.debug(
     `op-notice rate_limit ch=${channel} ops=${ops.length} (${ops.map((u) => u.nick).join(',')})`,
   );
+}
+
+/**
+ * Translate a character's generation block into SamplingOptions for the
+ * ambient-path respond() call. Mirrors `buildSamplingOptions` in
+ * pipeline.ts — kept local to avoid a cross-module import for a two-line
+ * helper, and because ambient may diverge later (e.g. override temperature
+ * down for unprompted turns).
+ */
+function buildAmbientSampling(character: Character): SamplingOptions | undefined {
+  const gen = character.generation;
+  if (!gen) return undefined;
+  const out: SamplingOptions = {};
+  if (typeof gen.temperature === 'number') out.temperature = gen.temperature;
+  if (typeof gen.topP === 'number') out.topP = gen.topP;
+  if (typeof gen.repeatPenalty === 'number') out.repeatPenalty = gen.repeatPenalty;
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** Build a SessionIdentity from a handler context for session identity gating. */
@@ -395,6 +412,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
         maxLineLength: cfg.output.maxLineLength,
         interLineDelayMs: cfg.output.interLineDelayMs,
         maxOutputTokens,
+        promptLeakThreshold: cfg.output.promptLeakThreshold,
       };
 
       const promptCtx: PromptContext = {
@@ -416,6 +434,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
           prompt,
           promptContext: promptCtx,
           maxContextMessages: character.generation?.maxContextMessages,
+          sampling: buildAmbientSampling(character),
         },
         {
           provider,
@@ -432,6 +451,11 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
         api.warn(
           `ambient ${kind}: dropped response containing fantasy-prefix line ${result.index}: ` +
             JSON.stringify(result.line.slice(0, 80)),
+        );
+      } else if (result.status === 'prompt_leaked') {
+        api.warn(
+          `ambient ${kind} prompt_leaked channel=${channel} overlap=${result.overlap} ` +
+            `preview=${JSON.stringify(result.preview.slice(0, 80))}`,
         );
       } else if (result.status === 'ok') {
         const styled = applyCharacterStyle(result.lines, {

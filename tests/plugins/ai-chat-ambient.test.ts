@@ -464,3 +464,38 @@ describe('AmbientEngine.getEffectiveChattiness', () => {
     engine.stop();
   });
 });
+
+describe('AmbientEngine unanswered-question "newer than last bot reply" gate', () => {
+  it('skips a question once the bot has already spoken after it', async () => {
+    let now = 1_000_000;
+    const sent: AmbientTriggerKind[] = [];
+    const social = new SocialTracker(null, () => now);
+    const engine = new AmbientEngine(
+      {
+        ...BASE_CONFIG,
+        unansweredQuestions: { enabled: true, waitSeconds: 1 },
+        eventReactions: { joinWb: false, topicChange: false },
+      },
+      social,
+      () => now,
+    );
+    const captureSender: AmbientSender = async (_ch, kind) => {
+      sent.push(kind);
+    };
+    engine.start(captureSender, 999_999);
+    social.onMessage('#c', 'alice', 'anyone know how this works?', false);
+    engine.onChannelActivity('#c');
+    // Bot replied to the question 500ms later — the filter must then drop
+    // the question from the unanswered pool.
+    now += 500;
+    social.onMessage('#c', 'hexbot', 'here is the answer', true);
+    // Advance past waitSeconds + enough to also clear the "lastWasBot"
+    // back-to-back block via a subsequent human message.
+    now += 5_000;
+    social.onMessage('#c', 'dave', 'cool thanks', false);
+    engine.tick();
+    await new Promise((r) => setTimeout(r, 0));
+    engine.stop();
+    expect(sent).not.toContain('unanswered');
+  });
+});

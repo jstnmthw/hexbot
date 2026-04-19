@@ -5,6 +5,7 @@ import {
   type AIProviderConfig,
   AIProviderError,
   type AIResponse,
+  type SamplingOptions,
   isAIProviderError,
 } from './types';
 
@@ -50,13 +51,14 @@ export class ResilientProvider implements AIProvider {
     systemPrompt: string,
     messages: AIMessage[],
     maxTokens: number,
+    sampling?: SamplingOptions,
   ): Promise<AIResponse> {
     this.assertCircuitClosed();
     let backoff = this.config.initialBackoffMs;
 
     for (let attempt = 0; attempt <= this.config.maxRetries; attempt++) {
       try {
-        const res = await this.inner.complete(systemPrompt, messages, maxTokens);
+        const res = await this.inner.complete(systemPrompt, messages, maxTokens, sampling);
         this.recordSuccess();
         return res;
       } catch (err) {

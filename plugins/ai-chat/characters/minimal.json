@@ -28,6 +28,8 @@
 
   "generation": {
     "temperature": 0.7,
+    "topP": 0.9,
+    "repeatPenalty": 1.1,
     "maxOutputTokens": 48,
     "maxContextMessages": 10
   }

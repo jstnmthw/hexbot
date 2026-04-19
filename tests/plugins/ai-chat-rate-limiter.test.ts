@@ -284,4 +284,44 @@ describe('RateLimiter', () => {
       expect(rl.checkAmbient('#chan', now)).toBe(false);
     });
   });
+
+  describe('stale bucket eviction', () => {
+    it('evicts idle+full buckets AND preserves in-use ones when size > 64', () => {
+      const rl = makeLimiter({ userBurst: 3, userRefillSeconds: 12 });
+      // 70 buckets at t=0 — pushes size past the 64 floor.
+      // Drain bucket `victim-inuse` mid-burst so it's NOT full at eviction
+      // time; the eviction loop must skip it (non-match branch of the inner
+      // filter).
+      for (let i = 0; i < 70; i++) {
+        rl.record(`user${i}`, 0);
+      }
+      // Drain an additional token on one bucket so tokens < burst.
+      rl.record('user5', 1);
+      rl.record('user5', 2);
+      rl.record('user5', 3);
+      // Trigger eviction via user0's next record at t=2h.
+      const later = 2 * 3_600_000 + 1;
+      rl.record('user0', later);
+      // Most idle+full buckets were evicted — but user5's state at eviction
+      // time had tokens < burst (not yet refilled in-place), so the loop's
+      // second condition (`b.tokens >= burst`) was false and user5 stayed.
+      // Covers both sides of that branch.
+      for (let i = 1; i < 70; i++) {
+        if (i === 5) continue;
+        expect(rl.check(`user${i}`, later).allowed).toBe(true);
+      }
+    });
+
+    it('skips eviction when bucket size is below the 64 floor', () => {
+      const rl = makeLimiter({ userBurst: 3 });
+      // Small deployment — only 10 buckets. Even after 2h idle + full tokens,
+      // the `size > 64` gate keeps them alive (eviction scan never runs).
+      for (let i = 0; i < 10; i++) rl.record(`user${i}`, 0);
+      const later = 2 * 3_600_000 + 1;
+      rl.record('user0', later);
+      for (let i = 1; i < 10; i++) {
+        expect(rl.check(`user${i}`, later).allowed).toBe(true);
+      }
+    });
+  });
 });

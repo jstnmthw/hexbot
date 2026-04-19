@@ -248,6 +248,39 @@ export function applyCharacterStyle(lines: string[], style: CharacterStyleOption
   return result;
 }
 
+/**
+ * Detect whether `output` contains a contiguous substring of `system` at
+ * least `threshold` bytes long. Used by the prompt-leak dropper to catch
+ * small models that regurgitate chunks of their own system prompt. Returns
+ * the matched substring on first hit (up to 200 chars for logging), or
+ * null when nothing crosses the threshold.
+ *
+ * Implementation is O(|output| × |system|) in the worst case — negligible
+ * given the system prompt is ~2 KB and the output is capped at
+ * `max_line_length × max_lines`. A rolling-hash variant would be faster in
+ * theory, but the extra complexity isn't justified by the workload.
+ */
+export function detectPromptEcho(output: string, system: string, threshold: number): string | null {
+  if (threshold <= 0 || output.length < threshold || system.length < threshold) return null;
+  // Normalise whitespace on both sides — small models often mangle spacing
+  // when echoing, so a literal substring match would miss obvious leaks.
+  const normOut = output.replace(/\s+/g, ' ');
+  const normSys = system.replace(/\s+/g, ' ');
+  if (normOut.length < threshold || normSys.length < threshold) return null;
+  // Walk windows over the output; the first window that appears in the
+  // system prompt is the leak. Step by 1 to keep detection tight — output
+  // is short enough that stride optimisations aren't worth the missed-
+  // alignment risk.
+  for (let i = 0; i + threshold <= normOut.length; i++) {
+    const window = normOut.slice(i, i + threshold);
+    if (normSys.includes(window)) {
+      const end = Math.min(i + 200, normOut.length);
+      return normOut.slice(i, end);
+    }
+  }
+  return null;
+}
+
 /** Optional hook invoked when the entire response is dropped due to a fantasy-prefix line. */
 export type FantasyDropHook = (info: { index: number; line: string }) => void;
 

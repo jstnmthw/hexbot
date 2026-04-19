@@ -5,17 +5,18 @@
 // buildProviderConfig (including the degraded-mode warn paths).
 import { describe, expect, it, vi } from 'vitest';
 
-import { buildProviderConfig, parseConfig } from '../../plugins/ai-chat/config';
+import { buildProviderConfig, inferModelClass, parseConfig } from '../../plugins/ai-chat/config';
 
 describe('parseConfig', () => {
   it('returns a fully-populated config from an empty input', () => {
     const cfg = parseConfig({});
-    // Top-level defaults
+    // Top-level defaults — default model is gemini-2.5-flash-lite → large tier.
     expect(cfg.provider).toBe('gemini');
     expect(cfg.apiKey).toBe('');
     expect(cfg.model).toBe('gemini-2.5-flash-lite');
+    expect(cfg.modelClass).toBe('large');
     expect(cfg.temperature).toBe(0.9);
-    expect(cfg.maxOutputTokens).toBe(256);
+    expect(cfg.maxOutputTokens).toBe(512);
     expect(cfg.character).toBe('friendly');
     expect(cfg.charactersDir).toBe('characters');
     expect(cfg.channelCharacters).toEqual({});
@@ -127,6 +128,8 @@ describe('parseConfig', () => {
       maxLineLength: 320,
       interLineDelayMs: 1000,
       stripUrls: true,
+      // Tier default for large (default model is gemini-2.5-flash-lite).
+      promptLeakThreshold: 100,
     });
   });
 
@@ -225,6 +228,10 @@ describe('parseConfig', () => {
       keepAlive: '1h',
       numCtx: 8192,
       allowPrivateUrl: false,
+      // Large tier defaults (no model_class override, default model = Gemini).
+      repeatPenalty: 0,
+      repeatLastN: 0,
+      stop: [],
     });
   });
 
@@ -234,7 +241,8 @@ describe('parseConfig', () => {
     expect(cfg.ollama.requestTimeoutMs).toBe(60_000);
     expect(cfg.ollama.useServerTokenizer).toBe(false);
     expect(cfg.ollama.keepAlive).toBe('30m');
-    expect(cfg.ollama.numCtx).toBe(4096);
+    // Default model is gemini-2.5-flash-lite → large tier → numCtx=8192.
+    expect(cfg.ollama.numCtx).toBe(8192);
     // Defaults to false — SSRF guard is secure-by-default.
     expect(cfg.ollama.allowPrivateUrl).toBe(false);
   });
@@ -286,8 +294,9 @@ describe('parseConfig', () => {
       temperature: Number.NaN,
       max_output_tokens: Number.POSITIVE_INFINITY,
     });
+    // Default model → large tier → temperature 0.9, maxOutputTokens 512.
     expect(cfg.temperature).toBe(0.9);
-    expect(cfg.maxOutputTokens).toBe(256);
+    expect(cfg.maxOutputTokens).toBe(512);
   });
 
   it('rejects non-string values and falls back to defaults', () => {
@@ -406,5 +415,158 @@ describe('buildProviderConfig', () => {
     expect(buildProviderConfig(cfg, warn)).toBeNull();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toContain('Unknown ai-chat provider "cohere"');
+  });
+
+  it('ollama config includes tier-driven sampling options and stop list for small tier', () => {
+    const cfg = parseConfig({
+      provider: 'ollama',
+      model: 'llama3.2:3b-instruct-q4_K_M',
+    });
+    const out = buildProviderConfig(cfg, vi.fn());
+    expect(out).toMatchObject({
+      samplingOptions: { repeat_penalty: 1.15, repeat_last_n: 64 },
+    });
+    // Small-tier stop list is populated from the tier defaults.
+    expect(Array.isArray((out as { stop?: unknown }).stop)).toBe(true);
+    expect((out as { stop: string[] }).stop.length).toBeGreaterThan(0);
+  });
+
+  it('ollama config omits samplingOptions / stop for large tier', () => {
+    const cfg = parseConfig({ provider: 'ollama', model: 'llama3:70b' });
+    const out = buildProviderConfig(cfg, vi.fn()) as unknown as Record<string, unknown>;
+    expect(out.samplingOptions).toEqual({});
+    expect(out.stop).toBeUndefined();
+  });
+});
+
+describe('inferModelClass', () => {
+  it('infers small for 1B/3B local instruct tags', () => {
+    expect(inferModelClass('llama3.2:1b-instruct')).toBe('small');
+    expect(inferModelClass('llama3.2:3b-instruct-q4_K_M')).toBe('small');
+    expect(inferModelClass('gemma3:1b-it')).toBe('small');
+    expect(inferModelClass('qwen2.5:3b-instruct')).toBe('small');
+    expect(inferModelClass('phi3:mini')).toBe('small');
+    expect(inferModelClass('smollm3:3b')).toBe('small');
+  });
+
+  it('infers medium for 7-8B local instruct families', () => {
+    expect(inferModelClass('llama3:8b-instruct-q4_K_M')).toBe('medium');
+    expect(inferModelClass('mistral:7b')).toBe('medium');
+    expect(inferModelClass('mixtral:8x7b')).toBe('medium');
+  });
+
+  it('infers large for hosted APIs and 70B locals', () => {
+    expect(inferModelClass('gemini-2.5-flash-lite')).toBe('large');
+    expect(inferModelClass('claude-opus-4-7')).toBe('large');
+    expect(inferModelClass('gpt-4o')).toBe('large');
+    expect(inferModelClass('o1-preview')).toBe('large');
+    expect(inferModelClass('llama3:70b')).toBe('large');
+  });
+
+  it('falls back to medium for unknown models and empty strings', () => {
+    expect(inferModelClass('some-random-thing')).toBe('medium');
+    expect(inferModelClass('')).toBe('medium');
+  });
+});
+
+describe('parseConfig model_class', () => {
+  it('auto-infers small from a 3b ollama tag and applies small-tier defaults', () => {
+    const cfg = parseConfig({ model: 'llama3.2:3b-instruct-q4_K_M' });
+    expect(cfg.modelClass).toBe('small');
+    expect(cfg.temperature).toBe(0.7);
+    expect(cfg.maxOutputTokens).toBe(80);
+    expect(cfg.context.maxMessages).toBe(5);
+    expect(cfg.context.maxTokens).toBe(1000);
+    expect(cfg.output.maxLines).toBe(1);
+    expect(cfg.output.promptLeakThreshold).toBe(60);
+    expect(cfg.ollama.numCtx).toBe(4096);
+    expect(cfg.ollama.repeatPenalty).toBe(1.15);
+    expect(cfg.ollama.repeatLastN).toBe(64);
+    expect(cfg.ollama.stop.length).toBeGreaterThan(0);
+    expect(cfg.engagement.softTimeoutMs).toBe(2 * 60_000);
+    expect(cfg.engagement.hardCeilingMs).toBe(5 * 60_000);
+    expect(cfg.dropInlineNickPrefix).toBe(true);
+    expect(cfg.defensiveVolatileHeader).toBe(true);
+  });
+
+  it('auto-infers medium from an 8b ollama tag and applies medium-tier defaults', () => {
+    const cfg = parseConfig({ model: 'llama3:8b-instruct-q4_K_M' });
+    expect(cfg.modelClass).toBe('medium');
+    expect(cfg.temperature).toBe(0.8);
+    expect(cfg.maxOutputTokens).toBe(256);
+    expect(cfg.context.maxMessages).toBe(25);
+    expect(cfg.output.maxLines).toBe(4);
+    expect(cfg.output.promptLeakThreshold).toBe(80);
+    expect(cfg.ollama.numCtx).toBe(8192);
+    expect(cfg.dropInlineNickPrefix).toBe(false);
+    expect(cfg.defensiveVolatileHeader).toBe(false);
+  });
+
+  it('honours explicit model_class over name-inferred tier', () => {
+    const cfg = parseConfig({ model: 'gemini-2.5-flash-lite', model_class: 'small' });
+    expect(cfg.modelClass).toBe('small');
+    expect(cfg.maxOutputTokens).toBe(80);
+    expect(cfg.output.maxLines).toBe(1);
+  });
+
+  it('ignores invalid model_class and falls back to name inference', () => {
+    const cfg = parseConfig({ model: 'gemini-2.5-flash-lite', model_class: 'xxl' });
+    expect(cfg.modelClass).toBe('large');
+  });
+
+  it('operator-set keys always win over tier defaults', () => {
+    const cfg = parseConfig({
+      model: 'llama3.2:3b-instruct-q4_K_M',
+      temperature: 0.5,
+      max_output_tokens: 200,
+      context: { max_messages: 7, max_tokens: 1500 },
+      output: { max_lines: 3, prompt_leak_threshold: 40 },
+      engagement: { soft_timeout_minutes: 4, hard_ceiling_minutes: 9 },
+      ollama: { num_ctx: 2048, repeat_penalty: 1.2, repeat_last_n: 32 },
+      drop_inline_nick_prefix: false,
+      defensive_volatile_header: false,
+    });
+    expect(cfg.temperature).toBe(0.5);
+    expect(cfg.maxOutputTokens).toBe(200);
+    expect(cfg.context.maxMessages).toBe(7);
+    expect(cfg.context.maxTokens).toBe(1500);
+    expect(cfg.output.maxLines).toBe(3);
+    expect(cfg.output.promptLeakThreshold).toBe(40);
+    expect(cfg.engagement.softTimeoutMs).toBe(4 * 60_000);
+    expect(cfg.engagement.hardCeilingMs).toBe(9 * 60_000);
+    expect(cfg.ollama.numCtx).toBe(2048);
+    expect(cfg.ollama.repeatPenalty).toBe(1.2);
+    expect(cfg.ollama.repeatLastN).toBe(32);
+    expect(cfg.dropInlineNickPrefix).toBe(false);
+    expect(cfg.defensiveVolatileHeader).toBe(false);
+  });
+
+  it('ambient.enabled is force-disabled on the small tier even when operator sets true', () => {
+    const cfg = parseConfig({
+      model: 'llama3.2:3b-instruct-q4_K_M',
+      ambient: { enabled: true },
+    });
+    expect(cfg.ambient.enabled).toBe(false);
+  });
+
+  it('operator-supplied ollama.stop entries merge with tier defaults, capped at 10', () => {
+    const many = Array.from({ length: 20 }, (_, i) => `<custom-${i}>`);
+    const cfg = parseConfig({
+      model: 'llama3.2:3b-instruct-q4_K_M',
+      ollama: { stop: many },
+    });
+    expect(cfg.ollama.stop.length).toBe(10);
+    // Tier defaults come first, so the first entry is a tier stop.
+    expect(cfg.ollama.stop[0]).toBe('\n## ');
+  });
+
+  it('dedupes operator stop entries that duplicate tier defaults', () => {
+    const cfg = parseConfig({
+      model: 'llama3.2:3b-instruct-q4_K_M',
+      ollama: { stop: ['\n## ', '<custom>'] },
+    });
+    // Duplicate tier entry is dropped; custom entry is appended.
+    expect(cfg.ollama.stop.filter((s) => s === '\n## ').length).toBe(1);
+    expect(cfg.ollama.stop).toContain('<custom>');
   });
 });

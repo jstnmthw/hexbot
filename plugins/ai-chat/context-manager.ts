@@ -127,26 +127,56 @@ export class ContextManager {
 
   /**
    * Build the AI-facing messages array for a channel.
-   * The oldest messages are dropped until the serialized length fits the token budget.
+   *
+   * @param channel        — channel to pull history from (null for PMs, which are disabled)
+   * @param _nick          — current speaker (unused today; reserved for per-nick filtering)
+   * @param maxMessages    — optional per-character message cap. Applied as a
+   *   bulk-prune threshold: when the buffer exceeds `maxMessages × 1.5`, it's
+   *   pruned down to `maxMessages` in one step, then held stable until the
+   *   next overflow. This preserves the byte-stable history prefix that
+   *   llama.cpp KV-cache and Gemini implicit cache rely on. A plain
+   *   `slice(-N)` at the call site would shift the included window by one
+   *   message every turn once `buffer.length > N` — 100% cache-miss rate.
+   * @param options        — per-call formatting options. `dropNickPrefix` omits
+   *   the `nick: ` prose prefix on user entries so small local models can't
+   *   mirror the pattern back as fabricated speaker turns.
    */
-  getContext(channel: string | null, _nick: string): AIMessage[] {
+  getContext(
+    channel: string | null,
+    _nick: string,
+    maxMessages?: number,
+    options?: { dropNickPrefix?: boolean },
+  ): AIMessage[] {
     if (channel === null) return []; // PM removed
     const key = channel.toLowerCase();
     const buf = this.pruneAndGet(key);
     if (buf.length === 0) return [];
 
+    // Bulk-prune to the per-character cap: only when we're significantly over
+    // the cap (1.5×), prune down to exactly the cap. Between prunes the
+    // buffer stays byte-stable, so every turn reuses the same prefix.
+    if (maxMessages !== undefined && maxMessages > 0 && buf.length > maxMessages * 1.5) {
+      buf.splice(0, buf.length - maxMessages);
+    }
+
     // Build messages newest-first, then reverse — lets us stop as soon as we exceed budget.
     const maxChars = this.config.maxTokens * CHARS_PER_TOKEN;
     const messages: AIMessage[] = [];
     let chars = 0;
-    for (let i = buf.length - 1; i >= 0; i--) {
+    const effectiveCap = maxMessages !== undefined && maxMessages > 0 ? maxMessages : buf.length;
+    let included = 0;
+    for (let i = buf.length - 1; i >= 0 && included < effectiveCap; i--) {
       const e = buf[i];
-      // `nick: text` prose prefix rather than `[nick] text` — small local
-      // models (llama3 family) mirror the bracket pattern into their output.
-      const content = e.isBot ? e.text : `${e.nick}: ${e.text}`;
+      // `nick: text` prose prefix by default — small local models (llama3
+      // family) mirror the bracket pattern into their output, but medium-
+      // and large-class models benefit from the inline attribution. On
+      // small-class deployments the caller sets `dropNickPrefix: true` and
+      // we rely on the volatile header to carry the speaker identity.
+      const content = e.isBot || options?.dropNickPrefix ? e.text : `${e.nick}: ${e.text}`;
       if (chars + content.length > maxChars && messages.length > 0) break;
       messages.push({ role: e.isBot ? 'assistant' : 'user', content });
       chars += content.length;
+      included++;
     }
     return messages.reverse();
   }
@@ -159,6 +189,29 @@ export class ContextManager {
   /** Return the number of messages currently buffered for a channel. */
   size(channel: string): number {
     return this.channels.get(channel.toLowerCase())?.length ?? 0;
+  }
+
+  /**
+   * Return the N most-recent distinct non-bot speakers in a channel, newest
+   * first. Used to surface speaker attribution in the volatile header for
+   * `model_class: "small"` deployments where the inline `nick: ` prefix has
+   * been stripped from history.
+   */
+  recentSpeakers(channel: string, n: number, excludeNick?: string): string[] {
+    const buf = this.channels.get(channel.toLowerCase());
+    if (!buf) return [];
+    const exclude = excludeNick?.toLowerCase();
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (let i = buf.length - 1; i >= 0 && out.length < n; i--) {
+      const e = buf[i];
+      if (e.isBot) continue;
+      const key = e.nick.toLowerCase();
+      if (seen.has(key) || key === exclude) continue;
+      seen.add(key);
+      out.push(e.nick);
+    }
+    return out;
   }
 
   /** Evict entries older than the configured TTL (idempotent). */

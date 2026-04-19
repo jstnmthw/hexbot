@@ -8,6 +8,20 @@ export interface AIMessage {
   content: string;
 }
 
+/**
+ * Per-call sampling overrides. All fields optional; unset fields fall back
+ * to the provider's init-time defaults. Used to thread per-character
+ * generation settings into a single `complete()` call without re-initialising
+ * the provider.
+ */
+export interface SamplingOptions {
+  temperature?: number;
+  topP?: number;
+  repeatPenalty?: number;
+  /** Stop sequences. Overrides the init-time stop list when provided. */
+  stop?: string[];
+}
+
 /** Token usage reported after a completion. */
 export interface TokenUsage {
   input: number;
@@ -34,6 +48,13 @@ export interface AIProviderConfig {
   requestTimeoutMs?: number;
   /** Extra sampling options passed through to the provider. Free-form; each provider pulls what it understands. */
   samplingOptions?: Record<string, number | string | boolean>;
+  /**
+   * Stop sequences. llama.cpp-family providers pass these as `options.stop`;
+   * hosted providers ignore. On hit, generation terminates mid-token — the
+   * cheapest prompt-echo / speaker-fabrication defence available. Cap ~10
+   * entries (llama.cpp stop-list bugs at larger sizes).
+   */
+  stop?: string[];
   /** Ollama-only: use the server's /api/tokenize endpoint instead of a length heuristic. */
   useServerTokenizer?: boolean;
   /**
@@ -77,8 +98,15 @@ export interface AIProvider {
    * @param systemPrompt  — persona/instructions prepended to the conversation
    * @param messages      — conversation history (ordered, includes the latest user turn)
    * @param maxTokens     — upper bound on output tokens for this call
+   * @param sampling      — optional per-call sampling overrides (per-character
+   *                        temperature, topP, repeatPenalty, stop list)
    */
-  complete(systemPrompt: string, messages: AIMessage[], maxTokens: number): Promise<AIResponse>;
+  complete(
+    systemPrompt: string,
+    messages: AIMessage[],
+    maxTokens: number,
+    sampling?: SamplingOptions,
+  ): Promise<AIResponse>;
 
   /** Count tokens for the given text using the provider's tokenizer. */
   countTokens(text: string): Promise<number>;

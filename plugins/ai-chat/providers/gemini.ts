@@ -14,6 +14,7 @@ import {
   type AIProviderConfig,
   AIProviderError,
   type AIResponse,
+  type SamplingOptions,
 } from './types';
 
 /**
@@ -54,12 +55,22 @@ export class GeminiProvider implements AIProvider {
     systemPrompt: string,
     messages: AIMessage[],
     maxTokens: number,
+    sampling?: SamplingOptions,
   ): Promise<AIResponse> {
     if (!this.model) throw new AIProviderError('Gemini provider not initialized', 'other');
 
     const contents = toGeminiContents(messages);
     if (contents.length === 0) {
       throw new AIProviderError('No messages to send to Gemini', 'other');
+    }
+
+    const generationConfig: Record<string, unknown> = {
+      temperature: sampling?.temperature ?? this.temperature,
+      maxOutputTokens: maxTokens,
+    };
+    if (sampling?.topP !== undefined) generationConfig.topP = sampling.topP;
+    if (sampling?.stop && sampling.stop.length > 0) {
+      generationConfig.stopSequences = sampling.stop.slice(0, 5);
     }
 
     try {
@@ -69,10 +80,7 @@ export class GeminiProvider implements AIProvider {
           systemInstruction: systemPrompt
             ? { role: 'system', parts: [{ text: systemPrompt }] }
             : undefined,
-          generationConfig: {
-            temperature: this.temperature,
-            maxOutputTokens: maxTokens,
-          },
+          generationConfig,
         }),
         GEMINI_REQUEST_TIMEOUT_MS,
       );

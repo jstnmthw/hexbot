@@ -27,7 +27,12 @@ import type { IterStats } from './iter-stats';
 import type { MoodEngine } from './mood';
 import { applyCharacterStyle, formatResponse } from './output-formatter';
 import { isFounderPostGate, postGateFor } from './permission-gates';
-import { type AIMessage, type AIProvider, isAIProviderError } from './providers/types';
+import {
+  type AIMessage,
+  type AIProvider,
+  type SamplingOptions,
+  isAIProviderError,
+} from './providers/types';
 import type { RateLimiter } from './rate-limiter';
 import type { ReplyDecision } from './reply-policy';
 import { sendLinesGated } from './sender';
@@ -82,6 +87,36 @@ export function renderChannelProfile(
   if (profile.role) parts.push(`Your role is ${profile.role}.`);
   if (profile.depth) parts.push(`Answer with ${profile.depth} depth.`);
   return parts.length > 0 ? parts.join(' ') : undefined;
+}
+
+/**
+ * Strip a leading `nick:` (or `<nick>` / `[nick]`) speaker prefix from a
+ * bot-reply line before it's persisted to context. Small models occasionally
+ * slip a fabricated speaker prefix past the stop-sequence defence — storing
+ * it as an assistant turn would then read as a template to repeat, so this
+ * normalises the stored form. Matches only IRC-valid nick characters so we
+ * don't eat words followed by a colon ("hey: look at this").
+ */
+function stripSpeakerPrefix(line: string): string {
+  return line.replace(/^[A-Za-z0-9_`{}[\]\\^|-]{1,30}:\s+/, '').replace(/^<[^>]{1,30}>\s*/, '');
+}
+
+/**
+ * Translate a character's `generation` block into a per-call SamplingOptions.
+ * Only fields the character explicitly set are carried through — unset
+ * fields fall back to the provider's init-time defaults (which themselves
+ * come from `model_class`). Returns undefined when the character supplies
+ * no sampling fields, so the provider's default path is preserved
+ * byte-for-byte (no KV-cache invalidation from a redundant empty object).
+ */
+function buildSamplingOptions(character: Character): SamplingOptions | undefined {
+  const gen = character.generation;
+  if (!gen) return undefined;
+  const out: SamplingOptions = {};
+  if (typeof gen.temperature === 'number') out.temperature = gen.temperature;
+  if (typeof gen.topP === 'number') out.topP = gen.topP;
+  if (typeof gen.repeatPenalty === 'number') out.repeatPenalty = gen.repeatPenalty;
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** Recency window for the rolled-reply boost — 15 minutes. */
@@ -176,6 +211,7 @@ export async function runPipeline(
 
   // Apply per-character generation overrides
   const maxOutputTokens = character.generation?.maxOutputTokens ?? cfg.maxOutputTokens;
+  const sampling = buildSamplingOptions(character);
 
   // Apply mood verbosity multiplier to maxLines
   const moodMultiplier = moodEngine?.getVerbosityMultiplier() ?? 1;
@@ -186,10 +222,19 @@ export async function runPipeline(
     maxLineLength: cfg.output.maxLineLength,
     interLineDelayMs: cfg.output.interLineDelayMs,
     maxOutputTokens,
+    promptLeakThreshold: cfg.output.promptLeakThreshold,
   };
 
   // Notify mood engine of the interaction
   moodEngine?.onInteraction();
+
+  // For small-model deployments the history strips `nick: ` prefixes, so
+  // speaker attribution rides on the volatile header instead. Medium/large
+  // tiers keep inline attribution and don't need the recent-speakers hint.
+  const recentSpeakers =
+    cfg.dropInlineNickPrefix && ctx.channel
+      ? (contextManager.recentSpeakers(ctx.channel, 3, ctx.nick) ?? undefined)
+      : undefined;
 
   const promptCtx: PromptContext = {
     botNick,
@@ -202,6 +247,8 @@ export async function runPipeline(
     styleNotes: character.style.notes,
     avoids: character.avoids,
     speaker: ctx.nick,
+    recentSpeakers,
+    defensiveGuard: cfg.defensiveVolatileHeader,
   };
 
   // Use per-character context window if specified
@@ -214,6 +261,8 @@ export async function runPipeline(
       promptContext: promptCtx,
       maxContextMessages,
       isAdmin,
+      sampling,
+      dropNickPrefix: cfg.dropInlineNickPrefix,
     },
     {
       provider,
@@ -277,6 +326,12 @@ export async function runPipeline(
           JSON.stringify(result.line.slice(0, 80)),
       );
       return;
+    case 'prompt_leaked':
+      api.warn(
+        `pipeline prompt_leaked ch=${ctx.channel ?? '(none)'} ` +
+          `overlap=${result.overlap} preview=${JSON.stringify(result.preview.slice(0, 80))}`,
+      );
+      return;
     case 'ok': {
       if (isFounderPostGate(api, cfg, ctx.channel, 'pipeline')) return;
       // Apply character style (casing, verbosity enforcement) AFTER
@@ -289,7 +344,19 @@ export async function runPipeline(
         casing: character.style.casing,
         verbosity: character.style.verbosity,
       });
-      contextManager.addMessage(ctx.channel, botNick, styled.join(' '), true);
+      // Persist only the first line when we've told the model to stay
+      // single-voice. Multi-line small-model output is the shape that
+      // produces fabricated `nick: …\n other_nick: …` splats, and even
+      // when the output filter catches the worst, any residual prefix
+      // lines stored as a single assistant turn will be mirrored back in
+      // the next call. Storing just line 1 matches the tier's output cap
+      // and closes that compounding loop. Medium/large keep the full
+      // response as a record of what was said.
+      const stored =
+        cfg.modelClass === 'small'
+          ? stripSpeakerPrefix(styled[0] ?? '')
+          : styled.map(stripSpeakerPrefix).join(' ');
+      contextManager.addMessage(ctx.channel, botNick, stored, true);
       // Record engagement so the user's next messages are treated as
       // continuations. Also record ambient budget tick for rolled replies.
       if (ctx.channel) {

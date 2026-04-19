@@ -173,8 +173,15 @@ export class AmbientEngine {
       if (this.config.unansweredQuestions.enabled && activity !== 'dead') {
         const waitMs = this.config.unansweredQuestions.waitSeconds * 1_000;
         const ready = this.social.getUnansweredQuestions(channelKey, waitMs);
-        if (ready.length > 0) {
-          const q = ready[0];
+        // Drop any question older than the most recent bot reply — the bot
+        // already spoke after it, so it's effectively answered (correctly or
+        // not). Without this, ambient fires on a question the bot has
+        // already addressed a turn ago. See audit persona-master-refactor.
+        const state = this.social.getState(channelKey);
+        const lastBotMsg = state?.lastBotMessage ?? 0;
+        const freshReady = ready.filter((q) => q.at > lastBotMsg);
+        if (freshReady.length > 0) {
+          const q = freshReady[0];
           this.social.consumeQuestion(channelKey, q);
           const safeNick = filterNick(q.nick);
           const who = safeNick ? `<<<${safeNick}>>>` : 'someone';

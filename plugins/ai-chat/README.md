@@ -55,7 +55,17 @@ No key? The plugin loads in degraded mode (every trigger replies with "AI chat i
 
 Ollama keeps every prompt and response on your own hardware. No API key, no per-request quota — only latency and VRAM.
 
-**Requirements:** ~5 GB disk for a quantised 7–8B model, ~8 GB RAM free while it's loaded, and Docker (or a native Ollama install from <https://ollama.com/download>).
+**Requirements:** ~3–5 GB disk for a quantised 3–8B model, 4–8 GB RAM free while it's loaded, and Docker (or a native Ollama install from <https://ollama.com/download>).
+
+**Pick a model tier.** ai-chat auto-infers a `model_class` from the `model` name — `small` for 1B/3B local instructs (leak-defence presets on by default), `medium` for 7–8B, `large` for hosted APIs. Three-tier recommendation for self-hosting:
+
+| Tier                             | Model                         | Disk    | RAM   | Notes                                                              |
+| -------------------------------- | ----------------------------- | ------- | ----- | ------------------------------------------------------------------ |
+| **Tight (2–4 GB RAM free)**      | `gemma3:1b-it`                | ~800 MB | ~2 GB | IFEval-tuned 1B. Best 1B for instruction following.                |
+| **Comfortable (4–8 GB)** ← floor | `llama3.2:3b-instruct-q4_K_M` | ~2 GB   | ~3 GB | Recommended default for self-host. Multi-turn persona work clears. |
+| **Best (8 GB+)**                 | `llama3:8b-instruct-q4_K_M`   | ~5 GB   | ~8 GB | Used to be the default; still excellent if you have the RAM.       |
+
+`llama3.2:1b-instruct` is **experimental** — even with `model_class: small` defences on, expect occasional prompt leaks and speaker fabrication. Run the 3B if RAM allows.
 
 1. Start Ollama and pull a model. The quickest local dev setup is Docker:
 
@@ -65,7 +75,7 @@ Ollama keeps every prompt and response on your own hardware. No API key, no per-
      -v ollama:/root/.ollama \
      -e OLLAMA_KEEP_ALIVE=30m \
      ollama/ollama:0.21.0
-   docker exec ollama ollama pull llama3:8b-instruct-q4_K_M
+   docker exec ollama ollama pull llama3.2:3b-instruct-q4_K_M
    ```
 
    The `127.0.0.1:` prefix keeps the port on loopback — Ollama ships with no auth, so **do not** expose it on a LAN or VPN. Pin a specific tag (above: `0.21.0`) rather than `:latest` to avoid surprise upgrades. For the operator playbook (persistent volumes, log rotation, GPU, model selection) see `docs/plans/ollama-self-hosting.md` and the upstream docs at <https://docs.ollama.com/docker> and <https://docs.ollama.com/faq>.
@@ -77,7 +87,7 @@ Ollama keeps every prompt and response on your own hardware. No API key, no per-
      "ai-chat": {
        "config": {
          "provider": "ollama",
-         "model": "llama3:8b-instruct-q4_K_M",
+         "model": "llama3.2:3b-instruct-q4_K_M",
          "ollama": {
            "base_url": "http://127.0.0.1:11434",
            "request_timeout_ms": 60000,
@@ -87,6 +97,8 @@ Ollama keeps every prompt and response on your own hardware. No API key, no per-
      }
    }
    ```
+
+   The plugin auto-infers `model_class: "medium"` from `llama3.2:3b-instruct-q4_K_M`? No — `3b` belongs to the `small` tier. The resolved defaults (below) then fill in leak-defence presets: single-line output, `80` max tokens, `repeat_penalty: 1.15`, stop sequences, inline `nick:` prefix stripped from history, ambient forced off. Override any field explicitly in config and the tier stays out of your way.
 
 3. Because local inference has no external quota but is latency-bound, raise the rate-limit ceilings so one slow reply doesn't drain the per-user bucket:
 
@@ -298,17 +310,50 @@ Defaults live in `config.json` in this directory. Override per-channel or global
 
 ### Top-level
 
-| Key                  | Type   | Default                   | Description                                                                               |
-| -------------------- | ------ | ------------------------- | ----------------------------------------------------------------------------------------- |
-| `provider`           | string | `"gemini"`                | LLM provider adapter. `gemini` or `ollama`.                                               |
-| `api_key_env`        | string | `"HEX_GEMINI_API_KEY"`    | Env var name holding the provider API key (Gemini only).                                  |
-| `model`              | string | `"gemini-2.5-flash-lite"` | Provider-specific model ID. For Ollama, the tag of a pulled model (e.g. `llama3:8b-...`). |
-| `temperature`        | number | `0.9`                     | Sampling temperature. Lower = more deterministic.                                         |
-| `max_output_tokens`  | number | `256`                     | Hard cap on generated tokens per reply.                                                   |
-| `character`          | string | `"friendly"`              | Default character for channels without an override.                                       |
-| `characters_dir`     | string | `"characters"`            | Directory (relative to plugin) to load character JSON files from.                         |
-| `channel_characters` | object | `{}`                      | Per-channel character override. Value is a name or `{ character, language }`.             |
-| `channel_profiles`   | object | `{}`                      | Per-channel hints appended to the system prompt — see _Channel profiles_.                 |
+| Key                  | Type   | Default                   | Description                                                                                                                                  |
+| -------------------- | ------ | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider`           | string | `"gemini"`                | LLM provider adapter. `gemini` or `ollama`.                                                                                                  |
+| `api_key_env`        | string | `"HEX_GEMINI_API_KEY"`    | Env var name holding the provider API key (Gemini only).                                                                                     |
+| `model`              | string | `"gemini-2.5-flash-lite"` | Provider-specific model ID. For Ollama, the tag of a pulled model (e.g. `llama3.2:3b-…`).                                                    |
+| `model_class`        | string | _inferred_                | Capability tier — `small` / `medium` / `large`. Drives defaults for a dozen knobs (see tier table). Auto-inferred from `model` when omitted. |
+| `temperature`        | number | _tiered_                  | Sampling temperature. Defaults: 0.7 / 0.8 / 0.9 for small / medium / large.                                                                  |
+| `max_output_tokens`  | number | _tiered_                  | Hard cap on generated tokens per reply. Defaults: 80 / 256 / 512.                                                                            |
+| `character`          | string | `"friendly"`              | Default character for channels without an override.                                                                                          |
+| `characters_dir`     | string | `"characters"`            | Directory (relative to plugin) to load character JSON files from.                                                                            |
+| `channel_characters` | object | `{}`                      | Per-channel character override. Value is a name or `{ character, language }`.                                                                |
+| `channel_profiles`   | object | `{}`                      | Per-channel hints appended to the system prompt — see _Channel profiles_.                                                                    |
+
+#### `model_class` — one knob, many defaults
+
+`model_class` is an operator-facing tier that drives defaults for a dozen tunables at once, so you don't have to tune each knob by hand when switching between a hosted API and a 3B local model. Operator-set keys always win — `model_class` only fills in the gaps. Auto-inference patterns match on the `model` string; override with `"model_class": "small"` (or `medium` / `large`) if you don't like the guess.
+
+**Auto-inference:**
+
+- **small** ← `llama3.2:1b`, `llama3.2:3b`, `gemma3:1b`, `qwen2.5:3b`, `phi3:mini`, `smollm3:3b`
+- **medium** ← `llama3:8b`, `mistral:7b`, `mixtral`
+- **large** ← `gemini-…`, `claude-…`, `gpt-…`, `llama3:70b`
+
+**Resolved defaults by tier:**
+
+| Key                                 | small        | medium          | large   |
+| ----------------------------------- | ------------ | --------------- | ------- |
+| `context.max_messages`              | 5            | 25              | 50      |
+| `context.max_tokens`                | 1000         | 2000            | 4000    |
+| `output.max_lines`                  | 1            | 4               | 4       |
+| `output.prompt_leak_threshold`      | 60           | 80              | 100     |
+| `max_output_tokens`                 | 80           | 256             | 512     |
+| `temperature`                       | 0.7          | 0.8             | 0.9     |
+| `ollama.repeat_penalty`             | 1.15         | 1.10            | unset   |
+| `ollama.repeat_last_n`              | 64           | 64              | unset   |
+| `ollama.num_ctx`                    | 4096         | 8192            | 8192    |
+| `ollama.stop[]`                     | full list    | EOS + H2 header | unset   |
+| `ambient.enabled` ceiling           | forced false | honored         | honored |
+| `engagement.soft_timeout_minutes`   | 2            | 10              | 10      |
+| `engagement.hard_ceiling_minutes`   | 5            | 30              | 30      |
+| `drop_inline_nick_prefix` (history) | on           | off             | off     |
+| `defensive_volatile_header`         | on           | off             | off     |
+
+On the `small` tier the plugin hardens the prompt path against small-model pathologies (prompt echo, speaker fabrication, ambient ramble) without you having to learn each knob. On `large` the defaults stay open since hosted APIs don't leak.
 
 ### `triggers`
 
@@ -328,11 +373,13 @@ Defaults live in `config.json` in this directory. Override per-channel or global
 
 ### `context`
 
-| Key            | Type   | Default | Description                                          |
-| -------------- | ------ | ------- | ---------------------------------------------------- |
-| `max_messages` | number | `50`    | Max messages retained per channel context window.    |
-| `max_tokens`   | number | `4000`  | Max tokens of context sent to the model per request. |
-| `ttl_minutes`  | number | `60`    | Idle window after which channel context is evicted.  |
+| Key                 | Type   | Default  | Description                                                                                         |
+| ------------------- | ------ | -------- | --------------------------------------------------------------------------------------------------- |
+| `max_messages`      | number | _tiered_ | Max messages retained per channel context window. Defaults: 5 / 25 / 50 for small / medium / large. |
+| `max_tokens`        | number | _tiered_ | Max tokens of context sent to the model per request. Defaults: 1000 / 2000 / 4000.                  |
+| `ttl_minutes`       | number | `60`     | Idle window after which channel context is evicted.                                                 |
+| `prune_strategy`    | string | `"bulk"` | `bulk` halves the buffer on overflow (cache-friendly); `sliding` drops-oldest-per-turn (legacy).    |
+| `max_message_chars` | number | `1000`   | Per-entry character cap. Longer entries are truncated with a "…".                                   |
 
 ### `rate_limits`
 
@@ -355,12 +402,20 @@ Defaults live in `config.json` in this directory. Override per-channel or global
 
 ### `output`
 
-| Key                   | Type    | Default | Description                                              |
-| --------------------- | ------- | ------- | -------------------------------------------------------- |
-| `max_lines`           | number  | `4`     | Max lines emitted per reply (scaled by mood verbosity).  |
-| `max_line_length`     | number  | `440`   | Max chars per line before truncation/wrapping.           |
-| `inter_line_delay_ms` | number  | `500`   | Delay between lines to feel human and avoid flood kicks. |
-| `strip_urls`          | boolean | `false` | If true, remove URLs from replies before sending.        |
+| Key                     | Type    | Default  | Description                                                                                                                                    |
+| ----------------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `max_lines`             | number  | _tiered_ | Max lines emitted per reply (scaled by mood verbosity). Defaults: 1 / 4 / 4.                                                                   |
+| `max_line_length`       | number  | `440`    | Max chars per line before truncation/wrapping.                                                                                                 |
+| `inter_line_delay_ms`   | number  | `500`    | Delay between lines to feel human and avoid flood kicks.                                                                                       |
+| `strip_urls`            | boolean | `false`  | If true, remove URLs from replies before sending.                                                                                              |
+| `prompt_leak_threshold` | number  | _tiered_ | Minimum bytes of contiguous overlap between model output and system prompt that triggers the echo-drop. `0` disables. Defaults: 60 / 80 / 100. |
+
+### `input`
+
+| Key                | Type   | Default | Description                                                   |
+| ------------------ | ------ | ------- | ------------------------------------------------------------- |
+| `max_prompt_chars` | number | `2000`  | Reject inbound user messages longer than this.                |
+| `max_inflight`     | number | `4`     | Cap on concurrent provider calls; excess requests get "busy". |
 
 ### `permissions`
 
@@ -409,11 +464,17 @@ Defaults live in `config.json` in this directory. Override per-channel or global
 
 Only read when `provider` is `"ollama"`.
 
-| Key                    | Type    | Default                    | Description                                                               |
-| ---------------------- | ------- | -------------------------- | ------------------------------------------------------------------------- |
-| `base_url`             | string  | `"http://127.0.0.1:11434"` | Ollama daemon URL. Keep on loopback — Ollama has no auth.                 |
-| `request_timeout_ms`   | number  | `60000`                    | Abort a generate call after this many ms.                                 |
-| `use_server_tokenizer` | boolean | `false`                    | Call `/api/tokenize` for accurate counts instead of the 4-char heuristic. |
+| Key                    | Type     | Default                    | Description                                                                        |
+| ---------------------- | -------- | -------------------------- | ---------------------------------------------------------------------------------- |
+| `base_url`             | string   | `"http://127.0.0.1:11434"` | Ollama daemon URL. Keep on loopback — Ollama has no auth.                          |
+| `request_timeout_ms`   | number   | `60000`                    | Abort a generate call after this many ms.                                          |
+| `use_server_tokenizer` | boolean  | `false`                    | Call `/api/tokenize` for accurate counts instead of the 4-char heuristic.          |
+| `keep_alive`           | string   | `"30m"`                    | How long Ollama keeps the model resident between requests. Empty = daemon default. |
+| `num_ctx`              | number   | _tiered_                   | Pinned context window size. Defaults: 4096 / 8192 / 8192.                          |
+| `allow_private_url`    | boolean  | `false`                    | Opt-in to private/loopback base_urls. Default-deny SSRF guard.                     |
+| `repeat_penalty`       | number   | _tiered_                   | llama.cpp `repeat_penalty`. Defaults: 1.15 / 1.10 / unset. `0` = unset.            |
+| `repeat_last_n`        | number   | _tiered_                   | llama.cpp `repeat_last_n`. Defaults: 64 / 64 / unset. `0` = unset.                 |
+| `stop`                 | string[] | _tiered_                   | Stop sequences. Operator entries merge on top of the tier list, capped at 10.      |
 
 ### Full example
 
