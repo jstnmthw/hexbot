@@ -72,8 +72,8 @@ export class BotLinkLeaf {
     this.reconnectDelayMs = config.reconnect_delay_ms ?? 5_000;
     this.reconnectMaxDelayMs = config.reconnect_max_delay_ms ?? 60_000;
     this.reconnectDelay = this.reconnectDelayMs;
-    this.pingIntervalMs = config.ping_interval_ms;
-    this.linkTimeoutMs = config.link_timeout_ms;
+    this.pingIntervalMs = config.ping_interval_ms ?? 30_000;
+    this.linkTimeoutMs = config.link_timeout_ms ?? 90_000;
   }
 
   /** Connect to the hub via TCP. */

@@ -149,11 +149,11 @@ export interface DccConfig {
   /** Port range [min, max] inclusive for passive DCC listeners. */
   port_range: [number, number];
   /** Flags required to open a DCC session. Default: "m" */
-  require_flags: string;
+  require_flags?: string;
   /** Maximum concurrent DCC sessions. Default: 5 */
-  max_sessions: number;
+  max_sessions?: number;
   /** Idle timeout in ms before disconnecting. Default: 300000 (5 min) */
-  idle_timeout_ms: number;
+  idle_timeout_ms?: number;
 }
 
 /** Bot-to-bot link settings. */
@@ -170,8 +170,10 @@ export interface BotlinkConfig {
   sync_permissions?: boolean;
   sync_channel_state?: boolean;
   sync_bans?: boolean;
-  ping_interval_ms: number;
-  link_timeout_ms: number;
+  /** How often the hub pings leaves (ms). Default: 30 000. */
+  ping_interval_ms?: number;
+  /** Disconnect leaves that don't respond within this window (ms). Default: 90 000. */
+  link_timeout_ms?: number;
   /** Max auth failures per IP before temporary ban. Default: 5. */
   max_auth_failures?: number;
   /** Sliding window for counting auth failures (ms). Default: 60 000. */

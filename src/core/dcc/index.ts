@@ -1439,7 +1439,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
   /** Verify user has the required DCC flags. Delegates to permissions so owner (n) implies all. */
   private checkUserFlags(nick: string, ctx: HandlerContext, user: UserRecord): boolean {
-    const requiredFlags = this.config.require_flags;
+    const requiredFlags = this.config.require_flags ?? 'm';
     if (this.permissions.checkFlags(requiredFlags, ctx)) return true;
     this.logger?.info(
       `DCC CHAT rejected (insufficient flags) for ${nick}: has="${user.global}" needs="${requiredFlags}"`,
@@ -1450,7 +1450,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
   /** Cap total concurrent sessions. */
   private checkSessionLimit(nick: string): boolean {
-    if (this.sessionStore.size < this.config.max_sessions) return true;
+    if (this.sessionStore.size < (this.config.max_sessions ?? 5)) return true;
     this.client.notice(nick, 'DCC CHAT: request denied.');
     return false;
   }
@@ -1640,7 +1640,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
       hostname: pending.hostname,
       socket,
       commandHandler: this.commandHandler,
-      idleTimeoutMs: this.config.idle_timeout_ms,
+      idleTimeoutMs: this.config.idle_timeout_ms ?? 300_000,
       logger: this.logger,
       consoleFlagStore: this.consoleFlagStore,
     });

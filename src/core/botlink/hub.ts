@@ -114,8 +114,8 @@ export class BotLinkHub {
     this.version = version;
     this.logger = logger?.child('botlink:hub') ?? null;
     this.eventBus = eventBus ?? null;
-    this.pingIntervalMs = config.ping_interval_ms;
-    this.linkTimeoutMs = config.link_timeout_ms;
+    this.pingIntervalMs = config.ping_interval_ms ?? 30_000;
+    this.linkTimeoutMs = config.link_timeout_ms ?? 90_000;
     this.auth = new BotLinkAuthManager(config, this.logger, this.eventBus, db ?? null);
     this.routes = new BotLinkRelayRouter({
       botname: config.botname,

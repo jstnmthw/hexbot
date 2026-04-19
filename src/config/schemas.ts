@@ -104,9 +104,9 @@ const DccConfigSchema = z.strictObject({
   enabled: z.boolean(),
   ip: IPv4DottedQuadSchema,
   port_range: DccPortTupleSchema,
-  require_flags: z.string(),
-  max_sessions: z.number(),
-  idle_timeout_ms: z.number(),
+  require_flags: z.string().optional(),
+  max_sessions: z.number().optional(),
+  idle_timeout_ms: z.number().optional(),
 });
 
 const BotlinkEndpointSchema = z.strictObject({
@@ -127,8 +127,8 @@ const BotlinkConfigOnDiskSchema = z.strictObject({
   sync_permissions: z.boolean().optional(),
   sync_channel_state: z.boolean().optional(),
   sync_bans: z.boolean().optional(),
-  ping_interval_ms: z.number(),
-  link_timeout_ms: z.number(),
+  ping_interval_ms: z.number().optional(),
+  link_timeout_ms: z.number().optional(),
   max_auth_failures: z.number().optional(),
   auth_window_ms: z.number().optional(),
   auth_ban_duration_ms: z.number().optional(),
