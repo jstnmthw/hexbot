@@ -507,6 +507,71 @@ describe('MessageQueue', () => {
   });
 
   // -------------------------------------------------------------------------
+  // flushWithDeadline — netsplit/disconnect best-effort drain
+  // -------------------------------------------------------------------------
+
+  describe('flushWithDeadline()', () => {
+    it('drains every queued message when none of them throw and the deadline is generous', () => {
+      // Real timers so Date.now() advances — the deadline check uses wall clock.
+      vi.useRealTimers();
+      const q = new MessageQueue({ rate: 1, burst: 0 });
+      const sent: number[] = [];
+      for (let i = 0; i < 5; i++) {
+        q.enqueue(T, () => sent.push(i));
+      }
+
+      const drained = q.flushWithDeadline(5_000);
+      expect(drained).toBe(5);
+      expect(sent).toEqual([0, 1, 2, 3, 4]);
+      expect(q.pending).toBe(0);
+      q.stop();
+      vi.useFakeTimers();
+    });
+
+    it('continues past sends that throw (per-message isolation)', () => {
+      // The disconnect-path drain must not abort on a single bad send —
+      // otherwise one failing closure could strand kick/mode commands an
+      // operator queued before the netsplit.
+      vi.useRealTimers();
+      const q = new MessageQueue({ rate: 1, burst: 0 });
+      const sent: string[] = [];
+      q.enqueue(T, () => sent.push('a'));
+      q.enqueue(T, () => {
+        throw new Error('boom');
+      });
+      q.enqueue(T, () => sent.push('c'));
+
+      const drained = q.flushWithDeadline(5_000);
+      expect(drained).toBe(3);
+      expect(sent).toEqual(['a', 'c']);
+      expect(q.pending).toBe(0);
+      q.stop();
+      vi.useFakeTimers();
+    });
+
+    it('returns 0 immediately when the queue is empty', () => {
+      vi.useRealTimers();
+      const q = new MessageQueue({ rate: 1, burst: 0 });
+      expect(q.flushWithDeadline(10)).toBe(0);
+      q.stop();
+      vi.useFakeTimers();
+    });
+
+    it('stops draining once the wall-clock deadline has passed', () => {
+      // Deadline of 0 ms means the loop exits before doing any work — the
+      // bound proves the deadline is honoured even on a backed-up queue.
+      vi.useRealTimers();
+      const q = new MessageQueue({ rate: 1, burst: 0 });
+      for (let i = 0; i < 50; i++) q.enqueue(T, () => {});
+      const drained = q.flushWithDeadline(0);
+      expect(drained).toBe(0);
+      expect(q.pending).toBe(50);
+      q.stop();
+      vi.useFakeTimers();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // TARGMAX surface (§10 Phase 6)
   // -------------------------------------------------------------------------
 

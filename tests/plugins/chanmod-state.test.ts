@@ -1,6 +1,29 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createState, pruneExpiredState } from '../../plugins/chanmod/state';
+import {
+  type ChanmodConfig,
+  createState,
+  pruneExpiredState,
+  readConfig,
+} from '../../plugins/chanmod/state';
+import type { PluginAPI } from '../../src/types';
+
+/**
+ * Build the smallest PluginAPI shim readConfig() touches: api.config (raw
+ * plugin config), api.botConfig.services.type, api.botConfig.chanmod, and
+ * api.log() so we can capture validation warnings.
+ */
+function makeConfigApi(pluginConfig: Record<string, unknown>, logs: string[]): PluginAPI {
+  return {
+    config: pluginConfig,
+    botConfig: {
+      services: { type: 'atheme' },
+      chanmod: { nick_recovery_password: '' },
+    },
+    log: (msg: string) => logs.push(msg),
+    // The rest of PluginAPI is unused by readConfig — cast through unknown.
+  } as unknown as PluginAPI;
+}
 
 describe('chanmod state', () => {
   beforeEach(() => {
@@ -101,6 +124,45 @@ describe('chanmod state', () => {
       state.cycles.clearAll();
       expect(state.cycles.size).toBe(0);
       expect(state.cycles.isLocked('#k')).toBe(false);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // readConfig() validation paths — exercise the cfgString and cfgStringArray
+  // "wrong type" branches so a typo in plugins.json produces a warning and
+  // falls back to the default rather than silently propagating bad data.
+  // -------------------------------------------------------------------------
+
+  describe('readConfig() type validation', () => {
+    it('warns and falls back when a string config is given a non-string', () => {
+      const logs: string[] = [];
+      const api = makeConfigApi({ chanserv_nick: 12345 }, logs);
+      const cfg: ChanmodConfig = readConfig(api);
+      // Default for chanserv_nick is "ChanServ" — fallback should win.
+      expect(cfg.chanserv_nick).toBe('ChanServ');
+      expect(logs.some((m) => m.includes('Invalid chanserv_nick'))).toBe(true);
+      expect(logs.some((m) => m.includes('expected string'))).toBe(true);
+    });
+
+    it('warns and falls back when a string-array config is not an array of strings', () => {
+      const logs: string[] = [];
+      // Mixed-type array: must be rejected by the every(string) guard.
+      const api = makeConfigApi({ op_flags: ['n', 42, 'o'] }, logs);
+      const cfg: ChanmodConfig = readConfig(api);
+      // Default for op_flags is ['n', 'm', 'o'] — fallback should win.
+      expect(cfg.op_flags).toEqual(['n', 'm', 'o']);
+      expect(logs.some((m) => m.includes('Invalid op_flags'))).toBe(true);
+      expect(logs.some((m) => m.includes('expected string[]'))).toBe(true);
+    });
+
+    it('warns once per offending key, not for valid neighbours', () => {
+      const logs: string[] = [];
+      const api = makeConfigApi({ chanserv_nick: { wrong: 'shape' }, op_flags: ['n', 'm'] }, logs);
+      readConfig(api);
+      // Only chanserv_nick should warn — op_flags is a valid string array.
+      const offending = logs.filter((m) => m.includes('Invalid'));
+      expect(offending).toHaveLength(1);
+      expect(offending[0]).toContain('chanserv_nick');
     });
   });
 });

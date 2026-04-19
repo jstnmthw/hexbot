@@ -394,6 +394,39 @@ describe('MemoManager', () => {
       expect(replies[0]).toContain('Usage');
     });
 
+    it('send with invalid nick rejects without contacting MemoServ', async () => {
+      // The nick regex blocks anything outside RFC-1459 nick shape; this
+      // protects the MemoServ command line from injection. The reject path
+      // must short-circuit before any client.say to MemoServ.
+      memo = setupMemo(bot);
+      bot.client.messages.length = 0;
+
+      const replies: string[] = [];
+      // "9bad" starts with a digit (not allowed by RFC-1459 nick start
+      // class), so the regex rejects it and we never call MemoServ.
+      await bot.commandHandler.execute('.memo send 9bad hello there', dccCtx('admin', replies));
+
+      expect(replies).toHaveLength(1);
+      expect(replies[0]).toContain('Invalid nick');
+      const says = bot.client.messages.filter((m) => m.type === 'say');
+      expect(says).toHaveLength(0);
+    });
+
+    it('send with valid nick but only whitespace message → shows usage', async () => {
+      // A nick that passes the regex but is followed by only whitespace must
+      // still re-print usage, not send an empty SEND command to MemoServ.
+      memo = setupMemo(bot);
+      bot.client.messages.length = 0;
+
+      const replies: string[] = [];
+      await bot.commandHandler.execute('.memo send d3m0n    ', dccCtx('admin', replies));
+
+      expect(replies).toHaveLength(1);
+      expect(replies[0]).toContain('Usage');
+      const says = bot.client.messages.filter((m) => m.type === 'say');
+      expect(says).toHaveLength(0);
+    });
+
     it('info → sends /msg MemoServ INFO', async () => {
       memo = setupMemo(bot);
       bot.client.messages.length = 0;

@@ -542,7 +542,18 @@ describe('rss plugin — integration', () => {
 
     // Force interval elapsed
     db.set('rss', 'rss:last_poll:capfeed', new Date(Date.now() - 120_000).toISOString());
-    await api._fireTime('60');
+
+    // announceItems sleeps 500ms between items. With real timers this test
+    // cost ~500ms; fake the timer subset so it returns immediately while
+    // leaving Date and queueMicrotask alone (other rss code reads them).
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const polled = api._fireTime('60');
+      await vi.runAllTimersAsync();
+      await polled;
+    } finally {
+      vi.useRealTimers();
+    }
 
     // Only 2 should be marked seen (max_per_poll: 2)
     const seen = db.list('rss', 'rss:seen:capfeed:');
@@ -894,7 +905,17 @@ describe('rss plugin — integration', () => {
       ];
       mockParseURL.mockResolvedValue({ items: newItems });
 
-      await dispatchRss('check testfeed');
+      // announceItems sleeps 500ms between items via setTimeout. Fake just
+      // the timer subset so the drip resolves immediately without slowing
+      // the suite (Date and microtasks stay real for the rest of the path).
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const dispatched = dispatchRss('check testfeed');
+        await vi.runAllTimersAsync();
+        await dispatched;
+      } finally {
+        vi.useRealTimers();
+      }
 
       // Should have announced both new items to #test
       expect(api._says.length).toBe(2);

@@ -252,18 +252,9 @@ describe('IRCBridge', () => {
       dispatcher.unbindAll('test');
     });
 
-    it('should track bot nick changes', () => {
-      client.simulateEvent('nick', {
-        nick: 'testbot',
-        new_nick: 'testbot_',
-        ident: 'bot',
-        hostname: 'localhost',
-      });
-
-      // setBotNick is called internally — verify by triggering another event
-      // where botNick matters (the bridge stores it)
-      expect(true).toBe(true); // Nick tracking is internal
-    });
+    // Bot-nick tracking on inbound `nick` events is covered observably by
+    // the dedicated `describe('setBotNick')` block below — it asserts that
+    // a subsequent nick change for the new bot nick is recognised.
   });
 
   describe('mode events', () => {

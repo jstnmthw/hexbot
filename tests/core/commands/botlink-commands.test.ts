@@ -11,6 +11,13 @@ import { BotDatabase } from '../../../src/database';
 import type { BotlinkConfig } from '../../../src/types';
 import { createMockSocket, parseWritten, pushFrame } from '../../helpers/mock-socket';
 
+// scrypt is intentionally slow (~10-50ms per call). The same plaintext
+// `'secret'` is used in every test that exercises a HELLO handshake, so
+// hash it once at module load and reuse the value — this trims the file
+// from ~2.2s to ~1.0s without changing semantics (verification still runs
+// real scrypt on the hash).
+const SECRET_HASH = hashPassword('secret');
+
 // Track hubs so afterEach can close() them — otherwise BotLinkAuthManager's
 // 5-minute sweepTimer leaks across the test run (unref'd so process still exits).
 const _createdHubs: BotLinkHub[] = [];
@@ -201,7 +208,7 @@ describe('botlink commands', () => {
       pushFrame(leafDuplex, {
         type: 'HELLO',
         botname: 'leaf1',
-        password: hashPassword('secret'),
+        password: SECRET_HASH,
         version: '1.0',
       });
       await tick();
@@ -511,7 +518,7 @@ describe('botlink commands', () => {
       pushFrame(leafDuplex, {
         type: 'HELLO',
         botname: 'leaf1',
-        password: hashPassword('secret'),
+        password: SECRET_HASH,
         version: '1',
       });
       await tick();
@@ -808,7 +815,7 @@ describe('branch coverage edge cases', () => {
     pushFrame(d1, {
       type: 'HELLO',
       botname: 'leaf1',
-      password: hashPassword('secret'),
+      password: SECRET_HASH,
       version: '1',
     });
     await tick();
@@ -817,7 +824,7 @@ describe('branch coverage edge cases', () => {
     pushFrame(d2, {
       type: 'HELLO',
       botname: 'leaf2',
-      password: hashPassword('secret'),
+      password: SECRET_HASH,
       version: '1',
     });
     await tick();
@@ -839,7 +846,7 @@ describe('branch coverage edge cases', () => {
     pushFrame(duplex, {
       type: 'HELLO',
       botname: 'leaf1',
-      password: hashPassword('secret'),
+      password: SECRET_HASH,
       version: '1',
     });
     await tick();
@@ -963,7 +970,7 @@ describe('.bot command', () => {
     pushFrame(duplex, {
       type: 'HELLO',
       botname: 'leaf1',
-      password: hashPassword('secret'),
+      password: SECRET_HASH,
       version: '1',
     });
     await tick();
@@ -1119,7 +1126,7 @@ describe('.bsay command', () => {
     pushFrame(duplex, {
       type: 'HELLO',
       botname: 'leaf1',
-      password: hashPassword('secret'),
+      password: SECRET_HASH,
       version: '1',
     });
     await tick();
@@ -1178,7 +1185,7 @@ describe('.bsay command', () => {
     pushFrame(duplex, {
       type: 'HELLO',
       botname: 'leaf1',
-      password: hashPassword('secret'),
+      password: SECRET_HASH,
       version: '1',
     });
     await tick();
@@ -1263,7 +1270,7 @@ describe('.bannounce command', () => {
     pushFrame(duplex, {
       type: 'HELLO',
       botname: 'leaf1',
-      password: hashPassword('secret'),
+      password: SECRET_HASH,
       version: '1',
     });
     await tick();
@@ -1442,7 +1449,7 @@ describe('botlink commands — audit coverage', () => {
     pushFrame(duplex, {
       type: 'HELLO',
       botname: 'leaf1',
-      password: hashPassword('secret'),
+      password: SECRET_HASH,
       version: '1',
     });
     await tick();
