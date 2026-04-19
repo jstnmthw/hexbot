@@ -108,6 +108,7 @@ const BASE_CONFIG: AiChatConfig = {
     useServerTokenizer: false,
     keepAlive: '30m',
     numCtx: 4096,
+    allowPrivateUrl: false,
   },
 };
 

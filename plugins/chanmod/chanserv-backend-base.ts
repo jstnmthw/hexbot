@@ -118,7 +118,18 @@ export abstract class ChanServBackendBase implements ProtectionBackend {
   }
 
   requestAkick(channel: string, mask: string, reason?: string): void {
-    const cmd = reason ? `AKICK ${channel} ADD ${mask} ${reason}` : `AKICK ${channel} ADD ${mask}`;
+    // Defense-in-depth shape guards for AKICK interpolation. Current
+    // callers pass hard-coded reasons and masks built by `buildBanMask()`
+    // (which validates shape), so these checks are belt-and-braces for
+    // a future caller that wires user input through. See audit 2026-04-19.
+    if (/\s/.test(mask)) {
+      this.api.warn(`AKICK mask "${mask}" contains whitespace — refusing to send`);
+      return;
+    }
+    const safeReason = reason ? reason.slice(0, 100) : undefined;
+    const cmd = safeReason
+      ? `AKICK ${channel} ADD ${mask} ${safeReason}`
+      : `AKICK ${channel} ADD ${mask}`;
     this.sendChanServ(cmd);
   }
 

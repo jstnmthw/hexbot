@@ -154,9 +154,17 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
       // `+m`, which is an escalation path — any master could seed a parallel
       // line of masters without owner involvement. Tighten the gate so
       // granting `m` or `n` requires `+n`.
-      if (ctx.source !== 'repl' && ctx.source !== 'botlink') {
-        const callerHostmask = `${ctx.nick}!${ctx.ident ?? ''}@${ctx.hostname ?? ''}`;
-        const caller = permissions.findByHostmask(callerHostmask);
+      //
+      // Botlink source is NOT exempt: a compromised `+m` on any leaf could
+      // otherwise run `.flags self +n` and have the hub silently promote
+      // them. For botlink, ctx.nick is the caller's bot handle (cmd-exec.ts
+      // pins ident/hostname to the literal `'botlink'`) so resolve by
+      // handle, not by the synthetic hostmask. See audit 2026-04-19.
+      if (ctx.source !== 'repl') {
+        const caller =
+          ctx.source === 'botlink'
+            ? permissions.getUser(ctx.nick)
+            : permissions.findByHostmask(`${ctx.nick}!${ctx.ident ?? ''}@${ctx.hostname ?? ''}`);
         const callerIsOwner = caller?.global.includes(OWNER_FLAG) ?? false;
         const grantsMasterOrHigher = flagsArg.includes(OWNER_FLAG) || flagsArg.includes('m');
         if (grantsMasterOrHigher && !callerIsOwner) {

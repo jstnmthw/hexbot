@@ -1,6 +1,10 @@
 // Ollama provider adapter.
 // Talks to a local Ollama daemon (default http://127.0.0.1:11434) via its
 // native REST API. Uses the built-in fetch (Node 20+) so we don't ship an SDK.
+import ipaddr from 'ipaddr.js';
+import dns from 'node:dns/promises';
+import net from 'node:net';
+
 import {
   type AIMessage,
   type AIProvider,
@@ -60,6 +64,15 @@ export class OllamaProvider implements AIProvider {
     this.useServerTokenizer = config.useServerTokenizer ?? false;
     this.keepAlive = config.keepAlive;
     this.numCtx = config.numCtx ?? 0;
+
+    // SSRF guard. Without this, an operator who misconfigures (or a
+    // config-write attacker) can point `base_url` at `169.254.169.254`
+    // (cloud-metadata), `127.0.0.1:<admin-panel>`, or a VPN-internal host,
+    // and the provider happily POSTs `/api/chat` bodies at it. Defaults to
+    // rejecting private/loopback/link-local addresses; operators running a
+    // local Ollama daemon must set `ollama.allow_private_url: true` to opt
+    // in. See audit 2026-04-19.
+    await validateOllamaBaseUrl(this.baseUrl, config.allowPrivateUrl === true);
 
     // Startup ping: fail fast if the daemon is unreachable, but only warn if
     // the configured model isn't pulled yet — operator may pull it after boot.
@@ -190,6 +203,85 @@ export class OllamaProvider implements AIProvider {
       clearTimeout(timer);
     }
   }
+}
+
+/**
+ * SSRF guard for `ollama.base_url`. Rejects any URL whose host resolves to a
+ * non-public address unless `allowPrivate` is true. Mirrors the classifier
+ * `plugins/rss/url-validator.ts` uses (default-deny anything whose
+ * `ipaddr.js` range isn't `unicast`, including IPv4-mapped IPv6).
+ *
+ * Throws an AIProviderError on any failure so `initialize()` surfaces the
+ * reason to the plugin's warn path instead of silently mis-routing traffic.
+ */
+async function validateOllamaBaseUrl(rawUrl: string, allowPrivate: boolean): Promise<void> {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new AIProviderError(`Ollama base_url is not a valid URL: ${rawUrl}`, 'other');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new AIProviderError(
+      `Ollama base_url scheme must be http or https (got ${parsed.protocol || '(none)'})`,
+      'other',
+    );
+  }
+  // URL() leaves IPv6 hostnames wrapped in brackets.
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, '');
+  if (!hostname) {
+    throw new AIProviderError('Ollama base_url has no hostname', 'other');
+  }
+
+  const literalFamily = net.isIP(hostname);
+  const addresses: string[] = [];
+  if (literalFamily === 4 || literalFamily === 6) {
+    addresses.push(hostname);
+  } else {
+    try {
+      const records = await dns.lookup(hostname, { all: true });
+      for (const r of records) addresses.push(r.address);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new AIProviderError(`Ollama base_url DNS lookup failed: ${msg}`, 'other', err);
+    }
+  }
+  if (addresses.length === 0) {
+    throw new AIProviderError(`Ollama base_url ${hostname} resolved to no addresses`, 'other');
+  }
+
+  if (allowPrivate) return;
+
+  for (const addr of addresses) {
+    if (!isPublicAddress(addr)) {
+      throw new AIProviderError(
+        `Ollama base_url ${hostname} resolves to blocked address ${addr} — ` +
+          'set ollama.allow_private_url: true if this is intentional (localhost/private Ollama).',
+        'other',
+      );
+    }
+  }
+}
+
+/**
+ * True if `ip` is a publicly-routable IPv4 or IPv6 address. Delegates to
+ * `ipaddr.js` so IPv4-mapped IPv6 hex form (`::ffff:7f00:1`) is classified
+ * the same as dotted form.
+ */
+function isPublicAddress(ip: string): boolean {
+  let addr: ipaddr.IPv4 | ipaddr.IPv6;
+  try {
+    addr = ipaddr.parse(ip);
+  } catch {
+    return false;
+  }
+  if (addr.kind() === 'ipv6') {
+    const v6 = addr as ipaddr.IPv6;
+    if (v6.isIPv4MappedAddress()) {
+      return v6.toIPv4Address().range() === 'unicast';
+    }
+  }
+  return addr.range() === 'unicast';
 }
 
 /** Read a response body to string without throwing if it's already consumed or malformed. */

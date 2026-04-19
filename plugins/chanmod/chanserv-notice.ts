@@ -56,6 +56,16 @@ export interface ProbeState {
   /** Channel that the current multi-line INFO response is about (set on "Information for channel #xxx:"). */
   activeInfoChannel: string | null;
   /**
+   * Trust-on-first-use pin for ChanServ's `ident@hostname`. Null until the
+   * first notice from the configured ChanServ nick arrives, at which point
+   * we snapshot the source. Subsequent notices whose source doesn't match
+   * are dropped — prevents a user who takes the ChanServ nick during a
+   * services outage from feeding the parser a crafted INFO/FLAGS response
+   * that grants the bot a phantom founder/op access tier. See audit
+   * 2026-04-19 (CRITICAL).
+   */
+  trustedServicesSource: { ident: string; hostname: string } | null;
+  /**
    * Anope-only: channels where ACCESS LIST returned empty while the INFO
    * probe was still pending. We defer committing `'none'` in this case —
    * INFO might still report the bot as implicit founder. The deferred
@@ -91,6 +101,7 @@ export function createProbeState(): ProbeState {
     pendingAnopeProbes: new Map(),
     pendingInfoProbes: new Map(),
     activeInfoChannel: null,
+    trustedServicesSource: null,
     deferredAnopeNoAccess: new Map(),
     commitDeferredNoAccess: null,
     probeTimers: new Set(),
@@ -142,6 +153,30 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
     if (ctx.channel !== null) return;
     if (api.ircLower(ctx.nick) !== api.ircLower(csNick)) return;
 
+    // Trust-on-first-use for ChanServ's services source. The nick alone
+    // is not enough on services-free networks or during a services outage:
+    // a user who grabs the ChanServ nick could otherwise feed this parser
+    // a crafted INFO/FLAGS response and promote themselves to founder in
+    // the bot's in-memory access table. Pin ident@host on first contact;
+    // reject any subsequent notice whose source diverges. The pin clears
+    // on plugin teardown (a `.reload chanmod` is the operator escape hatch
+    // if services legitimately rekeys its vhost). See audit 2026-04-19
+    // (CRITICAL).
+    const srcIdent = api.ircLower(ctx.ident);
+    const srcHost = api.ircLower(ctx.hostname);
+    if (probeState.trustedServicesSource === null) {
+      probeState.trustedServicesSource = { ident: srcIdent, hostname: srcHost };
+      api.debug(`Pinned ChanServ source to ${ctx.ident}@${ctx.hostname}`);
+    } else {
+      const pinned = probeState.trustedServicesSource;
+      if (pinned.ident !== srcIdent || pinned.hostname !== srcHost) {
+        api.warn(
+          `Dropping notice from ${ctx.nick}!${ctx.ident}@${ctx.hostname} — does not match pinned ChanServ source (${pinned.ident}@${pinned.hostname}). Possible services spoof.`,
+        );
+        return;
+      }
+    }
+
     const text = ctx.text;
 
     if (isAthemeBackend(backend)) {
@@ -159,6 +194,7 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
     probeState.commitDeferredNoAccess = null;
     probeState.pendingGetKey.clear();
     probeState.activeInfoChannel = null;
+    probeState.trustedServicesSource = null;
     for (const t of probeState.probeTimers) clearTimeout(t);
     probeState.probeTimers.clear();
   };

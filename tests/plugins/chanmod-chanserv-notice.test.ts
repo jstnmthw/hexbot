@@ -37,10 +37,16 @@ function createMockApi() {
     binds,
     logs,
     /** Dispatch a notice event to the bound handler. */
-    notice(nick: string, text: string) {
+    notice(nick: string, text: string, source?: { ident?: string; hostname?: string }) {
       for (const b of binds) {
         if (b.type === 'notice') {
-          b.handler({ nick, ident: 'services', hostname: 'services.', channel: null, text });
+          b.handler({
+            nick,
+            ident: source?.ident ?? 'services',
+            hostname: source?.hostname ?? 'services.',
+            channel: null,
+            text,
+          });
         }
       }
     },
@@ -600,6 +606,83 @@ describe('ChanServ notice handler — probe timeout', () => {
     logs.length = 0;
     await vi.advanceTimersByTimeAsync(10_000);
     expect(logs.filter((l) => l.includes('timed out'))).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Source pinning (services-spoof defense — audit 2026-04-19 CRITICAL)
+// ---------------------------------------------------------------------------
+
+describe('ChanServ notice handler — services source pin', () => {
+  it('pins ident@hostname on first notice and records the pin', () => {
+    const { api, notice, logs } = createMockApi();
+    const { backend } = createMockAthemeBackend();
+    const probeState = createProbeState();
+
+    setupChanServNotice({ api, config: createMockConfig(), backend, probeState });
+    markProbePending(api, probeState, '#test', 'atheme');
+
+    notice('ChanServ', '2 hexbot +o', { ident: 'services', hostname: 'services.net' });
+
+    expect(probeState.trustedServicesSource).toEqual({
+      ident: 'services',
+      hostname: 'services.net',
+    });
+    expect(logs.some((l) => l.includes('Pinned ChanServ source'))).toBe(true);
+  });
+
+  it('drops a spoofed notice whose ident@hostname does not match the pin', () => {
+    const { api, notice, logs } = createMockApi();
+    const { backend, calls } = createMockAthemeBackend();
+    const probeState = createProbeState();
+
+    setupChanServNotice({ api, config: createMockConfig(), backend, probeState });
+    markProbePending(api, probeState, '#test', 'atheme');
+    // First (legit) contact pins the source
+    notice('ChanServ', 'ignored', { ident: 'services', hostname: 'services.net' });
+
+    // Spoofer grabs the ChanServ nick from a different vhost and tries to feed
+    // a crafted FLAGS response — must be ignored.
+    markProbePending(api, probeState, '#test', 'atheme');
+    calls.length = 0;
+    notice('ChanServ', '2 hexbot +Aov', { ident: 'evil', hostname: 'attacker.example' });
+
+    expect(calls).toHaveLength(0);
+    expect(
+      logs.some((l) => l.includes('Dropping notice') && l.includes('Possible services spoof')),
+    ).toBe(true);
+    // Pending probe stays pending — no spoof consumed it.
+    expect(probeState.pendingAthemeProbes.size).toBe(1);
+  });
+
+  it('accepts subsequent notices from the pinned source', () => {
+    const { api, notice } = createMockApi();
+    const { backend, calls } = createMockAthemeBackend();
+    const probeState = createProbeState();
+
+    setupChanServNotice({ api, config: createMockConfig(), backend, probeState });
+    markProbePending(api, probeState, '#test', 'atheme');
+    notice('ChanServ', '2 hexbot +o', { ident: 'services', hostname: 'services.net' });
+
+    markProbePending(api, probeState, '#test2', 'atheme');
+    notice('ChanServ', '2 hexbot +Aov', { ident: 'services', hostname: 'services.net' });
+
+    expect(calls).toHaveLength(2);
+  });
+
+  it('matches the pin case-insensitively (services rename to uppercase host)', () => {
+    const { api, notice } = createMockApi();
+    const { backend, calls } = createMockAthemeBackend();
+    const probeState = createProbeState();
+
+    setupChanServNotice({ api, config: createMockConfig(), backend, probeState });
+    markProbePending(api, probeState, '#test', 'atheme');
+    notice('ChanServ', '2 hexbot +o', { ident: 'services', hostname: 'services.net' });
+
+    markProbePending(api, probeState, '#test2', 'atheme');
+    notice('ChanServ', '2 hexbot +Aov', { ident: 'SERVICES', hostname: 'SERVICES.NET' });
+
+    expect(calls).toHaveLength(2);
   });
 });
 

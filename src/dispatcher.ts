@@ -278,6 +278,12 @@ export class EventDispatcher {
     for (const entry of this.binds) {
       if (entry.type !== type) continue;
       if (!this.matchesMask(type, entry.mask, ctx)) continue;
+      // Ordering invariant: flag check FIRST, verification gate SECOND,
+      // handler call THIRD. Reordering (or slipping a handler invocation
+      // between the two checks) would either let an unprivileged user
+      // bypass flags via a lost-race short-circuit, or send an ACC
+      // round-trip on every anyone-allowed bind. Leave this sequence
+      // alone unless a test pins the new ordering. See audit 2026-04-19.
       if (!this.checkFlags(entry.flags, ctx)) {
         this.logger?.debug(
           `flag denied: ${ctx.nick}!${ctx.ident}@${ctx.hostname} → ${type}:${entry.mask} (requires ${entry.flags}, plugin=${entry.pluginId})`,

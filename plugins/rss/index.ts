@@ -40,10 +40,16 @@ function fetchOptsFor(cfg: RssPluginConfig): FetchFeedOpts {
   };
 }
 
-/** Narrow an unknown value to `Error` so we can read `.message` safely. */
+/**
+ * Narrow an unknown value to `Error` so we can read `.message` safely.
+ * Strips control bytes to prevent IRC formatting / ANSI injection via a
+ * persisted feed URL that surfaces in an error path. See audit 2026-04-19.
+ */
 function errorMessage(err: unknown): string {
   /* v8 ignore next -- defensive: tests always throw Error instances */
-  return err instanceof Error ? err.message : String(err);
+  const raw = err instanceof Error ? err.message : String(err);
+  // eslint-disable-next-line no-control-regex -- IRC formatting + ANSI
+  return raw.replace(/[\x00-\x1F\x7F]/g, '');
 }
 
 // ---------------------------------------------------------------------------

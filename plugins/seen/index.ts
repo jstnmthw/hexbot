@@ -8,6 +8,15 @@ export const description = 'Tracks and reports when users were last seen';
 
 const DEFAULT_MAX_AGE_DAYS = 90;
 
+/**
+ * Hard cap on stored seen records. A nick-rotation attack (10k unique
+ * nicks in a few minutes, common during botnet events) would otherwise
+ * inflate the plugin's namespace before the 90-day age-based cleanup
+ * caught up. When the sweep finds more than this, oldest records by
+ * `time` are evicted first. See audit 2026-04-19.
+ */
+const DEFAULT_MAX_ENTRIES = 10_000;
+
 /** A single seen record as persisted in the plugin KV store. */
 interface SeenRecord {
   nick: string;
@@ -43,6 +52,9 @@ export function init(api: PluginAPI): void {
   /* v8 ignore next -- default path only: tests never override max_age_days */
   const maxAgeDays = typeof rawMaxAge === 'number' ? rawMaxAge : DEFAULT_MAX_AGE_DAYS;
   const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+  const rawMaxEntries = api.config.max_entries;
+  const maxEntries =
+    typeof rawMaxEntries === 'number' && rawMaxEntries > 0 ? rawMaxEntries : DEFAULT_MAX_ENTRIES;
   const MAX_TEXT_LENGTH = 200;
 
   // Track every channel message (pubm is stackable, won't interfere with others)
@@ -71,7 +83,10 @@ export function init(api: PluginAPI): void {
 
     const raw = api.db.get(`seen:${api.ircLower(targetNick)}`);
     if (!raw) {
-      ctx.reply(`I haven't seen ${targetNick}.`);
+      // Strip formatting before echoing — otherwise an attacker can query
+      // `!seen <IRC-formatting-bytes>` and the client renders the reply as
+      // if the bot emitted extra content. See audit 2026-04-19.
+      ctx.reply(`I haven't seen ${api.stripFormatting(targetNick)}.`);
       return;
     }
 
@@ -81,7 +96,7 @@ export function init(api: PluginAPI): void {
       if (!isSeenRecord(parsed)) {
         /* v8 ignore start -- defensive shape guard, never hit in tests */
         api.db.del(`seen:${api.ircLower(targetNick)}`);
-        ctx.reply(`I haven't seen ${targetNick}.`);
+        ctx.reply(`I haven't seen ${api.stripFormatting(targetNick)}.`);
         return;
         /* v8 ignore stop */
       }
@@ -89,7 +104,7 @@ export function init(api: PluginAPI): void {
     } catch {
       /* v8 ignore start -- defensive catch for corrupted JSON, never hit in tests */
       api.db.del(`seen:${api.ircLower(targetNick)}`);
-      ctx.reply(`I haven't seen ${targetNick}.`);
+      ctx.reply(`I haven't seen ${api.stripFormatting(targetNick)}.`);
       return;
       /* v8 ignore stop */
     }
@@ -98,7 +113,7 @@ export function init(api: PluginAPI): void {
     /* v8 ignore start -- refactor broke test's Date.now mock; logic unchanged */
     if (age > maxAgeMs) {
       api.db.del(`seen:${api.ircLower(targetNick)}`);
-      ctx.reply(`I haven't seen ${targetNick}.`);
+      ctx.reply(`I haven't seen ${api.stripFormatting(targetNick)}.`);
       return;
     }
     /* v8 ignore stop */
@@ -115,9 +130,10 @@ export function init(api: PluginAPI): void {
     }
   });
 
-  // Hourly cleanup of stale entries
+  // Hourly cleanup of stale entries + namespace cap enforcement.
   api.bind('time', '-', '3600', () => {
     cleanupStale(api, maxAgeMs);
+    enforceEntryCap(api, maxEntries);
   });
 }
 
@@ -145,6 +161,34 @@ function cleanupStale(api: PluginAPI, maxAgeMs: number): void {
       api.db.del(entry.key);
     }
   }
+}
+
+/**
+ * After the age-based sweep, evict oldest records by `time` until the
+ * namespace is below `maxEntries`. Guards against nick-rotation attacks
+ * that would otherwise inflate the namespace across the 90-day window
+ * before `cleanupStale` could catch up. See audit 2026-04-19.
+ */
+function enforceEntryCap(api: PluginAPI, maxEntries: number): void {
+  const entries = api.db.list('seen:');
+  if (entries.length <= maxEntries) return;
+  const parsed: Array<{ key: string; time: number }> = [];
+  for (const entry of entries) {
+    try {
+      const value: unknown = JSON.parse(entry.value);
+      if (isSeenRecord(value)) {
+        parsed.push({ key: entry.key, time: value.time });
+      } else {
+        api.db.del(entry.key);
+      }
+    } catch {
+      api.db.del(entry.key);
+    }
+  }
+  if (parsed.length <= maxEntries) return;
+  parsed.sort((a, b) => a.time - b.time);
+  const excess = parsed.length - maxEntries;
+  for (let i = 0; i < excess; i++) api.db.del(parsed[i].key);
 }
 
 function formatRelativeTime(ms: number): string {

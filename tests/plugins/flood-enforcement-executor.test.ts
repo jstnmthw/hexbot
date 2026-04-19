@@ -209,3 +209,61 @@ describe('EnforcementExecutor liftExpiredBans (W-FL6)', () => {
     expect(api.db.del).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tempban mask shape validation (audit 2026-04-19)
+// ---------------------------------------------------------------------------
+
+describe('EnforcementExecutor tempban mask shape', () => {
+  it('falls back to kick-only when hostmask contains a space in the host', async () => {
+    const api = makeApi();
+    const ban = vi.fn();
+    const kick = vi.fn();
+    const getUserHostmask = vi.fn().mockReturnValue('alice!~ident@evil host.com');
+    const a = { ...api, ban, kick, getUserHostmask } as unknown as PluginAPI;
+    const ex = new EnforcementExecutor(a, cfg, () => true, vi.fn());
+    ex.apply('tempban', '#x', 'alice', 'spam');
+    await ex.drainPending();
+    expect(ban).not.toHaveBeenCalled();
+    expect(kick).toHaveBeenCalledWith('#x', 'alice', expect.stringContaining('spam'));
+  });
+
+  it('builds a valid mask when host is clean', async () => {
+    const api = makeApi();
+    const ban = vi.fn();
+    const kick = vi.fn();
+    const set = vi.fn();
+    const getUserHostmask = vi.fn().mockReturnValue('alice!~ident@evil.com');
+    const a = {
+      ...api,
+      ban,
+      kick,
+      db: { ...api.db, set },
+      getUserHostmask,
+    } as unknown as PluginAPI;
+    const ex = new EnforcementExecutor(a, cfg, () => true, vi.fn());
+    ex.apply('tempban', '#x', 'alice', 'spam');
+    await ex.drainPending();
+    expect(ban).toHaveBeenCalledWith('#x', '*!*@evil.com');
+    expect(kick).toHaveBeenCalled();
+  });
+
+  it('preserves cloaked slashes in the host', async () => {
+    const api = makeApi();
+    const ban = vi.fn();
+    const kick = vi.fn();
+    const set = vi.fn();
+    const getUserHostmask = vi.fn().mockReturnValue('alice!~ident@user/account.name');
+    const a = {
+      ...api,
+      ban,
+      kick,
+      db: { ...api.db, set },
+      getUserHostmask,
+    } as unknown as PluginAPI;
+    const ex = new EnforcementExecutor(a, cfg, () => true, vi.fn());
+    ex.apply('tempban', '#x', 'alice', 'spam');
+    await ex.drainPending();
+    expect(ban).toHaveBeenCalledWith('#x', '*!*@user/account.name');
+  });
+});

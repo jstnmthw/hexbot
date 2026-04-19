@@ -249,6 +249,20 @@ describe('seen plugin', () => {
     expect(db.get('seen', 'seen:ancient')).toBeNull();
   });
 
+  it('strips IRC formatting from targetNick in the not-found reply', async () => {
+    // A query that embeds IRC color/reset codes must not echo them back
+    // verbatim — otherwise an attacker can forge a channel-visible line
+    // that looks like the bot emitted extra content. Audit 2026-04-19.
+    const spoofed = '\x0312,0spoof\x03';
+    const ctx = makePubCtx('bob', `!seen ${spoofed}`);
+    await dispatcher.dispatch('pub', ctx);
+    const response = ctx.reply.mock.calls[0][0];
+    expect(response).not.toContain('\x03');
+    // eslint-disable-next-line no-control-regex -- explicit check
+    expect(response).not.toMatch(/[\x00-\x1F]/);
+    expect(response).toContain('spoof');
+  });
+
   it('should remove corrupt entries during cleanupStale', async () => {
     // Insert a corrupt entry and a valid recent entry
     db.set('seen', 'seen:badentry', 'NOT JSON');

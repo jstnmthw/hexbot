@@ -141,13 +141,18 @@ export function parseISupport(client: SupportsProvider): ServerCapabilities {
   const chanmodesC = new Set(cmArr[2] ?? 'l');
   const chanmodesD = new Set(cmArr[3] ?? 'imnpstr');
 
-  // MODES — max mode changes per line. RFC 2812 caps at 3.
+  // MODES — max mode changes per line. RFC 2812 caps at 3; real networks
+  // advertise values up to ~20. A malicious or compromised server could
+  // advertise `MODES=1000000` and blow up downstream per-mode allocations
+  // in the batcher. Cap at a hard ceiling so we can't be coerced into
+  // huge allocations by a server token. See audit 2026-04-19.
+  const MODES_HARD_CEILING = 100;
   const modesRaw = supports('MODES');
   const modesPerLine =
     typeof modesRaw === 'string' && /^\d+$/.test(modesRaw)
-      ? Math.max(1, parseInt(modesRaw, 10))
+      ? Math.min(MODES_HARD_CEILING, Math.max(1, parseInt(modesRaw, 10)))
       : typeof modesRaw === 'number' && modesRaw > 0
-        ? modesRaw
+        ? Math.min(MODES_HARD_CEILING, modesRaw)
         : 3;
 
   // CHANTYPES — irc-framework stores it as a char array; fall back to '#&'.
@@ -159,7 +164,11 @@ export function parseISupport(client: SupportsProvider): ServerCapabilities {
         ? ctRaw
         : '#&';
 
-  // TARGMAX — raw string of the form `PRIVMSG:4,NOTICE:4,JOIN:`; empty value = unlimited.
+  // TARGMAX — raw string of the form `PRIVMSG:4,NOTICE:4,JOIN:`; empty
+  // value = unlimited. Cap each per-command limit at a sane ceiling so a
+  // hostile server can't coerce downstream code into allocating per-target
+  // arrays at pathological scale. See audit 2026-04-19.
+  const TARGMAX_HARD_CEILING = 10_000;
   const targmaxRaw = supports('TARGMAX');
   const targmax: Record<string, number> = {};
   if (typeof targmaxRaw === 'string' && targmaxRaw.length > 0) {
@@ -171,7 +180,7 @@ export function parseISupport(client: SupportsProvider): ServerCapabilities {
         targmax[cmd] = Infinity;
       } else {
         const n = parseInt(rawVal, 10);
-        if (Number.isFinite(n) && n > 0) targmax[cmd] = n;
+        if (Number.isFinite(n) && n > 0) targmax[cmd] = Math.min(TARGMAX_HARD_CEILING, n);
       }
     }
   }

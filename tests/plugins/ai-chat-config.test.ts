@@ -224,6 +224,7 @@ describe('parseConfig', () => {
       useServerTokenizer: true,
       keepAlive: '1h',
       numCtx: 8192,
+      allowPrivateUrl: false,
     });
   });
 
@@ -234,6 +235,13 @@ describe('parseConfig', () => {
     expect(cfg.ollama.useServerTokenizer).toBe(false);
     expect(cfg.ollama.keepAlive).toBe('30m');
     expect(cfg.ollama.numCtx).toBe(4096);
+    // Defaults to false — SSRF guard is secure-by-default.
+    expect(cfg.ollama.allowPrivateUrl).toBe(false);
+  });
+
+  it('reads allow_private_url from config', () => {
+    const cfg = parseConfig({ ollama: { allow_private_url: true } });
+    expect(cfg.ollama.allowPrivateUrl).toBe(true);
   });
 
   it('parses channel_characters as a record', () => {

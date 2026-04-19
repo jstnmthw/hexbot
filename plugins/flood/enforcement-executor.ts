@@ -231,28 +231,56 @@ export class EnforcementExecutor {
     if (action === 'warn') {
       this.api.notice(nick, `[flood] ${reason}`);
       this.api.log(`Warned ${nick} in ${channel}: ${reason}`);
+      this.auditLog('flood-warn', channel, nick, reason);
       return;
     }
     if (action === 'kick') {
       this.api.kick(channel, nick, `[flood] ${reason}`);
       this.api.log(`Kicked ${nick} from ${channel}: ${reason}`);
+      this.auditLog('flood-kick', channel, nick, reason);
       return;
     }
     // action is 'tempban' — last valid action after 'warn' and 'kick'
     const hostmask = this.api.getUserHostmask(channel, nick);
     if (!hostmask) {
       this.api.kick(channel, nick, `[flood] ${reason}`);
+      this.auditLog('flood-kick', channel, nick, reason);
       return;
     }
     const banMask = buildFloodBanMask(hostmask);
     if (!banMask) {
       this.api.kick(channel, nick, `[flood] ${reason}`);
+      this.auditLog('flood-kick', channel, nick, reason);
       return;
     }
     this.api.ban(channel, banMask);
     this.storeBan(channel, banMask);
     this.api.kick(channel, nick, `[flood] ${reason}`);
     this.api.log(`Tempbanned ${nick} (${banMask}) from ${channel}: ${reason}`);
+    this.auditLog('flood-ban', channel, nick, reason, banMask);
+  }
+
+  /**
+   * Emit a mod_log row for the action. Without this, operators can't tell
+   * a flood-originated kick/ban from a human-ordered one after the fact —
+   * `.modlog` would show only human actions. See audit 2026-04-19.
+   */
+  private auditLog(
+    action: 'flood-warn' | 'flood-kick' | 'flood-ban',
+    channel: string,
+    nick: string,
+    reason: string,
+    mask?: string,
+  ): void {
+    try {
+      this.api.audit.log(action, {
+        channel,
+        target: mask ? `${nick} (${mask})` : nick,
+        reason,
+      });
+    } catch {
+      // Audit failures must not break enforcement — swallow silently.
+    }
   }
 
   private storeBan(channel: string, mask: string): void {
@@ -265,14 +293,28 @@ export class EnforcementExecutor {
 }
 
 /**
+ * Character set permitted inside a hostname: alphanumerics, `.`, `-`, `:`
+ * (IPv6 colons), and `/` (cloaked/vhost forms like `user/account`).
+ * Rejects anything else — whitespace in particular, which an
+ * RFC-compliant IRC server won't emit but an upstream bug or
+ * non-compliant server could, and which would then be parsed by the
+ * server as an extra MODE parameter when interpolated into a ban mask.
+ * Bracket-wrapped IPv6 literals are accepted too. See audit 2026-04-19.
+ */
+const HOST_SHAPE_RE = /^[A-Za-z0-9.\-:/[\]]+$/;
+
+/**
  * Build a simple *!*@host ban mask from a hostmask. For cloaked hosts
- * (containing '/'), the exact cloak is preserved.
+ * (containing '/'), the exact cloak is preserved. Returns null if the
+ * extracted host fails {@link HOST_SHAPE_RE} — caller falls back to a
+ * safe default (kick-only).
  */
 function buildFloodBanMask(hostmask: string): string | null {
   const atIdx = hostmask.lastIndexOf('@');
   if (atIdx === -1) return null;
   const host = hostmask.substring(atIdx + 1);
   if (!host) return null;
+  if (!HOST_SHAPE_RE.test(host)) return null;
   return `*!*@${host}`;
 }
 

@@ -91,6 +91,21 @@ export class ContextManager {
         buf.splice(0, Math.ceil(buf.length / 2));
       }
     }
+
+    // Byte-budget enforcement. The message-count cap above can't bound total
+    // bytes: many small messages plus one cap-sized one can still push
+    // serialized context past the configured maxTokens budget, inflating
+    // single-call cost. Cap cumulative bytes at maxTokens*4 (the chars-per-
+    // token heuristic used at serialize time) and evict oldest entries
+    // until the buffer fits. See audit 2026-04-19.
+    const maxBytes = this.config.maxTokens * CHARS_PER_TOKEN;
+    let total = 0;
+    for (const e of buf) total += e.nick.length + e.text.length + 2;
+    while (total > maxBytes && buf.length > 1) {
+      const oldest = buf[0];
+      total -= oldest.nick.length + oldest.text.length + 2;
+      buf.splice(0, 1);
+    }
   }
 
   /**

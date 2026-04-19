@@ -120,7 +120,15 @@ export class STSStore {
       duration: v.duration,
       expiresAt: v.expiresAt,
     };
-    if (typeof v.port === 'number') result.port = v.port;
+    // Re-validate the persisted port before handing it to the reconnect
+    // path. The directive parser rejects out-of-range ports when writing,
+    // but a corrupted row (migration bug, manual DB edit) would otherwise
+    // skip that check and feed a nonsense port into TLS connect. Drop the
+    // port silently so a subsequent valid directive can re-seed it. See
+    // audit 2026-04-19.
+    if (typeof v.port === 'number' && Number.isInteger(v.port) && v.port > 0 && v.port < 65536) {
+      result.port = v.port;
+    }
     return result;
   }
 

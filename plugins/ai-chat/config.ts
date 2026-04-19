@@ -86,6 +86,12 @@ export interface AiChatConfig {
     keepAlive: string;
     /** Pinned context window. `0` leaves it unset (daemon default). */
     numCtx: number;
+    /**
+     * Allow `base_url` to point at loopback/link-local/private addresses.
+     * Defaults to `false`; operators running Ollama on localhost must opt
+     * in explicitly. See SSRF guard in `providers/ollama.ts`.
+     */
+    allowPrivateUrl: boolean;
   };
 }
 
@@ -227,6 +233,7 @@ export function parseConfig(
         useServerTokenizer: asBool(o.use_server_tokenizer, false),
         keepAlive: asString(o.keep_alive, '30m'),
         numCtx: asNum(o.num_ctx, 4096),
+        allowPrivateUrl: asBool(o.allow_private_url, false),
       };
     })(),
   };
@@ -293,6 +300,7 @@ export function buildProviderConfig(
         // uses its own default (5m). Any non-empty string is passed through.
         keepAlive: cfg.ollama.keepAlive || undefined,
         numCtx: cfg.ollama.numCtx,
+        allowPrivateUrl: cfg.ollama.allowPrivateUrl,
       };
     }
     default:

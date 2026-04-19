@@ -171,6 +171,17 @@ export function init(api: PluginAPI): void {
 
   api.bind('pub', '-', '!help', handler);
   api.bind('msg', '-', '!help', handler);
+
+  // Time-based sweep (every 5 minutes) to complement the size-threshold
+  // sweep. On a rarely-used bot the map can accumulate entries for years
+  // without ever crossing the 1000-entry threshold — this keeps it tidy
+  // regardless of volume. See audit 2026-04-19.
+  api.bind('time', '-', '300', () => {
+    const now = Date.now();
+    for (const [k, t] of cooldowns) {
+      if (now - t >= cooldownMs) cooldowns.delete(k);
+    }
+  });
 }
 
 // `cooldowns` now lives inside `init()` so teardown has nothing to do;

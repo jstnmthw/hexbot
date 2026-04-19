@@ -22,6 +22,32 @@ function make(overrides: Partial<ConstructorParameters<typeof ContextManager>[0]
   return { mgr, clock };
 }
 
+describe('ContextManager byte-budget enforcement', () => {
+  // Audit 2026-04-19 — addMessage must evict oldest entries when cumulative
+  // bytes exceed maxTokens*4 (the char-per-token heuristic).
+  it('evicts oldest entries when cumulative bytes exceed maxTokens*4', () => {
+    // maxTokens=20 → maxBytes=80. Messages of ~50 bytes each can't all fit.
+    const { mgr } = make({ maxTokens: 20, maxMessages: 100 });
+    for (let i = 0; i < 10; i++) {
+      mgr.addMessage('#c', 'alice', 'x'.repeat(40), false);
+    }
+    // After eviction, total bytes should be under 80 (plus the most recent,
+    // which the cap keeps even if oversized).
+    const size = mgr.size('#c');
+    expect(size).toBeGreaterThanOrEqual(1);
+    // The size after eviction should be much smaller than 10.
+    expect(size).toBeLessThanOrEqual(3);
+  });
+
+  it('never evicts the last-remaining entry even if oversized', () => {
+    const { mgr } = make({ maxTokens: 1, maxMessages: 100 });
+    mgr.addMessage('#c', 'alice', 'x'.repeat(1000), false);
+    // A single over-budget entry is kept — the alternative is an empty
+    // buffer and a zero-context call, worse than the call with oversized ctx.
+    expect(mgr.size('#c')).toBe(1);
+  });
+});
+
 describe('ContextManager', () => {
   it('returns empty when nothing has been added', () => {
     const { mgr } = make();

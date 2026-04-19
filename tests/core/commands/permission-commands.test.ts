@@ -377,4 +377,54 @@ describe('.flags owner escalation guard', () => {
     expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('Global flags'));
     expect(perms.getUser('target')!.global).toBe('ov');
   });
+
+  // -------------------------------------------------------------------------
+  // Regression: botlink source must NOT bypass the escalation guard. Before
+  // fix, `ctx.source === 'botlink'` exempted the caller entirely, so a +m
+  // master on any leaf could run `.flags self +n`, the hub executed it as
+  // `botlink` source, and the master silently promoted to owner across the
+  // entire botnet. See audit 2026-04-19 (CRITICAL).
+  // -------------------------------------------------------------------------
+
+  it('botlink caller without +n is rejected when granting +n', async () => {
+    // Botlink cmd-exec.ts pins ident/hostname to 'botlink' and sets
+    // ctx.nick = fromHandle. The guard now resolves by handle for botlink,
+    // so a +m master who issues .flags self +n across the link is rejected.
+    const ctx = makeCtx({
+      source: 'botlink',
+      nick: 'master',
+      ident: 'botlink',
+      hostname: 'botlink',
+    });
+    await handler.execute('.flags master +n', ctx);
+
+    expect(ctx.reply).toHaveBeenCalledWith('Only owners (+n) can grant master or higher flags.');
+    expect(perms.getUser('master')!.global).toBe('m');
+  });
+
+  it('botlink caller without +n is rejected when granting +m', async () => {
+    const ctx = makeCtx({
+      source: 'botlink',
+      nick: 'master',
+      ident: 'botlink',
+      hostname: 'botlink',
+    });
+    await handler.execute('.flags target +m', ctx);
+
+    expect(ctx.reply).toHaveBeenCalledWith('Only owners (+n) can grant master or higher flags.');
+    expect(perms.getUser('target')!.global).toBe('o');
+  });
+
+  it('botlink caller with +n can grant +n', async () => {
+    const ctx = makeCtx({
+      source: 'botlink',
+      nick: 'owner',
+      ident: 'botlink',
+      hostname: 'botlink',
+    });
+    await handler.execute('.flags target +n', ctx);
+
+    expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('Global flags'));
+    expect(perms.getUser('target')!.global).toBe('n');
+  });
 });

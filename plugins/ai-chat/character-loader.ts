@@ -1,5 +1,5 @@
 // Load and validate character definitions from JSON files.
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -135,6 +135,13 @@ export function loadCharacters(dir: string, log?: (msg: string) => void): Map<st
   for (const file of files) {
     try {
       const path = join(dir, file);
+      // Reject symlinks outright — they can point outside the characters
+      // directory. Mirrors the games-loader pattern. See audit 2026-04-19.
+      const lstat = lstatSync(path);
+      if (lstat.isSymbolicLink()) {
+        log?.(`Skipping character file (symlink rejected): ${file}`);
+        continue;
+      }
       const stat = statSync(path);
       if (!stat.isFile() || stat.size > MAX_CHARACTER_FILE_BYTES) {
         log?.(`Skipping character file (not a file or over size cap): ${file} (${stat.size}B)`);

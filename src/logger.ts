@@ -17,6 +17,44 @@ function stripLogControls(input: string): string {
   return input.replace(/[\x00\x02\x03\x07\x0f\x16\x1d\x1e\x1f\r]/g, '');
 }
 
+/**
+ * Field names whose values are redacted if they end up in a log line as a
+ * `key=value` or `"key":"value"` pair. Defense-in-depth — no current call
+ * path logs the config object or credential tuples directly, but a future
+ * careless caller shouldn't be able to leak a password into `[bot]`
+ * output. See audit 2026-04-19. Keep the list short and biased toward
+ * true positives (matches on exact key names, not substrings).
+ */
+const REDACT_FIELDS = [
+  'password',
+  'password_env',
+  'password_hash',
+  'sasl',
+  'sasl_password',
+  'token',
+  'secret',
+  'api_key',
+  'apiKey',
+];
+const REDACT_JSON_RE = new RegExp(
+  `("(?:${REDACT_FIELDS.join('|')})"\\s*:\\s*)"[^"\\\\]*(?:\\\\.[^"\\\\]*)*"`,
+  'gi',
+);
+const REDACT_ASSIGN_RE = new RegExp(
+  `\\b(${REDACT_FIELDS.join('|')})\\s*[:=]\\s*(?:"[^"]*"|'[^']*'|\\S+)`,
+  'gi',
+);
+
+/**
+ * Replace the value portion of any `REDACT_FIELDS`-named key inside `s`.
+ * Handles both JSON-shaped (`"password":"abc"`) and loose (`password=abc`,
+ * `password: abc`) forms. Purely defensive — callers should still avoid
+ * logging credential-bearing objects. See audit 2026-04-19.
+ */
+function redactCredentialFields(s: string): string {
+  return s.replace(REDACT_JSON_RE, '$1"[REDACTED]"').replace(REDACT_ASSIGN_RE, '$1=[REDACTED]');
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -249,14 +287,14 @@ export class Logger implements LoggerLike {
       dccParts.push(chalk.cyan(prefixPlain));
     }
 
-    const formatted = format(...coloredParts, ...args);
+    const formatted = redactCredentialFields(format(...coloredParts, ...args));
     // Strip control bytes from sinks that lack ANSI rendering — the file
     // sink and the DCC fanout both treat the line as literal text, so a
     // log line carrying a sanitized but still-mIRC-colored message can
     // poison downstream operator consoles. The colored stdout sink keeps
     // its ANSI escapes; only `plain` / `dccFormatted` are scrubbed.
-    const plain = stripLogControls(format(...plainParts, ...args));
-    const dccFormatted = format(...dccParts, ...args);
+    const plain = redactCredentialFields(stripLogControls(format(...plainParts, ...args)));
+    const dccFormatted = redactCredentialFields(format(...dccParts, ...args));
 
     const source = this.prefix
       ? this.category

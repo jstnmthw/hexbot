@@ -32,10 +32,19 @@ export interface RssCommandsDeps {
 
 type CmdOutcome = 'attempt' | 'rejected' | 'ok' | 'error';
 
-/** Narrow an unknown value to `Error` so we can read `.message` safely. */
+/**
+ * Narrow an unknown value to `Error` so we can read `.message` safely.
+ * The message may embed operator-supplied URL bytes (e.g. validator
+ * errors that quote the rejected URL), so we strip IRC formatting / ANSI
+ * control bytes before returning — otherwise an attacker who persuades
+ * an operator to run `!rss add <url-with-color-codes>` could inject a
+ * channel-visible bold/colored line. See audit 2026-04-19.
+ */
 function errorMessage(err: unknown): string {
   /* v8 ignore next -- defensive: tests always throw Error instances */
-  return err instanceof Error ? err.message : String(err);
+  const raw = err instanceof Error ? err.message : String(err);
+  // eslint-disable-next-line no-control-regex -- IRC formatting + ANSI
+  return raw.replace(/[\x00-\x1F\x7F]/g, '');
 }
 
 function fetchOptsFor(cfg: RssCommandsConfig, signal?: AbortSignal): FetchFeedOpts {

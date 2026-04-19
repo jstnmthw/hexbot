@@ -14,6 +14,28 @@ import { EnforcementExecutor } from './enforcement-executor';
 import { LockdownController } from './lockdown';
 import { RateLimitTracker } from './rate-limit-tracker';
 
+/**
+ * Stable rfc1459 case-fold used for rate-limit keys. We can't use
+ * `api.ircLower` because it tracks the live CASEMAPPING — if the server
+ * updates CASEMAPPING mid-session (rare but possible on a migration),
+ * existing entries live under one fold while new lookups use another,
+ * effectively resetting the counter. Pinning to `rfc1459` (the historical
+ * default) keeps keys stable for the entire plugin lifetime regardless of
+ * what the server later advertises. See audit 2026-04-19.
+ */
+function stableKeyLower(s: string): string {
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '[') out += '{';
+    else if (ch === ']') out += '}';
+    else if (ch === '\\') out += '|';
+    else if (ch === '~') out += '^';
+    else out += ch.toLowerCase();
+  }
+  return out;
+}
+
 export const name = 'flood';
 export const version = '1.0.0';
 export const description =
@@ -123,7 +145,7 @@ async function handleMsgFlood(ctx: ChannelHandlerContext): Promise<void> {
   // fresh tracker entry per nick change and escapes escalation. See audit
   // finding C2 (2026-04-14).
   const hostmask = api.buildHostmask(ctx);
-  const key = `msg:${api.ircLower(hostmask)}@${api.ircLower(channel)}`;
+  const key = `msg:${stableKeyLower(hostmask)}@${stableKeyLower(channel)}`;
   if (!rateLimits.check('msg', key)) return;
   const action = enforcement.recordOffence(key);
   enforcement.apply(
@@ -142,7 +164,7 @@ function handleJoinFlood(ctx: JoinContext): void {
   // counter — otherwise a flapping op would delay lockdown decisions for
   // real offenders.
   if (isPrivileged(ctx.nick, channel, hostmask, ctx.account)) return;
-  const key = `join:${api.ircLower(hostmask)}`;
+  const key = `join:${stableKeyLower(hostmask)}`;
   if (!rateLimits.check('join', key)) return;
   const action = enforcement.recordOffence(key);
   lockdown.record(channel, hostmask);
@@ -162,7 +184,7 @@ function handlePartFlood(ctx: PartContext): void {
   // counter. Pass hostmask directly — user has already left channel state by
   // the time the part bind fires.
   if (isPrivileged(ctx.nick, channel, hostmask, ctx.account)) return;
-  const key = `part:${api.ircLower(hostmask)}`;
+  const key = `part:${stableKeyLower(hostmask)}`;
   if (!rateLimits.check('part', key)) return;
   const action = enforcement.recordOffence(key);
   lockdown.record(channel, hostmask);
@@ -191,21 +213,26 @@ function handleNickFlood(ctx: NickContext): void {
     if (user && /[nmo]/.test(user.global)) return;
   }
 
-  const key = `nick:${api.ircLower(hostmask)}`;
+  const key = `nick:${stableKeyLower(hostmask)}`;
   if (!rateLimits.check('nick', key)) return;
   // Use the new nick (ctx.args) for channel lookup and punishment — the old nick is gone
   const newNick = ctx.args;
 
+  // Record the offence once (keyed on the user's persistent hostmask) so
+  // the escalation ladder advances on the event, not per-channel. Then
+  // apply the same action to every channel where the bot has ops — prior
+  // behaviour broke after the first hit and left the spammer unopposed
+  // elsewhere. See audit 2026-04-19.
+  let action: string | null = null;
   for (const channel of api.botConfig.irc.channels) {
     if (!botHasOps(channel)) continue;
-    const action = enforcement.recordOffence(key);
+    if (action === null) action = enforcement.recordOffence(key);
     enforcement.apply(
       action,
       channel,
       newNick,
       `nick-change spam (${cfg.nickThreshold}+ changes/${cfg.nickWindowSecs}s)`,
     );
-    break;
   }
 }
 

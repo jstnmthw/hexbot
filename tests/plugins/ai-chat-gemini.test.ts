@@ -6,7 +6,11 @@ import {
 } from '@google/generative-ai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { GeminiProvider, mapGeminiError } from '../../plugins/ai-chat/providers/gemini';
+import {
+  GeminiProvider,
+  mapGeminiError,
+  redactGeminiKey,
+} from '../../plugins/ai-chat/providers/gemini';
 import { AIProviderError } from '../../plugins/ai-chat/providers/types';
 
 const generateContent = vi.fn();
@@ -298,5 +302,43 @@ describe('mapGeminiError', () => {
     const err = mapGeminiError('string error');
     expect(err.kind).toBe('other');
     expect(err.message).toBe('Unknown Gemini error');
+  });
+
+  it('redacts AIza… API keys from plain Error messages', () => {
+    // A fake-shape key (correct prefix + 35 url-safe chars) — must not leak.
+    const leak = 'auth failed for AIza0123456789ABCDEFGHIJ-_abcdefghijKLMNO key rejected';
+    const err = mapGeminiError(new Error(leak));
+    expect(err.message).not.toContain('AIza0123456789');
+    expect(err.message).toContain('[REDACTED_API_KEY]');
+  });
+
+  it('redacts AIza… API keys from HTTP error status lines', () => {
+    const fetchErr = Object.assign(new Error('HTTP 400'), {
+      status: 400,
+      statusText: 'Bad Request: key=AIza0123456789ABCDEFGHIJ-_abcdefghijKLMNO',
+    });
+    Object.setPrototypeOf(fetchErr, GoogleGenerativeAIFetchError.prototype);
+    const err = mapGeminiError(fetchErr);
+    expect(err.message).not.toContain('AIza0123456789');
+    expect(err.message).toContain('[REDACTED_API_KEY]');
+  });
+});
+
+describe('redactGeminiKey', () => {
+  it('replaces key-shaped strings with a placeholder', () => {
+    const out = redactGeminiKey('before AIza0123456789ABCDEFGHIJ-_abcdefghijKLMNO after');
+    expect(out).toBe('before [REDACTED_API_KEY] after');
+  });
+
+  it('leaves key-free strings untouched', () => {
+    expect(redactGeminiKey('no keys here')).toBe('no keys here');
+  });
+
+  it('redacts multiple keys in the same string', () => {
+    const s =
+      'key1=AIza0123456789ABCDEFGHIJ-_abcdefghijKLMNO key2=AIzaABCDEFGHIJKLMNOPQRS-_tuvwxyz01234567';
+    const out = redactGeminiKey(s);
+    expect(out).not.toMatch(/AIza[A-Za-z0-9]/);
+    expect((out.match(/\[REDACTED_API_KEY\]/g) ?? []).length).toBe(2);
   });
 });

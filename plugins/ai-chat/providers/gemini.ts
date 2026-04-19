@@ -163,6 +163,18 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+/**
+ * Strip anything shaped like a Gemini API key from `s`. Google keys start
+ * with `AIza` followed by 35 URL-safe chars; the SDK has, in past versions,
+ * embedded the key in the status-line string on auth failures. Every error
+ * message we emit passes through this so a 401/403 can't leak an AIza…
+ * literal into logs, DCC mirrors, or channel-visible error paths. See
+ * audit 2026-04-19.
+ */
+export function redactGeminiKey(s: string): string {
+  return s.replace(/AIza[0-9A-Za-z_-]{35,}/g, '[REDACTED_API_KEY]');
+}
+
 /** Convert Gemini SDK errors into AIProviderError with a kind tag. */
 export function mapGeminiError(err: unknown): AIProviderError {
   if (err instanceof AIProviderError) return err;
@@ -174,7 +186,7 @@ export function mapGeminiError(err: unknown): AIProviderError {
       return new AIProviderError('Gemini auth error', 'auth', err);
     if (status >= 500) return new AIProviderError('Gemini server error', 'network', err);
     return new AIProviderError(
-      `Gemini HTTP ${status}${err.statusText ? `: ${err.statusText}` : ''}`,
+      redactGeminiKey(`Gemini HTTP ${status}${err.statusText ? `: ${err.statusText}` : ''}`),
       'network',
       err,
     );
@@ -185,7 +197,7 @@ export function mapGeminiError(err: unknown): AIProviderError {
   }
 
   if (err instanceof Error) {
-    return new AIProviderError(err.message, 'other', err);
+    return new AIProviderError(redactGeminiKey(err.message), 'other', err);
   }
 
   return new AIProviderError('Unknown Gemini error', 'other', err);
