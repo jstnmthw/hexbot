@@ -56,6 +56,13 @@ export class OllamaProvider implements AIProvider {
       throw new AIProviderError('Ollama baseUrl is empty', 'other');
     }
     this.baseUrl = config.baseUrl.replace(/\/+$/, '');
+    // SECURITY: `modelName` must only ever be set from operator config
+    // (loaded into `AIProviderConfig` by the plugin loader). Do NOT add a
+    // public setter or wire any IRC command into this field — Ollama's
+    // `/api/chat` will implicitly pull an unknown model on first call,
+    // so a user-mutable model name lets anyone in-channel trigger an
+    // arbitrary GGUF download. See the matching read-only guard at the
+    // `model:` subcommand in plugins/ai-chat/index.ts and docs/SECURITY.md.
     this.modelName = config.model;
     this.temperature = config.temperature;
     this.maxOutputTokens = config.maxOutputTokens;

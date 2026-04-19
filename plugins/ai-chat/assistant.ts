@@ -1,5 +1,6 @@
 // Assistant — orchestrates provider + context + rate limit + token budget + output formatting.
 // Kept separate from the plugin entry so it can be unit-tested with a mock provider.
+import type { ProviderSemaphore } from './concurrency';
 import type { ContextManager } from './context-manager';
 import type { IterStats } from './iter-stats';
 import { formatResponse } from './output-formatter';
@@ -69,6 +70,7 @@ export type AssistantResult =
       retryAfterMs: number;
     }
   | { status: 'budget_exceeded' }
+  | { status: 'busy' }
   | { status: 'provider_error'; kind: AIProviderError['kind']; message: string }
   | { status: 'fantasy_dropped'; line: string; index: number }
   | { status: 'empty' };
@@ -83,9 +85,13 @@ export async function respond(
     contextManager: ContextManager;
     config: AssistantConfig;
     iterStats?: IterStats | null;
+    /** Optional concurrency cap. When omitted, no semaphore is enforced
+     *  (test paths that don't care about backpressure). */
+    semaphore?: ProviderSemaphore | null;
   },
 ): Promise<AssistantResult> {
-  const { provider, rateLimiter, tokenTracker, contextManager, config, iterStats } = deps;
+  const { provider, rateLimiter, tokenTracker, contextManager, config, iterStats, semaphore } =
+    deps;
   const userKey = req.nick.toLowerCase();
 
   // Admins bypass the per-user bucket; global RPM/RPD still enforced.
@@ -128,6 +134,18 @@ export async function respond(
 
   const system = renderStableSystemPrompt(req.promptContext);
 
+  // Concurrency gate — refuse rather than queue when the in-flight pool is
+  // full. Local Ollama serializes anyway; admitting more requests just builds
+  // an unbounded queue of Promise + prompt copies. Acquire AFTER the cheap
+  // gates (rate limit, budget) so a busy provider doesn't burn permits on
+  // requests that would have been rejected anyway.
+  let release: () => void = () => {};
+  if (semaphore) {
+    const acquired = semaphore.tryAcquire();
+    if (acquired === null) return { status: 'busy' };
+    release = acquired;
+  }
+
   let text: string;
   let usageIn: number;
   let usageOut: number;
@@ -142,6 +160,8 @@ export async function respond(
       kind: isAIProviderError(err) ? err.kind : 'other',
       message: err instanceof Error ? err.message : 'unknown error',
     };
+  } finally {
+    release();
   }
 
   // Record even on empty output — the call still cost tokens.

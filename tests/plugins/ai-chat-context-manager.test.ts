@@ -22,6 +22,31 @@ function make(overrides: Partial<ConstructorParameters<typeof ContextManager>[0]
   return { mgr, clock };
 }
 
+describe('ContextManager per-entry char cap', () => {
+  it('truncates messages longer than maxMessageChars with an ellipsis', () => {
+    const { mgr } = make({ maxMessageChars: 10 });
+    mgr.addMessage('#c', 'alice', 'x'.repeat(50), false);
+    const msgs = mgr.getContext('#c', 'alice');
+    expect(msgs).toHaveLength(1);
+    // 10 chars total: 9 'x' + the '…' marker.
+    expect(msgs[0].content).toBe('alice: ' + 'x'.repeat(9) + '…');
+  });
+
+  it('does not truncate when text is at or under cap', () => {
+    const { mgr } = make({ maxMessageChars: 10 });
+    mgr.addMessage('#c', 'bot', 'short', true);
+    const msgs = mgr.getContext('#c', 'bot');
+    expect(msgs[0].content).toBe('short');
+  });
+
+  it('leaves text untouched when no cap is configured', () => {
+    const { mgr } = make({});
+    mgr.addMessage('#c', 'alice', 'x'.repeat(500), false);
+    const msgs = mgr.getContext('#c', 'alice');
+    expect(msgs[0].content).toBe('alice: ' + 'x'.repeat(500));
+  });
+});
+
 describe('ContextManager byte-budget enforcement', () => {
   // Audit 2026-04-19 — addMessage must evict oldest entries when cumulative
   // bytes exceed maxTokens*4 (the char-per-token heuristic).

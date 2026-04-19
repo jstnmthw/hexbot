@@ -378,6 +378,7 @@ describe('shouldRespond logic', () => {
       maxTokens: 2000,
       ttlMs: 60_000,
       pruneStrategy: 'bulk' as const,
+      maxMessageChars: 1000,
     },
     rateLimits: {
       userBurst: 3,
@@ -397,6 +398,7 @@ describe('shouldRespond logic', () => {
       botNickPatterns: ['*bot', '*Bot', '*BOT'],
     },
     output: { maxLines: 4, maxLineLength: 440, interLineDelayMs: 0, stripUrls: false },
+    input: { maxPromptChars: 2000, maxInflight: 4 },
     ambient: {
       enabled: false,
       idle: { afterMinutes: 15, chance: 0.3, minUsers: 2 },

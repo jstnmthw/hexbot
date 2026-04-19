@@ -103,24 +103,79 @@ function collapseWhitespace(line: string): string {
   return line.replace(/[ \t]+/g, ' ').trim();
 }
 
-/** Split a single long line at sentence/word boundaries to fit maxLineLength. */
-function splitLongLine(line: string, maxLineLength: number): string[] {
-  if (line.length <= maxLineLength) return [line];
+/**
+ * Encoder reused across calls — TextEncoder is stateless and per-spec safe to
+ * share. Allocating one per `formatResponse` call adds noticeable GC pressure
+ * on chatty channels.
+ */
+const UTF8 = new TextEncoder();
+
+/** UTF-8 byte length of a string. */
+function utf8ByteLen(s: string): number {
+  return UTF8.encode(s).length;
+}
+
+/**
+ * Split `s` so that the head fits within `maxBytes` of UTF-8 without splitting
+ * a multi-byte code point. Iterates by code point (for…of yields full code
+ * points, including surrogate pairs for emoji ≥ U+10000) and stops as soon as
+ * the next character would push over the cap. Returns both halves so callers
+ * can keep slicing the tail.
+ */
+function sliceByBytes(s: string, maxBytes: number): { head: string; tail: string } {
+  if (maxBytes <= 0) return { head: '', tail: s };
+  let bytes = 0;
+  let cuCount = 0; // code-unit count → use to slice on string position
+  for (const ch of s) {
+    const b = UTF8.encode(ch).length;
+    if (bytes + b > maxBytes) break;
+    bytes += b;
+    cuCount += ch.length;
+  }
+  return { head: s.slice(0, cuCount), tail: s.slice(cuCount) };
+}
+
+/**
+ * Split a single long line at sentence/word boundaries to fit `maxByteLen`
+ * UTF-8 bytes per line. Multibyte content (emoji, CJK) is measured in bytes,
+ * not JS code units, so a line of CJK that fits the char cap but blows the
+ * 510-byte IRC line limit gets split before the server truncates it.
+ */
+function splitLongLine(line: string, maxByteLen: number): string[] {
+  if (utf8ByteLen(line) <= maxByteLen) return [line];
   const out: string[] = [];
   let remaining = line;
 
-  while (remaining.length > maxLineLength) {
-    const slice = remaining.substring(0, maxLineLength + 1);
+  while (utf8ByteLen(remaining) > maxByteLen) {
+    // Take a search window slightly larger than the cap — gives the boundary
+    // search a sentence break that lands at or just past the cap.
+    const { head: window } = sliceByBytes(remaining, maxByteLen + 4);
     // Prefer a sentence boundary, then fall back to word boundary.
-    let cut = findLastMatch(slice, /[.!?](\s|$)/g);
+    let cut = findLastMatch(window, /[.!?](\s|$)/g);
     // Reject sentence breaks in the first half — splitting "Yes." off the
     // front of a long line would emit a useless one-word IRC message.
-    if (cut === -1 || cut < maxLineLength / 2) {
-      // Sentence break too early — use last space.
-      cut = slice.lastIndexOf(' ', maxLineLength);
+    if (cut === -1 || cut < window.length / 2) {
+      // Sentence break too early — use last space within the window.
+      cut = window.lastIndexOf(' ');
     }
-    if (cut <= 0) cut = maxLineLength; // hard cut — no usable break
-    out.push(remaining.substring(0, cut).trimEnd());
+    if (cut <= 0) {
+      // No usable break — hard-cut at the byte boundary, preserving code points.
+      const { head, tail } = sliceByBytes(remaining, maxByteLen);
+      out.push(head.trimEnd());
+      remaining = tail.trimStart();
+      continue;
+    }
+    const chunk = remaining.substring(0, cut);
+    // Even at a found break, the chunk could exceed the byte cap when
+    // multibyte chars sit between the break and the line start. Re-cap by
+    // bytes in that case rather than emitting an over-budget line.
+    if (utf8ByteLen(chunk) > maxByteLen) {
+      const { head, tail } = sliceByBytes(remaining, maxByteLen);
+      out.push(head.trimEnd());
+      remaining = tail.trimStart();
+      continue;
+    }
+    out.push(chunk.trimEnd());
     remaining = remaining.substring(cut).trimStart();
   }
 
@@ -147,7 +202,11 @@ function findLastMatch(text: string, re: RegExp): number {
  *
  * @param text           — raw LLM response
  * @param maxLines       — maximum number of PRIVMSG lines to emit
- * @param maxLineLength  — max bytes per line
+ * @param maxLineLength  — max UTF-8 bytes per line. The IRC server hard-limits
+ *   PRIVMSG lines to 512 bytes total (including `:nick!user@host PRIVMSG #ch :`
+ *   prefix); 440 leaves a comfortable safety margin. Measuring in bytes rather
+ *   than JS code units matters for emoji and CJK content, where one visible
+ *   character is 3–4 UTF-8 bytes.
  */
 /** Character style overrides applied after formatResponse(). */
 export interface CharacterStyleOptions {
@@ -228,14 +287,17 @@ export function formatResponse(
 
   if (lines.length > maxLines) {
     const truncated = lines.slice(0, maxLines);
-    // Append ellipsis marker to the final kept line.
+    // Append ellipsis marker to the final kept line. Both length checks are
+    // in UTF-8 bytes — same units as `maxLineLength` — so multibyte content
+    // doesn't push us past the IRC line limit during the suffix step.
     const last = truncated[truncated.length - 1];
     const suffix = ' …';
-    if (last.length + suffix.length <= maxLineLength) {
+    const suffixBytes = utf8ByteLen(suffix);
+    if (utf8ByteLen(last) + suffixBytes <= maxLineLength) {
       truncated[truncated.length - 1] = `${last}${suffix}`;
     } else {
-      truncated[truncated.length - 1] =
-        `${last.substring(0, maxLineLength - suffix.length)}${suffix}`;
+      const { head } = sliceByBytes(last, maxLineLength - suffixBytes);
+      truncated[truncated.length - 1] = `${head}${suffix}`;
     }
     return truncated;
   }

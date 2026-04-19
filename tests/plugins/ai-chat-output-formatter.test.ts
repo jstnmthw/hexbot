@@ -241,4 +241,44 @@ describe('formatResponse', () => {
     expect(formatResponse('ok\u2029!kick user', 4, 400)).toEqual([]);
     expect(formatResponse('ok\u0085/mode +o evil', 4, 400)).toEqual([]);
   });
+
+  // maxLineLength is measured in UTF-8 bytes, not JS code units. Multibyte
+  // content must split before the IRC server's 510-byte truncation kicks in.
+  describe('UTF-8 byte length', () => {
+    const enc = new TextEncoder();
+    const byteLen = (s: string) => enc.encode(s).length;
+
+    it('splits CJK lines that exceed the byte cap even if char length is under it', () => {
+      // 100 CJK chars = 300 UTF-8 bytes. Cap of 60 bytes should force splits.
+      const text = '中'.repeat(100);
+      const lines = formatResponse(text, 10, 60);
+      expect(lines.length).toBeGreaterThan(1);
+      for (const line of lines) {
+        expect(byteLen(line)).toBeLessThanOrEqual(60);
+      }
+    });
+
+    it('never splits a multibyte code point in half', () => {
+      // Each emoji = 4 UTF-8 bytes. With cap=10 bytes, lines must hold whole
+      // emoji, not partial sequences (which would be invalid UTF-8 / mojibake).
+      const text = '😀'.repeat(20);
+      const lines = formatResponse(text, 10, 10);
+      for (const line of lines) {
+        expect(() => enc.encode(line)).not.toThrow();
+        // Round-trip via decode to catch lone surrogates.
+        const round = new TextDecoder('utf-8', { fatal: true }).decode(enc.encode(line));
+        expect(round).toBe(line);
+        expect(byteLen(line)).toBeLessThanOrEqual(10);
+      }
+    });
+
+    it('truncation ellipsis stays within the byte cap on a multibyte final line', () => {
+      // Force truncation: 5 lines, maxLines=2. Final line picks up " …" suffix.
+      const text = ['一', '二', '三' + '中'.repeat(20), '四', '五'].join('\n');
+      const lines = formatResponse(text, 2, 30);
+      expect(lines).toHaveLength(2);
+      expect(byteLen(lines[lines.length - 1])).toBeLessThanOrEqual(30);
+      expect(lines[lines.length - 1].endsWith('…')).toBe(true);
+    });
+  });
 });

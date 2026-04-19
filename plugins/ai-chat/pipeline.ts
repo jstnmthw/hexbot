@@ -19,6 +19,7 @@ import {
   respond,
 } from './assistant';
 import type { Character } from './characters/types';
+import type { ProviderSemaphore } from './concurrency';
 import type { AiChatConfig } from './config';
 import type { ContextManager } from './context-manager';
 import type { EngagementTracker } from './engagement-tracker';
@@ -54,6 +55,8 @@ export interface PipelineDeps {
   engagementTracker: EngagementTracker | null;
   socialTracker: SocialTracker | null;
   sessionManager: SessionManager | null;
+  /** Process-wide concurrency limiter for provider.complete() calls. */
+  semaphore: ProviderSemaphore | null;
   /** Resolve the active character + language for a channel (may read DB). */
   activeCharacter: (channel: string | null) => {
     character: Character;
@@ -119,10 +122,26 @@ export async function runPipeline(
     moodEngine,
     engagementTracker,
     socialTracker,
+    semaphore,
     activeCharacter,
     noticeOpsRateLimited,
   } = deps;
   if (!rateLimiter || !tokenTracker || !contextManager) return;
+  // Inbound size cap: reject before any provider work. The token budget would
+  // catch this *after* the prompt-eval cost is paid; rejecting up front keeps
+  // a single oversized paste from burning local-Ollama prefill GPU time.
+  // Rolled/ambient sources stay silent on overflow — they're unprompted, so
+  // a private notice would surprise the user.
+  if (prompt.length > cfg.input.maxPromptChars) {
+    if (source !== 'rolled') {
+      ctx.replyPrivate(`Message too long — keep it under ${cfg.input.maxPromptChars} chars.`);
+    }
+    api.debug(
+      `pipeline prompt_too_long ch=${ctx.channel ?? '(none)'} nick=${ctx.nick} ` +
+        `len=${prompt.length} cap=${cfg.input.maxPromptChars}`,
+    );
+    return;
+  }
   // Rolled replies count against the ambient budget — a random-chance reply
   // is an unprompted utterance, same class as idle / unanswered-question
   // ambient. Address/engaged replies are direct responses and keep the
@@ -196,7 +215,15 @@ export async function runPipeline(
       maxContextMessages,
       isAdmin,
     },
-    { provider, rateLimiter, tokenTracker, contextManager, config: assistantCfg, iterStats },
+    {
+      provider,
+      rateLimiter,
+      tokenTracker,
+      contextManager,
+      config: assistantCfg,
+      iterStats,
+      semaphore,
+    },
   );
 
   switch (result.status) {
@@ -216,6 +243,15 @@ export async function runPipeline(
       api.debug(
         `pipeline budget_exceeded ch=${ctx.channel ?? '(none)'} nick=${ctx.nick} ` +
           `notice=${noticeOnBlock}`,
+      );
+      return;
+    case 'busy':
+      // Provider is at the in-flight cap. Notify the user privately so they
+      // know the request was dropped (vs. silently losing it). Rolled/ambient
+      // sources stay silent to avoid noticing the channel about backpressure.
+      if (noticeOnBlock) ctx.replyPrivate('Busy — try again in a moment.');
+      api.debug(
+        `pipeline busy ch=${ctx.channel ?? '(none)'} nick=${ctx.nick} notice=${noticeOnBlock}`,
       );
       return;
     case 'provider_error': {
@@ -299,10 +335,21 @@ export async function runSessionPipeline(
     tokenTracker,
     sessionManager,
     iterStats,
+    semaphore,
     makeSessionIdentity,
     noticeOpsRateLimited,
   } = deps;
   if (!rateLimiter || !tokenTracker || !sessionManager || !provider) return;
+  // Same inbound cap as runPipeline — a session move is still user-supplied
+  // text that hits provider.complete().
+  if (text.length > cfg.input.maxPromptChars) {
+    ctx.replyPrivate(`Message too long — keep it under ${cfg.input.maxPromptChars} chars.`);
+    api.debug(
+      `session prompt_too_long ch=${ctx.channel ?? '(none)'} nick=${ctx.nick} ` +
+        `len=${text.length} cap=${cfg.input.maxPromptChars}`,
+    );
+    return;
+  }
   const session = sessionManager.getSession(ctx.nick, ctx.channel, makeSessionIdentity(ctx));
   if (!session) return;
 
@@ -353,12 +400,33 @@ export async function runSessionPipeline(
     content: volatileHeader ? `${volatileHeader} [${ctx.nick}] ${text}` : `[${ctx.nick}] ${text}`,
   };
 
+  // Concurrency gate — same rationale as runPipeline. Acquire after the cheap
+  // gates so a busy provider doesn't burn permits on requests we'd reject.
+  // Release scope is just the provider call, NOT the inter-line drip send,
+  // so a 5-line response with 500ms gaps doesn't hold a permit for 2.5s of
+  // sleep when the actual model work is already done.
+  let release: () => void = () => {};
+  if (semaphore) {
+    const acquired = semaphore.tryAcquire();
+    if (acquired === null) {
+      ctx.replyPrivate('Busy — try again in a moment.');
+      api.debug(`session busy ch=${ctx.channel ?? '(none)'} nick=${ctx.nick}`);
+      return;
+    }
+    release = acquired;
+  }
+
   try {
-    const res = await provider.complete(
-      systemPrompt,
-      [...session.context, userMsg],
-      cfg.maxOutputTokens,
-    );
+    let res;
+    try {
+      res = await provider.complete(
+        systemPrompt,
+        [...session.context, userMsg],
+        cfg.maxOutputTokens,
+      );
+    } finally {
+      release();
+    }
     tokenTracker.recordUsage(ctx.nick, res.usage);
     iterStats?.record(res.usage);
     rateLimiter.record(userKey);

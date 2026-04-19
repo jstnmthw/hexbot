@@ -56,7 +56,13 @@ const BASE_CONFIG: AiChatConfig = {
   channelProfiles: {},
   triggers: { directAddress: true, commandPrefix: '!ai', keywords: [], randomChance: 0 },
   engagement: { softTimeoutMs: 600_000, hardCeilingMs: 1_800_000 },
-  context: { maxMessages: 25, maxTokens: 2000, ttlMs: 60_000, pruneStrategy: 'bulk' },
+  context: {
+    maxMessages: 25,
+    maxTokens: 2000,
+    ttlMs: 60_000,
+    pruneStrategy: 'bulk',
+    maxMessageChars: 1000,
+  },
   rateLimits: {
     userBurst: 3,
     userRefillSeconds: 12,
@@ -75,6 +81,7 @@ const BASE_CONFIG: AiChatConfig = {
     botNickPatterns: ['*bot', '*Bot', '*BOT'],
   },
   output: { maxLines: 4, maxLineLength: 440, interLineDelayMs: 0, stripUrls: false },
+  input: { maxPromptChars: 2000, maxInflight: 4 },
   ambient: {
     enabled: false,
     idle: { afterMinutes: 15, chance: 0.3, minUsers: 2 },

@@ -65,7 +65,13 @@ const BASE_CONFIG: AiChatConfig = {
   channelProfiles: {},
   triggers: { directAddress: true, commandPrefix: '!ai', keywords: [], randomChance: 0 },
   engagement: { softTimeoutMs: 600_000, hardCeilingMs: 1_800_000 },
-  context: { maxMessages: 25, maxTokens: 2000, ttlMs: 60_000, pruneStrategy: 'bulk' },
+  context: {
+    maxMessages: 25,
+    maxTokens: 2000,
+    ttlMs: 60_000,
+    pruneStrategy: 'bulk',
+    maxMessageChars: 1000,
+  },
   rateLimits: {
     userBurst: 3,
     userRefillSeconds: 12,
@@ -84,6 +90,7 @@ const BASE_CONFIG: AiChatConfig = {
     botNickPatterns: ['*bot', '*Bot', '*BOT'],
   },
   output: { maxLines: 4, maxLineLength: 440, interLineDelayMs: 0, stripUrls: false },
+  input: { maxPromptChars: 2000, maxInflight: 4 },
   ambient: {
     enabled: false,
     idle: { afterMinutes: 15, chance: 0.3, minUsers: 2 },
@@ -212,6 +219,7 @@ function makeDeps(overrides: Partial<PipelineDeps> = {}): PipelineDeps {
     engagementTracker,
     socialTracker,
     sessionManager,
+    semaphore: null,
     activeCharacter: vi.fn().mockReturnValue({ character: BASE_CHARACTER, language: undefined }),
     makeSessionIdentity: vi.fn().mockReturnValue({ account: null, identHost: 'u@h' }),
     noticeOpsRateLimited: vi.fn(),
@@ -366,6 +374,65 @@ describe('runPipeline bail-outs', () => {
     await runPipeline(api, BASE_CONFIG, deps, ctx, 'hi', 'hexbot', 'irc.test', 'address');
     expect(ctx.reply).toHaveBeenCalledWith('AI chat is currently unavailable.');
     expect(respondMock).not.toHaveBeenCalled();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// runPipeline — input prompt cap
+// -----------------------------------------------------------------------------
+
+describe('runPipeline busy / semaphore', () => {
+  it("'busy' status sends a private notice for address source", async () => {
+    respondMock.mockResolvedValueOnce({ status: 'busy' });
+    const api = createMockPluginAPI();
+    const ctx = makeCtx();
+    const deps = makeDeps();
+    await runPipeline(api, BASE_CONFIG, deps, ctx, 'hi', 'hexbot', 'irc.test', 'address');
+    expect(ctx.replyPrivate).toHaveBeenCalledWith('Busy — try again in a moment.');
+    expect(ctx.reply).not.toHaveBeenCalled();
+  });
+
+  it("'busy' status stays silent for rolled source", async () => {
+    respondMock.mockResolvedValueOnce({ status: 'busy' });
+    const api = createMockPluginAPI();
+    const ctx = makeCtx();
+    const deps = makeDeps();
+    await runPipeline(api, BASE_CONFIG, deps, ctx, 'hi', 'hexbot', 'irc.test', 'rolled');
+    expect(ctx.reply).not.toHaveBeenCalled();
+    expect(ctx.replyPrivate).not.toHaveBeenCalled();
+  });
+});
+
+describe('runPipeline prompt cap', () => {
+  it('rejects oversize prompt with private notice for address source', async () => {
+    const api = createMockPluginAPI();
+    const ctx = makeCtx();
+    const deps = makeDeps();
+    const cfg = { ...BASE_CONFIG, input: { maxPromptChars: 10, maxInflight: 4 } };
+    await runPipeline(api, cfg, deps, ctx, 'this is too long', 'hexbot', 'irc.test', 'address');
+    expect(respondMock).not.toHaveBeenCalled();
+    expect(ctx.replyPrivate).toHaveBeenCalledWith('Message too long — keep it under 10 chars.');
+    expect(ctx.reply).not.toHaveBeenCalled();
+  });
+
+  it('stays silent on oversize prompt for rolled source', async () => {
+    const api = createMockPluginAPI();
+    const ctx = makeCtx();
+    const deps = makeDeps();
+    const cfg = { ...BASE_CONFIG, input: { maxPromptChars: 10, maxInflight: 4 } };
+    await runPipeline(api, cfg, deps, ctx, 'this is too long', 'hexbot', 'irc.test', 'rolled');
+    expect(respondMock).not.toHaveBeenCalled();
+    expect(ctx.reply).not.toHaveBeenCalled();
+    expect(ctx.replyPrivate).not.toHaveBeenCalled();
+  });
+
+  it('accepts a prompt at the cap boundary', async () => {
+    const api = createMockPluginAPI();
+    const ctx = makeCtx();
+    const deps = makeDeps();
+    const cfg = { ...BASE_CONFIG, input: { maxPromptChars: 5, maxInflight: 4 } };
+    await runPipeline(api, cfg, deps, ctx, 'hello', 'hexbot', 'irc.test', 'address');
+    expect(respondMock).toHaveBeenCalledTimes(1);
   });
 });
 

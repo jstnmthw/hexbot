@@ -590,6 +590,64 @@ describe('respond', () => {
   });
 });
 
+describe('respond — semaphore', () => {
+  it("returns 'busy' when the semaphore is at capacity, without calling provider", async () => {
+    const { ProviderSemaphore } = await import('../../plugins/ai-chat/concurrency');
+    const sem = new ProviderSemaphore(1);
+    sem.tryAcquire(); // exhaust the single permit
+    const deps = { ...makeDeps(), semaphore: sem };
+    const result = await respond(
+      {
+        nick: 'alice',
+        channel: '#c',
+        prompt: 'hi',
+        promptContext: PROMPT_CTX,
+      },
+      deps,
+    );
+    expect(result.status).toBe('busy');
+    expect(deps.provider.complete).not.toHaveBeenCalled();
+  });
+
+  it('releases the permit after a successful provider call', async () => {
+    const { ProviderSemaphore } = await import('../../plugins/ai-chat/concurrency');
+    const sem = new ProviderSemaphore(1);
+    const deps = { ...makeDeps(), semaphore: sem };
+    const result = await respond(
+      {
+        nick: 'alice',
+        channel: '#c',
+        prompt: 'hi',
+        promptContext: PROMPT_CTX,
+      },
+      deps,
+    );
+    expect(result.status).toBe('ok');
+    expect(sem.active()).toBe(0);
+  });
+
+  it('releases the permit after provider error', async () => {
+    const { ProviderSemaphore } = await import('../../plugins/ai-chat/concurrency');
+    const sem = new ProviderSemaphore(1);
+    const provider = makeProvider();
+    (provider.complete as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new AIProviderError('boom', 'network'),
+    );
+    const deps = { ...makeDeps(provider), semaphore: sem };
+    const result = await respond(
+      {
+        nick: 'alice',
+        channel: '#c',
+        prompt: 'hi',
+        promptContext: PROMPT_CTX,
+      },
+      deps,
+    );
+    expect(result.status).toBe('provider_error');
+    expect(sem.active()).toBe(0);
+  });
+});
+
 describe('sendLines', () => {
   it('sends nothing for empty array', async () => {
     const fn = vi.fn();

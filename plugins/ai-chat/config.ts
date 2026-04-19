@@ -33,6 +33,13 @@ export interface AiChatConfig {
     maxTokens: number;
     ttlMs: number;
     pruneStrategy: 'bulk' | 'sliding';
+    /**
+     * Per-entry character cap. Defence-in-depth against an oversized message
+     * (bot output, future code path) bloating the buffer beyond what
+     * `maxTokens` budget assumes per turn. Entries longer than this are
+     * truncated with an ellipsis at store time.
+     */
+    maxMessageChars: number;
   };
   rateLimits: {
     userBurst: number;
@@ -52,6 +59,28 @@ export interface AiChatConfig {
     botNickPatterns: string[];
   };
   output: { maxLines: number; maxLineLength: number; interLineDelayMs: number; stripUrls: boolean };
+  /**
+   * Inbound resource limits — bound the cost of a single user request before
+   * it reaches the provider. Distinct from `rateLimits` (which counts events)
+   * and `tokenBudgets` (which counts after-the-fact spend); these caps are
+   * about ensuring no single request can consume disproportionate resources.
+   */
+  input: {
+    /**
+     * Maximum prompt characters accepted from a single user message. Longer
+     * prompts are rejected with a private notice. Defaults to 2000 — well
+     * above any natural IRC turn but small enough that a 10K-char paste
+     * can't burn prompt-eval cost on the local model.
+     */
+    maxPromptChars: number;
+    /**
+     * Maximum concurrent in-flight provider requests across the whole bot.
+     * Excess requests are rejected ('busy') rather than queued — local
+     * Ollama serializes anyway, and a queue hides backpressure from the
+     * channel. Defaults to 4.
+     */
+    maxInflight: number;
+  };
   channelProfiles: Record<
     string,
     { topic?: string; culture?: string; role?: string; depth?: string }
@@ -159,6 +188,7 @@ export function parseConfig(
       maxTokens: asNum(context.max_tokens, 4000),
       ttlMs: asNum(context.ttl_minutes, 60) * 60_000,
       pruneStrategy: asString(context.prune_strategy, 'bulk') === 'sliding' ? 'sliding' : 'bulk',
+      maxMessageChars: asNum(context.max_message_chars, 1000),
     },
     rateLimits: {
       userBurst: asNum(rl.user_burst, 3),
@@ -186,6 +216,13 @@ export function parseConfig(
       interLineDelayMs: asNum(output.inter_line_delay_ms, 500),
       stripUrls: asBool(output.strip_urls, false),
     },
+    input: (() => {
+      const inp = asRecord(raw.input);
+      return {
+        maxPromptChars: asNum(inp.max_prompt_chars, 2000),
+        maxInflight: asNum(inp.max_inflight, 4),
+      };
+    })(),
     ambient: (() => {
       const a = asRecord(raw.ambient);
       const idle = asRecord(a.idle);

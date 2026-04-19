@@ -6,6 +6,7 @@ import { AmbientEngine } from './ambient';
 import { type AssistantConfig, type PromptContext, respond } from './assistant';
 import { getCharacter, loadCharacters, resolveCharactersDir } from './character-loader';
 import type { Character } from './characters/types';
+import { ProviderSemaphore } from './concurrency';
 import { type AiChatConfig, buildProviderConfig, parseConfig } from './config';
 import { ContextManager } from './context-manager';
 import { EngagementTracker } from './engagement-tracker';
@@ -79,6 +80,7 @@ export interface AIChatDeps {
   rateLimiter?: RateLimiter;
   tokenTracker?: TokenTracker;
   iterStats?: IterStats;
+  semaphore?: ProviderSemaphore | null;
   sessionManager?: SessionManager | null;
   socialTracker?: SocialTracker;
   moodEngine?: MoodEngine;
@@ -90,6 +92,7 @@ export interface AIChatDeps {
 let contextManager: ContextManager | null = null;
 let rateLimiter: RateLimiter | null = null;
 let tokenTracker: TokenTracker | null = null;
+let semaphore: ProviderSemaphore | null = null;
 let iterStats: IterStats | null = null;
 let sessionManager: SessionManager | null = null;
 let provider: AIProvider | null = null;
@@ -171,6 +174,7 @@ function buildPipelineDeps(api: PluginAPI, cfg: AiChatConfig): PipelineDeps {
     engagementTracker,
     socialTracker,
     sessionManager,
+    semaphore,
     activeCharacter: (channel) => activeCharacter(api, cfg, channel),
     makeSessionIdentity,
     noticeOpsRateLimited: (channel, detail) => noticeOpsRateLimited(api, channel, detail),
@@ -256,6 +260,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
 
   rateLimiter = merged.rateLimiter ?? new RateLimiter(cfg.rateLimits);
   tokenTracker = merged.tokenTracker ?? new TokenTracker(api.db, cfg.tokenBudgets);
+  semaphore = merged.semaphore ?? new ProviderSemaphore(cfg.input.maxInflight);
   iterStats = merged.iterStats ?? new IterStats();
   contextManager =
     merged.contextManager ??
@@ -264,6 +269,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
       maxTokens: cfg.context.maxTokens,
       ttlMs: cfg.context.ttlMs,
       pruneStrategy: cfg.context.pruneStrategy,
+      maxMessageChars: cfg.context.maxMessageChars,
     });
   sessionManager =
     merged.sessionManager !== undefined
@@ -411,7 +417,15 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
           promptContext: promptCtx,
           maxContextMessages: character.generation?.maxContextMessages,
         },
-        { provider, rateLimiter, tokenTracker, contextManager, config: assistantCfg, iterStats },
+        {
+          provider,
+          rateLimiter,
+          tokenTracker,
+          contextManager,
+          config: assistantCfg,
+          iterStats,
+          semaphore,
+        },
       );
 
       if (result.status === 'fantasy_dropped') {
@@ -839,6 +853,13 @@ const SUB_HANDLERS: Record<string, SubHandler> = {
     const charMap = state?.characters ?? new Map();
     ctx.reply(`Available: ${[...charMap.keys()].join(', ')}`);
   },
+  // SECURITY: keep this subcommand strictly READ-ONLY. Do not add a setter
+  // path here (e.g. `!ai model <name>`). Ollama's `/api/chat` endpoint will
+  // implicitly pull an unknown model on first invocation, so making the model
+  // name user-mutable from IRC turns the bot into an arbitrary-model puller
+  // for anyone who can speak in-channel — including pulling huge or hostile
+  // GGUF blobs. Model selection must stay operator-only via config. See
+  // docs/SECURITY.md and the matching guard in providers/ollama.ts.
   model: ({ cfg, ctx }) => {
     const modelName = provider?.getModelName() ?? '(not initialized)';
     ctx.reply(`Provider: ${cfg.provider}, model: ${modelName}`);
@@ -958,6 +979,7 @@ export function teardown(): void {
   engagementTracker?.clear();
   rateLimiter = null;
   tokenTracker = null;
+  semaphore = null;
   iterStats = null;
   contextManager = null;
   sessionManager = null;

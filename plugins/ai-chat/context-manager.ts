@@ -28,7 +28,19 @@ export interface ContextManagerConfig {
    *   operators who want the old behaviour.
    */
   pruneStrategy?: 'bulk' | 'sliding';
+  /**
+   * Per-entry character cap. Defence-in-depth: even though the input
+   * prompt cap (`cfg.input.maxPromptChars`) blocks oversize user
+   * messages at the pipeline boundary, bot output and future code paths
+   * can still call `addMessage()` directly. Truncate per-entry so a
+   * single giant message can't blow through the byte budget below.
+   * Optional — undefined means no per-entry cap (legacy behaviour).
+   */
+  maxMessageChars?: number;
 }
+
+/** Sentinel appended to truncated entries so model + reader see the cut. */
+const TRUNCATION_MARKER = '…';
 
 /** Rough char→token ratio used for trimming — ~4 chars per token for English. */
 const CHARS_PER_TOKEN = 4;
@@ -69,7 +81,12 @@ export class ContextManager {
    */
   addMessage(channel: string | null, nick: string, text: string, isBot: boolean): void {
     if (channel === null) return; // PM removed — silently ignore
-    const entry: ContextEntry = { nick, text, isBot, timestamp: this.now() };
+    const cap = this.config.maxMessageChars;
+    const stored =
+      cap !== undefined && cap > 0 && text.length > cap
+        ? text.slice(0, cap - TRUNCATION_MARKER.length) + TRUNCATION_MARKER
+        : text;
+    const entry: ContextEntry = { nick, text: stored, isBot, timestamp: this.now() };
     const key = channel.toLowerCase();
 
     let buf = this.channels.get(key);
