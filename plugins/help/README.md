@@ -36,16 +36,17 @@ detail view is shown; otherwise it is tried as a category name.
 ### Example output (`!help op`)
 
 ```
--Bot- !op [nick] — Op a nick (or yourself if omitted)
--Bot- Requires: o
+-Bot- !op [nick] — Op a nick (or yourself if omitted) | Requires: o
 ```
 
 ### Example output (`!help 8ball`)
 
 ```
 -Bot- !8ball <question> — Ask the magic 8-ball a question
--Bot- No flags required
 ```
+
+Flags collapse onto the header as `| Requires: <flags>`. Unflagged
+commands omit the suffix — the absence is the signal.
 
 ### Permission filtering
 

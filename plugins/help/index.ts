@@ -80,15 +80,14 @@ export function init(api: PluginAPI): void {
           api.notice(ctx.nick, `No help for "${arg}" — try !help for a list`);
           return;
         }
-        // Detail view — always private to nick
-        api.notice(ctx.nick, `${boldTrigger(entry.usage)} — ${entry.description}`);
-        api.notice(
-          ctx.nick,
-          entry.flags === '-' ? 'No flags required' : `Requires: ${entry.flags}`,
-        );
+        // Detail view — always private to nick. Flags collapse onto the
+        // header as `| Requires: <flags>`; absence of that suffix is itself
+        // the signal that no flags are required, saving a line per command.
+        const flagsSuffix = entry.flags === '-' ? '' : ` | Requires: ${entry.flags}`;
+        api.notice(ctx.nick, `${boldTrigger(entry.usage)} — ${entry.description}${flagsSuffix}`);
         if (entry.detail) {
           for (const line of entry.detail) {
-            api.notice(ctx.nick, line);
+            api.notice(ctx.nick, `  ${line}`);
           }
         }
         return;

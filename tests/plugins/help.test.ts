@@ -332,13 +332,11 @@ describe('help plugin', () => {
       expect(call[0]).toBe('user1');
     }
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    // First line: bold usage — description
-    expect(messages[0]).toBe('\x02!op\x02 [nick] — Op a nick');
-    // Second line: flags
-    expect(messages[1]).toBe('Requires: o');
+    // Single line: bold usage — description | Requires: <flags>
+    expect(messages).toEqual(['\x02!op\x02 [nick] — Op a nick | Requires: o']);
   });
 
-  it('!help <command> with flags:- shows "No flags required"', async () => {
+  it('!help <command> with flags:- omits the Requires suffix entirely', async () => {
     await loadHelp();
     helpRegistry.register('8ball', [BALL_ENTRY]);
 
@@ -346,8 +344,7 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    expect(messages[0]).toBe('\x02!8ball\x02 <question> — Ask the magic 8-ball');
-    expect(messages[1]).toBe('No flags required');
+    expect(messages).toEqual(['\x02!8ball\x02 <question> — Ask the magic 8-ball']);
   });
 
   it('!help !op (with leading !) also works', async () => {
@@ -360,7 +357,7 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    expect(messages[0]).toBe('\x02!op\x02 [nick] — Op a nick');
+    expect(messages[0]).toBe('\x02!op\x02 [nick] — Op a nick | Requires: o');
   });
 
   it('!help <command> shows detail lines when present', async () => {
@@ -374,8 +371,9 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    expect(messages).toContain('Extra info here');
-    expect(messages).toContain('More info');
+    // Detail lines are indented to match the list view's two-space prefix.
+    expect(messages).toContain('  Extra info here');
+    expect(messages).toContain('  More info');
   });
 
   it('!help <command> hides privileged commands from unprivileged users', async () => {
@@ -479,8 +477,7 @@ describe('help plugin', () => {
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
     // Should show detail for !fun command, not the category view
-    expect(messages[0]).toBe('\x02!fun\x02 — A command called fun');
-    expect(messages[1]).toBe('No flags required');
+    expect(messages).toEqual(['\x02!fun\x02 — A command called fun']);
   });
 
   it('!help <unknowncategory> returns not-found reply', async () => {

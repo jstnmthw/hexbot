@@ -39,11 +39,6 @@ export function init(api: PluginAPI): void {
       flags: 'o',
       usage: '!topic <theme> <text>',
       description: 'Set the channel topic with a color-coded theme',
-      detail: [
-        'Use !topic preview <theme> <text> to preview without setting.',
-        'Use !topic lock to lock the current topic.',
-        'Use !topic unlock to disable topic protection.',
-      ],
       category: 'topic',
     },
     {
