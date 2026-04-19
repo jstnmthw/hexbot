@@ -221,6 +221,15 @@ export interface BotConfig {
   /** Interval in ms for the periodic channel presence check (rejoin missing channels). Default: 30000. Set to 0 to disable. */
   channel_rejoin_interval_ms?: number;
   /**
+   * Backoff schedule (ms between retries) for rejoining channels that failed
+   * with a permanent-error numeric (+b/+i/+k/+r). Each entry is the delay
+   * before the next JOIN attempt after the previous failure. After the last
+   * tier, the bot stops retrying until the next reconnect or a manual
+   * `.join`. Default: [300000, 900000, 2700000] (5, 15, 45 minutes). Set to
+   * `[]` to disable retries entirely (original pre-bounded-retry behavior).
+   */
+  channel_retry_schedule_ms?: number[];
+  /**
    * Prefix for built-in admin commands (`.help`, `.say`, `.join`, …) executed
    * via the REPL or a DCC CHAT session. Default: `"."`. Change this if `.`
    * collides with another tool's input or if you want a less-chatty prefix.

@@ -89,5 +89,6 @@
     "delivery_cooldown_seconds": 60
   },
   "quit_message": "HexBot",
-  "channel_rejoin_interval_ms": 30000
+  "channel_rejoin_interval_ms": 30000,
+  "channel_retry_schedule_ms": [300000, 900000, 2700000]
 }

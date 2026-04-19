@@ -75,12 +75,14 @@ describe('parseBotConfigOnDisk — valid shapes', () => {
       },
       quit_message: 'bye',
       channel_rejoin_interval_ms: 30000,
+      channel_retry_schedule_ms: [300000, 900000, 2700000],
       chanmod: { nick_recovery_password_env: 'CHANMOD_PW' },
     };
     const parsed = parseBotConfigOnDisk(config);
     expect(parsed.queue?.rate).toBe(2);
     expect(parsed.dcc?.port_range).toEqual([49152, 49171]);
     expect(parsed.botlink?.role).toBe('leaf');
+    expect(parsed.channel_retry_schedule_ms).toEqual([300000, 900000, 2700000]);
   });
 });
 

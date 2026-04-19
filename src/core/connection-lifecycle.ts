@@ -9,7 +9,10 @@ import type { BindHandler, BindType } from '../types';
 import { toEventObject } from '../utils/irc-event';
 import { ListenerGroup } from '../utils/listener-group';
 import { ircLower } from '../utils/wildcard';
-import { startChannelPresenceCheck as startPresenceCheck } from './channel-presence-checker';
+import {
+  type PermanentFailureEntry,
+  startChannelPresenceCheck as startPresenceCheck,
+} from './channel-presence-checker';
 import { type ReconnectPolicy, classifyCloseReason } from './close-reason-classifier';
 import { type ServerCapabilities, parseISupport } from './isupport';
 import type { ReconnectDriver } from './reconnect-driver';
@@ -147,14 +150,16 @@ export function registerConnectionEvents(
   const listeners = new ListenerGroup(client);
 
   // Channels that have failed JOIN with a permanent-error numeric
-  // (+i/+b/+k/+r). The presence-check timer consults this set so it
-  // doesn't re-issue a JOIN at every tick. Cleared implicitly on the
-  // next reconnect because this whole closure is re-created.
-  const permanentFailureChannels = new Set<string>();
+  // (+i/+b/+k/+r). The presence-check timer consults this map so it
+  // applies the bounded retry schedule (default 5/15/45 min) instead of
+  // retrying every tick. Cleared implicitly on the next reconnect because
+  // this whole closure is re-created. See bounded-retry design 2026-04-19.
+  const permanentFailureChannels = new Map<string, PermanentFailureEntry>();
 
   // One-time listeners — registered before any connection events fire so they
   // are never stacked by reconnects.
-  registerJoinErrorListeners(logger, listeners, permanentFailureChannels);
+  const retrySchedule = deps.config.channel_retry_schedule_ms ?? [300_000, 900_000, 2_700_000];
+  registerJoinErrorListeners(logger, listeners, permanentFailureChannels, retrySchedule);
   bindCoreInviteHandler(deps);
 
   const onConnecting = (): void => {
@@ -221,7 +226,7 @@ export function registerConnectionEvents(
     // reconnected session might have different K-lines / +i state.
     permanentFailureChannels.clear();
     if (presenceTimer !== null) clearInterval(presenceTimer);
-    presenceTimer = startChannelPresenceCheck(deps, permanentFailureChannels);
+    presenceTimer = startChannelPresenceCheck(deps, permanentFailureChannels, retrySchedule);
 
     if (firstConnect) {
       firstConnect = false;
@@ -441,7 +446,8 @@ function hasGetCipher(value: unknown): value is { getCipher(): unknown } {
 function registerJoinErrorListeners(
   logger: LoggerLike,
   listeners: ListenerGroup,
-  permanentFailureChannels: Set<string>,
+  permanentFailureChannels: Map<string, PermanentFailureEntry>,
+  retrySchedule: readonly number[],
 ): void {
   const JOIN_ERROR_NAMES: Record<string, string> = {
     channel_is_full: 'channel is full (+l)',
@@ -451,12 +457,38 @@ function registerJoinErrorListeners(
   };
   // Of the above, only `channel_is_full` (471) is transient-ish — the
   // +l limit can drop. The rest require operator action (unban, invite,
-  // correct key) and should not be retried automatically.
+  // correct key) and the presence checker applies a bounded retry
+  // schedule so time-limited bans (e.g. flood kicks) auto-recover.
   const PERMANENT_FAILURE_NAMES: ReadonlySet<string> = new Set([
     'invite_only_channel',
     'banned_from_channel',
     'bad_channel_key',
   ]);
+
+  /**
+   * Register a channel for bounded retry. If it already has an entry,
+   * leave it alone — a repeated failure during retry must not reset the
+   * tier back to zero or the backoff is meaningless.
+   */
+  const markPermanentFailure = (channel: string): void => {
+    const key = ircLower(channel, 'rfc1459');
+    if (permanentFailureChannels.has(key)) return;
+    const firstDelay = retrySchedule[0] ?? 0;
+    permanentFailureChannels.set(key, { tier: 0, nextRetryAt: Date.now() + firstDelay });
+    if (retrySchedule.length === 0) {
+      logger.warn(
+        `${channel} marked as permanent-failure — retries are disabled by config. ` +
+          `Fix the underlying cause and use .join ${channel} to retry.`,
+      );
+    } else {
+      logger.warn(
+        `${channel} marked as permanent-failure — next retry in ${Math.round(firstDelay / 1000)}s ` +
+          `(${retrySchedule.length} attempt${retrySchedule.length === 1 ? '' : 's'} scheduled). ` +
+          `Use .join ${channel} to retry immediately.`,
+      );
+    }
+  };
+
   listeners.on('irc error', (...args: unknown[]) => {
     const e = toEventObject(args[0]);
     const errName = String(e.error ?? '');
@@ -465,11 +497,7 @@ function registerJoinErrorListeners(
     if (reason) {
       logger.warn(`Cannot join ${channel}: ${reason}`);
       if (channel && PERMANENT_FAILURE_NAMES.has(errName)) {
-        permanentFailureChannels.add(ircLower(channel, 'rfc1459'));
-        logger.warn(
-          `${channel} marked as permanent-failure — presence check will stop retrying until reconnect. ` +
-            `Fix the underlying cause and use .join ${channel} to retry.`,
-        );
+        markPermanentFailure(channel);
       }
     }
   });
@@ -483,7 +511,7 @@ function registerJoinErrorListeners(
       const channel = String(params[1] ?? '');
       logger.warn(`Cannot join ${channel}: need to register nick (+r)`);
       if (channel) {
-        permanentFailureChannels.add(ircLower(channel, 'rfc1459'));
+        markPermanentFailure(channel);
       }
     }
   });
@@ -531,7 +559,8 @@ function joinConfiguredChannels(deps: ConnectionLifecycleDeps): void {
  */
 function startChannelPresenceCheck(
   deps: ConnectionLifecycleDeps,
-  permanentFailureChannels: Set<string>,
+  permanentFailureChannels: Map<string, PermanentFailureEntry>,
+  retrySchedule: readonly number[],
 ): ReturnType<typeof setInterval> | null {
   return startPresenceCheck(
     {
@@ -540,6 +569,7 @@ function startChannelPresenceCheck(
       configuredChannels: deps.configuredChannels,
       logger: deps.logger,
       intervalMs: deps.config.channel_rejoin_interval_ms ?? 30_000,
+      retrySchedule,
     },
     permanentFailureChannels,
   );

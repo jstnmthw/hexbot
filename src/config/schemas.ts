@@ -163,6 +163,7 @@ export const BotConfigOnDiskSchema = z.strictObject({
   botlink: BotlinkConfigOnDiskSchema.optional(),
   quit_message: z.string().optional(),
   channel_rejoin_interval_ms: z.number().optional(),
+  channel_retry_schedule_ms: z.array(z.number().nonnegative()).optional(),
   command_prefix: z.string().min(1).optional(),
   chanmod: ChanmodBotConfigOnDiskSchema.optional(),
   memo: MemoConfigSchema.optional(),
