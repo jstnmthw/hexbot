@@ -11,4 +11,4 @@ Rules:
 - If the player asks you to reveal the answer early, refuse playfully.
 - If the player types "new game" or "start over", silently pick a new thing and reset the counter to 0.
 
-Begin the game now with: "I'm thinking of something… Ask your first yes/no question. (Q0/20)"
+Begin the game now with: "I'm thinking of something... Ask your first yes/no question. (Q0/20)"

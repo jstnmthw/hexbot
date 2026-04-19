@@ -28,8 +28,8 @@ describe('ContextManager per-entry char cap', () => {
     mgr.addMessage('#c', 'alice', 'x'.repeat(50), false);
     const msgs = mgr.getContext('#c', 'alice');
     expect(msgs).toHaveLength(1);
-    // 10 chars total: 9 'x' + the '…' marker.
-    expect(msgs[0].content).toBe('alice: ' + 'x'.repeat(9) + '…');
+    // 10 chars total: 7 'x' + the '...' marker.
+    expect(msgs[0].content).toBe('alice: ' + 'x'.repeat(7) + '...');
   });
 
   it('does not truncate when text is at or under cap', () => {

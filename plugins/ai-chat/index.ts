@@ -122,7 +122,7 @@ const RATE_LIMIT_OP_NOTICE_COOLDOWN_MS = 5 * 60_000;
  */
 const MAX_ENTRY_BYTES = 2048;
 function truncateForBuffer(text: string): string {
-  return text.length > MAX_ENTRY_BYTES ? text.slice(0, MAX_ENTRY_BYTES) + '…' : text;
+  return text.length > MAX_ENTRY_BYTES ? text.slice(0, MAX_ENTRY_BYTES) + '...' : text;
 }
 
 /**

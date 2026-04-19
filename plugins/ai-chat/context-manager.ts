@@ -40,7 +40,7 @@ export interface ContextManagerConfig {
 }
 
 /** Sentinel appended to truncated entries so model + reader see the cut. */
-const TRUNCATION_MARKER = '…';
+const TRUNCATION_MARKER = '...';
 
 /** Rough char→token ratio used for trimming — ~4 chars per token for English. */
 const CHARS_PER_TOKEN = 4;

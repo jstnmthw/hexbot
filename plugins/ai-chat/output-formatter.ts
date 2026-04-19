@@ -116,7 +116,7 @@ function collapseWhitespace(line: string): string {
  * hyphen) AND the next line does not start with a list marker (`-`, `*`,
  * `1.`) or a fantasy-command prefix (`.`, `!`, `/`, `~`, `@`, `%`, `$`,
  * `&`, `+`). Lines ending in sentence terminators (`.`, `!`, `?`, `:`,
- * `…`, close-quote/paren) are kept as breaks. The fantasy-prefix exclusion
+ * `...`, close-quote/paren) are kept as breaks. The fantasy-prefix exclusion
  * preserves the per-line drop in `formatResponse` — merging across into a
  * "safe-prefix" line would otherwise smuggle a `.deop` past it. The input
  * is NFKC-normalised in `formatResponse` before this runs, so fullwidth
@@ -358,7 +358,7 @@ export function formatResponse(
     // in UTF-8 bytes — same units as `maxLineLength` — so multibyte content
     // doesn't push us past the IRC line limit during the suffix step.
     const last = truncated[truncated.length - 1];
-    const suffix = ' …';
+    const suffix = ' ...';
     const suffixBytes = utf8ByteLen(suffix);
     if (utf8ByteLen(last) + suffixBytes <= maxLineLength) {
       truncated[truncated.length - 1] = `${last}${suffix}`;

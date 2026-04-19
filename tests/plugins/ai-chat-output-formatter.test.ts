@@ -107,7 +107,7 @@ describe('formatResponse', () => {
     const text = 'line1.\nline2.\nline3.\nline4.\nline5.\nline6.';
     const out = formatResponse(text, 3, 400);
     expect(out).toHaveLength(3);
-    expect(out[2]).toContain('…');
+    expect(out[2]).toContain('...');
   });
 
   it('does not add ellipsis when lines fit within maxLines', () => {
@@ -243,7 +243,7 @@ describe('formatResponse', () => {
       'a'.repeat(40) + '\n' + 'b'.repeat(40) + '\n' + 'c'.repeat(40) + '\n' + 'd'.repeat(40);
     const out = formatResponse(text, 3, 40);
     expect(out).toHaveLength(3);
-    expect(out[2].endsWith('…')).toBe(true);
+    expect(out[2].endsWith('...')).toBe(true);
     expect(out[2].length).toBeLessThanOrEqual(40);
   });
 
@@ -303,12 +303,12 @@ describe('formatResponse', () => {
     });
 
     it('truncation ellipsis stays within the byte cap on a multibyte final line', () => {
-      // Force truncation: 5 lines, maxLines=2. Final line picks up " …" suffix.
+      // Force truncation: 5 lines, maxLines=2. Final line picks up " ..." suffix.
       const text = ['一', '二', '三' + '中'.repeat(20), '四', '五'].join('\n');
       const lines = formatResponse(text, 2, 30);
       expect(lines).toHaveLength(2);
       expect(byteLen(lines[lines.length - 1])).toBeLessThanOrEqual(30);
-      expect(lines[lines.length - 1].endsWith('…')).toBe(true);
+      expect(lines[lines.length - 1].endsWith('...')).toBe(true);
     });
   });
 });
