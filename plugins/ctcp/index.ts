@@ -22,6 +22,9 @@ export function init(api: PluginAPI): void {
     const pkgVersion = typeof pkg.version === 'string' ? pkg.version : /* v8 ignore next */ '0.0.0';
     versionString = `${pkgName} v${pkgVersion}`;
   } catch {
+    // package.json missing or unreadable (test runs from temp dirs,
+    // bundled deployments) — fall back to a bare name so the bot still
+    // answers VERSION rather than going silent on the request.
     versionString = 'HexBot';
   }
 
@@ -29,10 +32,17 @@ export function init(api: PluginAPI): void {
     api.ctcpResponse(ctx.nick, 'VERSION', versionString);
   });
 
+  // CTCP PING echoes the requester's payload verbatim so they can
+  // measure round-trip time against their own clock — replacing
+  // `ctx.text` with anything else (timestamp, "PONG", etc.) would
+  // break the spec and most clients. The `ctcpResponse` helper
+  // CTCP-quotes the payload; do not pre-encode it here.
   api.bind('ctcp', '-', 'PING', (ctx) => {
     api.ctcpResponse(ctx.nick, 'PING', ctx.text);
   });
 
+  // CTCP TIME format is intentionally unspecified by the de-facto
+  // spec — `new Date().toString()` matches what mIRC and irssi emit.
   api.bind('ctcp', '-', 'TIME', (ctx) => {
     api.ctcpResponse(ctx.nick, 'TIME', new Date().toString());
   });

@@ -181,6 +181,8 @@ function buildPipelineDeps(api: PluginAPI, cfg: AiChatConfig): PipelineDeps {
 // Ignore list (persisted in DB under ignore:<entry>)
 // ---------------------------------------------------------------------------
 
+/** DB key prefix for the persisted ignore list. Each entry is `ignore:<nick-or-hostmask>`
+ *  with value `'1'` (presence is the signal; value is unused). */
 const IGNORE_PREFIX = 'ignore:';
 /** Soft cap on the persisted ignore list — cheap insurance against a script
  *  looping `.ai ignore`. Admin-gated so this is not a threat, just hygiene. */
@@ -198,6 +200,10 @@ function ignoreListSize(api: PluginAPI): number {
 // Character lookup
 // ---------------------------------------------------------------------------
 
+/** DB key prefix for per-channel character overrides set via `!ai character <name>`.
+ *  Looked up before falling back to `config.channelCharacters`, so admin overrides
+ *  win over operator config without a reload. Migrated lazily from the legacy
+ *  `personality:<channel>` key on first read. */
 const CHARACTER_PREFIX = 'character:';
 
 function activeCharacter(
@@ -267,6 +273,9 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
         : null;
   gamesDir = resolveGamesDir(cfg.sessions.gamesDir);
 
+  // 60s tick: matches the granularity of the inactivity timeout (operator
+  // configures it in minutes), so worst-case lag between expiry-deserved and
+  // expiry-applied is one tick.
   // Periodic sweep: expire game sessions past the inactivity timeout. Without
   // this, sessions only expire lazily on the user's next message, so a user
   // who starts sessions in many channels and goes silent pins all that state
@@ -369,7 +378,10 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
 
       const maxOutputTokens = Math.min(
         character.generation?.maxOutputTokens ?? cfg.maxOutputTokens,
-        128, // ambient messages use shorter output
+        // 128-token ceiling for ambient: an unprompted utterance shouldn't
+        // monologue. Caps both per-call cost and on-channel verbosity for
+        // idle/unanswered/join-wb/topic emissions.
+        128,
       );
 
       const assistantCfg: AssistantConfig = {
@@ -764,6 +776,11 @@ const SUB_HANDLERS: Record<string, SubHandler> = {
     // subsequent channel message scans via isIgnored(). An unvalidated
     // insert path is a slow-loris on the check loop (and a key-space
     // fill attack).
+    // Accept: an optional channel/services sigil ($/#/&) followed by characters
+    // valid in IRC nicks/hostmasks plus glob metacharacters (* ?). Rejects
+    // whitespace, control bytes, NUL, and anything that could smuggle a
+    // newline into the DB key. 128-char cap is a hygiene bound — real
+    // hostmasks fit comfortably under it.
     if (target.length > 128 || !/^[$#&]?[\w[\]\\`^{}*?@!.-]+$/.test(target)) {
       ctx.reply('Invalid ignore target.');
       return;

@@ -16,7 +16,11 @@ type SnapshotItem = { entry: ChannelSettingEntry; value: ChannelSettingValue; is
 /**
  * Format flag settings as an +/- grid.
  * Overridden values are marked with `*` (e.g. `+enforce_modes*`).
- * Pads entries to uniform width, 4 per row.
+ * Pads entries to uniform width.
+ *
+ * `perRow = 4` keeps a typical 4-flag row well under the 80-column DCC
+ * console width even when keys carry the `*` overridden marker — wider
+ * grids wrap in xchat / mIRC and ruin the at-a-glance scan.
  */
 function formatFlagGrid(flags: SnapshotItem[], prefix = '  ', perRow = 4): string[] {
   if (flags.length === 0) return [];
@@ -156,6 +160,9 @@ export function registerChannelCommands(deps: ChannelCommandsDeps): void {
         return;
       }
 
+      // Sanitize the value before it touches the settings store — values
+      // can be echoed back over IRC by plugins that read them, so strip
+      // CRLF / NUL up-front. See docs/SECURITY.md on user-input handling.
       const rawValue = sanitize(parts.slice(2).join(' '));
       if (def.type === 'int') {
         // Strict int parsing: parseInt('42abc', 10) returns 42, which would

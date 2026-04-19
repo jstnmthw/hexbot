@@ -66,10 +66,18 @@ function stripProtocolUnsafe(text: string): string {
   return out;
 }
 
-/** Strip common markdown syntaxes the LLM may produce. */
+/**
+ * Strip common markdown syntaxes the LLM may produce. IRC has no rendering for
+ * markdown; left in, asterisks/underscores/backticks become visible noise that
+ * also confuses downstream tooling (clients that parse `*emphasis*` as IRC
+ * action wrapping). Each pattern targets one syntax in turn — order matters
+ * so code fences are removed before italic/bold (`**` inside ``` would
+ * otherwise get partially stripped).
+ */
 function stripMarkdown(text: string): string {
   let out = text;
-  // Code fences ``` … ```
+  // Code fences ``` … ```  — strip the optional language tag and trailing
+  // newline that follow the opening fence, then strip any remaining bare ```.
   out = out.replace(/```[a-zA-Z]*\n?/g, '').replace(/```/g, '');
   // Bold **x**, __x__
   out = out.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/__([^_]+)__/g, '$1');
@@ -105,6 +113,8 @@ function splitLongLine(line: string, maxLineLength: number): string[] {
     const slice = remaining.substring(0, maxLineLength + 1);
     // Prefer a sentence boundary, then fall back to word boundary.
     let cut = findLastMatch(slice, /[.!?](\s|$)/g);
+    // Reject sentence breaks in the first half — splitting "Yes." off the
+    // front of a long line would emit a useless one-word IRC message.
     if (cut === -1 || cut < maxLineLength / 2) {
       // Sentence break too early — use last space.
       cut = slice.lastIndexOf(' ', maxLineLength);
@@ -125,6 +135,8 @@ function findLastMatch(text: string, re: RegExp): number {
   re.lastIndex = 0;
   while ((m = re.exec(text)) !== null) {
     idx = m.index + 1; // split AFTER the punctuation
+    // Zero-width-match guard — without this advance, a regex that matched the
+    // empty string at position N would loop forever at the same index.
     if (m.index === re.lastIndex) re.lastIndex++;
   }
   return idx;

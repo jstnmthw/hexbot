@@ -109,7 +109,13 @@ export interface PluginLoaderDeps {
   getServerSupports?: () => Record<string, string>;
 }
 
-/** Safe plugin name pattern. */
+/**
+ * Safe plugin name pattern — alphanumerics, hyphens, underscores; must start
+ * with an alphanumeric. Rejects path-traversal payloads (`..`, `/`, `\`),
+ * leading-dot dotfiles, and anything that would render strangely in
+ * `[plugin:<name>]` log prefixes. Enforced both on `mod.name` and on the
+ * directory name a plugin is loaded from.
+ */
 const SAFE_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 
 // ---------------------------------------------------------------------------
@@ -642,7 +648,14 @@ export class PluginLoader {
     }
   }
 
-  /** Import a plugin bundle with cache busting. */
+  /**
+   * Import a plugin bundle, side-stepping the ESM loader cache on subsequent
+   * imports of the same path. Node's ESM loader keys the cache by full URL,
+   * so appending a fresh `?t=<timestamp>` query string forces a re-evaluation
+   * of the module — required for `.reload <plugin>` to actually pick up edited
+   * code. The first import is cache-friendly (no query string) so production
+   * loads don't accumulate distinct module instances.
+   */
   private async importWithCacheBust(absPath: string): Promise<Record<string, unknown>> {
     if (!this.importedOnce.has(absPath)) {
       this.importedOnce.add(absPath);

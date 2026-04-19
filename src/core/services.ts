@@ -355,6 +355,8 @@ export class Services {
     // Some IRC networks (e.g. Anope) don't support the ACC command (Atheme-style)
     // and respond with "Unknown command ACC". In that case we fall back to STATUS,
     // and vice versa for networks that don't support STATUS.
+    // Regex: capture the command name after the literal "Unknown command "
+    // prefix that both Atheme and Anope emit verbatim for unknown subcommands.
     const unknownCmd = message.match(/^Unknown command (\S+)/i);
     if (unknownCmd) {
       const failedCmd = unknownCmd[1].toUpperCase();

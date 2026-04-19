@@ -174,6 +174,10 @@ export class BotLinkProtocol {
       /* v8 ignore next -- race guard: socket may deliver buffered lines after close */
       if (this.closed) return;
 
+      // Per-line cap before JSON.parse — keeps a hostile peer from forcing
+      // us to allocate (and walk) a multi-MB string just to reject it as
+      // oversized. Matches the outbound cap below so both sides agree on
+      // the wire-level frame ceiling.
       if (Buffer.byteLength(line, 'utf8') > MAX_FRAME_SIZE) {
         this.logger?.error('Frame exceeds 64KB limit, dropping connection');
         this.send({ type: 'ERROR', code: 'FRAME_TOO_LARGE', message: 'Frame exceeds 64KB limit' });

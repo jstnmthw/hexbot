@@ -162,7 +162,15 @@ process.on('SIGTERM', () => {
 // on every reconnect, for example) we'd otherwise spin forever printing
 // recovered errors. Past 100 in 60 seconds we escalate to fatalExit so
 // the supervisor restarts us cleanly.
+/** 60s sliding window — chosen to be long enough that a network blip producing
+ *  a few burst errors doesn't trip the cap, but short enough that a sustained
+ *  error storm escalates within ~one minute rather than letting the bot spin
+ *  noisily for hours. */
 const RECOVERABLE_RATE_WINDOW_MS = 60_000;
+/** ~100 swallowed socket errors per minute is comfortably above any real
+ *  network flap (a connect/disconnect cycle produces at most a handful) and
+ *  comfortably below the rate at which a true tight-loop would saturate the
+ *  log. Past this we escalate to fatalExit so the supervisor restarts cleanly. */
 const RECOVERABLE_RATE_MAX = 100;
 const recoverableTimestamps: number[] = [];
 

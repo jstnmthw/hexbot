@@ -45,7 +45,16 @@ interface IRCBridgeOptions {
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Duration after attach() during which topic events are suppressed (server join burst). */
+/**
+ * Duration after attach() during which topic events are suppressed.
+ *
+ * On every (re)connect, the server replays RPL_TOPIC (332) for each channel
+ * we autojoin — irc-framework surfaces these as `topic` events identical to
+ * a real `/topic` change. Without this grace window, every reconnect would
+ * fire the `topic` bind for every channel as if an operator had just edited
+ * the topic, producing spurious announcements and audit rows. 5s comfortably
+ * covers the join burst even on slow links.
+ */
 const STARTUP_GRACE_MS = 5000;
 
 // IRCv3 caps that irc-framework requests on our behalf but we deliberately

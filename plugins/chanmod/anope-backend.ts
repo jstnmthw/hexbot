@@ -3,7 +3,15 @@ import { ChanServBackendBase } from './chanserv-backend-base';
 import type { ProbeState } from './chanserv-notice';
 import { type BackendAccess, accessAtLeast } from './protection-backend';
 
-/** Default delay between steps in the synthetic RECOVER sequence. */
+/**
+ * Default delay between steps in the synthetic RECOVER sequence.
+ * Anope ChanServ commits MODE/CLEAR side effects asynchronously; without
+ * a small gap between `MODE CLEAR ops`, `UNBAN/INVITE`, and `OP`, the
+ * subsequent commands can race ahead of the prior commit and silently
+ * no-op. 200ms is well under the visible-to-operators threshold but
+ * larger than typical services scheduler latency. Tunable via
+ * `anope_recover_step_delay_ms` config.
+ */
 const RECOVER_STEP_DELAY_MS = 200;
 
 /** Timeout for GETKEY probe responses (matches other probe timeouts in chanserv-notice.ts). */

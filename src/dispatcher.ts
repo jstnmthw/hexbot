@@ -188,6 +188,10 @@ export class EventDispatcher {
 
     // Timer binds: set up an interval
     if (type === 'time') {
+      // Floor at 10s — anything tighter is almost certainly a plugin bug
+      // (the IRC-bot timer use case is "every minute / hour / day", never
+      // sub-second) and would burn CPU and queue capacity for no benefit.
+      // We raise rather than reject so the bind still functions.
       const MIN_TIMER_MS = 10_000;
       const rawMs = parseInt(mask, 10) * 1000;
       if (!Number.isFinite(rawMs) || rawMs <= 0) {

@@ -553,7 +553,9 @@ export class Permissions {
     // Account patterns are inherently stronger than hostmask patterns — skip.
     if (hostmask.startsWith(ACCOUNT_PATTERN_PREFIX)) return;
 
-    // Check for nick!*@* pattern (only nick portion is specific)
+    // Check for nick!*@* pattern (only nick portion is specific). Either
+    // exact form is treated the same — the `*.*` variant is a common mistake
+    // operators copy off old eggdrop tutorials thinking it's stricter.
     const bangIdx = hostmask.indexOf('!');
     if (bangIdx === -1) return;
 

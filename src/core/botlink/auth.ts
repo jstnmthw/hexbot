@@ -27,7 +27,13 @@ export type { AuthBanEntry, LinkBan } from './auth-store';
 // IP parsing helpers
 // ---------------------------------------------------------------------------
 
-/** Parse an IPv4 address into a 32-bit number. Returns NaN for invalid input. */
+/**
+ * Parse an IPv4 address into a 32-bit number. Returns NaN for invalid input.
+ * The final `>>> 0` converts the signed result of the bit-shift sequence
+ * (which goes negative once the high bit of the first octet is set, e.g.
+ * 128.0.0.0 and above) back into an unsigned 32-bit value so callers can
+ * compare numeric IPs with `===` and `&` without worrying about sign.
+ */
 function ipv4ToNum(ip: string): number {
   const parts = ip.split('.');
   if (parts.length !== 4) return NaN;
@@ -71,6 +77,10 @@ export function isWhitelisted(ip: string, cidrs: string[]): boolean {
     if (prefix < 0 || prefix > 32 || !Number.isInteger(prefix)) continue;
     const baseNum = ipv4ToNum(baseIP);
     if (Number.isNaN(baseNum)) continue;
+    // CIDR mask: all-ones for `prefix` high bits, zeros below. The
+    // `prefix === 0` branch is required because `~0 << 32` is `~0` in JS
+    // (the shift amount is taken mod 32), which would wrongly produce a
+    // full mask for a `/0` (match-everything) range.
     const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
     if ((ipNum & mask) === (baseNum & mask)) return true;
   }

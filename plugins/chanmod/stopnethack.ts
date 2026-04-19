@@ -9,9 +9,19 @@ import type { PluginAPI } from '../../src/types';
 import { botHasOps, getUserFlags, hasAnyFlag, markIntentional } from './helpers';
 import type { ChanmodConfig, SharedState } from './state';
 
-/** Time window within which split-quits count toward netsplit detection. */
+/**
+ * Time window within which split-quits count toward netsplit detection.
+ * Real netsplits fire dozens of quits in well under a second; 5s is
+ * generous enough to ride out clock skew between server-emitted QUITs and
+ * still tight enough that three unrelated `<server> <server>` quits hours
+ * apart never trip detection.
+ */
 const SPLIT_WINDOW_MS = 5000;
-/** Number of split-quits within SPLIT_WINDOW_MS that triggers netsplit mode. */
+/**
+ * Three split-quits within {@link SPLIT_WINDOW_MS} triggers netsplit mode.
+ * Two could plausibly be a coincidence on a busy network; three within 5s
+ * is a netsplit signature that doesn't occur in normal traffic.
+ */
 const SPLIT_THRESHOLD = 3;
 
 /**

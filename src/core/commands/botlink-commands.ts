@@ -204,8 +204,12 @@ function handleBotlinkBan(
     ctx.reply('Invalid IPv4 address or CIDR range.');
     return;
   }
-  let durationMs = 0; // default: permanent
+  // 0 = permanent (BotLinkHub.manualBan sentinel).
+  let durationMs = 0;
   let reasonParts = rest.slice(1);
+  // Optional duration token: only consume rest[1] if parseDuration recognizes
+  // the syntax (e.g. `30m`, `7d`). A bare reason word like "abuse" returns
+  // null and is left in the reason text instead.
   if (reasonParts.length > 0) {
     const parsed = parseDuration(reasonParts[0]);
     if (parsed !== null) {
@@ -427,6 +431,10 @@ export function registerBotlinkCommands(deps: BotlinkCommandsDeps): void {
           sendFrame(link, { type: 'RELAY_INPUT', handle: session.handle, line }, targetBot);
         },
         {
+          // 3s — interactive operator round-trip. Long enough to absorb a
+          // typical hub→leaf hop + DCC accept on the remote side, short
+          // enough that a silent drop snaps back to the local console
+          // before the operator gives up and retypes the command.
           timeoutMs: 3000,
           onTimeout: () => {
             if (link.kind === 'hub') link.hub.unregisterRelay(session.handle);
@@ -506,7 +514,10 @@ export function registerBotlinkCommands(deps: BotlinkCommandsDeps): void {
         return;
       }
 
-      // Strip leading dot if present (user may type `.bot leaf1 .status` or `.bot leaf1 status`)
+      // Strip leading dot if present (user may type `.bot leaf1 .status` or
+      // `.bot leaf1 status`). The remote handler re-prepends `.` when it
+      // dispatches via `handler.execute`, so a single leading dot would
+      // otherwise become `..status` on the leaf.
       const cmdText = command.startsWith('.') ? command.slice(1) : command;
       const [cmdNameRaw, ...cmdArgs] = cmdText.split(/\s+/);
       const cmdName = cmdNameRaw.toLowerCase();
@@ -536,7 +547,10 @@ export function registerBotlinkCommands(deps: BotlinkCommandsDeps): void {
         metadata: { command: cmdName, args: redactArgs ? '[redacted]' : cmdArgs.join(' ') },
       });
 
-      // Execute on self — just run the command locally
+      // Self-targeted relay short-circuits the wire path and runs the
+      // command locally with the original ctx — preserves transport,
+      // permissions, and reply routing exactly as if the operator had
+      // typed `.<cmdText>` directly.
       if (targetBot === config.botname) {
         await handler.execute(`.${cmdText}`, ctx);
         return;

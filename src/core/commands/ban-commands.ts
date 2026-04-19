@@ -113,12 +113,17 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
         return;
       }
       const { channel, mask } = parsed;
+      // 200-char ceiling matches the hostmask length cap in `.adduser` and
+      // bounds the row size we persist in BanStore. RFC 2812 nick+user+host
+      // tops out well below this; anything longer is almost certainly a
+      // malformed mask or an attempt to bloat the store.
       if (mask.length > 200) {
         ctx.reply('Ban mask too long (max 200 characters).');
         return;
       }
 
-      let durationMs = 0; // default: permanent
+      // 0 is the BanStore sentinel for "permanent" — no expiry sweep.
+      let durationMs = 0;
       let rest = parsed.rest;
       if (rest.length > 0) {
         const parsedDuration = parseDuration(rest[0]);

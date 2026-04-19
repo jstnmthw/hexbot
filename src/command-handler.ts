@@ -196,6 +196,12 @@ export class CommandHandler {
     args: string,
     ctx: CommandContext,
   ): boolean {
+    // REPL: trusted local console — only reachable by someone who can already
+    // read config/bot.json off disk, so flag enforcement is moot.
+    // Botlink: command was already permission-checked on the originating
+    // leaf (and again on the hub if it routes onward); re-checking here would
+    // double-deny against the relay actor's hostmask, which never matches.
+    // See docs/SECURITY.md for the trust-boundary rationale.
     if (ctx.source === 'repl' || ctx.source === 'botlink') return true;
     if (entry.options.flags === '-' || entry.options.flags === '') return true;
 

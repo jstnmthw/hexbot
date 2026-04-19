@@ -63,7 +63,15 @@ export function setupProtection(
   chain?: ProtectionChain,
   onThreat?: ThreatCallback,
 ): () => void {
-  /** Delay for services to process UNBAN/INVITE before we rejoin. */
+  /**
+   * Delay between dispatching ChanServ UNBAN/INVITE and the actual JOIN
+   * retry. 500ms covers typical services round-trip on ircd-hybrid +
+   * Atheme; shorter delays race the JOIN against the still-applied ban
+   * mode and produce a second `banned_from_channel` that resets backoff.
+   * If a deployment sees consistent rejoin failures, raise this rather
+   * than the configured `rejoin_delay_ms` — the latter is the user-facing
+   * knob for the no-services case.
+   */
   const SERVICES_PROCESSING_MS = 500;
 
   // ---------------------------------------------------------------------------
@@ -240,6 +248,12 @@ export function setupProtection(
 
   if (config.nick_recovery) {
     const desiredNick = api.botConfig.irc.nick;
+    /**
+     * Throttle nick-recovery attempts. A flapping holder (rapid
+     * QUIT/JOIN cycles or repeated nick changes) would otherwise drive
+     * a NICK or GHOST per event — the latter is rate-limited by services
+     * and 30s leaves headroom under typical NickServ floodprot.
+     */
     const BACKOFF_MS = 30_000;
     let lastAttemptMs = 0;
 

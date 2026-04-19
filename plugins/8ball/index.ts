@@ -49,6 +49,9 @@ export function init(api: PluginAPI): void {
       return;
     }
 
+    // Math.random is fine here — this is a fun toy, not a fairness or
+    // security primitive. The classic 8-ball ratio (10/5/5 affirmative/
+    // hedged/negative) is encoded by the order/count in RESPONSES.
     const answer = RESPONSES[Math.floor(Math.random() * RESPONSES.length)];
     ctx.reply(`🎱 ${answer}`);
   });

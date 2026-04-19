@@ -67,6 +67,9 @@ export function init(api: PluginAPI): void {
     const arg = ctx.args.trim();
 
     if (arg) {
+      // Accept both `!help foo` and `!help !foo` — strip the optional
+      // leading `!` so the lookup matches command entries regardless of
+      // whether the user typed the prefix.
       const normalized = arg.replace(/^!/, '');
 
       // Priority 1: match as a command name

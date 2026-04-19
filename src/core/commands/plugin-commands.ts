@@ -6,6 +6,11 @@ import type { PluginLoader } from '../../plugin-loader';
 import { tryAudit } from '../audit';
 import { replyFailure } from '../command-helpers';
 
+// Plugin names must start with an alphanumeric and consist of alphanumerics,
+// hyphens, and underscores only. This matches plugin-loader's internal
+// SAFE_NAME_RE — duplicated here so command-side validation can reject bad
+// arguments with a clear error before they hit the loader, and so a
+// path-traversal sequence like `../foo` never reaches the dynamic import.
 const PLUGIN_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 
 /**

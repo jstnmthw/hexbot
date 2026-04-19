@@ -25,7 +25,19 @@ interface JoinRecoveryState {
   resetTimer: ReturnType<typeof setTimeout> | null;
 }
 
+/**
+ * Backoff floor — first failed join waits at least 30s before the next
+ * recovery attempt. Tight enough to recover quickly from a transient
+ * services outage, loose enough that a wedged channel doesn't hammer
+ * ChanServ once per second.
+ */
 const INITIAL_BACKOFF_MS = 30_000;
+/**
+ * Backoff ceiling — caps doubling at 5 minutes. With a 5-minute cap the
+ * worst-case retry rate against a permanently-broken channel is
+ * 12 ChanServ requests per hour, which services rate limiters on
+ * Libera/Rizon tolerate without K-line risk.
+ */
 const MAX_BACKOFF_MS = 300_000;
 
 /** How long the bot must stay in the channel before backoff resets (5 minutes). */

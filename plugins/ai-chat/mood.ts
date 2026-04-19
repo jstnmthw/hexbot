@@ -14,14 +14,26 @@ export interface BotMood {
   humor: number;
 }
 
-/** Mood decay/recharge rates per hour. */
+/**
+ * Mood decay/recharge rates. Tuned so a fresh DEFAULT_MOOD takes ~30+ hours
+ * of total inactivity to cross any threshold organically — drift should be
+ * felt over a session, not observed in a single tick. All values are
+ * dimensionless deltas applied to clamped 0..1 mood components.
+ */
 const RATES = {
+  /** Energy bleeds 0.01/h ⇒ ~70h to fully discharge from 0.7 default. */
   energyDecayPerHour: 0.01,
+  /** Recharge per fully-elapsed QUIET_WINDOW_MS, capped at 3 windows per call. */
   energyRechargePerQuietWindow: 0.05,
+  /** Each direct interaction nudges engagement up — saturates at 1.0. */
   engagementRisePerInteraction: 0.1,
   engagementDecayPerHour: 0.02,
+  /** Hard knock per detected repeat — 4 repeats in a row crosses the
+   *  "getting impatient" threshold from default 0.8. */
   patienceDropPerRepeat: 0.05,
   patienceRechargePerHour: 0.02,
+  /** Random walk amplitude per hour — produces semi-random humor variety
+   *  without spiking on any single tick. */
   humorDriftPerHour: 0.05,
 };
 
@@ -113,7 +125,10 @@ export class MoodEngine {
   private applyTimeDrift(): void {
     const now = this.now();
     const elapsed = now - this.lastUpdate;
-    if (elapsed < 1_000) return; // Skip sub-second updates
+    // Skip sub-second updates: per-message bursts would otherwise generate
+    // floating-point noise (`elapsed/3.6e6` underflows the rates) without
+    // changing observable behaviour.
+    if (elapsed < 1_000) return;
     this.lastUpdate = now;
 
     const hours = elapsed / 3_600_000;
@@ -125,6 +140,9 @@ export class MoodEngine {
     const quietMs = now - this.lastInteraction;
     if (quietMs >= QUIET_WINDOW_MS) {
       const quietWindows = Math.floor(quietMs / QUIET_WINDOW_MS);
+      // Cap recharge at 3 windows so a bot returning from a multi-day idle
+      // doesn't pin energy to 1.0 in one drift step — gradual ramp is more
+      // realistic than instant max.
       const recharge = Math.min(quietWindows, 3) * RATES.energyRechargePerQuietWindow;
       this.mood.energy = clamp(this.mood.energy + recharge);
     }

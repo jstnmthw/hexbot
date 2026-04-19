@@ -31,8 +31,13 @@ import { MASTER_FLAG, OWNER_FLAG, type Permissions } from '../permissions';
 // Tunables
 // ---------------------------------------------------------------------------
 
+/** Rows per `.modlog` page. Sized to fit a typical DCC console without
+ * triggering flood protection on most networks. */
 export const PAGE_SIZE = 10;
-export const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+/** A pager older than this is dropped on the next command invocation —
+ * 30 min balances "operator stepped away for coffee" against unbounded
+ * `pagers` Map growth on a long-running bot. */
+export const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 const VALID_SOURCES: ReadonlySet<string> = new Set<ModLogSource>([
   'repl',
@@ -572,8 +577,9 @@ function runPrev(ctx: CommandContext, key: string, db: BotDatabase): void {
     return;
   }
   // Walk back to the page whose first row was `prev.firstId`. The cursor
-  // for that page is `prev.firstId + 1` (use beforeId one greater so the
-  // first row reappears).
+  // for that page is `prev.firstId + 1` — `beforeId` is exclusive in
+  // getModLog, so passing one greater than firstId makes the original
+  // first row reappear at the top of the page.
   const rows = db.getModLog({ ...state.filter, beforeId: prev.firstId + 1, limit: PAGE_SIZE });
   updatePagerState(state, rows, Math.max(1, state.pageStart - PAGE_SIZE));
   reply(ctx, renderPage(state, db));
@@ -598,7 +604,9 @@ function runEnd(ctx: CommandContext, key: string, db: BotDatabase): void {
     return;
   }
   // Walk forward in PAGE_SIZE steps until exhausted. Bounded by the snapshot
-  // total so a runaway filter can't loop indefinitely.
+  // total so a runaway filter (or rows landing during the walk) cannot loop
+  // indefinitely. The `+ 2` slack absorbs at most one new page worth of
+  // inserts mid-walk; beyond that the user runs `.modlog top` to refresh.
   const maxIterations = Math.ceil(state.totalAtFirstQuery / PAGE_SIZE) + 2;
   let safety = 0;
   while (safety++ < maxIterations) {

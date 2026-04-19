@@ -41,9 +41,11 @@ export function registerDispatcherCommands(deps: DispatcherCommandsDeps): void {
       // stripFormatting on every user-influenced column — plugin IDs and
       // bind masks originate from plugin code, so a compromised plugin
       // could otherwise inject IRC control codes into an operator's
-      // console via the `.binds` output.
+      // console via the `.binds` output. See docs/SECURITY.md.
 
-      // Group binds by plugin for readability
+      // Group binds by plugin so the rendered table reads top-down by
+      // owning plugin instead of interleaving handlers from different
+      // plugins as they happened to register.
       const groups = new Map<string, typeof binds>();
       for (const b of binds) {
         const id = stripFormatting(b.pluginId);

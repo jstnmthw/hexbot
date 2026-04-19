@@ -256,6 +256,10 @@ export class RateLimiter {
     // Opportunistic eviction: a fully-refilled bucket that hasn't been touched
     // in over an hour is indistinguishable from a fresh one — drop it so
     // nick-rotation doesn't grow `userBuckets` forever.
+    // Trigger eviction only when the map is large (>64 buckets) AND the
+    // current bucket has been idle ≥1h AND is at full capacity. The size
+    // floor prevents thrashing in small deployments; the idle+full check
+    // ensures we only evict buckets that look indistinguishable from fresh.
     if (
       bucket.tokens >= this.config.userBurst &&
       now - bucket.lastRefill > 3_600_000 &&

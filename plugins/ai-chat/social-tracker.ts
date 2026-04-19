@@ -103,6 +103,10 @@ export class SocialTracker {
     // Question tracking — hard cap keeps the list bounded even inside the
     // 10-min prune window (defence against a crafted `foo?` flood).
     if (!isBot && looksLikeQuestion(text)) {
+      // Hard cap at 50 pending questions per channel — well above any
+      // organic rate (questions arrive on the order of minutes, prune fires
+      // every 10 min) but bounds the array against a `foo?\nfoo?\n...` flood
+      // from a single nick that hasn't yet been answered by another nick.
       if (state.pendingQuestions.length >= 50) state.pendingQuestions.shift();
       state.pendingQuestions.push({ nick, text, at: now });
     }
@@ -242,6 +246,11 @@ export class SocialTracker {
       state.activity =
         state.lastMessageAt > 0 && now - state.lastMessageAt >= DEAD_THRESHOLD_MS ? 'dead' : 'slow';
     } else if (perMinute < 2) {
+      // Activity tiers (msgs/min, 5-min rolling window):
+      //   <2   slow      — bot can chime in freely without crowding
+      //   2-5  normal    — baseline conversation density
+      //   5-10 active    — humans engaged; bot scales rolled-reply chance down
+      //   >10  flooding  — back off entirely (ambient + rolled both suppressed)
       state.activity = 'slow';
     } else if (perMinute <= 5) {
       state.activity = 'normal';
@@ -332,11 +341,21 @@ export class SocialTracker {
   }
 }
 
-/** Heuristic: does this message look like a question? */
+/**
+ * Heuristic: does this message look like a question? Used by the ambient
+ * engine to populate `pendingQuestions` for the unanswered-question
+ * amplification path. Intentionally permissive — false positives just mean
+ * the ambient engine *might* chime in if no one answers within the wait
+ * window, which is the desired fallback behaviour anyway.
+ */
 export function looksLikeQuestion(text: string): boolean {
   const trimmed = text.trim();
   if (trimmed.endsWith('?')) return true;
   const lower = trimmed.toLowerCase();
+  // English interrogative openers — kept short and high-precision. A trailing
+  // space avoids matching prefixes ("isolation" → "is "); inflected forms
+  // ("does" but not "do") are intentional to suppress imperative/declarative
+  // false positives ("do that", "is here").
   const interrogatives = [
     'who ',
     'what ',

@@ -395,7 +395,9 @@ export class DCCSession implements DCCSessionEntry {
   /**
    * Start the session: wire up readline, send the password prompt, and wait
    * for the first line of input. The banner is **not** sent until the
-   * password prompt succeeds — see {@link showBanner}.
+   * password prompt succeeds — see {@link showBanner}. version/botNick are
+   * captured here (not in the constructor) so a single DCCSession instance
+   * can be re-used by tests that drive the prompt directly.
    */
   start(version: string, botNick: string): void {
     this.versionForBanner = version;
@@ -412,6 +414,9 @@ export class DCCSession implements DCCSessionEntry {
     this.resetPromptIdle();
 
     rl.on('line', (line: string) => {
+      // readline has just delivered a complete line — every byte that
+      // contributed to it is no longer "pending". Reset before dispatch so
+      // the next chunk's accounting starts clean.
       this.pendingLineBytes = 0;
       this.onLine(line);
     });
@@ -454,6 +459,10 @@ export class DCCSession implements DCCSessionEntry {
    */
   private attachLineLengthGuard(): void {
     this.dataGuard = (chunk: Buffer) => {
+      // 0x0a = LF. We track bytes accumulated since the most recent newline
+      // — when the chunk has no LF we extend the running count; when it
+      // does, we reset to whatever follows the LAST LF (the partial trailing
+      // line that readline will continue to buffer).
       const newlineIdx = chunk.lastIndexOf(0x0a);
       if (newlineIdx === -1) {
         this.pendingLineBytes += chunk.length;
@@ -524,6 +533,7 @@ export class DCCSession implements DCCSessionEntry {
     this.resetIdle();
 
     rl.on('line', (line: string) => {
+      // See `start()` — reset the pending-bytes guard on each completed line.
       this.pendingLineBytes = 0;
       this.onLine(line);
     });
@@ -1504,6 +1514,10 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
     server.listen(port, '0.0.0.0', () => {
       const ipDecimal = ipToDecimal(this.config.ip);
+      // Reuse the client-supplied token when present so the peer can
+      // correlate our reply with their original passive offer; otherwise
+      // mint a non-zero 16-bit token (`+1` keeps it strictly > 0 — a zero
+      // token reads as "no token" to some clients and breaks correlation).
       const token = parsed.token !== 0 ? parsed.token : Math.floor(Math.random() * 0xffff) + 1;
       this.client.ctcpRequest(nick, 'DCC', `CHAT chat ${ipDecimal} ${port} ${token}`);
       this.logger?.info(`Passive DCC offered to ${nick} on port ${port}`);

@@ -2,7 +2,13 @@
 // A session is identified by (userKey, channel) — only one active per user per channel.
 import type { AIMessage } from './providers/types';
 
-/** Bound on session.context length — caps per-turn token burn on long games. */
+/**
+ * Bound on session.context length — caps per-turn token burn on long games.
+ * 40 turns ≈ 20 player/bot exchange pairs, enough for a 20questions playthrough
+ * or a multi-round trivia session before sliding-window pruning kicks in.
+ * Beyond this, per-call cost grows roughly linearly with no quality benefit
+ * (game state is short-horizon — older turns rarely change current play).
+ */
 const MAX_SESSION_TURNS = 40;
 
 /**

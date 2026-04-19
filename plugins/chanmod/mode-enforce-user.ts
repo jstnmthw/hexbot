@@ -23,6 +23,14 @@ import {
   type SharedState,
 } from './state';
 
+/**
+ * Punishment is harsher (kick/kickban) than mode re-enforcement, so the
+ * cap is tighter and the window longer than the generic {@link
+ * COOLDOWN_WINDOW_MS}: at most 2 punishments per setter per channel per
+ * 30s. Prevents a deop loop between two bots from cascading into a flood
+ * of kicks. The setter (not the target) is the cooldown key — punishment
+ * is about the actor, not the victim.
+ */
 const PUNISH_MAX = 2;
 const PUNISH_COOLDOWN_MS = 30_000;
 

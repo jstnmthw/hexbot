@@ -36,10 +36,17 @@ const REDACT_FIELDS = [
   'api_key',
   'apiKey',
 ];
+/** Matches JSON-shaped credential pairs: `"password":"value"` (handles
+ *  embedded `\"` escape sequences in the value). Captures the key+colon
+ *  preamble in $1 so we can rewrite the value while preserving the key. */
 const REDACT_JSON_RE = new RegExp(
   `("(?:${REDACT_FIELDS.join('|')})"\\s*:\\s*)"[^"\\\\]*(?:\\\\.[^"\\\\]*)*"`,
   'gi',
 );
+/** Matches loose `key=value`, `key: value`, or `key="value"` shapes outside
+ *  of JSON — e.g. how an Error.toString or `util.format('%j')` of a partial
+ *  object might surface a credential. Word-boundary anchored to avoid
+ *  matching `mypassword` as the key `password`. */
 const REDACT_ASSIGN_RE = new RegExp(
   `\\b(${REDACT_FIELDS.join('|')})\\s*[:=]\\s*(?:"[^"]*"|'[^']*'|\\S+)`,
   'gi',

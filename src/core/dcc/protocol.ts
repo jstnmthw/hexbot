@@ -12,7 +12,13 @@ export const DCC_PROMPT_TIMEOUT_MS = 30_000;
 
 /**
  * Convert a dotted IPv4 string to a 32-bit unsigned decimal integer,
- * as required by the DCC CTCP protocol.
+ * as required by the DCC CTCP protocol (RFC 1459 era CTCP DCC spec —
+ * IPs travel as decimal big-endian uint32 strings on the wire).
+ *
+ * The trailing `>>> 0` re-interprets the result as unsigned: once the
+ * high bit of the first octet is set (e.g. addresses 128.0.0.0+), the
+ * `<<` / `|` chain leaves a negative signed-32 number, which mIRC and
+ * other DCC peers parse as a totally different IP.
  *
  * @example ipToDecimal('1.2.3.4') === 16909060
  */
@@ -44,6 +50,9 @@ export interface DccChatPayload {
  * Passive DCC: "CHAT chat 0 0 <token>"
  */
 export function parseDccChatPayload(args: string): DccChatPayload | null {
+  // Whitespace tokenisation matches the CTCP DCC payload grammar — the
+  // canonical form is exactly four (active) or five (passive) space-
+  // separated tokens. Tabs are accepted because some clients emit them.
   const parts = args.trim().split(/\s+/);
   // Minimum: "CHAT chat <ip> <port>" = 4 tokens
   if (parts.length < 4) return null;

@@ -57,7 +57,10 @@ export function init(api: PluginAPI): void {
     typeof rawMaxEntries === 'number' && rawMaxEntries > 0 ? rawMaxEntries : DEFAULT_MAX_ENTRIES;
   const MAX_TEXT_LENGTH = 200;
 
-  // Track every channel message (pubm is stackable, won't interfere with others)
+  // Track every channel message. `pubm` (public message match) is the
+  // stackable variant of `pub` — multiple plugins can bind '*' without
+  // any one of them blocking dispatch to the others, unlike `pub` which
+  // is exclusive on the trigger.
   api.bind('pubm', '-', '*', (ctx) => {
     const text =
       ctx.text.length > MAX_TEXT_LENGTH ? ctx.text.substring(0, MAX_TEXT_LENGTH) + '...' : ctx.text;
@@ -157,7 +160,9 @@ function cleanupStale(api: PluginAPI, maxAgeMs: number): void {
       }
       api.db.del(entry.key);
     } catch {
-      // Corrupt entry — remove it
+      // Corrupt JSON in the KV store — drop it. The sweep is the only
+      // place that can clean up garbage left by an older plugin version
+      // or a partial write, so swallowing here is intentional.
       api.db.del(entry.key);
     }
   }

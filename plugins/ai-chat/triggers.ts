@@ -62,10 +62,17 @@ export function isIgnored(nick: string, hostmask: string, ignoreList: string[]):
   return false;
 }
 
-/** Minimal glob matching for hostmasks — supports `*` and `?`. */
+/**
+ * Minimal glob matching for hostmasks — supports `*` (any run) and `?`
+ * (one char). Standalone implementation rather than reusing `src/utils/wildcard`
+ * to keep this module pure and dependency-free for unit testing.
+ */
 function hostmaskMatches(hostmask: string, pattern: string): boolean {
   // Fast path: no wildcards
   if (!pattern.includes('*') && !pattern.includes('?')) return hostmask === pattern;
+  // Escape regex metacharacters first, THEN substitute glob `*` / `?` —
+  // doing it in the other order would let `pattern.replace(/\*/g, '.*')`
+  // get clobbered by the metachar escape that follows.
   const regex = new RegExp(
     '^' +
       pattern
@@ -106,7 +113,10 @@ export function detectTrigger(
         if (prompt) return { kind: 'direct', prompt };
       }
     }
-    // "… hexbot?" / "… hexbot!" style
+    // "… hexbot?" / "… hexbot!" style — bot-nick at a word boundary followed
+    // by `?` or `!`, anywhere in the message. Catches "hey hexbot?" and
+    // "I think hexbot!" without false-positive on "hexbots" (the \b prevents
+    // matching `hexbots?` as a word).
     const questionRe = new RegExp(`\\b${escapeRe(nickLow)}[?!]`, 'i');
     if (questionRe.test(lower)) {
       return { kind: 'direct', prompt: trimmed };

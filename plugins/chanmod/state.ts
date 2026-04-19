@@ -149,8 +149,23 @@ function createCycleState(): CycleState {
   return cycle;
 }
 
+/**
+ * How long a bot-initiated mode change marker stays "fresh" before it's
+ * considered stale. 5s is comfortably longer than the round-trip from
+ * `api.deop()` to the resulting MODE event under normal latency, but short
+ * enough that a user manually re-deopping someone seconds later doesn't
+ * accidentally consume a stale marker and bypass mode-enforce.
+ */
 export const INTENTIONAL_TTL_MS = 5000;
+/**
+ * Rolling window for the per-(channel,target) enforcement cooldown counter.
+ * Combined with {@link MAX_ENFORCEMENTS}: more than 3 re-enforcements within
+ * 10s on the same target is treated as a mode-war signal — the bot stops
+ * fighting and (where wired) reports `enforcement_suppressed` to the takeover
+ * detector for escalation through ProtectionChain.
+ */
 export const COOLDOWN_WINDOW_MS = 10_000;
+/** Mode-war saturation threshold — see {@link COOLDOWN_WINDOW_MS}. */
 export const MAX_ENFORCEMENTS = 3;
 /** How long a `pendingRecoverCleanup`/`unbanRequested`/cycle dedup lock
  *  can live waiting for its expected follow-up event before it's pruned. */

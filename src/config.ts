@@ -76,6 +76,9 @@ function formatPath(path: ReadonlyArray<PropertyKey>): string {
 // Resolver
 // ---------------------------------------------------------------------------
 
+/** Matches any object key ending in `_env` and captures the sibling field name
+ *  (e.g. `password_env` → captures `password`). Used by `resolveObject` to
+ *  pair `<field>_env` keys with the env var they reference. */
 const ENV_SUFFIX_RE = /^(.+)_env$/;
 
 /**

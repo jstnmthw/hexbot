@@ -318,7 +318,10 @@ export class BotDatabase {
     this.ensureOpen();
     return this.runClassified('list', () => {
       if (prefix != null) {
-        // Escape LIKE wildcards in the prefix, then append %
+        // Escape LIKE wildcards in the prefix, then append %.
+        // Order matters: escape backslashes FIRST so the `\` we then prepend
+        // to `%` and `_` isn't itself escaped on the next pass. Paired with
+        // the `ESCAPE '\'` clause in `stmtListPrefix`.
         const escaped = prefix.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
         return this.stmtListPrefix.all(namespace, `${escaped}%`) as Array<{
           key: string;

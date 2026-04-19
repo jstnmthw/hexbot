@@ -2,6 +2,14 @@
 // Extracted so the classifier and timeout helper are unit-testable without
 // installing real process listeners.
 
+/**
+ * Socket-layer error codes we treat as transient. All four are emitted by the
+ * Node TCP read path when the peer or network drops a connection mid-read —
+ * irc-framework's reconnect loop will recover, but Node first surfaces the
+ * raw read error as an `uncaughtException` because no one is awaiting the
+ * socket. Anything outside this set is a real bug and falls through to
+ * fatalExit.
+ */
 const RECOVERABLE_SOCKET_CODES = new Set(['ETIMEDOUT', 'ECONNRESET', 'EPIPE', 'ENOTCONN']);
 
 /**

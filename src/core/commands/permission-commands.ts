@@ -145,8 +145,11 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
         return;
       }
 
-      // Set mode
+      // Set mode — parts[1] is the +/- flag string (e.g. `+o`, `-mn`).
       const flagsArg = parts[1];
+      // Audit source resolves the caller's transport to the canonical
+      // mod_log `by` value. See CLAUDE.md "Audit logging convention" — never
+      // hand-roll `{ by: ctx.nick, source: ctx.source }` here.
       const source = getAuditSource(ctx);
 
       // Guard: only owners can grant flags at master level (`m`) or higher.
@@ -173,8 +176,10 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
         }
       }
 
+      // Channel-specific path: `.flags <handle> <flags> #channel`. Channel
+      // names start with `#` or `&` per RFC 2812, but the legacy `.flags`
+      // grammar only documents `#`, so keep the looser narrow here.
       if (parts.length >= 3 && parts[2].startsWith('#')) {
-        // Channel-specific flags
         const channel = parts[2];
         permissions.setChannelFlags(
           handle,

@@ -95,6 +95,9 @@ export function init(api: PluginAPI): void {
         api.notice(ctx.nick, 'Cannot lock: no topic is currently set.');
         return;
       }
+      // 390 is a conservative ceiling: RFC 2812's 512-byte line cap
+      // minus the per-server `:nick!user@host TOPIC #channel :` framing
+      // and CRLF leaves ~390 usable bytes for the topic on most ircds.
       if (live.length > 390) {
         api.notice(
           ctx.nick,
@@ -232,7 +235,10 @@ export function init(api: PluginAPI): void {
 
     const enforced = api.channelSettings.getString(channel, 'topic_text');
     if (!enforced) return; // no lock set
-    if (ctx.text === enforced) return; // already correct — bot's own echo or a matching change
+    // Reentrancy guard: when this handler restores the topic via
+    // api.topic() below, the server echoes a TOPIC event back to us.
+    // Returning early on a match prevents an infinite restore loop.
+    if (ctx.text === enforced) return;
 
     const isAuthorized = api.permissions.checkFlags('o', ctx);
     if (isAuthorized) {

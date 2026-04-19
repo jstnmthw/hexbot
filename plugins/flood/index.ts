@@ -102,6 +102,13 @@ function cfgStr(key: string, fallback: string): string {
   return typeof v === 'string' ? v : fallback;
 }
 
+/**
+ * True if the bot currently holds `+o` in `channel`. Enforcement actions
+ * (kick/ban/mode) require ops — without this guard the bot would emit
+ * MODE/KICK lines that the server rejects as "you're not channel
+ * operator", noisily logging on every flood hit during a takeover where
+ * the bot has been deopped.
+ */
 function botHasOps(channel: string): boolean {
   const ch = api.getChannel(channel);
   if (!ch) return false;

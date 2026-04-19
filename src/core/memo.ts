@@ -84,7 +84,11 @@ const DEFAULTS: Required<MemoConfig> = {
 
 const OWNER_ID = 'core:memo';
 
-/** Regex to parse "You have N new memo(s)" from MemoServ. */
+/**
+ * Regex to parse "You have N new memo(s)" from MemoServ. Matches both Atheme
+ * ("You have 3 new memos.") and Anope ("You have 1 new memo.") phrasing —
+ * we capture only the count, ignoring singular/plural and any trailing text.
+ */
 const MEMO_COUNT_RE = /you have (\d+) new memo/i;
 
 // ---------------------------------------------------------------------------
@@ -325,6 +329,10 @@ export class MemoManager {
         // `nick` argument could carry control characters into the
         // MemoServ command line or exploit the services-protocol parser
         // on the destination network.
+        // Regex: first char is a letter or special (`_[]\`^{|}`); subsequent
+        // 0-31 chars add digits and `-`. 32-char total cap matches the
+        // RFC 2812 NICKLEN ceiling — networks may advertise lower via
+        // ISUPPORT but never higher.
         if (!/^[A-Za-z_[\]\\`^{|}][A-Za-z0-9_[\]\\`^{|}-]{0,31}$/.test(nick)) {
           ctx.reply(`Invalid nick: "${nick}"`);
           return;
