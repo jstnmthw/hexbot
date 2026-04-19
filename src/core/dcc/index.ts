@@ -19,9 +19,7 @@ import type { BotEventBus, BotEvents } from '../../event-bus';
 import type { LogRecord, LogSink, LoggerLike } from '../../logger';
 import { Logger as LoggerClass } from '../../logger';
 import type { DccConfig, HandlerContext, PluginServices, UserRecord } from '../../types';
-import { toEventObject } from '../../utils/irc-event';
-import { sanitize } from '../../utils/sanitize';
-import { type Casemapping, ircLower } from '../../utils/wildcard';
+import type { Casemapping } from '../../utils/wildcard';
 import { tryLogModAction } from '../audit';
 import { clearAuditTailForSession, clearPagerForSession } from '../commands/modlog-commands';
 import { verifyPassword } from '../password';
@@ -35,6 +33,11 @@ import {
   parseCanonicalFlags,
   shouldDeliverToSession,
 } from './console-flags';
+import {
+  extractMirrorEvent as extractMirrorEventImpl,
+  mirrorNotice as mirrorNoticeImpl,
+  mirrorPrivmsg as mirrorPrivmsgImpl,
+} from './irc-mirror';
 import { buildLoginSummary } from './login-summary';
 import {
   DCC_PROMPT_TIMEOUT_MS,
@@ -43,6 +46,7 @@ import {
   isPassiveDcc,
   parseDccChatPayload,
 } from './protocol';
+import { DCCSessionStore } from './session-store';
 
 // Barrel re-exports — external consumers import from `'./dcc'` instead of
 // reaching into individual files.
@@ -866,10 +870,6 @@ export class DCCSession implements DCCSessionEntry {
     if (this.closed) return;
     this.closed = true;
 
-    this.clearAllTimers();
-
-    this.rl?.close();
-
     if (!this.socket.destroyed) {
       // Wrap the farewell write — a concurrent `close` event between the
       // destroyed-check and the write can still throw EPIPE. We must
@@ -885,33 +885,37 @@ export class DCCSession implements DCCSessionEntry {
       this.socket.destroy();
     }
 
-    this.manager.removeSession(this.nick);
-    this.manager.announce(`*** ${this.handle} has left the console`);
-    this.manager.notifyPartyPart(this.handle, this.nick);
-    // Eagerly drop modlog pager and audit-tail subscriptions tied to this
-    // session — without this they linger for `IDLE_TIMEOUT_MS` (30 min)
-    // past close. See audit findings W-CMD1/W-CMD2 (2026-04-14).
-    clearPagerForSession(`dcc:${this.handle}`);
-    clearAuditTailForSession(`dcc:${this.handle}`);
-    this.logger?.info(`DCC session closed: ${this.handle} (${reason ?? 'unknown'})`);
+    this.teardownSession(`DCC session closed: ${this.handle} (${reason ?? 'unknown'})`);
   }
 
   private onClose(): void {
     if (this.closed) return;
     this.closed = true;
 
+    this.teardownSession(`DCC disconnected: ${this.handle} (${this.nick})`);
+  }
+
+  /**
+   * Shared teardown path for both graceful {@link close} and socket-driven
+   * {@link onClose}: cancel timers, close the readline, drop the session
+   * from the manager, announce departure on the party line, and eagerly
+   * unsubscribe modlog pager / audit-tail handlers tied to this DCC
+   * session (without the eager drop they linger for `IDLE_TIMEOUT_MS`
+   * after close — see audit findings W-CMD1/W-CMD2 from 2026-04-14).
+   *
+   * Socket destruction stays in {@link close} because only that path
+   * writes a farewell message and calls `destroy()` manually;
+   * {@link onClose} fires after the socket is already torn down.
+   */
+  private teardownSession(logMessage: string): void {
     this.clearAllTimers();
     this.rl?.close();
-
-    // Remove from manager and announce departure
     this.manager.removeSession(this.nick);
     this.manager.announce(`*** ${this.handle} has left the console`);
     this.manager.notifyPartyPart(this.handle, this.nick);
-    // Eagerly drop modlog pager and audit-tail subscriptions tied to this
-    // session — see audit findings W-CMD1/W-CMD2 (2026-04-14).
     clearPagerForSession(`dcc:${this.handle}`);
     clearAuditTailForSession(`dcc:${this.handle}`);
-    this.logger?.info(`DCC disconnected: ${this.handle} (${this.nick})`);
+    this.logger?.info(logMessage);
   }
 }
 
@@ -960,11 +964,15 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     fn: (...args: never[]) => void;
   }> = [];
 
-  private readonly sessions: Map<string, DCCSessionEntry>;
+  /**
+   * IRC-casemapping-aware store wrapping the sessions map. Built from
+   * `deps.sessions` so tests that pre-seed a plain `Map` keep working —
+   * the store just adopts whatever map the caller injected.
+   */
+  private readonly sessionStore: DCCSessionStore;
   private readonly portAllocator: PortAllocator;
   /** Port → awaiting-connect entry. Injectable via `deps.pending` for tests. */
   private readonly pending: Map<number, PendingDCC>;
-  private casemapping: Casemapping = 'rfc1459';
   private botNick: string;
   private ircListeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
   private authSweepTimer: NodeJS.Timeout | null = null;
@@ -996,7 +1004,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     this.botNick = deps.botNick;
     this.logger = deps.logger?.child('dcc') ?? null;
     this.getStatsFn = deps.getStats ?? null;
-    this.sessions = deps.sessions ?? new Map();
+    this.sessionStore = new DCCSessionStore(deps.sessions ?? new Map());
     this.portAllocator = deps.portAllocator ?? new RangePortAllocator(deps.config.port_range);
     this.pending = deps.pending ?? new Map();
     this.authTracker = deps.authTracker ?? new DCCAuthTracker();
@@ -1027,7 +1035,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     // console — they already saw the banner. Existing sessions and the
     // stdout/file sinks still get it.
     this.logger?.info(`DCC session active: ${session.handle} (${session.nick})`);
-    this.sessions.set(ircLower(session.nick, this.casemapping), session);
+    this.sessionStore.set(session.nick, session);
     this.announce(`*** ${session.handle} has joined the console`);
     this.onPartyJoin?.(session.handle, session.nick);
     // Write the `login/success` row after the in-memory state is
@@ -1108,7 +1116,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   }
 
   setCasemapping(cm: Casemapping): void {
-    this.casemapping = cm;
+    this.sessionStore.setCasemapping(cm);
   }
 
   /** Attach to the dispatcher — starts listening for DCC CTCP requests. */
@@ -1181,7 +1189,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
    * full Logger machinery.
    */
   private fanoutLogToSessions(record: LogRecord): void {
-    for (const session of this.sessions.values()) {
+    for (const session of this.sessionStore.values()) {
       try {
         session.receiveLog(record);
         /* v8 ignore start -- defensive: one broken session must not block others */
@@ -1242,29 +1250,28 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   onPartyPart: ((handle: string, nick: string) => void) | null = null;
 
   /**
+   * Thin wrapper around {@link extractMirrorEventImpl} preserved so any
+   * existing internal or test caller keeps working after the extraction.
+   * The real implementation lives in `./irc-mirror`.
+   */
+  private extractMirrorEvent(
+    raw: unknown,
+  ): { nick: string; target: string; message: string } | null {
+    return extractMirrorEventImpl(raw);
+  }
+
+  /**
    * Forward a raw IRC notice to all DCC sessions, skipping channel notices
-   * and NickServ ACC/STATUS replies (internal permission-verification
-   * chatter that shouldn't reach operator consoles). Extracted from
-   * {@link attach} so unit tests can drive it directly.
+   * and NickServ ACC/STATUS replies. Delegates to the pure helper in
+   * `./irc-mirror` so the guard chain can be unit-tested in isolation.
    */
   mirrorNotice(raw: unknown): void {
-    const e = toEventObject(raw);
-    const nick = String(e.nick ?? '');
-    const target = String(e.target ?? '');
-    const message = String(e.message ?? '');
-    if (/^[#&]/.test(target)) return;
-    if (this.services.isNickServVerificationReply(nick, message)) return;
-    this.announce(`-${sanitize(nick)}- ${sanitize(message)}`);
+    mirrorNoticeImpl(this.services, (line) => this.announce(line), raw);
   }
 
   /** Forward a raw IRC PRIVMSG to all DCC sessions, skipping channel messages. */
   mirrorPrivmsg(raw: unknown): void {
-    const e = toEventObject(raw);
-    const nick = String(e.nick ?? '');
-    const target = String(e.target ?? '');
-    const message = String(e.message ?? '');
-    if (/^[#&]/.test(target)) return;
-    this.announce(`<${sanitize(nick)}> ${sanitize(message)}`);
+    mirrorPrivmsgImpl((line) => this.announce(line), raw);
   }
 
   /**
@@ -1277,7 +1284,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
    * stability audit 2026-04-14.
    */
   broadcast(fromHandle: string, message: string): void {
-    for (const session of this.sessions.values()) {
+    for (const session of this.sessionStore.values()) {
       if (session.handle === fromHandle) continue;
       try {
         session.writeLine(`<${fromHandle}> ${message}`);
@@ -1300,7 +1307,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
    * audit 2026-04-14.
    */
   announce(message: string): void {
-    for (const session of this.sessions.values()) {
+    for (const session of this.sessionStore.values()) {
       try {
         session.writeLine(message);
       } catch (err) {
@@ -1321,16 +1328,12 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
   /** Return a snapshot of the current session list. */
   getSessionList(): Array<{ handle: string; nick: string; connectedAt: number }> {
-    return Array.from(this.sessions.values()).map((s) => ({
-      handle: s.handle,
-      nick: s.nick,
-      connectedAt: s.connectedAt,
-    }));
+    return this.sessionStore.snapshot();
   }
 
   /** Get a session by IRC nick. */
   getSession(nick: string): DCCSessionEntry | undefined {
-    return this.sessions.get(ircLower(nick, this.casemapping));
+    return this.sessionStore.get(nick);
   }
 
   /** Get the bot's name (for relay display). */
@@ -1345,7 +1348,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
   /** Remove a session by IRC nick (called by DCCSession.onClose). */
   removeSession(nick: string): void {
-    this.sessions.delete(ircLower(nick, this.casemapping));
+    this.sessionStore.delete(nick);
   }
 
   // -------------------------------------------------------------------------
@@ -1427,21 +1430,21 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
   /** Cap total concurrent sessions. */
   private checkSessionLimit(nick: string): boolean {
-    if (this.sessions.size < this.config.max_sessions) return true;
+    if (this.sessionStore.size < this.config.max_sessions) return true;
     this.client.notice(nick, 'DCC CHAT: request denied.');
     return false;
   }
 
   /** Reject if the user already has an active session or a pending connection. */
   private checkNotAlreadyConnected(nick: string): boolean {
-    const lowerNick = ircLower(nick, this.casemapping);
-    const session = this.sessions.get(lowerNick);
+    const lowerNick = this.sessionStore.sessionKey(nick);
+    const session = this.sessionStore.get(nick);
     if (session) {
       if (session.isStale) {
         // Either the session already closed itself, or the socket is dead
         // but onClose hasn't fired yet. Evict and let the new offer through.
         if (session.isClosed) {
-          this.sessions.delete(lowerNick);
+          this.sessionStore.delete(nick);
         } else {
           this.logger?.info(`DCC: evicting stale session for ${nick}`);
           session.close('Stale session replaced.');
@@ -1452,7 +1455,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
       }
     }
     for (const p of this.pending.values()) {
-      if (ircLower(p.nick, this.casemapping) === lowerNick) {
+      if (this.sessionStore.sessionKey(p.nick) === lowerNick) {
         this.client.notice(nick, 'DCC CHAT: request denied.');
         return false;
       }
@@ -1624,10 +1627,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   }
 
   private closeAll(reason?: string): void {
-    for (const session of this.sessions.values()) {
-      session.close(reason);
-    }
-    this.sessions.clear();
+    this.sessionStore.closeAll(reason);
   }
 
   /**
@@ -1637,18 +1637,6 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
    * old credentials cannot survive a rotation.
    */
   private closeSessionsForHandle(handle: string, reason: string): void {
-    const lowerHandle = ircLower(handle, this.casemapping);
-    const toClose: Array<[string, DCCSessionEntry]> = [];
-    for (const [key, session] of this.sessions.entries()) {
-      if (ircLower(session.handle, this.casemapping) === lowerHandle) {
-        toClose.push([key, session]);
-      }
-    }
-    if (toClose.length === 0) return;
-    this.logger?.warn(`Closing ${toClose.length} DCC session(s) for ${handle}: ${reason}`);
-    for (const [key, session] of toClose) {
-      session.close(`Session ended: ${reason}.`);
-      this.sessions.delete(key);
-    }
+    this.sessionStore.closeForHandle(handle, reason, this.logger);
   }
 }

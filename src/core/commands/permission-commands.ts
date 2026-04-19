@@ -1,10 +1,15 @@
 // HexBot — Permission management commands
 // Registers .adduser, .deluser, .flags, .users with the command handler.
 import type { CommandHandler } from '../../command-handler';
-import { getAuditSource } from '../../utils/command-helpers';
 import { stripFormatting } from '../../utils/strip-formatting';
 import { formatTable } from '../../utils/table';
+import { getAuditSource, parseCommandArgs } from '../command-helpers';
 import { OWNER_FLAG, type Permissions } from '../permissions';
+
+export interface PermissionCommandsDeps {
+  handler: CommandHandler;
+  permissions: Permissions;
+}
 
 /**
  * Register permission management commands (`.adduser`, `.deluser`,
@@ -20,10 +25,8 @@ import { OWNER_FLAG, type Permissions } from '../permissions';
  * because viewing is cheap, but an inline check inside the handler
  * tightens the grant path so only owners can promote to master.
  */
-export function registerPermissionCommands(
-  handler: CommandHandler,
-  permissions: Permissions,
-): void {
+export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
+  const { handler, permissions } = deps;
   handler.registerCommand(
     'adduser',
     {
@@ -34,11 +37,8 @@ export function registerPermissionCommands(
       relayToHub: true,
     },
     (args, ctx) => {
-      const parts = args.split(/\s+/);
-      if (parts.length < 3) {
-        ctx.reply('Usage: .adduser <handle> <hostmask> <flags>');
-        return;
-      }
+      const parts = parseCommandArgs(args, 3, 'Usage: .adduser <handle> <hostmask> <flags>', ctx);
+      if (!parts) return;
 
       const [handle, hostmask, flags] = parts;
 

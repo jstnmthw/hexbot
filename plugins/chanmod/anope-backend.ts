@@ -1,7 +1,7 @@
 import type { PluginAPI } from '../../src/types';
+import { ChanServBackendBase } from './chanserv-backend-base';
 import type { ProbeState } from './chanserv-notice';
-import { getBotNick } from './helpers';
-import { type BackendAccess, type ProtectionBackend, accessAtLeast } from './protection-backend';
+import { type BackendAccess, accessAtLeast } from './protection-backend';
 
 /** Default delay between steps in the synthetic RECOVER sequence. */
 const RECOVER_STEP_DELAY_MS = 200;
@@ -28,15 +28,16 @@ const MAX_PENDING_GETKEY = 64;
  * - op:       AOP (level 5)  — OP self/others, UNBAN, INVITE, GETKEY, AKICK
  * - superop:  SOP (level 10) — + DEOP others, access management
  * - founder:  Founder (10000) — + MODE CLEAR, everything
+ *
+ * Most scaffolding lives in {@link ChanServBackendBase}; this class
+ * overrides the pieces where Anope diverges from Atheme defaults:
+ * AKICK requires superop, RECOVER is synthesized, CLEAR uses `MODE CLEAR
+ * bans`, key removal goes through GETKEY+join, AKICK ENFORCE runs after
+ * the ADD, and access probing uses ACCESS LIST + INFO.
  */
-export class AnopeBackend implements ProtectionBackend {
+export class AnopeBackend extends ChanServBackendBase {
   readonly name = 'anope';
-  readonly priority = 2; // ChanServ backends are priority 2 (botnet is 1)
 
-  private accessLevels = new Map<string, BackendAccess>();
-  private autoDetectedChannels = new Set<string>();
-  private api: PluginAPI;
-  private chanservNick: string;
   private recoverStepDelayMs: number;
   private probeState: ProbeState | null;
   /** Track active recover timers for cleanup. Entries self-remove on fire. */
@@ -48,67 +49,14 @@ export class AnopeBackend implements ProtectionBackend {
     recoverStepDelayMs?: number,
     probeState?: ProbeState,
   ) {
-    this.api = api;
-    this.chanservNick = chanservNick;
+    super(api, chanservNick);
     this.recoverStepDelayMs = recoverStepDelayMs ?? RECOVER_STEP_DELAY_MS;
     this.probeState = probeState ?? null;
   }
 
   // ---------------------------------------------------------------------------
-  // Access management
+  // Capability query overrides (Anope AKICK requires SOP)
   // ---------------------------------------------------------------------------
-
-  getAccess(channel: string): BackendAccess {
-    return this.accessLevels.get(this.api.ircLower(channel)) ?? 'none';
-  }
-
-  setAccess(channel: string, level: BackendAccess): void {
-    const key = this.api.ircLower(channel);
-    const prev = this.accessLevels.get(key);
-    this.accessLevels.set(key, level);
-    // Clear auto-detected flag only when the value actually changes
-    if (this.autoDetectedChannels.has(key) && level !== prev) {
-      this.autoDetectedChannels.delete(key);
-    }
-  }
-
-  isAutoDetected(channel: string): boolean {
-    return this.autoDetectedChannels.has(this.api.ircLower(channel));
-  }
-
-  // ---------------------------------------------------------------------------
-  // Capability queries
-  // ---------------------------------------------------------------------------
-
-  canOp(channel: string): boolean {
-    return accessAtLeast(this.getAccess(channel), 'op');
-  }
-
-  canDeop(channel: string): boolean {
-    return accessAtLeast(this.getAccess(channel), 'superop');
-  }
-
-  canUnban(channel: string): boolean {
-    return accessAtLeast(this.getAccess(channel), 'op');
-  }
-
-  canInvite(channel: string): boolean {
-    return accessAtLeast(this.getAccess(channel), 'op');
-  }
-
-  canRecover(channel: string): boolean {
-    // Synthetic RECOVER requires MODE CLEAR which needs founder/QOP
-    return accessAtLeast(this.getAccess(channel), 'founder');
-  }
-
-  canClearBans(channel: string): boolean {
-    return accessAtLeast(this.getAccess(channel), 'founder');
-  }
-
-  canRemoveKey(channel: string): boolean {
-    // Anope: GETKEY requires AOP (level 5) — retrieves the key so the bot can join
-    return accessAtLeast(this.getAccess(channel), 'op');
-  }
 
   canAkick(channel: string): boolean {
     // Anope AKICK requires SOP (level 10)
@@ -116,25 +64,8 @@ export class AnopeBackend implements ProtectionBackend {
   }
 
   // ---------------------------------------------------------------------------
-  // Action requests
+  // Action request overrides
   // ---------------------------------------------------------------------------
-
-  requestOp(channel: string, nick?: string): void {
-    const target = nick ?? getBotNick(this.api);
-    this.sendChanServ(`OP ${channel} ${target}`);
-  }
-
-  requestDeop(channel: string, nick: string): void {
-    this.sendChanServ(`DEOP ${channel} ${nick}`);
-  }
-
-  requestUnban(channel: string): void {
-    this.sendChanServ(`UNBAN ${channel}`);
-  }
-
-  requestInvite(channel: string): void {
-    this.sendChanServ(`INVITE ${channel}`);
-  }
 
   /**
    * Synthetic RECOVER — Anope has no native RECOVER command.
@@ -215,8 +146,7 @@ export class AnopeBackend implements ProtectionBackend {
   }
 
   requestAkick(channel: string, mask: string, reason?: string): void {
-    const cmd = reason ? `AKICK ${channel} ADD ${mask} ${reason}` : `AKICK ${channel} ADD ${mask}`;
-    this.sendChanServ(cmd);
+    super.requestAkick(channel, mask, reason);
     // Anope-specific: immediately enforce the AKICK list
     this.sendChanServ(`AKICK ${channel} ENFORCE`);
   }
@@ -293,13 +223,5 @@ export class AnopeBackend implements ProtectionBackend {
   clearTimers(): void {
     for (const t of this.recoverTimers) clearTimeout(t);
     this.recoverTimers.clear();
-  }
-
-  // ---------------------------------------------------------------------------
-  // Internal
-  // ---------------------------------------------------------------------------
-
-  private sendChanServ(command: string): void {
-    this.api.say(this.chanservNick, command);
   }
 }

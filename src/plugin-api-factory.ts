@@ -38,10 +38,13 @@ import type {
   PluginDB,
   PluginPermissions,
   PluginServices,
+  PluginSlidingWindowCounter,
+  PluginUtil,
 } from './types';
 import { sanitize } from './utils/sanitize';
+import { SlidingWindowCounter } from './utils/sliding-window';
 import { stripFormatting } from './utils/strip-formatting';
-import { ircLower } from './utils/wildcard';
+import { ircLower, wildcardMatch } from './utils/wildcard';
 
 // ---------------------------------------------------------------------------
 // Dependencies
@@ -122,6 +125,7 @@ const SUB_API_KEYS = new Set([
   'banStore',
   'channelSettings',
   'audit',
+  'util',
 ]);
 
 /**
@@ -282,6 +286,7 @@ export function createPluginApi(
     stripFormatting(text: string): string {
       return stripFormatting(text);
     },
+    util: createPluginUtilApi(getCasemapping),
     audit: createPluginAuditApi(deps.db, pluginId, pluginLogger),
     ...createPluginLogApi(pluginLogger),
   };
@@ -765,6 +770,27 @@ function createPluginHelpApi(
       return helpRegistry?.getAll() ?? [];
     },
   };
+}
+
+/**
+ * Build the `api.util` namespace — wildcard matching + sliding-window
+ * counters. Exists so plugins don't reach into `src/utils/*` at runtime
+ * (that boundary is type-only per CLAUDE.md / DESIGN.md). `matchWildcard`
+ * always uses the network's current CASEMAPPING, fetched on every call so
+ * it stays correct across an ISUPPORT update mid-session. The counter
+ * factory returns the canonical {@link SlidingWindowCounter} class, which
+ * structurally satisfies {@link PluginSlidingWindowCounter}.
+ */
+function createPluginUtilApi(getCasemapping: () => Casemapping): PluginUtil {
+  return Object.freeze({
+    matchWildcard(pattern: string, text: string, opts?: { caseInsensitive?: boolean }): boolean {
+      const caseInsensitive = opts?.caseInsensitive ?? true;
+      return wildcardMatch(pattern, text, caseInsensitive, getCasemapping());
+    },
+    createSlidingWindowCounter(): PluginSlidingWindowCounter {
+      return new SlidingWindowCounter();
+    },
+  });
 }
 
 function createPluginLogApi(

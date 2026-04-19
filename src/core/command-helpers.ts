@@ -5,8 +5,8 @@
 // few lines but extracting them keeps the command files focused on intent
 // rather than argument-parsing boilerplate.
 import type { CommandContext } from '../command-handler';
-import { tryAudit } from '../core/audit';
 import type { BotDatabase, LogModActionOptions } from '../database';
+import { tryAudit } from './audit';
 
 /**
  * Derive the `source` string used when writing a `mod_log` row for a
@@ -23,6 +23,34 @@ import type { BotDatabase, LogModActionOptions } from '../database';
  */
 export function getAuditSource(ctx: CommandContext): string {
   return ctx.source === 'repl' ? 'REPL' : ctx.nick;
+}
+
+/**
+ * Split an args string on whitespace, discard empty tokens, and enforce a
+ * minimum arity. When the result has fewer than `minParts` tokens, emits
+ * `usage` to `ctx.reply()` and returns `null` so the caller can `return`
+ * without repeating the reply line.
+ *
+ * Not every command can use this — some strip control characters before
+ * splitting, some delegate to `parseTargetMessage`, some need a bespoke
+ * split rule — but it collapses the most common "split + arity + usage"
+ * pattern used across the command modules.
+ */
+export function parseCommandArgs(
+  args: string,
+  minParts: number,
+  usage: string,
+  ctx: CommandContext,
+): string[] | null {
+  const parts = args
+    .trim()
+    .split(/\s+/)
+    .filter((p) => p.length > 0);
+  if (parts.length < minParts) {
+    ctx.reply(usage);
+    return null;
+  }
+  return parts;
 }
 
 /**

@@ -98,6 +98,17 @@ export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginA
     getHelpEntries: vi.fn().mockReturnValue([]),
     stripFormatting: (s: string) => s,
     getChannelKey: vi.fn().mockReturnValue(undefined),
+    util: {
+      matchWildcard: vi.fn().mockReturnValue(false),
+      createSlidingWindowCounter: vi.fn().mockReturnValue({
+        check: vi.fn().mockReturnValue(false),
+        peek: vi.fn().mockReturnValue(0),
+        clear: noop,
+        reset: noop,
+        sweep: noop,
+        size: 0,
+      }),
+    },
     log: noop,
     error: noop,
     warn: noop,

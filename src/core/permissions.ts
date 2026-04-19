@@ -4,8 +4,9 @@ import type { BotDatabase, ModLogSource } from '../database';
 import type { BotEventBus } from '../event-bus';
 import type { LoggerLike } from '../logger';
 import type { HandlerContext, UserRecord } from '../types';
-import { type Casemapping, ircLower, wildcardMatch } from '../utils/wildcard';
+import { type Casemapping, ircLower } from '../utils/wildcard';
 import { tryLogModAction } from './audit';
+import { ACCOUNT_PATTERN_PREFIX, HostmaskMatcher } from './hostmask-matcher';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -40,25 +41,9 @@ export function hasOwnerOrMaster(record: { global: string }): boolean {
  * nick or host — the critical property for a post-cloak world where hostmask
  * matching alone is not strong enough.
  */
-const ACCOUNT_PATTERN_PREFIX = '$a:';
-
-/**
- * Rank a wildcard pattern by how specific it is. Higher score = more
- * specific = preferred when multiple records match the same identity.
- *
- * Heuristic: count literal (non-wildcard) characters and subtract a small
- * penalty per wildcard. This keeps `alice!*@host.isp.net` ahead of
- * `*!*@host.isp.net` and keeps a literal hostmask ahead of either.
- */
-function patternSpecificity(pattern: string): number {
-  let literal = 0;
-  let wildcards = 0;
-  for (const ch of pattern) {
-    if (ch === '*' || ch === '?') wildcards++;
-    else literal++;
-  }
-  return literal * 10 - wildcards;
-}
+// Shared wildcard+specificity scoring lives in `./hostmask-matcher` so the
+// contract (account matches outrank hostmask matches, literal chars beat
+// wildcards) can be unit-tested without standing up a Permissions instance.
 
 // ---------------------------------------------------------------------------
 // Types
@@ -97,6 +82,7 @@ export class Permissions {
   private logger: LoggerLike | null;
   private eventBus: BotEventBus | null;
   private casemapping: Casemapping = 'rfc1459';
+  private readonly matcher = new HostmaskMatcher();
   private accountLookup: AccountLookup | null = null;
 
   /**
@@ -119,6 +105,7 @@ export class Permissions {
 
   setCasemapping(cm: Casemapping): void {
     this.casemapping = cm;
+    this.matcher.setCasemapping(cm);
   }
 
   private lowerChannel(name: string): string {
@@ -373,42 +360,13 @@ export class Permissions {
     let best: { record: UserRecord; score: number } | null = null;
     for (const record of this.users.values()) {
       for (const pattern of record.hostmasks) {
-        const score = pattern.startsWith(ACCOUNT_PATTERN_PREFIX)
-          ? this.matchesAccountPattern(pattern, account)
-          : this.matchesHostmaskPattern(pattern, fullHostmask);
+        const score = this.matcher.scorePattern(pattern, fullHostmask, account);
         if (score !== null && (best === null || score > best.score)) {
           best = { record, score };
         }
       }
     }
     return best?.record ?? null;
-  }
-
-  /**
-   * Score a `$a:<accountpattern>` pattern against the caller's services
-   * account. Returns the specificity score when matched, or `null` when the
-   * pattern doesn't apply (no account available, empty pattern, or miss).
-   * Authoritative account matches are scored in a higher tier than any
-   * hostmask match.
-   */
-  private matchesAccountPattern(
-    pattern: string,
-    account: string | null | undefined,
-  ): number | null {
-    if (account == null) return null;
-    const accountPattern = pattern.substring(ACCOUNT_PATTERN_PREFIX.length);
-    if (accountPattern.length === 0) return null;
-    if (!wildcardMatch(accountPattern, account, true, this.casemapping)) return null;
-    return 1_000_000 + patternSpecificity(accountPattern);
-  }
-
-  /**
-   * Score a hostmask wildcard pattern against the caller's full hostmask.
-   * Returns the specificity score on match, or `null` on miss.
-   */
-  private matchesHostmaskPattern(pattern: string, fullHostmask: string): number | null {
-    if (!wildcardMatch(pattern, fullHostmask, true, this.casemapping)) return null;
-    return patternSpecificity(pattern);
   }
 
   // -------------------------------------------------------------------------

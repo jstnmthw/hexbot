@@ -1,15 +1,17 @@
 // HexBot — Event dispatcher
 // Routes IRC events to registered handlers based on bind type, mask, and flags.
+import {
+  type FloodCheckResult,
+  FloodLimiter,
+  type FloodNoticeProvider,
+} from './core/flood-limiter';
 import type { LoggerLike } from './logger';
-import type {
-  BindHandler,
-  BindType,
-  FloodConfig,
-  FloodWindowConfig,
-  HandlerContext,
-} from './types';
-import { SlidingWindowCounter } from './utils/sliding-window';
+import type { BindHandler, BindType, FloodConfig, HandlerContext } from './types';
 import { type Casemapping, caseCompare, wildcardMatch } from './utils/wildcard';
+
+// Re-export so existing `import { FloodNoticeProvider, FloodCheckResult } from './dispatcher'`
+// call sites keep working after the flood state moved to `core/flood-limiter.ts`.
+export type { FloodCheckResult, FloodNoticeProvider };
 
 // ---------------------------------------------------------------------------
 // Types
@@ -75,26 +77,6 @@ export interface BindFilter {
   pluginId?: string;
 }
 
-/**
- * Narrow interface for sending flood-warning NOTICEs.
- * Injected by the bot to avoid a direct dep on the IRC client.
- */
-export interface FloodNoticeProvider {
-  sendNotice(nick: string, message: string): void;
-}
-
-/** Result from floodCheck(). */
-export interface FloodCheckResult {
-  /** True if the user is currently rate-limited and this message should be dropped. */
-  blocked: boolean;
-  /**
-   * True only on the first blocked message per window — the caller should
-   * send a one-time warning notice if this is true.
-   * Always false when blocked is false.
-   */
-  firstBlock: boolean;
-}
-
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -106,8 +88,6 @@ const NON_STACKABLE_TYPES: ReadonlySet<BindType> = new Set(['pub', 'msg']);
 // EventDispatcher
 // ---------------------------------------------------------------------------
 
-const FLOOD_DEFAULTS: Required<FloodWindowConfig> = { count: 5, window: 10 };
-
 export class EventDispatcher {
   private binds: BindEntry[] = [];
   private timers: Map<BindEntry, ReturnType<typeof setInterval>> = new Map();
@@ -115,21 +95,18 @@ export class EventDispatcher {
   private verification: VerificationProvider | null = null;
   private logger: LoggerLike | null;
   private casemapping: Casemapping = 'rfc1459';
-
-  private floodNotice: FloodNoticeProvider | null = null;
-  private floodConfig: {
-    pub: Required<FloodWindowConfig>;
-    msg: Required<FloodWindowConfig>;
-  } | null = null;
-  private pubFlood = new SlidingWindowCounter();
-  private msgFlood = new SlidingWindowCounter();
-  /** Tracks which hostmask keys have already received the one-time flood warning this window. */
-  private floodWarned = new Set<string>();
-  private lastFloodSweep = 0;
+  /**
+   * Per-user input flood limiter. Owned by the dispatcher because flood
+   * gating sits directly in front of `dispatch()` in the bridge's hot path,
+   * but the state and sweep logic live in `FloodLimiter` so this class
+   * stays focused on bind routing.
+   */
+  private floodLimiter: FloodLimiter;
 
   constructor(permissions?: PermissionsProvider | null, logger?: LoggerLike | null) {
     this.permissions = permissions ?? null;
     this.logger = logger?.child('dispatcher') ?? null;
+    this.floodLimiter = new FloodLimiter(this.permissions, this.logger);
   }
 
   /** Wire in the verification provider (called after services + channel-state are available). */
@@ -143,7 +120,7 @@ export class EventDispatcher {
 
   /** Wire in the flood notice provider (injected by Bot to avoid a direct IRC client dep). */
   setFloodNotice(provider: FloodNoticeProvider): void {
-    this.floodNotice = provider;
+    this.floodLimiter.setNoticeProvider(provider);
   }
 
   /**
@@ -153,9 +130,7 @@ export class EventDispatcher {
    * 2026-04-14.
    */
   clearFloodState(): void {
-    this.pubFlood.reset();
-    this.msgFlood.reset();
-    this.floodWarned.clear();
+    this.floodLimiter.reset();
   }
 
   /**
@@ -163,10 +138,7 @@ export class EventDispatcher {
    * If not called, flood limiting is disabled.
    */
   setFloodConfig(config: FloodConfig): void {
-    this.floodConfig = {
-      pub: { ...FLOOD_DEFAULTS, ...config.pub },
-      msg: { ...FLOOD_DEFAULTS, ...config.msg },
-    };
+    this.floodLimiter.setConfig(config);
   }
 
   /**
@@ -184,54 +156,7 @@ export class EventDispatcher {
    *   when a `FloodNoticeProvider` is attached)
    */
   floodCheck(floodType: 'pub' | 'msg', key: string, ctx: HandlerContext): FloodCheckResult {
-    this._maybeSweep();
-
-    if (!this.floodConfig) return { blocked: false, firstBlock: false };
-
-    // Owner bypass — n-flagged users are never flood-limited
-    if (this.permissions?.checkFlags('n', ctx)) return { blocked: false, firstBlock: false };
-
-    const cfg = this.floodConfig[floodType];
-    const counter = floodType === 'pub' ? this.pubFlood : this.msgFlood;
-    const windowMs = cfg.window * 1000;
-
-    const exceeded = counter.check(key, windowMs, cfg.count);
-
-    if (!exceeded) {
-      // Window has room — clear any stale warned state so next flood gets a fresh notice
-      this.floodWarned.delete(key);
-      return { blocked: false, firstBlock: false };
-    }
-
-    // User is flooding
-    if (!this.floodWarned.has(key)) {
-      this.floodWarned.add(key);
-      this.floodNotice?.sendNotice(
-        ctx.nick,
-        'You are sending commands too quickly. Please slow down.',
-      );
-      this.logger?.warn(`[dispatcher] flood: ${key} (${floodType}) — blocked`);
-      return { blocked: true, firstBlock: true };
-    }
-
-    return { blocked: true, firstBlock: false };
-  }
-
-  /**
-   * Prune stale keys from the flood counters and clear the one-time warning
-   * set every 5 minutes. Cheap when invoked from the hot path because we
-   * short-circuit on the timestamp check; extracted from `floodCheck` so the
-   * caller reads top-to-bottom without a mid-function maintenance block.
-   */
-  private _maybeSweep(): void {
-    const now = Date.now();
-    if (now - this.lastFloodSweep <= 300_000) return;
-    this.lastFloodSweep = now;
-    if (this.floodConfig) {
-      this.pubFlood.sweep(this.floodConfig.pub.window * 1000);
-      this.msgFlood.sweep(this.floodConfig.msg.window * 1000);
-    }
-    this.floodWarned.clear();
+    return this.floodLimiter.check(floodType, key, ctx);
   }
 
   /**

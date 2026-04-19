@@ -275,7 +275,7 @@ export function init(pluginApi: PluginAPI): void {
     capturedApi.error('Flood action error:', err);
   };
 
-  rateLimits = new RateLimitTracker(cfg);
+  rateLimits = new RateLimitTracker(cfg, api.util.createSlidingWindowCounter);
   enforcement = new EnforcementExecutor(api, cfg, botHasOps, logFloodError);
   lockdown = new LockdownController(api, cfg, botHasOps);
 

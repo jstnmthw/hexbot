@@ -1,16 +1,22 @@
 // flood — sliding-window rate counters for msg/join/part/nick events
 //
-// Thin wrapper around four SlidingWindowCounter instances, one per event
+// Thin wrapper around four sliding-window counter instances, one per event
 // class. Lives behind its own module so the plugin's bind handlers just ask
 // "did this user flood X" without knowing which counter belongs to which
 // event — and so the sweep schedule stays in one place.
 //
-// Uses the canonical SlidingWindowCounter from src/utils (hard key cap +
-// emergency sweep) so a nick-rotation attacker can't balloon the map
-// between 60s plugin sweeps. See memleak audit C1 (2026-04-14).
-import { SlidingWindowCounter } from '../../src/utils/sliding-window';
+// Counters come from `api.util.createSlidingWindowCounter()` so this module
+// doesn't reach into `src/utils/*` at runtime — that boundary is type-only
+// per CLAUDE.md / DESIGN.md. The factory returns the canonical
+// SlidingWindowCounter (hard key cap + emergency sweep) so a nick-rotation
+// attacker can't balloon the map between 60s plugin sweeps. See memleak
+// audit C1 (2026-04-14).
+import type { PluginSlidingWindowCounter } from '../../src/types';
 
 export type RateLimitKind = 'msg' | 'join' | 'part' | 'nick';
+
+/** Factory signature matching `api.util.createSlidingWindowCounter`. */
+export type CounterFactory = () => PluginSlidingWindowCounter;
 
 export interface RateLimitWindows {
   msgThreshold: number;
@@ -25,35 +31,39 @@ export interface RateLimitWindows {
 
 /**
  * Optional pre-built counters for each event class. Tests that need "msg
- * counter already at 45/50, join counter idle" can construct each
- * `SlidingWindowCounter` with its own seed and pass them in without replaying
+ * counter already at 45/50, join counter idle" can construct each counter
+ * with its own seed (directly instantiating the underlying
+ * `SlidingWindowCounter` class) and pass them in here without replaying
  * hundreds of `check()` calls.
  */
 export interface RateLimitTrackerInitialCounters {
-  msg?: SlidingWindowCounter;
-  join?: SlidingWindowCounter;
-  part?: SlidingWindowCounter;
-  nick?: SlidingWindowCounter;
+  msg?: PluginSlidingWindowCounter;
+  join?: PluginSlidingWindowCounter;
+  part?: PluginSlidingWindowCounter;
+  nick?: PluginSlidingWindowCounter;
 }
 
 /**
  * Groups four independent sliding-window counters (one per event class) so the
  * plugin's bind handlers can ask "did this user flood X" without knowing
  * which counter belongs to which event. Sweep and reset are fanned out
- * across all four in a single call.
+ * across all four in a single call. `counterFactory` supplies fresh
+ * counters for any kind not pre-seeded via `initialCounters` — pass
+ * `api.util.createSlidingWindowCounter` from the plugin's init().
  */
 export class RateLimitTracker {
-  private readonly counters: Record<RateLimitKind, SlidingWindowCounter>;
+  private readonly counters: Record<RateLimitKind, PluginSlidingWindowCounter>;
 
   constructor(
     private readonly windows: RateLimitWindows,
+    counterFactory: CounterFactory,
     initialCounters?: RateLimitTrackerInitialCounters,
   ) {
     this.counters = {
-      msg: initialCounters?.msg ?? new SlidingWindowCounter(),
-      join: initialCounters?.join ?? new SlidingWindowCounter(),
-      part: initialCounters?.part ?? new SlidingWindowCounter(),
-      nick: initialCounters?.nick ?? new SlidingWindowCounter(),
+      msg: initialCounters?.msg ?? counterFactory(),
+      join: initialCounters?.join ?? counterFactory(),
+      part: initialCounters?.part ?? counterFactory(),
+      nick: initialCounters?.nick ?? counterFactory(),
     };
   }
 

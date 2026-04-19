@@ -89,7 +89,7 @@ describe('botlink commands', () => {
   describe('when botlink is disabled', () => {
     it('.botlink status says disabled', async () => {
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, null, null, null, null);
+      registerBotlinkCommands({ handler, hub: null, leaf: null, config: null, db: null });
       const replies: string[] = [];
       await handler.execute('.botlink status', makeCtx(replies));
       expect(replies[0]).toBe('Bot link is not enabled.');
@@ -97,7 +97,7 @@ describe('botlink commands', () => {
 
     it('.bots says disabled', async () => {
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, null, null, null, null);
+      registerBotlinkCommands({ handler, hub: null, leaf: null, config: null, db: null });
       const replies: string[] = [];
       await handler.execute('.bots', makeCtx(replies));
       expect(replies[0]).toBe('Bot link is not enabled.');
@@ -105,7 +105,7 @@ describe('botlink commands', () => {
 
     it('.bottree says disabled', async () => {
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, null, null, null, null);
+      registerBotlinkCommands({ handler, hub: null, leaf: null, config: null, db: null });
       const replies: string[] = [];
       await handler.execute('.bottree', makeCtx(replies));
       expect(replies[0]).toBe('Bot link is not enabled.');
@@ -116,7 +116,7 @@ describe('botlink commands', () => {
     it('.botlink status shows hub info with no leaves', async () => {
       const hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+      registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
 
       const replies: string[] = [];
       await handler.execute('.botlink status', makeCtx(replies));
@@ -131,7 +131,7 @@ describe('botlink commands', () => {
     it('.bots lists the hub bot', async () => {
       const hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+      registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
 
       const replies: string[] = [];
       await handler.execute('.bots', makeCtx(replies));
@@ -144,7 +144,7 @@ describe('botlink commands', () => {
     it('.bottree shows the hub as root', async () => {
       const hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+      registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
 
       const replies: string[] = [];
       await handler.execute('.bottree', makeCtx(replies));
@@ -157,7 +157,7 @@ describe('botlink commands', () => {
     it('.botlink disconnect requires a botname', async () => {
       const hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+      registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
 
       const replies: string[] = [];
       await handler.execute('.botlink disconnect', makeCtx(replies));
@@ -170,7 +170,7 @@ describe('botlink commands', () => {
     it('.botlink reconnect is hub-only error', async () => {
       const hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+      registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
 
       const replies: string[] = [];
       await handler.execute('.botlink reconnect', makeCtx(replies));
@@ -193,7 +193,7 @@ describe('botlink commands', () => {
     }> {
       hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+      registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
 
       // Simulate a leaf connecting through the hub
       const { socket: leafSocket, written: leafWritten, duplex: leafDuplex } = createMockSocket();
@@ -269,7 +269,7 @@ describe('botlink commands', () => {
       const { leaf } = await connectLeaf();
       const handler = new CommandHandler();
       const cfg = leafConfig();
-      registerBotlinkCommands(handler, null, leaf, cfg, null);
+      registerBotlinkCommands({ handler, hub: null, leaf, config: cfg, db: null });
 
       const replies: string[] = [];
       await handler.execute('.botlink status', makeCtx(replies));
@@ -285,7 +285,7 @@ describe('botlink commands', () => {
       const { leaf } = await connectLeaf();
       const handler = new CommandHandler();
       const cfg = leafConfig();
-      registerBotlinkCommands(handler, null, leaf, cfg, null);
+      registerBotlinkCommands({ handler, hub: null, leaf, config: cfg, db: null });
 
       const replies: string[] = [];
       await handler.execute('.botlink reconnect', makeCtx(replies));
@@ -298,7 +298,7 @@ describe('botlink commands', () => {
     it('.botlink disconnect says hub-only on leaf', async () => {
       const { leaf } = await connectLeaf();
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, null, leaf, leafConfig(), null);
+      registerBotlinkCommands({ handler, hub: null, leaf, config: leafConfig(), db: null });
 
       const replies: string[] = [];
       await handler.execute('.botlink disconnect leaf1', makeCtx(replies));
@@ -312,7 +312,7 @@ describe('botlink commands', () => {
       const { leaf } = await connectLeaf();
       const handler = new CommandHandler();
       const cfg = leafConfig();
-      registerBotlinkCommands(handler, null, leaf, cfg, null);
+      registerBotlinkCommands({ handler, hub: null, leaf, config: cfg, db: null });
 
       const replies: string[] = [];
       await handler.execute('.bots', makeCtx(replies));
@@ -328,7 +328,7 @@ describe('botlink commands', () => {
       const { leaf } = await connectLeaf();
       const handler = new CommandHandler();
       const cfg = leafConfig();
-      registerBotlinkCommands(handler, null, leaf, cfg, null);
+      registerBotlinkCommands({ handler, hub: null, leaf, config: cfg, db: null });
 
       const replies: string[] = [];
       await handler.execute('.bottree', makeCtx(replies));
@@ -345,7 +345,7 @@ describe('botlink commands', () => {
     it('.botlink status shows disconnected state', async () => {
       const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, null, leaf, leafConfig(), null);
+      registerBotlinkCommands({ handler, hub: null, leaf, config: leafConfig(), db: null });
 
       const replies: string[] = [];
       await handler.execute('.botlink status', makeCtx(replies));
@@ -358,7 +358,7 @@ describe('botlink commands', () => {
     it('.bots on disconnected leaf shows self as disconnected', async () => {
       const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, null, leaf, leafConfig(), null);
+      registerBotlinkCommands({ handler, hub: null, leaf, config: leafConfig(), db: null });
 
       const replies: string[] = [];
       await handler.execute('.bots', makeCtx(replies));
@@ -369,7 +369,7 @@ describe('botlink commands', () => {
     it('.bottree on disconnected leaf shows self as disconnected', async () => {
       const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, null, leaf, leafConfig(), null);
+      registerBotlinkCommands({ handler, hub: null, leaf, config: leafConfig(), db: null });
 
       const replies: string[] = [];
       await handler.execute('.bottree', makeCtx(replies));
@@ -381,7 +381,7 @@ describe('botlink commands', () => {
   describe('.relay command', () => {
     it('says not enabled when botlink is disabled', async () => {
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, null, null, null, null);
+      registerBotlinkCommands({ handler, hub: null, leaf: null, config: null, db: null });
       const replies: string[] = [];
       await handler.execute('.relay somebot', makeCtx(replies));
 
@@ -391,7 +391,7 @@ describe('botlink commands', () => {
     it('shows usage when no target is given', async () => {
       const hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+      registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
 
       const replies: string[] = [];
       await handler.execute('.relay', makeCtx(replies));
@@ -404,7 +404,7 @@ describe('botlink commands', () => {
     it('rejects from non-DCC source (repl)', async () => {
       const hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+      registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
 
       const replies: string[] = [];
       // repl source bypasses permission check, but then the handler checks ctx.source !== 'dcc'
@@ -420,7 +420,7 @@ describe('botlink commands', () => {
       // Provide a permissive permissions provider so the DCC source passes the flag check
       const allowAll = { checkFlags: () => true };
       const handler = new CommandHandler(allowAll);
-      registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+      registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
 
       const replies: string[] = [];
       await handler.execute('.relay somebot', makeCtx(replies, { source: 'dcc' }));
@@ -440,7 +440,14 @@ describe('botlink commands', () => {
         getSessionList: () => [],
         getSession: () => undefined,
       } satisfies BotlinkDCCView;
-      registerBotlinkCommands(handler, hub, null, hubConfig(), null, mockDcc);
+      registerBotlinkCommands({
+        handler,
+        hub,
+        leaf: null,
+        config: hubConfig(),
+        db: null,
+        dccManager: mockDcc,
+      });
 
       const replies: string[] = [];
       await handler.execute('.relay somebot', makeCtx(replies, { source: 'dcc' }));
@@ -457,7 +464,14 @@ describe('botlink commands', () => {
         getSessionList: () => [],
         getSession: () => mockSession,
       } satisfies BotlinkDCCView;
-      registerBotlinkCommands(handler, hub, null, hubConfig(), null, mockDcc);
+      registerBotlinkCommands({
+        handler,
+        hub,
+        leaf: null,
+        config: hubConfig(),
+        db: null,
+        dccManager: mockDcc,
+      });
 
       const replies: string[] = [];
       await handler.execute('.relay somebot', makeCtx(replies, { source: 'dcc' }));
@@ -474,7 +488,14 @@ describe('botlink commands', () => {
         getSessionList: () => [],
         getSession: () => mockSession,
       } satisfies BotlinkDCCView;
-      registerBotlinkCommands(handler, hub, null, hubConfig(), null, mockDcc);
+      registerBotlinkCommands({
+        handler,
+        hub,
+        leaf: null,
+        config: hubConfig(),
+        db: null,
+        dccManager: mockDcc,
+      });
 
       const replies: string[] = [];
       await handler.execute('.relay nobot', makeCtx(replies, { source: 'dcc' }));
@@ -504,7 +525,14 @@ describe('botlink commands', () => {
         getSessionList: () => [],
         getSession: () => mockSession,
       } satisfies BotlinkDCCView;
-      registerBotlinkCommands(handler, hub, null, hubConfig(), null, mockDcc);
+      registerBotlinkCommands({
+        handler,
+        hub,
+        leaf: null,
+        config: hubConfig(),
+        db: null,
+        dccManager: mockDcc,
+      });
 
       const replies: string[] = [];
       await handler.execute('.relay leaf1', makeCtx(replies, { source: 'dcc' }));
@@ -530,7 +558,14 @@ describe('botlink commands', () => {
         getSessionList: () => [],
         getSession: () => mockSession,
       } satisfies BotlinkDCCView;
-      registerBotlinkCommands(handler, null, leaf, leafConfig(), null, mockDcc);
+      registerBotlinkCommands({
+        handler,
+        hub: null,
+        leaf,
+        config: leafConfig(),
+        db: null,
+        dccManager: mockDcc,
+      });
 
       const replies: string[] = [];
       await handler.execute('.relay somebot', makeCtx(replies, { source: 'dcc' }));
@@ -548,7 +583,14 @@ describe('botlink commands', () => {
         getSessionList: () => [],
         getSession: () => mockSession,
       } satisfies BotlinkDCCView;
-      registerBotlinkCommands(handler, null, null, hubConfig(), null, mockDcc);
+      registerBotlinkCommands({
+        handler,
+        hub: null,
+        leaf: null,
+        config: hubConfig(),
+        db: null,
+        dccManager: mockDcc,
+      });
 
       const replies: string[] = [];
       await handler.execute('.relay somebot', makeCtx(replies, { source: 'dcc' }));
@@ -562,7 +604,7 @@ describe('botlink commands', () => {
       written.length = 0;
 
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, null, leaf, leafConfig(), null);
+      registerBotlinkCommands({ handler, hub: null, leaf, config: leafConfig(), db: null });
 
       const promise = handler.execute('.whom', makeCtx([]));
       await tick();
@@ -593,7 +635,14 @@ describe('botlink commands', () => {
         getSession: () => undefined,
       };
       // config=null simulates DCC enabled without botlink configured
-      registerBotlinkCommands(handler, null, null, null, null, mockDcc);
+      registerBotlinkCommands({
+        handler,
+        hub: null,
+        leaf: null,
+        config: null,
+        db: null,
+        dccManager: mockDcc,
+      });
 
       const replies: string[] = [];
       await handler.execute('.whom', makeCtx(replies));
@@ -605,7 +654,13 @@ describe('botlink commands', () => {
 
     it('reports no users when DCC is not available and no link', async () => {
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, null, null, { ...hubConfig(), enabled: true }, null);
+      registerBotlinkCommands({
+        handler,
+        hub: null,
+        leaf: null,
+        config: { ...hubConfig(), enabled: true },
+        db: null,
+      });
 
       const replies: string[] = [];
       await handler.execute('.whom', makeCtx(replies));
@@ -616,7 +671,7 @@ describe('botlink commands', () => {
     it('reports no users when hub has no remote party users and no DCC', async () => {
       const hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+      registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
 
       const replies: string[] = [];
       await handler.execute('.whom', makeCtx(replies));
@@ -629,7 +684,7 @@ describe('botlink commands', () => {
     it('reports no users when leaf is disconnected and no DCC', async () => {
       const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, null, leaf, leafConfig(), null);
+      registerBotlinkCommands({ handler, hub: null, leaf, config: leafConfig(), db: null });
 
       const replies: string[] = [];
       await handler.execute('.whom', makeCtx(replies));
@@ -646,7 +701,14 @@ describe('botlink commands', () => {
         ],
         getSession: () => undefined,
       };
-      registerBotlinkCommands(handler, hub, null, hubConfig(), null, mockDcc);
+      registerBotlinkCommands({
+        handler,
+        hub,
+        leaf: null,
+        config: hubConfig(),
+        db: null,
+        dccManager: mockDcc,
+      });
 
       const replies: string[] = [];
       await handler.execute('.whom', makeCtx(replies));
@@ -665,7 +727,14 @@ describe('botlink commands', () => {
         getSessionList: () => [{ handle: 'solo', nick: 'Solo', connectedAt: Date.now() - 5_000 }],
         getSession: () => undefined,
       };
-      registerBotlinkCommands(handler, null, null, hubConfig(), null, mockDcc);
+      registerBotlinkCommands({
+        handler,
+        hub: null,
+        leaf: null,
+        config: hubConfig(),
+        db: null,
+        dccManager: mockDcc,
+      });
 
       const replies: string[] = [];
       await handler.execute('.whom', makeCtx(replies));
@@ -684,7 +753,14 @@ describe('botlink commands', () => {
         ],
         getSession: () => undefined,
       };
-      registerBotlinkCommands(handler, null, null, hubConfig(), null, mockDcc);
+      registerBotlinkCommands({
+        handler,
+        hub: null,
+        leaf: null,
+        config: hubConfig(),
+        db: null,
+        dccManager: mockDcc,
+      });
 
       const replies: string[] = [];
       await handler.execute('.whom', makeCtx(replies));
@@ -697,7 +773,7 @@ describe('botlink commands', () => {
     it('.botlink foo shows usage', async () => {
       const hub = makeHub(hubConfig(), '1.0.0');
       const handler = new CommandHandler();
-      registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+      registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
 
       const replies: string[] = [];
       await handler.execute('.botlink foo', makeCtx(replies));
@@ -717,7 +793,7 @@ describe('branch coverage edge cases', () => {
   it('.botlink with empty string defaults to status', async () => {
     const hub = makeHub(hubConfig(), '1.0.0');
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
 
     const replies: string[] = [];
     await handler.execute('.botlink', makeCtx(replies));
@@ -747,7 +823,7 @@ describe('branch coverage edge cases', () => {
     await tick();
 
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.bottree', makeCtx(replies));
     expect(replies[0]).toContain('├─ leaf1');
@@ -775,7 +851,7 @@ describe('branch coverage edge cases', () => {
     if (remoteUsers.length > 0) remoteUsers[0].idle = 120;
 
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.whom', makeCtx(replies));
     expect(replies[0]).toContain('idle 120s');
@@ -790,7 +866,7 @@ describe('branch coverage edge cases', () => {
 describe('botlink commands with neither hub nor leaf', () => {
   it('.botlink status produces no output when hub and leaf are both null', async () => {
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub: null, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.botlink status', makeCtx(replies));
     expect(replies).toEqual([]);
@@ -798,7 +874,7 @@ describe('botlink commands with neither hub nor leaf', () => {
 
   it('.bots produces no output when hub and leaf are both null', async () => {
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub: null, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.bots', makeCtx(replies));
     expect(replies).toEqual([]);
@@ -806,7 +882,7 @@ describe('botlink commands with neither hub nor leaf', () => {
 
   it('.bottree produces no output when hub and leaf are both null', async () => {
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub: null, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.bottree', makeCtx(replies));
     expect(replies).toEqual([]);
@@ -820,7 +896,13 @@ describe('botlink commands with neither hub nor leaf', () => {
 describe('.bot command', () => {
   it('replies disabled when botlink is not enabled', async () => {
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, null, { ...hubConfig(), enabled: false }, null);
+    registerBotlinkCommands({
+      handler,
+      hub: null,
+      leaf: null,
+      config: { ...hubConfig(), enabled: false },
+      db: null,
+    });
     const replies: string[] = [];
     await handler.execute('.bot leaf1 status', makeCtx(replies));
     expect(replies[0]).toBe('Bot link is not enabled.');
@@ -828,7 +910,7 @@ describe('.bot command', () => {
 
   it('shows usage with no args', async () => {
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub: null, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.bot', makeCtx(replies));
     expect(replies[0]).toContain('Usage');
@@ -836,7 +918,7 @@ describe('.bot command', () => {
 
   it('shows usage with only botname and no command', async () => {
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub: null, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.bot leaf1', makeCtx(replies));
     expect(replies[0]).toContain('Usage');
@@ -852,7 +934,7 @@ describe('.bot command', () => {
         c.reply('I am alive');
       },
     );
-    registerBotlinkCommands(handler, null, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub: null, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.bot myhub status', makeCtx(replies));
     expect(replies[0]).toBe('I am alive');
@@ -868,7 +950,7 @@ describe('.bot command', () => {
         c.reply('alive');
       },
     );
-    registerBotlinkCommands(handler, null, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub: null, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.bot myhub .status', makeCtx(replies));
     expect(replies[0]).toBe('alive');
@@ -888,7 +970,7 @@ describe('.bot command', () => {
     written.length = 0;
 
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
 
     const promise = handler.execute('.bot leaf1 status', makeCtx(replies));
@@ -909,7 +991,7 @@ describe('.bot command', () => {
   it('hub returns error for unknown leaf', async () => {
     const hub = makeHub(hubConfig(), '1.0.0');
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.bot nobot status', makeCtx(replies));
     expect(replies[0]).toContain('not connected');
@@ -921,7 +1003,7 @@ describe('.bot command', () => {
     written.length = 0;
 
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, leaf, leafConfig(), null);
+    registerBotlinkCommands({ handler, hub: null, leaf, config: leafConfig(), db: null });
     const replies: string[] = [];
 
     const promise = handler.execute('.bot myhub status', makeCtx(replies));
@@ -940,7 +1022,7 @@ describe('.bot command', () => {
 
   it('returns not connected when no hub or leaf', async () => {
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub: null, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.bot remote status', makeCtx(replies));
     expect(replies[0]).toBe('Not connected to any bot link.');
@@ -954,7 +1036,13 @@ describe('.bot command', () => {
 describe('.bsay command', () => {
   it('replies disabled when botlink is not enabled', async () => {
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, null, { ...hubConfig(), enabled: false }, null);
+    registerBotlinkCommands({
+      handler,
+      hub: null,
+      leaf: null,
+      config: { ...hubConfig(), enabled: false },
+      db: null,
+    });
     const replies: string[] = [];
     await handler.execute('.bsay hub #test hello', makeCtx(replies));
     expect(replies[0]).toBe('Bot link is not enabled.');
@@ -962,7 +1050,7 @@ describe('.bsay command', () => {
 
   it('shows usage with missing args', async () => {
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub: null, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.bsay', makeCtx(replies));
     expect(replies[0]).toContain('Usage');
@@ -971,7 +1059,15 @@ describe('.bsay command', () => {
   it('sends locally when target is self', async () => {
     const handler = new CommandHandler();
     const ircSay = vi.fn();
-    registerBotlinkCommands(handler, null, null, hubConfig(), null, null, ircSay);
+    registerBotlinkCommands({
+      handler,
+      hub: null,
+      leaf: null,
+      config: hubConfig(),
+      db: null,
+      dccManager: null,
+      ircSay,
+    });
     const replies: string[] = [];
     await handler.execute('.bsay myhub #test hello world', makeCtx(replies));
     expect(ircSay).toHaveBeenCalledWith('#test', 'hello world');
@@ -981,7 +1077,15 @@ describe('.bsay command', () => {
   it('sanitizes target and message in local send path', async () => {
     const handler = new CommandHandler();
     const ircSay = vi.fn();
-    registerBotlinkCommands(handler, null, null, hubConfig(), null, null, ircSay);
+    registerBotlinkCommands({
+      handler,
+      hub: null,
+      leaf: null,
+      config: hubConfig(),
+      db: null,
+      dccManager: null,
+      ircSay,
+    });
     const replies: string[] = [];
     // Inject \0 into target and message (these survive regex and trim)
     await handler.execute('.bsay myhub #test\0bad hello\0world', makeCtx(replies));
@@ -994,7 +1098,15 @@ describe('.bsay command', () => {
 
   it('sends locally and reports no IRC client when ircSay is null', async () => {
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, null, hubConfig(), null, null, null);
+    registerBotlinkCommands({
+      handler,
+      hub: null,
+      leaf: null,
+      config: hubConfig(),
+      db: null,
+      dccManager: null,
+      ircSay: null,
+    });
     const replies: string[] = [];
     await handler.execute('.bsay myhub #test hello', makeCtx(replies));
     expect(replies[0]).toContain('IRC client not available');
@@ -1015,7 +1127,15 @@ describe('.bsay command', () => {
 
     const ircSay = vi.fn();
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, hub, null, hubConfig(), null, null, ircSay);
+    registerBotlinkCommands({
+      handler,
+      hub,
+      leaf: null,
+      config: hubConfig(),
+      db: null,
+      dccManager: null,
+      ircSay,
+    });
     const replies: string[] = [];
     await handler.execute('.bsay * #test broadcast msg', makeCtx(replies));
 
@@ -1032,7 +1152,15 @@ describe('.bsay command', () => {
 
     const ircSay = vi.fn();
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, leaf, leafConfig(), null, null, ircSay);
+    registerBotlinkCommands({
+      handler,
+      hub: null,
+      leaf,
+      config: leafConfig(),
+      db: null,
+      dccManager: null,
+      ircSay,
+    });
     const replies: string[] = [];
     await handler.execute('.bsay * #test hi', makeCtx(replies));
 
@@ -1057,7 +1185,7 @@ describe('.bsay command', () => {
     written.length = 0;
 
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.bsay leaf1 #test remote msg', makeCtx(replies));
 
@@ -1070,7 +1198,7 @@ describe('.bsay command', () => {
   it('hub returns error for unknown bot', async () => {
     const hub = makeHub(hubConfig(), '1.0.0');
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.bsay nobot #test msg', makeCtx(replies));
     expect(replies[0]).toContain('not connected');
@@ -1082,7 +1210,7 @@ describe('.bsay command', () => {
     written.length = 0;
 
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, leaf, leafConfig(), null);
+    registerBotlinkCommands({ handler, hub: null, leaf, config: leafConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.bsay somehub #test msg', makeCtx(replies));
 
@@ -1094,7 +1222,7 @@ describe('.bsay command', () => {
 
   it('returns not connected when no hub or leaf', async () => {
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub: null, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.bsay remotebot #test msg', makeCtx(replies));
     expect(replies[0]).toBe('Not connected to any bot link.');
@@ -1108,7 +1236,13 @@ describe('.bsay command', () => {
 describe('.bannounce command', () => {
   it('replies disabled when botlink is not enabled', async () => {
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, null, { ...hubConfig(), enabled: false }, null);
+    registerBotlinkCommands({
+      handler,
+      hub: null,
+      leaf: null,
+      config: { ...hubConfig(), enabled: false },
+      db: null,
+    });
     const replies: string[] = [];
     await handler.execute('.bannounce test', makeCtx(replies));
     expect(replies[0]).toBe('Bot link is not enabled.');
@@ -1116,7 +1250,7 @@ describe('.bannounce command', () => {
 
   it('shows usage with empty message', async () => {
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub: null, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.bannounce', makeCtx(replies));
     expect(replies[0]).toContain('Usage');
@@ -1137,7 +1271,14 @@ describe('.bannounce command', () => {
 
     const mockDcc = { announce: vi.fn(), getSessionList: () => [], getSession: () => undefined };
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, hub, null, hubConfig(), null, mockDcc);
+    registerBotlinkCommands({
+      handler,
+      hub,
+      leaf: null,
+      config: hubConfig(),
+      db: null,
+      dccManager: mockDcc,
+    });
     const replies: string[] = [];
     await handler.execute('.bannounce hello everyone', makeCtx(replies));
 
@@ -1153,7 +1294,7 @@ describe('.bannounce command', () => {
     written.length = 0;
 
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, leaf, leafConfig(), null);
+    registerBotlinkCommands({ handler, hub: null, leaf, config: leafConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.bannounce test msg', makeCtx(replies));
 
@@ -1165,7 +1306,7 @@ describe('.bannounce command', () => {
 
   it('works with no hub, leaf, or DCC (local only)', async () => {
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub: null, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.bannounce solo message', makeCtx(replies));
     expect(replies[0]).toContain('Announcement sent');
@@ -1183,7 +1324,7 @@ describe('.botlink ban subcommands', () => {
     hub.manualBan('10.0.0.1', 0, 'test', 'admin');
 
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.botlink bans', makeCtx(replies));
 
@@ -1197,7 +1338,7 @@ describe('.botlink ban subcommands', () => {
     await hub.listen(0, '127.0.0.1');
 
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.botlink bans', makeCtx(replies));
 
@@ -1210,7 +1351,7 @@ describe('.botlink ban subcommands', () => {
     await hub.listen(0, '127.0.0.1');
 
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.botlink ban 10.0.0.1 5m test reason', makeCtx(replies));
 
@@ -1224,7 +1365,7 @@ describe('.botlink ban subcommands', () => {
     await hub.listen(0, '127.0.0.1');
 
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.botlink ban not-an-ip', makeCtx(replies));
 
@@ -1237,7 +1378,7 @@ describe('.botlink ban subcommands', () => {
     await hub.listen(0, '127.0.0.1');
 
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.botlink ban', makeCtx(replies));
 
@@ -1251,7 +1392,7 @@ describe('.botlink ban subcommands', () => {
     hub.manualBan('10.0.0.1', 0, 'test', 'admin');
 
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.botlink unban 10.0.0.1', makeCtx(replies));
 
@@ -1265,7 +1406,7 @@ describe('.botlink ban subcommands', () => {
     await hub.listen(0, '127.0.0.1');
 
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, hub, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.botlink unban', makeCtx(replies));
 
@@ -1275,7 +1416,7 @@ describe('.botlink ban subcommands', () => {
 
   it('.botlink bans replies "Only available on hub" for leaf', async () => {
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, null, hubConfig(), null);
+    registerBotlinkCommands({ handler, hub: null, leaf: null, config: hubConfig(), db: null });
     const replies: string[] = [];
     await handler.execute('.botlink bans', makeCtx(replies));
     expect(replies[0]).toContain('Only available on hub');
@@ -1306,7 +1447,7 @@ describe('botlink commands — audit coverage', () => {
     });
     await tick();
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, hub, null, hubConfig(), db);
+    registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db });
     await handler.execute('.botlink disconnect leaf1', makeCtx([]));
 
     const [row] = db.getModLog({ action: 'botlink-disconnect' });
@@ -1321,7 +1462,7 @@ describe('botlink commands — audit coverage', () => {
     const { db, close } = setup();
     const hub = makeHub(hubConfig(), '1.0.0');
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, hub, null, hubConfig(), db);
+    registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db });
     await handler.execute('.botlink disconnect ghost', makeCtx([]));
     const [row] = db.getModLog({ action: 'botlink-disconnect' });
     expect(row.outcome).toBe('failure');
@@ -1334,7 +1475,7 @@ describe('botlink commands — audit coverage', () => {
     const { db, close } = setup();
     const { leaf } = await connectLeaf();
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, leaf, leafConfig(), db);
+    registerBotlinkCommands({ handler, hub: null, leaf, config: leafConfig(), db });
     await handler.execute('.botlink reconnect', makeCtx([]));
     const [row] = db.getModLog({ action: 'botlink-reconnect' });
     expect(row).toBeDefined();
@@ -1346,7 +1487,7 @@ describe('botlink commands — audit coverage', () => {
     const { db, close } = setup();
     const handler = new CommandHandler();
     // Self-target dispatches locally — we just want the audit row.
-    registerBotlinkCommands(handler, null, null, hubConfig(), db);
+    registerBotlinkCommands({ handler, hub: null, leaf: null, config: hubConfig(), db });
     await handler.execute('.bot myhub status', makeCtx([]));
     const [row] = db.getModLog({ action: 'bot-remote' });
     expect(row).toBeDefined();
@@ -1358,7 +1499,7 @@ describe('botlink commands — audit coverage', () => {
   it('.bsay writes a row carrying target + message metadata', async () => {
     const { db, close } = setup();
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, null, hubConfig(), db);
+    registerBotlinkCommands({ handler, hub: null, leaf: null, config: hubConfig(), db });
     await handler.execute('.bsay myhub #test hello', makeCtx([]));
     const [row] = db.getModLog({ action: 'bsay' });
     expect(row).toBeDefined();
@@ -1370,7 +1511,7 @@ describe('botlink commands — audit coverage', () => {
   it('.bannounce writes a row with the message in metadata', async () => {
     const { db, close } = setup();
     const handler = new CommandHandler();
-    registerBotlinkCommands(handler, null, null, hubConfig(), db);
+    registerBotlinkCommands({ handler, hub: null, leaf: null, config: hubConfig(), db });
     await handler.execute('.bannounce hello everyone', makeCtx([]));
     const [row] = db.getModLog({ action: 'bannounce' });
     expect(row).toBeDefined();

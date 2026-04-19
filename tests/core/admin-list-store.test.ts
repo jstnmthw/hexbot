@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { AdminListStore } from '../../src/core/admin-list-store';
 import { BotDatabase } from '../../src/database';
-import { AdminListStore } from '../../src/utils/admin-list-store';
 
 interface TestItem {
   id: string;

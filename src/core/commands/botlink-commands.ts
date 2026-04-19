@@ -246,20 +246,23 @@ function handleBotlinkUnban(
 // Registration
 // ---------------------------------------------------------------------------
 
+export interface BotlinkCommandsDeps {
+  handler: CommandHandler;
+  hub: BotLinkHub | null;
+  leaf: BotLinkLeaf | null;
+  config: BotlinkConfig | null;
+  db: BotDatabase | null;
+  dccManager?: BotlinkDCCView | null;
+  ircSay?: ((target: string, message: string) => void) | null;
+}
+
 /**
  * Register bot-link admin commands.
  * Called regardless of whether botlink is enabled — commands respond
  * appropriately when the feature is disabled.
  */
-export function registerBotlinkCommands(
-  handler: CommandHandler,
-  hub: BotLinkHub | null,
-  leaf: BotLinkLeaf | null,
-  config: BotlinkConfig | null,
-  db: BotDatabase | null,
-  dccManager?: BotlinkDCCView | null,
-  ircSay?: ((target: string, message: string) => void) | null,
-): void {
+export function registerBotlinkCommands(deps: BotlinkCommandsDeps): void {
+  const { handler, hub, leaf, config, db, dccManager, ircSay } = deps;
   handler.registerCommand(
     'botlink',
     {

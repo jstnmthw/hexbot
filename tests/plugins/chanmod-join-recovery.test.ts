@@ -2,36 +2,13 @@ import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { type MockBot, createMockBot } from '../helpers/mock-bot';
+import { flush, giveBotOps, tick } from '../helpers/plugin-test-helpers';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 const PLUGIN_PATH = resolve('./plugins/chanmod/index.ts');
-
-/** Flush microtasks — sufficient for synchronous handlers dispatched via async dispatch(). */
-async function flush(): Promise<void> {
-  await Promise.resolve();
-}
-
-/** Advance fake timers and flush async. */
-async function tick(ms = 20): Promise<void> {
-  await new Promise<void>((r) => setImmediate(r));
-  await vi.advanceTimersByTimeAsync(ms);
-}
-
-/** Give the bot ops in a channel via ChanServ mode event. */
-function giveBotOps(bot: MockBot, channel: string): void {
-  const nick = bot.client.user.nick;
-  bot.client.simulateEvent('join', { nick, ident: 'bot', hostname: 'bot.host', channel });
-  bot.client.simulateEvent('mode', {
-    nick: 'ChanServ',
-    ident: 'ChanServ',
-    hostname: 'services.',
-    target: channel,
-    modes: [{ mode: '+o', param: nick }],
-  });
-}
 
 /** Get ChanServ messages from the mock client. */
 function csMessages(bot: MockBot): string[] {

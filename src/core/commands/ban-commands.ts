@@ -2,11 +2,11 @@
 // Registers .bans, .ban, .unban, .stick, .unstick with the command handler.
 import type { CommandHandler } from '../../command-handler';
 import type { BotDatabase } from '../../database';
-import { parseBanArgs } from '../../utils/command-helpers';
 import { formatDuration, parseDuration } from '../../utils/duration';
 import { tryAudit } from '../audit';
 import type { BanStore } from '../ban-store';
 import type { BotLinkHub, SharedBanList } from '../botlink';
+import { parseBanArgs } from '../command-helpers';
 import type { BanOperator } from '../irc-commands';
 
 export interface BanCommandsDeps {

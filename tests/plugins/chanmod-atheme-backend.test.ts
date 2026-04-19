@@ -4,20 +4,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { AthemeBackend } from '../../plugins/chanmod/atheme-backend';
 import type { MockBot } from '../helpers/mock-bot';
 import { createMockBot } from '../helpers/mock-bot';
+import { giveBotOps } from '../helpers/plugin-test-helpers';
 
 const PLUGIN_PATH = resolve('./plugins/chanmod/index.ts');
-
-function giveBotOps(bot: MockBot, channel: string): void {
-  const nick = bot.client.user.nick;
-  bot.client.simulateEvent('join', { nick, ident: 'bot', hostname: 'bot.host', channel });
-  bot.client.simulateEvent('mode', {
-    nick: 'ChanServ',
-    ident: 'ChanServ',
-    hostname: 'services.',
-    target: channel,
-    modes: [{ mode: '+o', param: nick }],
-  });
-}
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });

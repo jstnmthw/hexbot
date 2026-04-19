@@ -5,6 +5,11 @@ import type { EventDispatcher } from '../../dispatcher';
 import { stripFormatting } from '../../utils/strip-formatting';
 import { formatTable } from '../../utils/table';
 
+export interface DispatcherCommandsDeps {
+  handler: CommandHandler;
+  dispatcher: EventDispatcher;
+}
+
 /**
  * Register dispatcher inspection commands (`.binds`) on the given command
  * handler. `+o` is sufficient because the command is read-only; output
@@ -12,10 +17,8 @@ import { formatTable } from '../../utils/table';
  * originate from plugin code and could otherwise smuggle IRC control
  * codes into an operator's console.
  */
-export function registerDispatcherCommands(
-  handler: CommandHandler,
-  dispatcher: EventDispatcher,
-): void {
+export function registerDispatcherCommands(deps: DispatcherCommandsDeps): void {
+  const { handler, dispatcher } = deps;
   handler.registerCommand(
     'binds',
     {

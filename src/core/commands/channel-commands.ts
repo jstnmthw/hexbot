@@ -46,6 +46,12 @@ function formatValueLines(items: SnapshotItem[], prefix = '  '): string[] {
   });
 }
 
+export interface ChannelCommandsDeps {
+  handler: CommandHandler;
+  channelSettings: ChannelSettings;
+  db: BotDatabase | null;
+}
+
 /**
  * Register .chanset and .chaninfo commands on the given command handler.
  *
@@ -54,11 +60,8 @@ function formatValueLines(items: SnapshotItem[], prefix = '  '): string[] {
  * be auditable, regardless of whether the command was driven from REPL,
  * DCC, or relayed through bot-link.
  */
-export function registerChannelCommands(
-  handler: CommandHandler,
-  channelSettings: ChannelSettings,
-  db: BotDatabase | null,
-): void {
+export function registerChannelCommands(deps: ChannelCommandsDeps): void {
+  const { handler, channelSettings, db } = deps;
   // ---------------------------------------------------------------------------
   // .chanset #chan [+/-]key [value]
   // ---------------------------------------------------------------------------

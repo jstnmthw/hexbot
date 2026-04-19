@@ -2,16 +2,13 @@ import { resolve } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { type MockBot, createMockBot } from '../helpers/mock-bot';
+import { flush } from '../helpers/plugin-test-helpers';
 
 const PLUGIN_PATH = resolve('./plugins/ctcp/index.ts');
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-async function flush(): Promise<void> {
-  await Promise.resolve();
-}
 
 function simulateCtcp(bot: MockBot, nick: string, type: string, message: string): void {
   bot.client.simulateEvent('ctcp request', {

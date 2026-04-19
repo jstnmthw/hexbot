@@ -5,25 +5,9 @@ import { AnopeBackend } from '../../plugins/chanmod/anope-backend';
 import { createProbeState } from '../../plugins/chanmod/chanserv-notice';
 import type { MockBot } from '../helpers/mock-bot';
 import { createMockBot } from '../helpers/mock-bot';
+import { giveBotOps, tick } from '../helpers/plugin-test-helpers';
 
 const PLUGIN_PATH = resolve('./plugins/chanmod/index.ts');
-
-async function tick(ms = 20): Promise<void> {
-  await new Promise<void>((r) => setImmediate(r));
-  await vi.advanceTimersByTimeAsync(ms);
-}
-
-function giveBotOps(bot: MockBot, channel: string): void {
-  const nick = bot.client.user.nick;
-  bot.client.simulateEvent('join', { nick, ident: 'bot', hostname: 'bot.host', channel });
-  bot.client.simulateEvent('mode', {
-    nick: 'ChanServ',
-    ident: 'ChanServ',
-    hostname: 'services.',
-    target: channel,
-    modes: [{ mode: '+o', param: nick }],
-  });
-}
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });

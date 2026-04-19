@@ -3,29 +3,13 @@ import { resolve } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { type MockBot, createMockBot } from '../helpers/mock-bot';
+import { giveBotOps } from '../helpers/plugin-test-helpers';
 
 const PLUGIN_PATH = resolve('./plugins/chanmod/index.ts');
 
 async function flush(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
-}
-
-function giveBotOps(bot: MockBot, channel: string): void {
-  const nick = bot.client.user.nick;
-  bot.client.simulateEvent('join', {
-    nick,
-    ident: 'bot',
-    hostname: 'bot.host',
-    channel,
-  });
-  bot.client.simulateEvent('mode', {
-    nick: 'ChanServ',
-    ident: 'ChanServ',
-    hostname: 'services.',
-    target: channel,
-    modes: [{ mode: '+o', param: nick }],
-  });
 }
 
 describe('chanmod — sticky ban enforcement', () => {

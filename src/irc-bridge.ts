@@ -1,6 +1,7 @@
 // HexBot — IRC bridge
 // Translates irc-framework events into dispatcher events.
 // This is the trust boundary — all IRC data entering the dispatcher passes through here.
+import { extractAccountTag, sanitizeField } from './core/irc-event-helpers';
 import { type ServerCapabilities, defaultServerCapabilities } from './core/isupport';
 import type { MessageQueue } from './core/message-queue';
 import type { EventDispatcher } from './dispatcher';
@@ -67,36 +68,6 @@ const STARTUP_GRACE_MS = 5000;
 //
 // See docs/audits/irc-logic-2026-04-11.md §A.2 for the full capability
 // survey that motivated this set of tradeoffs.
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Pull the IRCv3 `account-tag` off an irc-framework event object, if the
- * server attached one. Returns:
- *   - `undefined` — tag not present (cap not negotiated, or server didn't send it)
- *   - `null`      — tag present but the sender is not identified
- *   - `string`    — the authoritative services account name
- *
- * irc-framework exposes `account` at the top level of the emitted event
- * (see `messaging.js` handler) and mirrors the raw IRCv3 tag map on
- * `event.tags`. We check the top-level field first and fall back to the
- * tag map for robustness against future event-shape changes.
- */
-function extractAccountTag(event: Record<string, unknown>): string | null | undefined {
-  const direct = event.account;
-  if (direct === '*' || direct === null) return null;
-  if (typeof direct === 'string' && direct.length > 0) return direct;
-
-  const tags = event.tags;
-  if (tags !== null && typeof tags === 'object' && 'account' in tags) {
-    const tagAccount = tags.account;
-    if (tagAccount === '*' || tagAccount === null) return null;
-    if (typeof tagAccount === 'string' && tagAccount.length > 0) return tagAccount;
-  }
-  return undefined;
-}
 
 // ---------------------------------------------------------------------------
 // IRCBridge
@@ -209,11 +180,11 @@ export class IRCBridge {
   // -------------------------------------------------------------------------
 
   private onPrivmsg(event: Record<string, unknown>): void {
-    const nick = sanitize(String(event.nick ?? ''));
-    const ident = sanitize(String(event.ident ?? ''));
-    const hostname = sanitize(String(event.hostname ?? ''));
-    const target = sanitize(String(event.target ?? ''));
-    const message = sanitize(String(event.message ?? ''));
+    const nick = sanitizeField(event, 'nick');
+    const ident = sanitizeField(event, 'ident');
+    const hostname = sanitizeField(event, 'hostname');
+    const target = sanitizeField(event, 'target');
+    const message = sanitizeField(event, 'message');
 
     const isChannel = this.isValidChannel(target);
     const channel = isChannel ? target : null;
@@ -239,11 +210,11 @@ export class IRCBridge {
   }
 
   private onAction(event: Record<string, unknown>): void {
-    const nick = sanitize(String(event.nick ?? ''));
-    const ident = sanitize(String(event.ident ?? ''));
-    const hostname = sanitize(String(event.hostname ?? ''));
-    const target = sanitize(String(event.target ?? ''));
-    const message = sanitize(String(event.message ?? ''));
+    const nick = sanitizeField(event, 'nick');
+    const ident = sanitizeField(event, 'ident');
+    const hostname = sanitizeField(event, 'hostname');
+    const target = sanitizeField(event, 'target');
+    const message = sanitizeField(event, 'message');
 
     const isChannel = this.isValidChannel(target);
     const channel = isChannel ? target : null;
@@ -269,10 +240,10 @@ export class IRCBridge {
   }
 
   private onJoin(event: Record<string, unknown>): void {
-    const nick = sanitize(String(event.nick ?? ''));
-    const ident = sanitize(String(event.ident ?? ''));
-    const hostname = sanitize(String(event.hostname ?? ''));
-    const channel = sanitize(String(event.channel ?? ''));
+    const nick = sanitizeField(event, 'nick');
+    const ident = sanitizeField(event, 'ident');
+    const hostname = sanitizeField(event, 'hostname');
+    const channel = sanitizeField(event, 'channel');
 
     if (!this.isValidChannel(channel)) return;
 
@@ -297,11 +268,11 @@ export class IRCBridge {
   }
 
   private onPart(event: Record<string, unknown>): void {
-    const nick = sanitize(String(event.nick ?? ''));
-    const ident = sanitize(String(event.ident ?? ''));
-    const hostname = sanitize(String(event.hostname ?? ''));
-    const channel = sanitize(String(event.channel ?? ''));
-    const message = sanitize(String(event.message ?? ''));
+    const nick = sanitizeField(event, 'nick');
+    const ident = sanitizeField(event, 'ident');
+    const hostname = sanitizeField(event, 'hostname');
+    const channel = sanitizeField(event, 'channel');
+    const message = sanitizeField(event, 'message');
 
     if (!this.isValidChannel(channel)) return;
 
@@ -319,10 +290,10 @@ export class IRCBridge {
   }
 
   private onKick(event: Record<string, unknown>): void {
-    const kicker = sanitize(String(event.nick ?? ''));
-    const channel = sanitize(String(event.channel ?? ''));
-    const kicked = sanitize(String(event.kicked ?? ''));
-    const message = sanitize(String(event.message ?? ''));
+    const kicker = sanitizeField(event, 'nick');
+    const channel = sanitizeField(event, 'channel');
+    const kicked = sanitizeField(event, 'kicked');
+    const message = sanitizeField(event, 'message');
 
     if (!this.isValidChannel(channel)) return;
 
@@ -348,10 +319,10 @@ export class IRCBridge {
   }
 
   private onNick(event: Record<string, unknown>): void {
-    const nick = sanitize(String(event.nick ?? ''));
-    const ident = sanitize(String(event.ident ?? ''));
-    const hostname = sanitize(String(event.hostname ?? ''));
-    const newNick = sanitize(String(event.new_nick ?? ''));
+    const nick = sanitizeField(event, 'nick');
+    const ident = sanitizeField(event, 'ident');
+    const hostname = sanitizeField(event, 'hostname');
+    const newNick = sanitizeField(event, 'new_nick');
 
     // Track bot's own nick changes
     if (nick === this.botNick) {
@@ -372,10 +343,10 @@ export class IRCBridge {
   }
 
   private onMode(event: Record<string, unknown>): void {
-    const nick = sanitize(String(event.nick ?? ''));
-    const ident = sanitize(String(event.ident ?? ''));
-    const hostname = sanitize(String(event.hostname ?? ''));
-    const target = sanitize(String(event.target ?? ''));
+    const nick = sanitizeField(event, 'nick');
+    const ident = sanitizeField(event, 'ident');
+    const hostname = sanitizeField(event, 'hostname');
+    const target = sanitizeField(event, 'target');
     if (!isModeArray(event.modes) || !this.isValidChannel(target)) return;
     const modes = event.modes;
 
@@ -400,11 +371,11 @@ export class IRCBridge {
   }
 
   private onNotice(event: Record<string, unknown>): void {
-    const nick = sanitize(String(event.nick ?? ''));
-    const ident = sanitize(String(event.ident ?? ''));
-    const hostname = sanitize(String(event.hostname ?? ''));
-    const target = sanitize(String(event.target ?? ''));
-    const message = sanitize(String(event.message ?? ''));
+    const nick = sanitizeField(event, 'nick');
+    const ident = sanitizeField(event, 'ident');
+    const hostname = sanitizeField(event, 'hostname');
+    const target = sanitizeField(event, 'target');
+    const message = sanitizeField(event, 'message');
 
     const isChannel = this.isValidChannel(target);
     const channel = isChannel ? target : null;
@@ -430,11 +401,11 @@ export class IRCBridge {
   }
 
   private onCtcp(event: Record<string, unknown>): void {
-    const nick = sanitize(String(event.nick ?? ''));
-    const ident = sanitize(String(event.ident ?? ''));
-    const hostname = sanitize(String(event.hostname ?? ''));
-    const type = sanitize(String(event.type ?? '')).toUpperCase();
-    const rawMessage = sanitize(String(event.message ?? ''));
+    const nick = sanitizeField(event, 'nick');
+    const ident = sanitizeField(event, 'ident');
+    const hostname = sanitizeField(event, 'hostname');
+    const type = sanitizeField(event, 'type').toUpperCase();
+    const rawMessage = sanitizeField(event, 'message');
 
     // irc-framework includes the CTCP type in the message (e.g. "PING 1234567890").
     // Strip the type prefix so ctx.text contains only the payload.
@@ -472,13 +443,13 @@ export class IRCBridge {
   private onTopic(event: Record<string, unknown>): void {
     if (this.topicStartupGrace) return;
 
-    const channel = sanitize(String(event.channel ?? ''));
+    const channel = sanitizeField(event, 'channel');
     if (!this.isValidChannel(channel)) return;
 
-    const nick = sanitize(String(event.nick ?? ''));
-    const ident = sanitize(String(event.ident ?? ''));
-    const hostname = sanitize(String(event.hostname ?? ''));
-    const topic = sanitize(String(event.topic ?? ''));
+    const nick = sanitizeField(event, 'nick');
+    const ident = sanitizeField(event, 'ident');
+    const hostname = sanitizeField(event, 'hostname');
+    const topic = sanitizeField(event, 'topic');
 
     const ctx = this.buildContext({
       nick,
@@ -494,10 +465,10 @@ export class IRCBridge {
   }
 
   private onQuit(event: Record<string, unknown>): void {
-    const nick = sanitize(String(event.nick ?? ''));
-    const ident = sanitize(String(event.ident ?? ''));
-    const hostname = sanitize(String(event.hostname ?? ''));
-    const message = sanitize(String(event.message ?? ''));
+    const nick = sanitizeField(event, 'nick');
+    const ident = sanitizeField(event, 'ident');
+    const hostname = sanitizeField(event, 'hostname');
+    const message = sanitizeField(event, 'message');
 
     // Don't dispatch the bot's own quit
     if (nick === this.botNick) return;
@@ -516,10 +487,10 @@ export class IRCBridge {
   }
 
   private onInvite(event: Record<string, unknown>): void {
-    const nick = sanitize(String(event.nick ?? ''));
-    const ident = sanitize(String(event.ident ?? ''));
-    const hostname = sanitize(String(event.hostname ?? ''));
-    const channel = sanitize(String(event.channel ?? ''));
+    const nick = sanitizeField(event, 'nick');
+    const ident = sanitizeField(event, 'ident');
+    const hostname = sanitizeField(event, 'hostname');
+    const channel = sanitizeField(event, 'channel');
 
     if (!this.isValidChannel(channel)) return;
 
@@ -552,10 +523,10 @@ export class IRCBridge {
     const error = String(event.error ?? '');
     if (!IRCBridge.JOIN_ERROR_NAMES.has(error)) return;
 
-    const channel = sanitize(String(event.channel ?? ''));
+    const channel = sanitizeField(event, 'channel');
     if (!this.isValidChannel(channel)) return;
 
-    const reason = sanitize(String(event.reason ?? ''));
+    const reason = sanitizeField(event, 'reason');
 
     const ctx = this.buildContext({
       nick: this.botNick,

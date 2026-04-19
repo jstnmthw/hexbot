@@ -3,8 +3,8 @@
 import type { CommandContext, CommandHandler } from '../../command-handler';
 import type { BotDatabase } from '../../database';
 import type { PluginLoader } from '../../plugin-loader';
-import { replyFailure } from '../../utils/command-helpers';
 import { tryAudit } from '../audit';
+import { replyFailure } from '../command-helpers';
 
 const PLUGIN_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 
@@ -22,6 +22,13 @@ function validatePluginName(ctx: CommandContext, name: string): boolean {
   return true;
 }
 
+export interface PluginCommandsDeps {
+  handler: CommandHandler;
+  pluginLoader: PluginLoader;
+  pluginDir: string;
+  db: BotDatabase | null;
+}
+
 /**
  * Register plugin lifecycle commands (`.plugins`, `.load`, `.unload`,
  * `.reload`) on the given command handler.
@@ -32,12 +39,8 @@ function validatePluginName(ctx: CommandContext, name: string): boolean {
  * action writes a `plugin-{load,unload,reload}` row to `mod_log` via
  * `tryAudit` (both success and failure paths through `replyFailure`).
  */
-export function registerPluginCommands(
-  handler: CommandHandler,
-  pluginLoader: PluginLoader,
-  pluginDir: string,
-  db: BotDatabase | null,
-): void {
+export function registerPluginCommands(deps: PluginCommandsDeps): void {
+  const { handler, pluginLoader, pluginDir, db } = deps;
   handler.registerCommand(
     'plugins',
     {

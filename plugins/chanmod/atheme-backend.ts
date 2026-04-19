@@ -1,7 +1,8 @@
 // chanmod — Atheme ChanServ ProtectionBackend implementation
 import type { PluginAPI } from '../../src/types';
+import { ChanServBackendBase } from './chanserv-backend-base';
 import { getBotNick } from './helpers';
-import { type BackendAccess, type ProtectionBackend, accessAtLeast } from './protection-backend';
+import { type BackendAccess, accessAtLeast } from './protection-backend';
 
 /**
  * Atheme ChanServ backend.
@@ -14,101 +15,21 @@ import { type BackendAccess, type ProtectionBackend, accessAtLeast } from './pro
  * - op:       OP, UNBAN, INVITE, GETKEY, AKICK
  * - superop:  + DEOP others, FLAGS mgmt, SET
  * - founder:  + RECOVER, CLEAR (requires +R flag)
+ *
+ * Most of the scaffolding lives in {@link ChanServBackendBase}; only the
+ * pieces specific to Atheme's command syntax (RECOVER is native, CLEAR,
+ * MODE -k for key removal) and FLAGS-based access probe live here.
  */
-export class AthemeBackend implements ProtectionBackend {
+export class AthemeBackend extends ChanServBackendBase {
   readonly name = 'atheme';
-  readonly priority = 2; // ChanServ backends are priority 2 (botnet is 1)
-
-  private accessLevels = new Map<string, BackendAccess>();
-  private autoDetectedChannels = new Set<string>();
-  private api: PluginAPI;
-  private chanservNick: string;
 
   constructor(api: PluginAPI, chanservNick: string) {
-    this.api = api;
-    this.chanservNick = chanservNick;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Access management
-  // ---------------------------------------------------------------------------
-
-  getAccess(channel: string): BackendAccess {
-    return this.accessLevels.get(this.api.ircLower(channel)) ?? 'none';
-  }
-
-  setAccess(channel: string, level: BackendAccess): void {
-    const key = this.api.ircLower(channel);
-    const prev = this.accessLevels.get(key);
-    this.accessLevels.set(key, level);
-    // Clear auto-detected flag only when the value actually changes (the onChange
-    // round-trip from syncAccessToSettings writes the same value back — preserve the flag)
-    if (this.autoDetectedChannels.has(key) && level !== prev) {
-      this.autoDetectedChannels.delete(key);
-    }
-  }
-
-  isAutoDetected(channel: string): boolean {
-    return this.autoDetectedChannels.has(this.api.ircLower(channel));
-  }
-
-  // ---------------------------------------------------------------------------
-  // Capability queries
-  // ---------------------------------------------------------------------------
-
-  canOp(channel: string): boolean {
-    return accessAtLeast(this.getAccess(channel), 'op');
-  }
-
-  canDeop(channel: string): boolean {
-    // Atheme +o can deop, but for takeover "deop others" we gate on superop
-    return accessAtLeast(this.getAccess(channel), 'superop');
-  }
-
-  canUnban(channel: string): boolean {
-    return accessAtLeast(this.getAccess(channel), 'op');
-  }
-
-  canInvite(channel: string): boolean {
-    return accessAtLeast(this.getAccess(channel), 'op');
-  }
-
-  canRecover(channel: string): boolean {
-    return accessAtLeast(this.getAccess(channel), 'founder');
-  }
-
-  canClearBans(channel: string): boolean {
-    return accessAtLeast(this.getAccess(channel), 'founder');
-  }
-
-  canRemoveKey(channel: string): boolean {
-    return accessAtLeast(this.getAccess(channel), 'op');
-  }
-
-  canAkick(channel: string): boolean {
-    return accessAtLeast(this.getAccess(channel), 'op');
+    super(api, chanservNick);
   }
 
   // ---------------------------------------------------------------------------
   // Action requests
   // ---------------------------------------------------------------------------
-
-  requestOp(channel: string, nick?: string): void {
-    const target = nick ?? getBotNick(this.api);
-    this.sendChanServ(`OP ${channel} ${target}`);
-  }
-
-  requestDeop(channel: string, nick: string): void {
-    this.sendChanServ(`DEOP ${channel} ${nick}`);
-  }
-
-  requestUnban(channel: string): void {
-    this.sendChanServ(`UNBAN ${channel}`);
-  }
-
-  requestInvite(channel: string): void {
-    this.sendChanServ(`INVITE ${channel}`);
-  }
 
   requestRecover(channel: string): void {
     this.sendChanServ(`RECOVER ${channel}`);
@@ -126,11 +47,6 @@ export class AthemeBackend implements ProtectionBackend {
   requestRemoveKey(channel: string): void {
     // Atheme: SET #channel KEYDEL removes the key. MODE -k also works at op+.
     this.sendChanServ(`MODE ${channel} -k`);
-  }
-
-  requestAkick(channel: string, mask: string, reason?: string): void {
-    const cmd = reason ? `AKICK ${channel} ADD ${mask} ${reason}` : `AKICK ${channel} ADD ${mask}`;
-    this.sendChanServ(cmd);
   }
 
   // ---------------------------------------------------------------------------
@@ -206,13 +122,5 @@ export class AthemeBackend implements ProtectionBackend {
     if (flags.includes('f') || flags.includes('s') || flags.includes('a')) return 'superop';
     if (flags.includes('o')) return 'op';
     return 'none';
-  }
-
-  // ---------------------------------------------------------------------------
-  // Internal
-  // ---------------------------------------------------------------------------
-
-  private sendChanServ(command: string): void {
-    this.api.say(this.chanservNick, command);
   }
 }

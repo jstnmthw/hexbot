@@ -1,64 +1,27 @@
-// HexBot — Bot link authentication and IP ban management
+// HexBot — Bot link admission gate
 //
-// Owns everything to do with authenticating incoming leaf connections:
-// IP allow/denylists, per-IP auth failure tracking with exponential backoff,
-// pending-handshake counting, manual CIDR bans, and the persisted link-ban
-// store. Extracted from BotLinkHub so the escalation math and ban-state
-// management can be unit-tested without standing up a full hub.
+// The public face of bot-link authentication: admission checks,
+// password verification, failure/success tracking, and the operator
+// ban/unban interface. Escalation math lives in `./auth-escalation`;
+// LRU / CIDR / DB storage lives in `./auth-store`. This file stays
+// focused on "should this IP be allowed through, and what do we do
+// after the handshake result is known?". See 2026-04-19 quality audit.
 import { timingSafeEqual } from 'node:crypto';
 
 import type { BotDatabase } from '../../database';
 import type { BotEventBus } from '../../event-bus';
 import type { LoggerLike } from '../../logger';
 import type { BotlinkConfig } from '../../types';
-import { AdminListStore } from '../../utils/admin-list-store';
 import { tryLogModAction } from '../audit';
+import { applyBanCountDecay, escalateBan, rollFailureWindowIfExpired } from './auth-escalation';
+import type { AuthTracker } from './auth-escalation';
+import { type AuthBanEntry, BotLinkAuthStore, type LinkBan } from './auth-store';
+import type { LRUMap } from './lru-map';
 import { hashPassword } from './protocol';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface AuthTracker {
-  failures: number;
-  firstFailure: number;
-  bannedUntil: number;
-  /** Number of times this IP has been banned — drives escalation doubling. */
-  banCount: number;
-  /** Wall-clock ms of the most recent failure — drives `banCount` decay. */
-  lastFailure: number;
-}
-
-/**
- * `banCount` halves once per hour since the last failure. Without
- * decay, a shared-NAT IP that occasionally fumbles auth eventually
- * accumulates a permanently escalating ban duration even when the
- * underlying offenders have long since moved on. See stability audit
- * 2026-04-14.
- */
-const BAN_COUNT_DECAY_MS = 3_600_000; // 1 hour
-/** Hard cap on `banCount` so the exponential doesn't run away. */
-const BAN_COUNT_MAX = 8;
-
-export interface AuthBanEntry {
-  ip: string;
-  bannedUntil: number; // 0 = permanent
-  banCount: number;
-  manual: boolean;
-}
-
-export interface LinkBan {
-  ip: string; // single IP or CIDR range
-  bannedUntil: number; // 0 = permanent
-  reason: string;
-  setBy: string;
-  setAt: number; // unix ms
-}
-
-/** Outcome of the "can this IP even start a handshake" gate. */
-export type AdmissionResult =
-  | { allowed: true; whitelisted: boolean }
-  | { allowed: false; reason: 'banned' | 'cidr-banned' | 'pending-limit' | 'unknown-ip' };
+// Re-export the storage-shape types so external consumers keep importing
+// them from `./auth` (the module's public surface hasn't changed).
+export type { AuthBanEntry, LinkBan } from './auth-store';
 
 // ---------------------------------------------------------------------------
 // IP parsing helpers
@@ -118,16 +81,10 @@ export function isWhitelisted(ip: string, cidrs: string[]): boolean {
 // BotLinkAuthManager
 // ---------------------------------------------------------------------------
 
-/** Hard cap on manually-banned CIDR ranges to prevent connection-path DoS. */
-const MAX_CIDR_BANS = 500;
-
-/** Hard cap on the per-IP auth failure tracker. Defends against a distributed
- *  scanner briefly spiking the map between sweep runs (every 300s). At 200
- *  conns/s worst case, one sweep window is ~60k attempts, but steady state
- *  post-sweep is bounded by actual live tracker lifetimes. Oldest entries
- *  are evicted first — they haven't been touched by `noteFailure` recently
- *  so they are the safest to drop. */
-const MAX_AUTH_TRACKERS = 10_000;
+/** Outcome of the "can this IP even start a handshake" gate. */
+export type AdmissionResult =
+  | { allowed: true; whitelisted: boolean }
+  | { allowed: false; reason: 'banned' | 'cidr-banned' | 'pending-limit' | 'unknown-ip' };
 
 /**
  * Owns authentication state for the bot-link hub: password hash, per-IP
@@ -149,20 +106,27 @@ export class BotLinkAuthManager {
   private readonly eventBus: BotEventBus | null;
   private readonly db: BotDatabase | null;
   private readonly expectedHash: string;
-  /**
-   * Per-IP auth-failure state with LRU ordering via Map insertion order.
-   * Exposed `readonly` so tests can seed / inspect the LRU; production code
-   * reads and mutates through the helper methods below.
-   */
-  readonly authTracker: Map<string, AuthTracker> = new Map();
+  private readonly store: BotLinkAuthStore;
   private readonly pendingHandshakes: Map<string, number> = new Map();
-  /**
-   * Manually-banned CIDR ranges, keyed by normalized CIDR string. Exposed
-   * `readonly` so tests can seed entries directly for sweep / limit tests.
-   */
-  readonly manualCidrBans: Map<string, LinkBan> = new Map();
-  private readonly linkBanStore: AdminListStore<LinkBan> | null;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * Per-IP auth-failure state with an explicit LRU contract: every `set`
+   * promotes the key and evicts the oldest entry if the map is full.
+   * Exposed so tests and `getAuthBans` can read / seed entries; production
+   * code mutates via the helper methods below.
+   */
+  get authTracker(): LRUMap<string, AuthTracker> {
+    return this.store.authTracker;
+  }
+
+  /**
+   * Manually-banned CIDR ranges, keyed by normalized CIDR string.
+   * Exposed so tests can seed entries directly for sweep / limit tests.
+   */
+  get manualCidrBans(): Map<string, LinkBan> {
+    return this.store.manualCidrBans;
+  }
 
   constructor(
     config: BotlinkConfig,
@@ -175,13 +139,7 @@ export class BotLinkAuthManager {
     this.eventBus = eventBus;
     this.db = db;
     this.expectedHash = hashPassword(config.password);
-    this.linkBanStore = db
-      ? new AdminListStore<LinkBan>(db, {
-          namespace: '_linkbans',
-          keyFn: (ban) => ban.ip,
-        })
-      : null;
-    this.loadPersistedBans();
+    this.store = new BotLinkAuthStore(db, logger);
 
     this.sweepTimer = setInterval(() => this.sweepStaleTrackers(), 300_000);
     this.sweepTimer.unref(); // Don't keep the process alive
@@ -214,13 +172,13 @@ export class BotLinkAuthManager {
 
     if (!whitelisted) {
       // Ban check — immediately reject banned IPs before any protocol setup
-      const tracker = this.authTracker.get(ip);
+      const tracker = this.store.authTracker.get(ip);
       if (tracker && tracker.bannedUntil > Date.now()) {
         return { allowed: false, reason: 'banned' };
       }
       // Check CIDR manual bans (small admin-managed list, linear scan is fine)
       const normalizedIP = normalizeIP(ip);
-      for (const cidrBan of this.manualCidrBans.values()) {
+      for (const cidrBan of this.store.manualCidrBans.values()) {
         if (cidrBan.bannedUntil !== 0 && cidrBan.bannedUntil <= Date.now()) continue;
         if (isWhitelisted(normalizedIP, [cidrBan.ip])) {
           return { allowed: false, reason: 'cidr-banned' };
@@ -278,56 +236,19 @@ export class BotLinkAuthManager {
     const MAX_BAN_MS = 86_400_000; // 24h cap to prevent overflow
 
     const now = Date.now();
-    let tracker = this.authTracker.get(ip);
-    if (!tracker) {
-      // Evict oldest entries first when the hard cap is hit. JS Maps keep
-      // insertion order, so `keys().next()` gives the oldest entry — and we
-      // touch-update entries on every hit (delete + set) to promote them
-      // to "most recently touched", making this true LRU.
-      while (this.authTracker.size >= MAX_AUTH_TRACKERS) {
-        const oldest = this.authTracker.keys().next().value;
-        if (oldest === undefined) break;
-        this.authTracker.delete(oldest);
-      }
-      tracker = {
-        failures: 0,
-        firstFailure: now,
-        bannedUntil: 0,
-        banCount: 0,
-        lastFailure: now,
-      };
-      this.authTracker.set(ip, tracker);
-    } else {
-      // Promote to most-recently-touched in the insertion-order map.
-      this.authTracker.delete(ip);
-      this.authTracker.set(ip, tracker);
-    }
+    const tracker = this.store.getOrCreateTracker(ip, now);
+    // LRUMap.set promotes existing keys to most-recently-used and evicts
+    // the oldest when a new key would push the map past its cap.
+    this.store.authTracker.set(ip, tracker);
 
-    // Decay `banCount` by one half-step per hour since last failure.
-    // A one-off typo on a shared NAT IP shouldn't compound forever.
-    // See stability audit 2026-04-14.
-    if (tracker.banCount > 0) {
-      const elapsed = now - tracker.lastFailure;
-      if (elapsed >= BAN_COUNT_DECAY_MS) {
-        const halves = Math.floor(elapsed / BAN_COUNT_DECAY_MS);
-        tracker.banCount = Math.max(0, tracker.banCount - halves);
-      }
-    }
-
-    // Reset failure window if expired (but never reset banCount)
-    if (now - tracker.firstFailure > windowMs) {
-      tracker.failures = 0;
-      tracker.firstFailure = now;
-    }
+    applyBanCountDecay(tracker, now);
+    rollFailureWindowIfExpired(tracker, now, windowMs);
 
     tracker.failures++;
     tracker.lastFailure = now;
 
     if (tracker.failures >= maxFailures) {
-      const banDuration = Math.min(baseBanMs * 2 ** tracker.banCount, MAX_BAN_MS);
-      tracker.bannedUntil = now + banDuration;
-      tracker.banCount = Math.min(tracker.banCount + 1, BAN_COUNT_MAX);
-      tracker.failures = 0;
+      const banDuration = escalateBan(tracker, now, baseBanMs, MAX_BAN_MS);
       this.logger?.warn(`IP ${ip} banned for ${banDuration}ms after ${maxFailures} auth failures`);
       this.eventBus?.emit('auth:ban', ip, maxFailures, banDuration);
       // Distinct action from the manual `botlink-ban` so an operator can
@@ -359,7 +280,7 @@ export class BotLinkAuthManager {
    */
   noteSuccess(ip: string, whitelisted: boolean): void {
     if (whitelisted || ip === 'unknown') return;
-    const tracker = this.authTracker.get(ip);
+    const tracker = this.store.authTracker.get(ip);
     if (tracker) {
       tracker.failures = 0;
       if (tracker.banCount > 0) tracker.banCount--;
@@ -389,23 +310,22 @@ export class BotLinkAuthManager {
     // escalation memory horizon, a property of the ban algorithm, not per
     // deployment tuning.
     const ESCALATED_STALE_MS = 86_400_000;
-    for (const [ip, tracker] of this.authTracker) {
+    for (const [ip, tracker] of this.store.authTracker) {
       const banExpired = tracker.bannedUntil < now;
       const failureWindowExpired = now - tracker.firstFailure > windowMs;
       if (banExpired && failureWindowExpired) {
         if (tracker.banCount === 0) {
-          this.authTracker.delete(ip);
+          this.store.authTracker.delete(ip);
         } else if (now - tracker.bannedUntil > ESCALATED_STALE_MS) {
-          this.authTracker.delete(ip);
+          this.store.authTracker.delete(ip);
         }
       }
     }
 
     // Sweep expired CIDR manual bans
-    for (const [ip, ban] of this.manualCidrBans) {
+    for (const [ip, ban] of this.store.manualCidrBans) {
       if (ban.bannedUntil !== 0 && ban.bannedUntil <= now) {
-        this.manualCidrBans.delete(ip);
-        this.linkBanStore?.del(ip);
+        this.store.dropExpiredCidrBan(ip);
       }
     }
   }
@@ -420,7 +340,7 @@ export class BotLinkAuthManager {
     const result: AuthBanEntry[] = [];
 
     // Auto bans from authTracker
-    for (const [ip, tracker] of this.authTracker) {
+    for (const [ip, tracker] of this.store.authTracker) {
       if (tracker.bannedUntil > now) {
         // Normalize MAX_SAFE_INTEGER sentinel (permanent manual ban) to 0 in output
         const bannedUntil =
@@ -430,17 +350,15 @@ export class BotLinkAuthManager {
     }
 
     // Manual bans from DB (may overlap with authTracker entries)
-    if (this.linkBanStore) {
-      for (const ban of this.linkBanStore.list()) {
-        // Skip expired manual bans
-        if (ban.bannedUntil !== 0 && ban.bannedUntil <= now) continue;
-        // Check if already listed from authTracker
-        const existing = result.find((r) => r.ip === ban.ip);
-        if (existing) {
-          existing.manual = true;
-        } else {
-          result.push({ ip: ban.ip, bannedUntil: ban.bannedUntil, banCount: 0, manual: true });
-        }
+    for (const ban of this.store.listPersistedBans()) {
+      // Skip expired manual bans
+      if (ban.bannedUntil !== 0 && ban.bannedUntil <= now) continue;
+      // Check if already listed from authTracker
+      const existing = result.find((r) => r.ip === ban.ip);
+      if (existing) {
+        existing.manual = true;
+      } else {
+        result.push({ ip: ban.ip, bannedUntil: ban.bannedUntil, banCount: 0, manual: true });
       }
     }
 
@@ -453,86 +371,17 @@ export class BotLinkAuthManager {
     const bannedUntil = durationMs === 0 ? 0 : now + durationMs;
     const ban: LinkBan = { ip, bannedUntil, reason, setBy, setAt: now };
 
-    // Persist to DB
-    this.linkBanStore?.set(ban);
+    const stored = this.store.addManualBan(ban);
+    if (!stored) return; // CIDR cap hit — warning already logged by store
 
-    // Load into hot path
-    if (ip.includes('/')) {
-      // CIDR range — enforce cap to prevent connection-path DoS
-      if (!this.manualCidrBans.has(ip) && this.manualCidrBans.size >= MAX_CIDR_BANS) {
-        this.logger?.warn(`CIDR ban limit (${MAX_CIDR_BANS}) reached, rejecting ${ip}`);
-        return;
-      }
-      this.manualCidrBans.set(ip, ban);
-    } else {
-      // Single IP — set in authTracker for fast Map lookup
-      const tracker = this.authTracker.get(ip) ?? {
-        failures: 0,
-        firstFailure: now,
-        bannedUntil: 0,
-        banCount: 0,
-        lastFailure: now,
-      };
-      // For permanent bans, use a far-future timestamp
-      tracker.bannedUntil = bannedUntil === 0 ? Number.MAX_SAFE_INTEGER : bannedUntil;
-      this.authTracker.set(ip, tracker);
-    }
-
-    this.recordModAction('botlink-ban', ip, setBy, reason);
+    this.store.recordModAction('botlink-ban', ip, setBy, reason);
     this.eventBus?.emit('auth:ban', ip, 0, durationMs);
   }
 
   /** Remove a ban (auto or manual) for an IP or CIDR. */
   unban(ip: string, by: string): void {
-    // Remove from authTracker (single IPs)
-    this.authTracker.delete(ip);
-    // Remove from CIDR map
-    this.manualCidrBans.delete(ip);
-    // Remove from DB
-    this.linkBanStore?.del(ip);
-
-    this.recordModAction('botlink-unban', ip, by, null);
+    this.store.removeBan(ip);
+    this.store.recordModAction('botlink-unban', ip, by, null);
     this.eventBus?.emit('auth:unban', ip);
-  }
-
-  /**
-   * Write a mod_log row for a manual ban action. Wrapped so a DB error
-   * never prevents the ban/unban from taking effect in memory.
-   */
-  private recordModAction(action: string, target: string, by: string, detail: string | null): void {
-    tryLogModAction(
-      this.db,
-      { action, source: 'botlink', by, target, reason: detail },
-      this.logger,
-    );
-  }
-
-  /** Load persisted manual bans from DB into the hot path on startup. */
-  private loadPersistedBans(): void {
-    if (!this.linkBanStore) return;
-    const now = Date.now();
-    let loaded = 0;
-    for (const ban of this.linkBanStore.list()) {
-      // Skip expired non-permanent bans
-      if (ban.bannedUntil !== 0 && ban.bannedUntil <= now) continue;
-
-      if (ban.ip.includes('/')) {
-        this.manualCidrBans.set(ban.ip, ban);
-      } else {
-        const tracker = this.authTracker.get(ban.ip) ?? {
-          failures: 0,
-          firstFailure: ban.setAt,
-          bannedUntil: 0,
-          banCount: 0,
-          lastFailure: ban.setAt,
-        };
-        tracker.bannedUntil = ban.bannedUntil === 0 ? Number.MAX_SAFE_INTEGER : ban.bannedUntil;
-        this.authTracker.set(ban.ip, tracker);
-      }
-      loaded++;
-    }
-    if (loaded > 0) {
-      this.logger?.info(`Loaded ${loaded} persisted link ban(s)`);
-    }
   }
 }

@@ -18,7 +18,9 @@ describe('RateLimitTracker initialCounters seed', () => {
   it('uses a pre-built counter when one is provided per kind', () => {
     const now = Date.now();
     const msgSeed = new SlidingWindowCounter([['alice', [now - 1_000, now - 500]]]);
-    const tracker = new RateLimitTracker(WINDOWS, { msg: msgSeed });
+    const tracker = new RateLimitTracker(WINDOWS, () => new SlidingWindowCounter(), {
+      msg: msgSeed,
+    });
     // msg counter starts pre-loaded at 2; next check pushes it over the
     // threshold of 2 (3 > 2).
     expect(tracker.check('msg', 'alice')).toBe(true);

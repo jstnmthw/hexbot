@@ -52,11 +52,38 @@ export function formatItem(
   return `\x02[${feedName}]\x02 ${title}${link ? ` \u2014 ${link}` : ''}`;
 }
 
+/** Per-item drip delay used between successive announce lines. */
+const ANNOUNCE_DRIP_MS = 500;
+
+/**
+ * Resolve after `ms` or immediately when `signal` aborts. Listener is
+ * detached after either outcome so the signal doesn't leak a handler per
+ * call. Used by {@link announceItems} so `teardown()` can interrupt the
+ * drip-feed without waiting out the final sleep.
+ */
+function interruptibleSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 /**
  * Drip-feed a batch of items to every channel configured on `feed`, sleeping
- * 500ms between items so a large batch doesn't flood the channel or trip
- * the server's own rate limiter. The `signal` is honored at each sleep and
- * each item boundary so `teardown()` interrupts mid-batch cleanly.
+ * `ANNOUNCE_DRIP_MS` between items so a large batch doesn't flood the
+ * channel or trip the server's own rate limiter. The `signal` is honored
+ * at each sleep and each item boundary so `teardown()` interrupts
+ * mid-batch cleanly. Formatting stays in {@link formatItem}; this
+ * function is pure loop + send + sleep.
  */
 export async function announceItems(
   api: PluginAPI,
@@ -76,22 +103,8 @@ export async function announceItems(
     for (const channel of feed.channels) {
       api.say(channel, line);
     }
-    // Drip-feed at 500ms per item so a burst doesn't flood the channel or
-    // trip the server's own rate limiter. The sleep is interruptible: if
-    // the plugin is torn down mid-drip the abort resolves the sleep
-    // immediately so we return without touching `api` again.
     if (i < items.length - 1) {
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => {
-          signal?.removeEventListener('abort', onAbort);
-          resolve();
-        }, 500);
-        const onAbort = () => {
-          clearTimeout(timer);
-          resolve();
-        };
-        if (signal) signal.addEventListener('abort', onAbort, { once: true });
-      });
+      await interruptibleSleep(ANNOUNCE_DRIP_MS, signal);
     }
   }
 

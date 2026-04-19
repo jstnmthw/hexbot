@@ -3,24 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { themeNames } from '../../plugins/topic/themes';
 import { type MockBot, createMockBot } from '../helpers/mock-bot';
+import { simulatePrivmsg, tick } from '../helpers/plugin-test-helpers';
 
 const PLUGIN_PATH = resolve('./plugins/topic/index.ts');
-
-function simulatePrivmsg(
-  bot: MockBot,
-  nick: string,
-  ident: string,
-  hostname: string,
-  channel: string,
-  message: string,
-): void {
-  bot.client.simulateEvent('privmsg', { nick, ident, hostname, target: channel, message });
-}
-
-async function tick(ms = 20): Promise<void> {
-  await new Promise<void>((r) => setImmediate(r));
-  await vi.advanceTimersByTimeAsync(ms);
-}
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });

@@ -5,6 +5,7 @@
 // for CMD, PARTY_WHOM, and protection-request round trips. Centralising
 // the bookkeeping removes three parallel Map declarations per side and
 // makes shutdown drain paths impossible to forget.
+import type { LoggerLike } from '../../logger';
 
 interface PendingEntry<T> {
   timer: ReturnType<typeof setTimeout>;
@@ -21,13 +22,35 @@ interface PendingEntry<T> {
  */
 const DEFAULT_MAX_PENDING = 4096;
 
+export interface PendingRequestMapOptions {
+  /** Maximum concurrent pending entries. Defaults to `DEFAULT_MAX_PENDING` (4096). */
+  maxPending?: number;
+  /** Human-friendly label for cap-hit warnings (e.g. `"hub:pendingCmds"`). */
+  label?: string;
+  /** Logger to notify on cap-hit. A null/undefined logger silences the warning. */
+  logger?: LoggerLike | null;
+}
+
 export class PendingRequestMap<T> {
   private map = new Map<string, PendingEntry<T>>();
   private readonly maxPending: number;
+  private readonly label: string;
+  private readonly logger: LoggerLike | null;
   private droppedAtCap = 0;
 
-  constructor(maxPending: number = DEFAULT_MAX_PENDING) {
-    this.maxPending = maxPending;
+  /**
+   * Construct a pending-request map. Accepts either a plain `maxPending`
+   * number (legacy shape, kept to avoid churning 8+ call sites that don't
+   * need logger plumbing) or an options object carrying a logger and
+   * label for cap-hit observability.
+   */
+  constructor(maxPending?: number);
+  constructor(options: PendingRequestMapOptions);
+  constructor(arg: number | PendingRequestMapOptions = DEFAULT_MAX_PENDING) {
+    const opts: PendingRequestMapOptions = typeof arg === 'number' ? { maxPending: arg } : arg;
+    this.maxPending = opts.maxPending ?? DEFAULT_MAX_PENDING;
+    this.label = opts.label ?? 'pending';
+    this.logger = opts.logger ?? null;
   }
 
   /**
@@ -45,6 +68,14 @@ export class PendingRequestMap<T> {
     // natural timeout. See stability audit 2026-04-14.
     if (this.map.size >= this.maxPending) {
       this.droppedAtCap++;
+      // Log on the first drop and then every 100th — a laggy peer can
+      // drive this counter upward fast and we don't want to flood the
+      // log, but operators need to see it happening at least once.
+      if (this.droppedAtCap === 1 || this.droppedAtCap % 100 === 0) {
+        this.logger?.warn(
+          `[botlink:${this.label}] pending-request cap ${this.maxPending} reached — dropping ref "${ref}" (${this.droppedAtCap} total drops)`,
+        );
+      }
       return Promise.resolve(timeoutValue);
     }
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {

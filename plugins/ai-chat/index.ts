@@ -3,35 +3,50 @@
 // AI provider adapter (currently Gemini).
 import type { HandlerContext, PluginAPI } from '../../src/types';
 import { AmbientEngine } from './ambient';
-import {
-  type AssistantConfig,
-  type PromptContext,
-  renderStableSystemPrompt,
-  renderVolatileHeader,
-  respond,
-  sendLines,
-} from './assistant';
+import { type AssistantConfig, type PromptContext, respond } from './assistant';
 import { getCharacter, loadCharacters, resolveCharactersDir } from './character-loader';
 import type { Character } from './characters/types';
+import { type AiChatConfig, buildProviderConfig, parseConfig } from './config';
 import { ContextManager } from './context-manager';
 import { EngagementTracker } from './engagement-tracker';
 import { listGames, loadGamePrompt, resolveGamesDir } from './games-loader';
 import { IterStats } from './iter-stats';
 import { MoodEngine } from './mood';
 import { applyCharacterStyle, formatResponse } from './output-formatter';
-import { createResilientProvider } from './providers';
 import {
-  type AIMessage,
-  type AIProvider,
-  type AIProviderConfig,
-  isAIProviderError,
-} from './providers/types';
+  getBotChannelModes,
+  getBotChanservAccess,
+  isFounderPostGate,
+  postGateFor,
+  shouldRespond,
+  shouldRespondReason,
+  traceLine,
+} from './permission-gates';
+import {
+  type PipelineDeps,
+  hasRecentBotInteraction,
+  renderChannelProfile,
+  runPipeline,
+  runSessionPipeline,
+} from './pipeline';
+import { createResilientProvider } from './providers';
+import type { AIProvider } from './providers/types';
 import { RateLimiter } from './rate-limiter';
-import { type ReplyDecision, type SocialSnapshot, decideReply } from './reply-policy';
+import { type SocialSnapshot, decideReply } from './reply-policy';
+import { sendLinesGated } from './sender';
 import { type SessionIdentity, SessionManager } from './session-manager';
 import { SocialTracker } from './social-tracker';
 import { TokenTracker } from './token-tracker';
-import { type TriggerConfig, detectTrigger, isIgnored, isLikelyBot } from './triggers';
+import { detectTrigger, isIgnored, isLikelyBot } from './triggers';
+
+// Re-export parseConfig so the index.ts public surface is unchanged after the
+// config extraction. Callers that pre-extraction imported it from index.ts
+// (none in-tree, but external plugin harnesses might) continue to work.
+export { parseConfig } from './config';
+
+// Re-exports preserve the pre-split index.ts public surface (tests import
+// `shouldRespond` and `shouldBlockOnFounder` from the plugin entry).
+export { shouldBlockOnFounder, shouldRespond } from './permission-gates';
 
 export const name = 'ai-chat';
 export const version = '1.0.0';
@@ -105,511 +120,6 @@ function truncateForBuffer(text: string): string {
   return text.length > MAX_ENTRY_BYTES ? text.slice(0, MAX_ENTRY_BYTES) + '…' : text;
 }
 
-// ---------------------------------------------------------------------------
-// Typed config accessors
-// ---------------------------------------------------------------------------
-
-interface AiChatConfig {
-  provider: string;
-  /** Resolved from `api_key_env` by the plugin loader. Empty string → degraded mode. */
-  apiKey: string;
-  model: string;
-  temperature: number;
-  maxOutputTokens: number;
-  character: string;
-  charactersDir: string;
-  channelCharacters: Record<string, string | { character?: string; language?: string }>;
-  triggers: TriggerConfig;
-  engagement: {
-    softTimeoutMs: number;
-    hardCeilingMs: number;
-  };
-  context: {
-    maxMessages: number;
-    maxTokens: number;
-    ttlMs: number;
-    pruneStrategy: 'bulk' | 'sliding';
-  };
-  rateLimits: {
-    userBurst: number;
-    userRefillSeconds: number;
-    globalRpm: number;
-    globalRpd: number;
-    rpmBackpressurePct: number;
-    ambientPerChannelPerHour: number;
-    ambientGlobalPerHour: number;
-  };
-  tokenBudgets: { perUserDaily: number; globalDaily: number };
-  permissions: {
-    requiredFlag: string;
-    adminFlag: string;
-    ignoreList: string[];
-    ignoreBots: boolean;
-    botNickPatterns: string[];
-  };
-  output: { maxLines: number; maxLineLength: number; interLineDelayMs: number; stripUrls: boolean };
-  channelProfiles: Record<
-    string,
-    { topic?: string; culture?: string; role?: string; depth?: string }
-  >;
-  ambient: {
-    enabled: boolean;
-    idle: { afterMinutes: number; chance: number; minUsers: number };
-    unansweredQuestions: { enabled: boolean; waitSeconds: number };
-    chattiness: number;
-    interests: string[];
-    eventReactions: { joinWb: boolean; topicChange: boolean };
-  };
-  security: {
-    privilegeGating: boolean;
-    privilegedModeThreshold: string;
-    privilegedRequiredFlag: string;
-    disableWhenPrivileged: boolean;
-    /**
-     * Refuse to respond in any channel where the bot holds ChanServ founder
-     * access. Enforced by reading the `chanserv_access` chanset (written by
-     * chanmod auto-detect or manual override). Checked at both trigger time
-     * and post time so a probe that resolves between the two still blocks.
-     */
-    disableWhenFounder: boolean;
-  };
-  sessions: { enabled: boolean; inactivityMs: number; gamesDir: string };
-  ollama: {
-    baseUrl: string;
-    requestTimeoutMs: number;
-    useServerTokenizer: boolean;
-    /** Ollama `keep_alive` — empty string means "use Ollama's default". */
-    keepAlive: string;
-    /** Pinned context window. `0` leaves it unset (daemon default). */
-    numCtx: number;
-  };
-}
-
-/**
- * Parse a raw `ai-chat` config object (from plugins.json / config.json)
- * into the strongly-typed internal shape. Every field has a default — an
- * empty `{}` input yields a fully-populated config. `warn` is invoked with
- * a human message for removed-key migrations (pre-0.5.0 `engagement_seconds`
- * / `triggers.command`); callers wire it to the plugin API warn log so
- * operators see the message without a bot restart.
- */
-export function parseConfig(
-  raw: Record<string, unknown>,
-  warn: (msg: string) => void = () => {},
-): AiChatConfig {
-  const triggers = asRecord(raw.triggers);
-  const context = asRecord(raw.context);
-  const rl = asRecord(raw.rate_limits);
-  const tb = asRecord(raw.token_budgets);
-  const perm = asRecord(raw.permissions);
-  const output = asRecord(raw.output);
-  const channelCharacters = asRecord(raw.channel_characters);
-
-  // Legacy config migration warnings. Retained values are ignored; the
-  // replacement keys (`engagement.*`, always-on `!ai` console) are used.
-  if ('engagement_seconds' in triggers) {
-    warn(
-      'triggers.engagement_seconds is removed — replace with ' +
-        'engagement.soft_timeout_minutes / engagement.hard_ceiling_minutes ' +
-        '(see CHANGELOG 0.5.0).',
-    );
-  }
-  if ('command' in triggers) {
-    warn(
-      'triggers.command is removed — the !ai subcommand console is always ' +
-        'enabled. Remove this key from your config.',
-    );
-  }
-
-  return {
-    provider: asString(raw.provider, 'gemini'),
-    apiKey: asString(raw.api_key, ''),
-    model: asString(raw.model, 'gemini-2.5-flash-lite'),
-    temperature: asNum(raw.temperature, 0.9),
-    maxOutputTokens: asNum(raw.max_output_tokens, 256),
-    character: asString(raw.character, 'friendly'),
-    charactersDir: asString(raw.characters_dir, 'characters'),
-    channelCharacters: channelCharacters as AiChatConfig['channelCharacters'],
-    channelProfiles: asRecord(raw.channel_profiles) as AiChatConfig['channelProfiles'],
-    triggers: {
-      directAddress: asBool(triggers.direct_address, true),
-      commandPrefix: asString(triggers.command_prefix, '!ai'),
-      keywords: asStringArr(triggers.keywords, []),
-      randomChance: asNum(triggers.random_chance, 0),
-    },
-    engagement: (() => {
-      const e = asRecord(raw.engagement);
-      return {
-        softTimeoutMs: asNum(e.soft_timeout_minutes, 10) * 60_000,
-        hardCeilingMs: asNum(e.hard_ceiling_minutes, 30) * 60_000,
-      };
-    })(),
-    context: {
-      maxMessages: asNum(context.max_messages, 50),
-      maxTokens: asNum(context.max_tokens, 4000),
-      ttlMs: asNum(context.ttl_minutes, 60) * 60_000,
-      pruneStrategy: asString(context.prune_strategy, 'bulk') === 'sliding' ? 'sliding' : 'bulk',
-    },
-    rateLimits: {
-      userBurst: asNum(rl.user_burst, 3),
-      userRefillSeconds: asNum(rl.user_refill_seconds, 12),
-      globalRpm: asNum(rl.global_rpm, 10),
-      globalRpd: asNum(rl.global_rpd, 800),
-      rpmBackpressurePct: asNum(rl.rpm_backpressure_pct, 80),
-      ambientPerChannelPerHour: asNum(rl.ambient_per_channel_per_hour, 5),
-      ambientGlobalPerHour: asNum(rl.ambient_global_per_hour, 20),
-    },
-    tokenBudgets: {
-      perUserDaily: asNum(tb.per_user_daily, 50_000),
-      globalDaily: asNum(tb.global_daily, 200_000),
-    },
-    permissions: {
-      requiredFlag: asString(perm.required_flag, '-'),
-      adminFlag: asString(perm.admin_flag, 'm'),
-      ignoreList: asStringArr(perm.ignore_list, []),
-      ignoreBots: asBool(perm.ignore_bots, true),
-      botNickPatterns: asStringArr(perm.bot_nick_patterns, ['*bot', '*Bot', '*BOT']),
-    },
-    output: {
-      maxLines: asNum(output.max_lines, 4),
-      maxLineLength: asNum(output.max_line_length, 440),
-      interLineDelayMs: asNum(output.inter_line_delay_ms, 500),
-      stripUrls: asBool(output.strip_urls, false),
-    },
-    ambient: (() => {
-      const a = asRecord(raw.ambient);
-      const idle = asRecord(a.idle);
-      const uq = asRecord(a.unanswered_questions);
-      const er = asRecord(a.event_reactions);
-      return {
-        enabled: asBool(a.enabled, false),
-        idle: {
-          afterMinutes: asNum(idle.after_minutes, 15),
-          chance: asNum(idle.chance, 0.3),
-          minUsers: asNum(idle.min_users, 2),
-        },
-        unansweredQuestions: {
-          enabled: asBool(uq.enabled, true),
-          waitSeconds: asNum(uq.wait_seconds, 90),
-        },
-        chattiness: asNum(a.chattiness, 0.08),
-        interests: asStringArr(a.interests, []),
-        eventReactions: {
-          joinWb: asBool(er.join_wb, false),
-          topicChange: asBool(er.topic_change, false),
-        },
-      };
-    })(),
-    security: (() => {
-      const sec = asRecord(raw.security);
-      return {
-        privilegeGating: asBool(sec.privilege_gating, false),
-        privilegedModeThreshold: asString(sec.privileged_mode_threshold, 'h'),
-        privilegedRequiredFlag: asString(sec.privileged_required_flag, 'm'),
-        disableWhenPrivileged: asBool(sec.disable_when_privileged, false),
-        disableWhenFounder: asBool(sec.disable_when_founder, true),
-      };
-    })(),
-    sessions: {
-      enabled: asBool(asRecord(raw.sessions).enabled, true),
-      inactivityMs: asNum(asRecord(raw.sessions).inactivity_timeout_minutes, 10) * 60_000,
-      gamesDir: asString(asRecord(raw.sessions).games_dir, 'games'),
-    },
-    ollama: (() => {
-      const o = asRecord(raw.ollama);
-      return {
-        baseUrl: asString(o.base_url, 'http://127.0.0.1:11434'),
-        requestTimeoutMs: asNum(o.request_timeout_ms, 60_000),
-        useServerTokenizer: asBool(o.use_server_tokenizer, false),
-        keepAlive: asString(o.keep_alive, '30m'),
-        numCtx: asNum(o.num_ctx, 4096),
-      };
-    })(),
-  };
-}
-
-function asRecord(v: unknown): Record<string, unknown> {
-  return v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
-}
-function asBool(v: unknown, dflt: boolean): boolean {
-  return typeof v === 'boolean' ? v : dflt;
-}
-function asNum(v: unknown, dflt: number): number {
-  return typeof v === 'number' && Number.isFinite(v) ? v : dflt;
-}
-function asString(v: unknown, dflt: string): string {
-  return typeof v === 'string' ? v : dflt;
-}
-function asStringArr(v: unknown, dflt: string[]): string[] {
-  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : dflt;
-}
-
-/**
- * Build an AIProviderConfig for the configured provider, or return null to
- * signal degraded mode (provider couldn't be initialized). Each provider
- * branch pulls only the fields it understands — Gemini needs `apiKey`,
- * Ollama needs `baseUrl`. A missing required field logs a clear warning and
- * drops the provider instead of throwing, mirroring the prior behaviour
- * where a missing API key put the plugin in degraded mode.
- */
-function buildProviderConfig(
-  cfg: AiChatConfig,
-  warn: (msg: string) => void,
-): AIProviderConfig | null {
-  const base = {
-    model: cfg.model,
-    maxOutputTokens: cfg.maxOutputTokens,
-    temperature: cfg.temperature,
-  };
-  switch (cfg.provider) {
-    case 'gemini': {
-      if (!cfg.apiKey) {
-        warn(
-          'No Gemini API key found (set api_key_env → HEX_GEMINI_API_KEY) — ' +
-            'ai-chat plugin is in degraded mode (no LLM calls).',
-        );
-        return null;
-      }
-      return { ...base, apiKey: cfg.apiKey };
-    }
-    case 'ollama': {
-      if (!cfg.ollama.baseUrl) {
-        warn(
-          'Ollama provider requires ollama.base_url — ai-chat plugin is in ' +
-            'degraded mode (no LLM calls).',
-        );
-        return null;
-      }
-      return {
-        ...base,
-        baseUrl: cfg.ollama.baseUrl,
-        requestTimeoutMs: cfg.ollama.requestTimeoutMs,
-        useServerTokenizer: cfg.ollama.useServerTokenizer,
-        // Empty keep_alive string → leave it out of the request so Ollama
-        // uses its own default (5m). Any non-empty string is passed through.
-        keepAlive: cfg.ollama.keepAlive || undefined,
-        numCtx: cfg.ollama.numCtx,
-      };
-    }
-    default:
-      warn(`Unknown ai-chat provider "${cfg.provider}" — plugin is in degraded mode.`);
-      return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// shouldRespond — permission, ignore, bot-nick, and self-talk gating.
-// ---------------------------------------------------------------------------
-
-export interface ShouldRespondCtx {
-  nick: string;
-  ident: string;
-  hostname: string;
-  channel: string | null;
-  botNick: string;
-  hasRequiredFlag: boolean;
-  /** Does the user have the privilege-gating flag (e.g. +m)? */
-  hasPrivilegedFlag: boolean;
-  /** Bot's channel modes (e.g. 'o', 'ov') or undefined if unknown. */
-  botChannelModes: string | undefined;
-  /**
-   * Bot's resolved ChanServ access tier for this channel (from the
-   * `chanserv_access` chanset). `undefined` when no channel context is
-   * available (PM etc.). Used by the founder-disable gate.
-   */
-  botChanservAccess: string | undefined;
-  config: AiChatConfig;
-  /** Dynamic ignore list (from DB) merged with config.permissions.ignoreList. */
-  dynamicIgnoreList: string[];
-}
-
-/**
- * Check whether the bot's privilege level in the channel restricts AI responses.
- *
- * When `security.privilege_gating` is enabled and the bot has elevated channel
- * modes (half-op or above), either:
- * - `disable_when_privileged`: block all responses
- * - Otherwise: require the user to have the configured bot flag (default +m)
- */
-function isPrivilegeRestricted(ctx: ShouldRespondCtx): boolean {
-  const sec = ctx.config.security;
-  if (!sec.privilegeGating || !ctx.channel) return false;
-
-  const botModes = ctx.botChannelModes;
-  if (!botModes) return false;
-
-  // Check if bot has any elevated mode at or above threshold
-  const elevated = ['q', 'a', 'o', 'h']; // founder, admin, op, halfop
-  const threshIdx = elevated.indexOf(sec.privilegedModeThreshold);
-  if (threshIdx === -1) return false;
-  const eligibleModes = elevated.slice(0, threshIdx + 1);
-  if (!eligibleModes.some((m) => botModes.includes(m))) return false;
-
-  // Bot is privileged. Disable entirely or gate by flag.
-  if (sec.disableWhenPrivileged) return true;
-  return !ctx.hasPrivilegedFlag;
-}
-
-/**
- * Pure rule for the founder-disable gate. Exported for testing. A compromised
- * or prompt-injected response at founder tier can DROP the channel, transfer
- * founder to an attacker, or wipe the access list — none recoverable without
- * services-staff intervention — so we refuse to respond when the bot's
- * ChanServ tier for the channel reads `'founder'`. Only the affirmative
- * string matches; `undefined` / `'none'` / `'op'` / `'superop'` all permit.
- */
-export function shouldBlockOnFounder(
-  disableWhenFounder: boolean,
-  channel: string | null,
-  chanservAccess: string | undefined,
-): boolean {
-  if (!disableWhenFounder) return false;
-  if (!channel) return false;
-  // Normalise: defend against casing/whitespace drift if a non-chanmod path
-  // ever writes chanserv_access without going through the allowedValues enum.
-  return chanservAccess?.trim().toLowerCase() === 'founder';
-}
-
-function isFounderRestricted(ctx: ShouldRespondCtx): boolean {
-  return shouldBlockOnFounder(
-    ctx.config.security.disableWhenFounder,
-    ctx.channel,
-    ctx.botChanservAccess,
-  );
-}
-
-/**
- * Reason a message was rejected. `'allowed'` means it passed every gate. The
- * other values name the specific gate that fired so the pubm-level debug log
- * can attribute drops without re-running each predicate.
- */
-export type ShouldRespondReason =
-  | 'allowed'
-  | 'self'
-  | 'bot_nick'
-  | 'ignored'
-  | 'no_flag'
-  | 'privilege_restricted'
-  | 'founder_restricted';
-
-export function shouldRespondReason(ctx: ShouldRespondCtx): ShouldRespondReason {
-  const nick = ctx.nick;
-  if (nick.toLowerCase() === ctx.botNick.toLowerCase()) return 'self';
-  if (
-    isLikelyBot(nick, ctx.config.permissions.botNickPatterns, ctx.config.permissions.ignoreBots)
-  ) {
-    return 'bot_nick';
-  }
-  const hostmask = `${nick}!${ctx.ident}@${ctx.hostname}`;
-  const fullIgnore = [...ctx.config.permissions.ignoreList, ...ctx.dynamicIgnoreList];
-  if (isIgnored(nick, hostmask, fullIgnore)) return 'ignored';
-  if (ctx.config.permissions.requiredFlag !== '-' && !ctx.hasRequiredFlag) return 'no_flag';
-  if (isPrivilegeRestricted(ctx)) return 'privilege_restricted';
-  if (isFounderRestricted(ctx)) return 'founder_restricted';
-  return 'allowed';
-}
-
-/**
- * True when every gate (self/bot-nick/ignore/flag/privilege/founder) passes.
- * Thin wrapper over `shouldRespondReason` for call sites that don't care
- * which gate fired.
- */
-export function shouldRespond(ctx: ShouldRespondCtx): boolean {
-  return shouldRespondReason(ctx) === 'allowed';
-}
-
-// ---------------------------------------------------------------------------
-// Helpers: build ShouldRespondCtx with privilege info
-// ---------------------------------------------------------------------------
-
-function getBotChannelModes(api: PluginAPI, channel: string | null): string | undefined {
-  if (!channel) return undefined;
-  const ch = api.getChannel(channel);
-  if (!ch) return undefined;
-  for (const u of ch.users.values()) {
-    if (api.isBotNick(u.nick)) return u.modes;
-  }
-  return undefined;
-}
-
-/**
- * Read the bot's ChanServ access tier for a channel from the chanset written
- * by chanmod. Returns undefined for PMs and for channels chanmod has never
- * touched. Used by the founder-disable gate at both trigger and post time.
- */
-function getBotChanservAccess(api: PluginAPI, channel: string | null): string | undefined {
-  if (!channel) return undefined;
-  return api.channelSettings.getString(channel, 'chanserv_access');
-}
-
-/**
- * Post-time fail-closed gate. Re-checks the founder condition right before we
- * publish to IRC, closing the race where the ChanServ probe resolves between
- * the trigger-time `shouldRespond` decision and the LLM round-trip completing.
- * Returns true when the response must be discarded. Logs the drop.
- */
-function isFounderPostGate(
-  api: PluginAPI,
-  cfg: AiChatConfig,
-  channel: string | null,
-  reason: string,
-): boolean {
-  const block = shouldBlockOnFounder(
-    cfg.security.disableWhenFounder,
-    channel,
-    getBotChanservAccess(api, channel),
-  );
-  if (!block) return false;
-  api.warn(
-    `post-gate: dropped ${reason} response — bot is ChanServ founder in ${channel} ` +
-      `(disable_when_founder is on; grant op/AOP instead, or disable this gate explicitly)`,
-  );
-  return true;
-}
-
-/**
- * Wrap a line-sender so every line is re-checked against `isFounderPostGate`
- * immediately before going to IRC. `sendLines()` uses setTimeout between
- * lines, so the chanserv-access state can flip mid-send even after the gate
- * passed at pipeline start — the point of the gate is to fail closed, and
- * this is the last line of defence. The warn fires at most once per send.
- */
-function gatedSender(
-  api: PluginAPI,
-  cfg: AiChatConfig,
-  channel: string | null,
-  reason: string,
-  send: (line: string) => void,
-): (line: string) => void {
-  let dropped = false;
-  return (line) => {
-    if (dropped) return;
-    if (isFounderPostGate(api, cfg, channel, reason)) {
-      dropped = true;
-      return;
-    }
-    send(line);
-  };
-}
-
-/**
- * One-line debug summary of a pubm decision. Lets `api.debug` show why a
- * given message was skipped or routed without dumping full context. Text is
- * truncated and quoted so newlines / control bytes can't smear log lines.
- */
-function traceLine(
-  ctx: HandlerContext,
-  text: string,
-  fields: { trigger: string; reason: ShouldRespondReason; action: string },
-): string {
-  const snippet = text.length > 60 ? text.slice(0, 60) + '…' : text;
-  const safe = JSON.stringify(snippet);
-  return (
-    `pubm ch=${ctx.channel ?? '(none)'} nick=${ctx.nick} ` +
-    `trigger=${fields.trigger} gate=${fields.reason} → ${fields.action} text=${safe}`
-  );
-}
-
 /**
  * Notice every +o user in `channel` (PM target ignored) that the AI provider
  * is rate-limited. Debounced per channel by `RATE_LIMIT_OP_NOTICE_COOLDOWN_MS`
@@ -644,6 +154,29 @@ function makeSessionIdentity(ctx: HandlerContext): SessionIdentity {
   };
 }
 
+/**
+ * Snapshot the current module-scope refs into a `PipelineDeps` bundle so
+ * pipeline.ts doesn't need direct access to this file's `let` state. Built
+ * fresh per call — cheap (one object allocation) and avoids the hazard of
+ * a cached bundle holding stale refs across teardown/init cycles.
+ */
+function buildPipelineDeps(api: PluginAPI, cfg: AiChatConfig): PipelineDeps {
+  return {
+    provider,
+    rateLimiter,
+    tokenTracker,
+    contextManager,
+    iterStats,
+    moodEngine,
+    engagementTracker,
+    socialTracker,
+    sessionManager,
+    activeCharacter: (channel) => activeCharacter(api, cfg, channel),
+    makeSessionIdentity,
+    noticeOpsRateLimited: (channel, detail) => noticeOpsRateLimited(api, channel, detail),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Ignore list (persisted in DB under ignore:<entry>)
 // ---------------------------------------------------------------------------
@@ -666,19 +199,6 @@ function ignoreListSize(api: PluginAPI): number {
 // ---------------------------------------------------------------------------
 
 const CHARACTER_PREFIX = 'character:';
-
-/** Render a channel profile string for prompt injection, or undefined if none configured. */
-function renderChannelProfile(cfg: AiChatConfig, channel: string | null): string | undefined {
-  if (!channel) return undefined;
-  const profile = cfg.channelProfiles[channel] ?? cfg.channelProfiles[channel.toLowerCase()];
-  if (!profile) return undefined;
-  const parts: string[] = [];
-  if (profile.topic) parts.push(`This channel is about ${profile.topic}.`);
-  if (profile.culture) parts.push(`The culture here is ${profile.culture}.`);
-  if (profile.role) parts.push(`Your role is ${profile.role}.`);
-  if (profile.depth) parts.push(`Answer with ${profile.depth} depth.`);
-  return parts.length > 0 ? parts.join(' ') : undefined;
-}
 
 function activeCharacter(
   api: PluginAPI,
@@ -750,10 +270,16 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
   // Periodic sweep: expire game sessions past the inactivity timeout. Without
   // this, sessions only expire lazily on the user's next message, so a user
   // who starts sessions in many channels and goes silent pins all that state
-  // until plugin teardown.
+  // until plugin teardown. Wrap in try/catch so a SessionManager regression
+  // (e.g. a persistence write that throws) can't bring down the plugin's
+  // interval loop silently — the next tick will still fire.
   if (sessionManager) {
     sessionExpiryInterval = setInterval(() => {
-      sessionManager?.expireInactive();
+      try {
+        sessionManager?.expireInactive();
+      } catch (err) {
+        api.error('Session expiry sweep threw:', err);
+      }
     }, 60_000);
   }
 
@@ -893,9 +419,11 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
         api.log(
           `ambient ${kind} channel=${channel} character=${character.name} lines=${styled.length}`,
         );
-        await sendLines(
+        await sendLinesGated(
           styled,
-          gatedSender(api, cfg, channel, `ambient ${kind}`, (line) => api.say(channel, line)),
+          postGateFor(api, cfg, channel),
+          `ambient ${kind}`,
+          (line) => api.say(channel, line),
           cfg.output.interLineDelayMs,
         );
       }
@@ -1018,7 +546,15 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
         return;
       }
       api.debug(traceLine(ctx, text, { trigger: 'session', reason, action: 'session' }));
-      await runSessionPipeline(api, cfg, ctx, text, botNick(), network());
+      await runSessionPipeline(
+        api,
+        cfg,
+        buildPipelineDeps(api, cfg),
+        ctx,
+        text,
+        botNick(),
+        network(),
+      );
       return;
     }
 
@@ -1069,7 +605,17 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
       }),
     );
     const hasAdmin = api.permissions.checkFlags(cfg.permissions.adminFlag, ctx);
-    await runPipeline(api, cfg, ctx, prompt, botNick(), network(), decision, hasAdmin);
+    await runPipeline(
+      api,
+      cfg,
+      buildPipelineDeps(api, cfg),
+      ctx,
+      prompt,
+      botNick(),
+      network(),
+      decision,
+      hasAdmin,
+    );
   });
 
   // -----------------------------------------------------------------------
@@ -1108,285 +654,6 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Pipeline: call Assistant, format output, send with inter-line delay.
-// ---------------------------------------------------------------------------
-
-/** Recency window for the rolled-reply boost — 15 minutes. */
-const RECENT_BOT_INTERACTION_MS = 15 * 60_000;
-
-function hasRecentBotInteraction(tracker: SocialTracker | null, nick: string): boolean {
-  if (!tracker) return false;
-  const stats = tracker.getUserInteraction(nick);
-  if (!stats || stats.botInteractions === 0) return false;
-  return Date.now() - stats.lastBotInteraction < RECENT_BOT_INTERACTION_MS;
-}
-
-async function runPipeline(
-  api: PluginAPI,
-  cfg: AiChatConfig,
-  ctx: HandlerContext,
-  prompt: string,
-  botNick: string,
-  network: string,
-  source: ReplyDecision,
-  isAdmin = false,
-): Promise<void> {
-  if (!rateLimiter || !tokenTracker || !contextManager) return;
-  // Rolled replies count against the ambient budget — a random-chance reply
-  // is an unprompted utterance, same class as idle / unanswered-question
-  // ambient. Address/engaged replies are direct responses and keep the
-  // per-user bucket pathway (inside respond()).
-  if (source === 'rolled' && ctx.channel) {
-    if (!rateLimiter.checkAmbient(ctx.channel)) {
-      api.debug(
-        `pipeline rolled-skip ch=${ctx.channel} nick=${ctx.nick} reason=ambient_budget_full`,
-      );
-      return;
-    }
-  }
-  // Rolled replies are unprompted — stay quiet on user-bucket / budget
-  // blocks so we don't spam noticeOps or reveal limiter state to the
-  // channel. Address/engaged replies came from an explicit user action, so
-  // they get the private rate-limit notice.
-  const noticeOnBlock = source !== 'rolled';
-
-  const { character, language } = activeCharacter(api, cfg, ctx.channel);
-
-  api.debug(
-    `pipeline enter ch=${ctx.channel ?? '(none)'} nick=${ctx.nick} ` +
-      `character=${character.name}${language ? `/${language}` : ''} ` +
-      `provider=${provider?.name ?? 'none'} admin=${isAdmin} promptLen=${prompt.length}`,
-  );
-
-  // No provider? Degraded placeholder mode.
-  if (!provider) {
-    ctx.reply('AI chat is currently unavailable.');
-    return;
-  }
-
-  // Apply per-character generation overrides
-  const maxOutputTokens = character.generation?.maxOutputTokens ?? cfg.maxOutputTokens;
-
-  // Apply mood verbosity multiplier to maxLines
-  const moodMultiplier = moodEngine?.getVerbosityMultiplier() ?? 1;
-  const effectiveMaxLines = Math.max(1, Math.round(cfg.output.maxLines * moodMultiplier));
-
-  const assistantCfg: AssistantConfig = {
-    maxLines: effectiveMaxLines,
-    maxLineLength: cfg.output.maxLineLength,
-    interLineDelayMs: cfg.output.interLineDelayMs,
-    maxOutputTokens,
-  };
-
-  // Notify mood engine of the interaction
-  moodEngine?.onInteraction();
-
-  const promptCtx: PromptContext = {
-    botNick,
-    channel: ctx.channel,
-    network,
-    language,
-    channelProfile: renderChannelProfile(cfg, ctx.channel),
-    mood: moodEngine?.renderMoodLine(),
-    persona: character.persona,
-    styleNotes: character.style.notes,
-    avoids: character.avoids,
-    speaker: ctx.nick,
-  };
-
-  // Use per-character context window if specified
-  const maxContextMessages = character.generation?.maxContextMessages;
-  const result = await respond(
-    {
-      nick: ctx.nick,
-      channel: ctx.channel,
-      prompt,
-      promptContext: promptCtx,
-      maxContextMessages,
-      isAdmin,
-    },
-    { provider, rateLimiter, tokenTracker, contextManager, config: assistantCfg, iterStats },
-  );
-
-  switch (result.status) {
-    case 'rate_limited': {
-      const secs = Math.max(1, Math.ceil(result.retryAfterMs / 1000));
-      if (noticeOnBlock) {
-        ctx.replyPrivate(`Rate limited (${result.limitedBy}) — try again in ${secs}s.`);
-      }
-      api.debug(
-        `pipeline rate_limited ch=${ctx.channel ?? '(none)'} nick=${ctx.nick} ` +
-          `limitedBy=${result.limitedBy} retryAfterSec=${secs} notice=${noticeOnBlock}`,
-      );
-      return;
-    }
-    case 'budget_exceeded':
-      if (noticeOnBlock) ctx.replyPrivate('Daily token budget exceeded — try again tomorrow.');
-      api.debug(
-        `pipeline budget_exceeded ch=${ctx.channel ?? '(none)'} nick=${ctx.nick} ` +
-          `notice=${noticeOnBlock}`,
-      );
-      return;
-    case 'provider_error': {
-      api.error(`provider error (${result.kind}): ${result.message}`);
-      if (result.kind === 'safety') {
-        ctx.reply("Sorry — I can't help with that.");
-      } else if (result.kind === 'rate_limit') {
-        // Stay silent in-channel — repeating "AI is temporarily unavailable"
-        // on every triggered message during an outage is noisy and reveals
-        // upstream state to the channel. Tell ops privately instead.
-        noticeOpsRateLimited(api, ctx.channel, result.message);
-      } else {
-        ctx.reply('AI is temporarily unavailable.');
-      }
-      return;
-    }
-    case 'empty':
-      api.debug('empty LLM response — nothing to send');
-      return;
-    case 'fantasy_dropped':
-      api.warn(
-        `dropped response containing fantasy-prefix line ${result.index}: ` +
-          JSON.stringify(result.line.slice(0, 80)),
-      );
-      return;
-    case 'ok': {
-      if (isFounderPostGate(api, cfg, ctx.channel, 'pipeline')) return;
-      // Apply character style (casing, verbosity enforcement)
-      const styled = applyCharacterStyle(result.lines, {
-        casing: character.style.casing,
-        verbosity: character.style.verbosity,
-      });
-      contextManager.addMessage(ctx.channel, botNick, styled.join(' '), true);
-      // Record engagement so the user's next messages are treated as
-      // continuations. Also record ambient budget tick for rolled replies.
-      if (ctx.channel) {
-        engagementTracker?.onBotReply(ctx.channel, ctx.nick);
-        if (source === 'rolled') rateLimiter.recordAmbient(ctx.channel);
-      }
-      socialTracker?.recordBotInteraction(ctx.nick);
-      api.log(
-        `response sent channel=${ctx.channel ?? '(unknown)'} nick=${ctx.nick} ` +
-          `character=${character.name} lines=${styled.length} in=${result.tokensIn} out=${result.tokensOut}`,
-      );
-      await sendLines(
-        styled,
-        gatedSender(api, cfg, ctx.channel, 'pipeline', (line) => ctx.reply(line)),
-        cfg.output.interLineDelayMs,
-      );
-      return;
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Session pipeline — route a message as a move inside an active game session.
-// ---------------------------------------------------------------------------
-
-async function runSessionPipeline(
-  api: PluginAPI,
-  cfg: AiChatConfig,
-  ctx: HandlerContext,
-  text: string,
-  botNickValue: string,
-  networkName: string,
-): Promise<void> {
-  if (!rateLimiter || !tokenTracker || !sessionManager || !provider) return;
-  const session = sessionManager.getSession(ctx.nick, ctx.channel, makeSessionIdentity(ctx));
-  if (!session) return;
-
-  const userKey = ctx.nick.toLowerCase();
-  const isAdmin = api.permissions.checkFlags(cfg.permissions.adminFlag, ctx);
-  // Sessions bypass the per-user bucket — only enforce global RPM/RPD.
-  const rl = rateLimiter.checkGlobal();
-  if (!rl.allowed) {
-    const secs = Math.max(1, Math.ceil((rl.retryAfterMs ?? 0) / 1000));
-    ctx.replyPrivate(`Rate limited (${rl.limitedBy ?? 'rpm'}) — try again in ${secs}s.`);
-    api.debug(
-      `session rate_limited ch=${ctx.channel ?? '(none)'} nick=${ctx.nick} ` +
-        `limitedBy=${rl.limitedBy ?? 'rpm'} retryAfterSec=${secs}`,
-    );
-    return;
-  }
-  const estimate = Math.ceil(text.length / 4) + 64;
-  // Admins bypass the per-user daily cap — global cap still enforced.
-  const budgetOk = isAdmin
-    ? tokenTracker.canSpendGlobal(estimate)
-    : tokenTracker.canSpend(ctx.nick, estimate);
-  if (!budgetOk) {
-    ctx.replyPrivate('Daily token budget exceeded — try again tomorrow.');
-    return;
-  }
-
-  // Game sessions use the game-defined prompt as the persona body. No style
-  // notes / avoids / channel profile / mood — the game owns the framing.
-  // Split stable/volatile the same way the regular pipeline does so sessions
-  // get the same KV-cache benefits.
-  const sessionPromptCtx: PromptContext = {
-    botNick: botNickValue,
-    channel: ctx.channel,
-    network: networkName,
-    persona: session.systemPrompt,
-  };
-  const systemPrompt = renderStableSystemPrompt(sessionPromptCtx);
-  const volatileHeader = renderVolatileHeader(sessionPromptCtx);
-  // NOTE: session path uses `[nick] text` bracket-tag attribution — this
-  // intentionally differs from the regular chat path, which uses `nick: text`
-  // for history and no nick prefix on the current turn (see
-  // context-manager.ts and assistant.renderVolatileHeader). Game prompts
-  // treat the player as a distinct entity ("the player said: …") and the
-  // bracket tag makes that boundary obvious to the model even inside games
-  // with multi-role transcripts (trivia host / contestant).
-  const userMsg: AIMessage = {
-    role: 'user',
-    content: volatileHeader ? `${volatileHeader} [${ctx.nick}] ${text}` : `[${ctx.nick}] ${text}`,
-  };
-
-  try {
-    const res = await provider.complete(
-      systemPrompt,
-      [...session.context, userMsg],
-      cfg.maxOutputTokens,
-    );
-    tokenTracker.recordUsage(ctx.nick, res.usage);
-    iterStats?.record(res.usage);
-    rateLimiter.record(userKey);
-
-    const lines = formatResponse(
-      res.text,
-      cfg.output.maxLines,
-      cfg.output.maxLineLength,
-      ({ index, line }) => {
-        api.warn(
-          `session: dropped response containing fantasy-prefix line ${index}: ` +
-            JSON.stringify(line.slice(0, 80)),
-        );
-      },
-    );
-    if (lines.length === 0) return;
-
-    sessionManager.addMessage(session, userMsg);
-    sessionManager.addMessage(session, { role: 'assistant', content: lines.join(' ') });
-
-    if (isFounderPostGate(api, cfg, ctx.channel, 'session')) return;
-    await sendLines(
-      lines,
-      gatedSender(api, cfg, ctx.channel, 'session', (line) => ctx.reply(line)),
-      cfg.output.interLineDelayMs,
-    );
-  } catch (err) {
-    const kind = isAIProviderError(err) ? err.kind : 'other';
-    const message = err instanceof Error ? err.message : String(err);
-    api.error(`session provider error (${kind}): ${message}`);
-    if (kind === 'rate_limit') {
-      noticeOpsRateLimited(api, ctx.channel, message);
-    } else {
-      ctx.reply('AI is temporarily unavailable.');
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Admin + info subcommands (return true if handled).
 // ---------------------------------------------------------------------------
 
@@ -1413,6 +680,216 @@ function subcommandUsageHint(cfg: AiChatConfig, botNick: string): string {
   );
 }
 
+/**
+ * Context passed to each subcommand handler. Carries the parsed `subArgs`
+ * plus the two permission flags every gated handler needs, so individual
+ * handlers don't re-derive them.
+ */
+interface SubHandlerCtx {
+  api: PluginAPI;
+  cfg: AiChatConfig;
+  ctx: HandlerContext;
+  subArgs: string;
+  hasAdmin: boolean;
+  hasOwner: boolean;
+}
+
+type SubHandler = (c: SubHandlerCtx) => void | Promise<void>;
+
+/**
+ * Subcommand dispatch table. Each entry replaces one `case` in the
+ * former 225-line `switch`. Gated subcommands do their own
+ * `hasAdmin`/`hasOwner` check and silently return when the caller
+ * lacks the required flag — that's the existing behavior preserved
+ * verbatim. Unknown subcommands are handled by `handleSubcommand` via
+ * the default-path branch below so the table stays flat.
+ */
+const SUB_HANDLERS: Record<string, SubHandler> = {
+  help: ({ api, ctx }) => {
+    const anyone = 'help, character, characters, model, games';
+    const admin = 'stats, iter, ignore, unignore, clear, character <name>, play, endgame';
+    const owner = 'reset <nick>';
+    const botNickValue = api.botConfig.irc.nick;
+    ctx.reply(`Subcommands — anyone: ${anyone}`);
+    ctx.reply(`[admin]: ${admin}`);
+    ctx.reply(`[owner]: ${owner}`);
+    ctx.reply(`Talk to the bot by nick ("${botNickValue}: hello") to chat.`);
+  },
+  stats: ({ ctx, hasAdmin }) => {
+    if (!hasAdmin) return;
+    const total = tokenTracker!.getDailyTotal();
+    ctx.reply(
+      `Today: ${total.requests} requests, ${total.input + total.output} tokens ` +
+        `(in:${total.input} out:${total.output})`,
+    );
+  },
+  iter: ({ ctx, subArgs, hasAdmin }) => {
+    if (!hasAdmin) return;
+    if (subArgs === 'reset') {
+      iterStats!.reset();
+      ctx.reply('Iteration stats reset.');
+      return;
+    }
+    if (subArgs !== '') {
+      ctx.reply('Usage: !ai iter [reset]');
+      return;
+    }
+    const s = iterStats!.snapshot();
+    ctx.reply(
+      `Since reset (${formatIterDuration(s.sinceMs)}): ${s.requests} requests, ` +
+        `${s.input + s.output} tokens (in:${s.input} out:${s.output})`,
+    );
+  },
+  reset: ({ api, ctx, subArgs, hasOwner }) => {
+    if (!hasOwner) return;
+    const target = subArgs;
+    if (!target) {
+      ctx.reply('Usage: !ai reset <nick>');
+      return;
+    }
+    tokenTracker!.resetUser(target);
+    ctx.reply(`Reset token usage for ${api.stripFormatting(target)}.`);
+  },
+  ignore: ({ api, ctx, subArgs, hasAdmin }) => {
+    if (!hasAdmin) return;
+    const target = subArgs;
+    if (!target) {
+      ctx.reply('Usage: !ai ignore <nick|hostmask>');
+      return;
+    }
+    // Shape + length validation: the target becomes a DB key that every
+    // subsequent channel message scans via isIgnored(). An unvalidated
+    // insert path is a slow-loris on the check loop (and a key-space
+    // fill attack).
+    if (target.length > 128 || !/^[$#&]?[\w[\]\\`^{}*?@!.-]+$/.test(target)) {
+      ctx.reply('Invalid ignore target.');
+      return;
+    }
+    // Only count toward the cap if this is a new entry — re-ignoring an
+    // existing target is a no-op and shouldn't be refused.
+    const existing = api.db.get(`${IGNORE_PREFIX}${target}`);
+    if (existing === undefined && ignoreListSize(api) >= IGNORE_LIST_MAX) {
+      ctx.reply(
+        `Ignore list is full (${IGNORE_LIST_MAX} entries). Remove entries with "!ai unignore".`,
+      );
+      return;
+    }
+    api.db.set(`${IGNORE_PREFIX}${target}`, '1');
+    ctx.reply(`Now ignoring "${api.stripFormatting(target)}".`);
+  },
+  unignore: ({ api, ctx, subArgs, hasAdmin }) => {
+    if (!hasAdmin) return;
+    const target = subArgs;
+    if (!target) {
+      ctx.reply('Usage: !ai unignore <nick|hostmask>');
+      return;
+    }
+    api.db.del(`${IGNORE_PREFIX}${target}`);
+    ctx.reply(`No longer ignoring "${api.stripFormatting(target)}".`);
+  },
+  clear: ({ ctx, hasAdmin }) => {
+    if (!hasAdmin) return;
+    if (ctx.channel) contextManager!.clearContext(ctx.channel);
+    ctx.reply('Channel context cleared.');
+  },
+  character: ({ api, cfg, ctx, subArgs, hasAdmin }) => {
+    if (!subArgs) {
+      const active = activeCharacter(api, cfg, ctx.channel);
+      ctx.reply(
+        `Character: ${active.character.name}${active.language ? ` (${active.language})` : ''}`,
+      );
+      return;
+    }
+    if (!hasAdmin) return;
+    const name = subArgs.toLowerCase();
+    const charMap = state?.characters ?? new Map();
+    if (!charMap.has(name)) {
+      ctx.reply(
+        `Unknown character: ${api.stripFormatting(subArgs)}. ` +
+          `Available: ${[...charMap.keys()].join(', ')}`,
+      );
+      return;
+    }
+    if (ctx.channel) {
+      api.db.set(`${CHARACTER_PREFIX}${ctx.channel.toLowerCase()}`, name);
+      ctx.reply(`Character set to ${api.stripFormatting(name)} for ${ctx.channel}.`);
+    }
+  },
+  characters: ({ ctx }) => {
+    const charMap = state?.characters ?? new Map();
+    ctx.reply(`Available: ${[...charMap.keys()].join(', ')}`);
+  },
+  model: ({ cfg, ctx }) => {
+    const modelName = provider?.getModelName() ?? '(not initialized)';
+    ctx.reply(`Provider: ${cfg.provider}, model: ${modelName}`);
+  },
+  games: ({ ctx }) => {
+    if (!sessionManager) {
+      ctx.reply('Sessions are disabled.');
+      return;
+    }
+    const available = listGames(gamesDir);
+    if (available.length === 0) ctx.reply('No games available.');
+    else ctx.reply(`Games: ${available.join(', ')}`);
+  },
+  play: async ({ api, cfg, ctx, subArgs }) => {
+    if (!sessionManager) {
+      ctx.reply('Sessions are disabled.');
+      return;
+    }
+    const game = subArgs;
+    if (!game) {
+      ctx.reply(`Usage: ${cfg.triggers.commandPrefix} play <game>`);
+      return;
+    }
+    const prompt = loadGamePrompt(gamesDir, game);
+    if (!prompt) {
+      ctx.reply(`Unknown game: ${game}. Available: ${listGames(gamesDir).join(', ')}`);
+      return;
+    }
+    // Gate session creation on the same rules as the normal response path.
+    // Without this check, an ignored or founder-blocked user could spin up
+    // partial session state and trigger post-time-gate noise on every turn.
+    const allowed = shouldRespond({
+      nick: ctx.nick,
+      ident: ctx.ident,
+      hostname: ctx.hostname,
+      channel: ctx.channel,
+      botNick: api.botConfig.irc.nick,
+      hasRequiredFlag: api.permissions.checkFlags(cfg.permissions.requiredFlag, ctx),
+      hasPrivilegedFlag: api.permissions.checkFlags(cfg.security.privilegedRequiredFlag, ctx),
+      botChannelModes: getBotChannelModes(api, ctx.channel),
+      botChanservAccess: getBotChanservAccess(api, ctx.channel),
+      config: cfg,
+      dynamicIgnoreList: getDynamicIgnoreList(api),
+    });
+    if (!allowed) {
+      ctx.reply('AI chat is disabled here.');
+      return;
+    }
+    sessionManager.createSession(ctx.nick, ctx.channel, game, prompt, makeSessionIdentity(ctx));
+    ctx.reply(`Starting ${game}! Type \`${cfg.triggers.commandPrefix} endgame\` to quit.`);
+    // Kick off the session with an empty move so the game sends its opening line.
+    await runSessionPipeline(
+      api,
+      cfg,
+      buildPipelineDeps(api, cfg),
+      ctx,
+      '(game start)',
+      api.botConfig.irc.nick,
+      api.botConfig.irc.host,
+    );
+  },
+  endgame: ({ ctx }) => {
+    if (!sessionManager) {
+      ctx.reply('Sessions are disabled.');
+      return;
+    }
+    const ended = sessionManager.endSession(ctx.nick, ctx.channel);
+    ctx.reply(ended ? 'Session ended.' : 'No active session.');
+  },
+};
+
 async function handleSubcommand(
   api: PluginAPI,
   cfg: AiChatConfig,
@@ -1426,212 +903,23 @@ async function handleSubcommand(
   }
   const [sub, ...rest] = args.split(/\s+/);
   const subLower = sub.toLowerCase();
-  const adminFlag = cfg.permissions.adminFlag;
-  const hasAdmin = api.permissions.checkFlags(adminFlag, ctx);
-  const hasOwner = api.permissions.checkFlags('n', ctx);
-  const subArgs = rest.join(' ').trim();
-
-  switch (subLower) {
-    case 'help': {
-      const anyone = 'help, character, characters, model, games';
-      const admin = 'stats, iter, ignore, unignore, clear, character <name>, play, endgame';
-      const owner = 'reset <nick>';
-      ctx.reply(`Subcommands — anyone: ${anyone}`);
-      ctx.reply(`[admin]: ${admin}`);
-      ctx.reply(`[owner]: ${owner}`);
-      ctx.reply(`Talk to the bot by nick ("${botNickValue}: hello") to chat.`);
-      return true;
-    }
-    case 'stats': {
-      if (!hasAdmin) return true; // silently ignore
-      const total = tokenTracker!.getDailyTotal();
-      ctx.reply(
-        `Today: ${total.requests} requests, ${total.input + total.output} tokens ` +
-          `(in:${total.input} out:${total.output})`,
-      );
-      return true;
-    }
-    case 'iter': {
-      if (!hasAdmin) return true;
-      if (subArgs === 'reset') {
-        iterStats!.reset();
-        ctx.reply('Iteration stats reset.');
-        return true;
-      }
-      if (subArgs !== '') {
-        ctx.reply('Usage: !ai iter [reset]');
-        return true;
-      }
-      const s = iterStats!.snapshot();
-      ctx.reply(
-        `Since reset (${formatIterDuration(s.sinceMs)}): ${s.requests} requests, ` +
-          `${s.input + s.output} tokens (in:${s.input} out:${s.output})`,
-      );
-      return true;
-    }
-    case 'reset': {
-      if (!hasOwner) return true;
-      const target = subArgs;
-      if (!target) {
-        ctx.reply('Usage: !ai reset <nick>');
-        return true;
-      }
-      tokenTracker!.resetUser(target);
-      ctx.reply(`Reset token usage for ${api.stripFormatting(target)}.`);
-      return true;
-    }
-    case 'ignore': {
-      if (!hasAdmin) return true;
-      const target = subArgs;
-      if (!target) {
-        ctx.reply('Usage: !ai ignore <nick|hostmask>');
-        return true;
-      }
-      // Shape + length validation: the target becomes a DB key that every
-      // subsequent channel message scans via isIgnored(). An unvalidated
-      // insert path is a slow-loris on the check loop (and a key-space
-      // fill attack).
-      if (target.length > 128 || !/^[$#&]?[\w[\]\\`^{}*?@!.-]+$/.test(target)) {
-        ctx.reply('Invalid ignore target.');
-        return true;
-      }
-      // Only count toward the cap if this is a new entry — re-ignoring an
-      // existing target is a no-op and shouldn't be refused.
-      const existing = api.db.get(`${IGNORE_PREFIX}${target}`);
-      if (existing === undefined && ignoreListSize(api) >= IGNORE_LIST_MAX) {
-        ctx.reply(
-          `Ignore list is full (${IGNORE_LIST_MAX} entries). Remove entries with "!ai unignore".`,
-        );
-        return true;
-      }
-      api.db.set(`${IGNORE_PREFIX}${target}`, '1');
-      ctx.reply(`Now ignoring "${api.stripFormatting(target)}".`);
-      return true;
-    }
-    case 'unignore': {
-      if (!hasAdmin) return true;
-      const target = subArgs;
-      if (!target) {
-        ctx.reply('Usage: !ai unignore <nick|hostmask>');
-        return true;
-      }
-      api.db.del(`${IGNORE_PREFIX}${target}`);
-      ctx.reply(`No longer ignoring "${api.stripFormatting(target)}".`);
-      return true;
-    }
-    case 'clear': {
-      if (!hasAdmin) return true;
-      if (ctx.channel) contextManager!.clearContext(ctx.channel);
-      ctx.reply('Channel context cleared.');
-      return true;
-    }
-    case 'character': {
-      if (!subArgs) {
-        const active = activeCharacter(api, cfg, ctx.channel);
-        ctx.reply(
-          `Character: ${active.character.name}${active.language ? ` (${active.language})` : ''}`,
-        );
-        return true;
-      }
-      if (!hasAdmin) return true;
-      const name = subArgs.toLowerCase();
-      const charMap = state?.characters ?? new Map();
-      if (!charMap.has(name)) {
-        ctx.reply(
-          `Unknown character: ${api.stripFormatting(subArgs)}. ` +
-            `Available: ${[...charMap.keys()].join(', ')}`,
-        );
-        return true;
-      }
-      if (ctx.channel) {
-        api.db.set(`${CHARACTER_PREFIX}${ctx.channel.toLowerCase()}`, name);
-        ctx.reply(`Character set to ${api.stripFormatting(name)} for ${ctx.channel}.`);
-      }
-      return true;
-    }
-    case 'characters': {
-      const charMap = state?.characters ?? new Map();
-      ctx.reply(`Available: ${[...charMap.keys()].join(', ')}`);
-      return true;
-    }
-    case 'model': {
-      const modelName = provider?.getModelName() ?? '(not initialized)';
-      ctx.reply(`Provider: ${cfg.provider}, model: ${modelName}`);
-      return true;
-    }
-    case 'games': {
-      if (!sessionManager) {
-        ctx.reply('Sessions are disabled.');
-        return true;
-      }
-      const available = listGames(gamesDir);
-      if (available.length === 0) ctx.reply('No games available.');
-      else ctx.reply(`Games: ${available.join(', ')}`);
-      return true;
-    }
-    case 'play': {
-      if (!sessionManager) {
-        ctx.reply('Sessions are disabled.');
-        return true;
-      }
-      const game = subArgs;
-      if (!game) {
-        ctx.reply(`Usage: ${cfg.triggers.commandPrefix} play <game>`);
-        return true;
-      }
-      const prompt = loadGamePrompt(gamesDir, game);
-      if (!prompt) {
-        ctx.reply(`Unknown game: ${game}. Available: ${listGames(gamesDir).join(', ')}`);
-        return true;
-      }
-      // Gate session creation on the same rules as the normal response path.
-      // Without this check, an ignored or founder-blocked user could spin up
-      // partial session state and trigger post-time-gate noise on every turn.
-      const allowed = shouldRespond({
-        nick: ctx.nick,
-        ident: ctx.ident,
-        hostname: ctx.hostname,
-        channel: ctx.channel,
-        botNick: api.botConfig.irc.nick,
-        hasRequiredFlag: api.permissions.checkFlags(cfg.permissions.requiredFlag, ctx),
-        hasPrivilegedFlag: api.permissions.checkFlags(cfg.security.privilegedRequiredFlag, ctx),
-        botChannelModes: getBotChannelModes(api, ctx.channel),
-        botChanservAccess: getBotChanservAccess(api, ctx.channel),
-        config: cfg,
-        dynamicIgnoreList: getDynamicIgnoreList(api),
-      });
-      if (!allowed) {
-        ctx.reply('AI chat is disabled here.');
-        return true;
-      }
-      sessionManager.createSession(ctx.nick, ctx.channel, game, prompt, makeSessionIdentity(ctx));
-      ctx.reply(`Starting ${game}! Type \`${cfg.triggers.commandPrefix} endgame\` to quit.`);
-      // Kick off the session with an empty move so the game sends its opening line.
-      await runSessionPipeline(
-        api,
-        cfg,
-        ctx,
-        '(game start)',
-        api.botConfig.irc.nick,
-        api.botConfig.irc.host,
-      );
-      return true;
-    }
-    case 'endgame': {
-      if (!sessionManager) {
-        ctx.reply('Sessions are disabled.');
-        return true;
-      }
-      const ended = sessionManager.endSession(ctx.nick, ctx.channel);
-      ctx.reply(ended ? 'Session ended.' : 'No active session.');
-      return true;
-    }
-    default:
-      ctx.reply(
-        `Unknown subcommand "${api.stripFormatting(sub)}". Try "${cfg.triggers.commandPrefix} help".`,
-      );
-      return true;
+  const handler = SUB_HANDLERS[subLower];
+  if (!handler) {
+    ctx.reply(
+      `Unknown subcommand "${api.stripFormatting(sub)}". Try "${cfg.triggers.commandPrefix} help".`,
+    );
+    return true;
   }
+  const adminFlag = cfg.permissions.adminFlag;
+  await handler({
+    api,
+    cfg,
+    ctx,
+    subArgs: rest.join(' ').trim(),
+    hasAdmin: api.permissions.checkFlags(adminFlag, ctx),
+    hasOwner: api.permissions.checkFlags('n', ctx),
+  });
+  return true;
 }
 
 // ---------------------------------------------------------------------------

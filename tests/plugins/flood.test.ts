@@ -2,33 +2,13 @@ import { resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { type MockBot, createMockBot } from '../helpers/mock-bot';
+import { flush, giveBotOps, simulateJoin, simulatePrivmsg } from '../helpers/plugin-test-helpers';
 
 const PLUGIN_PATH = resolve('./plugins/flood/index.ts');
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function simulatePrivmsg(
-  bot: MockBot,
-  nick: string,
-  ident: string,
-  hostname: string,
-  channel: string,
-  message: string,
-): void {
-  bot.client.simulateEvent('privmsg', { nick, ident, hostname, target: channel, message });
-}
-
-function simulateJoin(
-  bot: MockBot,
-  nick: string,
-  ident: string,
-  hostname: string,
-  channel: string,
-): void {
-  bot.client.simulateEvent('join', { nick, ident, hostname, channel });
-}
 
 function simulateNick(
   bot: MockBot,
@@ -38,22 +18,6 @@ function simulateNick(
   newNick: string,
 ): void {
   bot.client.simulateEvent('nick', { nick, ident, hostname, new_nick: newNick });
-}
-
-async function flush(): Promise<void> {
-  await Promise.resolve();
-}
-
-function giveBotOps(bot: MockBot, channel: string): void {
-  const nick = bot.client.user.nick;
-  bot.client.simulateEvent('join', { nick, ident: 'bot', hostname: 'bot.host', channel });
-  bot.client.simulateEvent('mode', {
-    nick: 'ChanServ',
-    ident: 'ChanServ',
-    hostname: 'services.',
-    target: channel,
-    modes: [{ mode: '+o', param: nick }],
-  });
 }
 
 // ---------------------------------------------------------------------------

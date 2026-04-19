@@ -45,7 +45,7 @@ describe('irc-commands-admin', () => {
     };
     db = new BotDatabase(':memory:');
     db.open();
-    registerIRCAdminCommands(handler, mockClient, mockBotInfo, db);
+    registerIRCAdminCommands({ handler, client: mockClient, botInfo: mockBotInfo, db });
   });
 
   describe('.say', () => {

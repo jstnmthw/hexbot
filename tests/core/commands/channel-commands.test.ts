@@ -23,7 +23,7 @@ describe('channel-commands', () => {
     db.open();
     handler = new CommandHandler();
     channelSettings = new ChannelSettings(db);
-    registerChannelCommands(handler, channelSettings, db);
+    registerChannelCommands({ handler, channelSettings, db });
   });
 
   describe('.chanset', () => {

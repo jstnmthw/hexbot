@@ -3,26 +3,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import type { MockBot } from '../helpers/mock-bot';
 import { createMockBot } from '../helpers/mock-bot';
+import { giveBotOps, simulateMode, tick } from '../helpers/plugin-test-helpers';
 
 const PLUGIN_PATH = resolve('./plugins/chanmod/index.ts');
 
-async function tick(ms = 20): Promise<void> {
-  await new Promise<void>((r) => setImmediate(r));
-  await vi.advanceTimersByTimeAsync(ms);
-}
-
-function giveBotOps(bot: MockBot, channel: string): void {
-  const nick = bot.client.user.nick;
-  bot.client.simulateEvent('join', { nick, ident: 'bot', hostname: 'bot.host', channel });
-  bot.client.simulateEvent('mode', {
-    nick: 'ChanServ',
-    ident: 'ChanServ',
-    hostname: 'services.',
-    target: channel,
-    modes: [{ mode: '+o', param: nick }],
-  });
-}
-
+// Local `addToChannel` is a custom variant that accepts an extra `modes` string
+// argument to optionally grant channel modes after join. Not shareable.
 function addToChannel(
   bot: MockBot,
   nick: string,
@@ -42,22 +28,6 @@ function addToChannel(
       modes: [{ mode: `+${m}`, param: nick }],
     });
   }
-}
-
-function simulateMode(
-  bot: MockBot,
-  setter: string,
-  channel: string,
-  mode: string,
-  param: string,
-): void {
-  bot.client.simulateEvent('mode', {
-    nick: setter,
-    ident: 'ident',
-    hostname: 'host',
-    target: channel,
-    modes: [{ mode, param }],
-  });
 }
 
 beforeEach(() => {

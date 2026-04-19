@@ -6,10 +6,11 @@
 // rejected to keep plaintext passwords off the wire.
 import type { CommandContext, CommandHandler } from '../../command-handler';
 import type { BotDatabase } from '../../database';
-import { getAuditSource } from '../../utils/command-helpers';
 import { tryAudit } from '../audit';
+import { getAuditSource, parseCommandArgs } from '../command-helpers';
 import { hashPassword } from '../password';
 import { OWNER_FLAG, type Permissions } from '../permissions';
+import { requireTransport } from './permission-helpers';
 
 export interface PasswordCommandDeps {
   handler: CommandHandler;
@@ -67,17 +68,24 @@ export function registerPasswordCommands(deps: PasswordCommandDeps): void {
       // hub/leaf TCP link (plaintext) and is also refused. Any future
       // transport added to `CommandContext['source']` must be explicitly
       // allowlisted here rather than implicitly permitted.
-      if (ctx.source !== 'repl' && ctx.source !== 'dcc') {
-        ctx.reply('chpass: passwords must be set from the bot console (DCC) or REPL only.');
+      if (
+        !requireTransport(
+          ctx,
+          ['repl', 'dcc'],
+          'chpass: passwords must be set from the bot console (DCC) or REPL only.',
+        )
+      ) {
         failure(ctx, `rejected: ${ctx.source} transport`);
         return;
       }
 
-      const parts = args.split(/\s+/).filter((p) => p.length > 0);
-      if (parts.length === 0) {
-        ctx.reply('Usage: .chpass <handle> <newpass> | .chpass <newpass>');
-        return;
-      }
+      const parts = parseCommandArgs(
+        args,
+        1,
+        'Usage: .chpass <handle> <newpass> | .chpass <newpass>',
+        ctx,
+      );
+      if (!parts) return;
 
       // Resolve caller and target handle.
       const resolved = resolveCallerAndTarget(parts, ctx, permissions);

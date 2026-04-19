@@ -8,6 +8,7 @@ import { toEventObject } from '../utils/irc-event';
 import { ListenerGroup } from '../utils/listener-group';
 import { type Casemapping, ircLower } from '../utils/wildcard';
 import { tryLogModAction } from './audit';
+import { tryParseAccResponse, tryParseStatusResponse } from './services-parser';
 
 export type { VerifyResult };
 
@@ -332,14 +333,14 @@ export class Services {
 
     this.logger?.debug(`NickServ notice: ${message}`);
 
-    const acc = this.tryParseAccResponse(message);
+    const acc = tryParseAccResponse(message);
     if (acc) {
       this.logger?.debug(`ACC response: nick=${acc.nick} level=${acc.level}`);
       this.resolveVerification(acc.nick, acc.level >= 3, acc.level >= 3 ? acc.nick : null);
       return;
     }
 
-    const status = this.tryParseStatusResponse(message);
+    const status = tryParseStatusResponse(message);
     if (status) {
       this.logger?.debug(`STATUS response: nick=${status.nick} level=${status.level}`);
       this.resolveVerification(
@@ -382,20 +383,6 @@ export class Services {
     if (this.pending.size > 0) {
       this.logger?.debug(`NickServ notice did not match ACC or STATUS pattern: ${message}`);
     }
-  }
-
-  /** Parse an Atheme ACC response: "nick ACC level" → {nick, level} or null. */
-  private tryParseAccResponse(message: string): { nick: string; level: number } | null {
-    const m = message.match(/^(\S+)\s+ACC\s+(\d+)/i);
-    if (!m) return null;
-    return { nick: m[1], level: parseInt(m[2], 10) };
-  }
-
-  /** Parse an Anope STATUS response: "STATUS nick level" → {nick, level} or null. */
-  private tryParseStatusResponse(message: string): { nick: string; level: number } | null {
-    const m = message.match(/^STATUS\s+(\S+)\s+(\d+)/i);
-    if (!m) return null;
-    return { nick: m[1], level: parseInt(m[2], 10) };
   }
 
   private resolveVerification(nick: string, verified: boolean, account: string | null): void {

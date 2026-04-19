@@ -8,72 +8,21 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { PARAM_MODES, getParamModes, parseChannelModes } from '../../plugins/chanmod/helpers';
 import { type MockBot, createMockBot } from '../helpers/mock-bot';
 import { createMockPluginAPI } from '../helpers/mock-plugin-api';
+import {
+  addToChannel,
+  flush,
+  giveBotOps,
+  simulateJoin,
+  simulateMode,
+  simulatePrivmsg,
+  tick,
+} from '../helpers/plugin-test-helpers';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 const PLUGIN_PATH = resolve('./plugins/chanmod/index.ts');
-
-function simulateJoin(
-  bot: MockBot,
-  nick: string,
-  ident: string,
-  hostname: string,
-  channel: string,
-): void {
-  bot.client.simulateEvent('join', { nick, ident, hostname, channel });
-}
-
-function simulatePrivmsg(
-  bot: MockBot,
-  nick: string,
-  ident: string,
-  hostname: string,
-  channel: string,
-  message: string,
-): void {
-  bot.client.simulateEvent('privmsg', { nick, ident, hostname, target: channel, message });
-}
-
-function simulateMode(
-  bot: MockBot,
-  setter: string,
-  channel: string,
-  mode: string,
-  param: string,
-): void {
-  bot.client.simulateEvent('mode', {
-    nick: setter,
-    ident: 'ident',
-    hostname: 'host',
-    target: channel,
-    modes: [{ mode, param }],
-  });
-}
-
-/** Flush microtasks — sufficient for synchronous handlers dispatched via async dispatch(). */
-async function flush(): Promise<void> {
-  await Promise.resolve();
-}
-
-/** Advance fake timers (enforcement delays, async handlers). */
-async function tick(ms = 20): Promise<void> {
-  // Drain async event handler chain before advancing fake timers
-  await new Promise<void>((r) => setImmediate(r));
-  await vi.advanceTimersByTimeAsync(ms);
-}
-
-/** Add a user to channel-state so getUserHostmask works. */
-function addToChannel(
-  bot: MockBot,
-  nick: string,
-  ident: string,
-  hostname: string,
-  channel: string,
-): void {
-  bot.client.simulateEvent('join', { nick, ident, hostname, channel });
-}
 
 /**
  * Simulate RPL_CHANNELMODEIS (324) response — channel info event.
@@ -110,21 +59,6 @@ function simulateChannelInfo(
     modes,
     raw_modes: rawModes,
     raw_params: rawParams,
-  });
-}
-
-/** Simulate the bot joining a channel with ops (via userlist). */
-function giveBotOps(bot: MockBot, channel: string): void {
-  const nick = bot.client.user.nick;
-  // Ensure bot is in the channel
-  bot.client.simulateEvent('join', { nick, ident: 'bot', hostname: 'bot.host', channel });
-  // Give the bot +o via mode event
-  bot.client.simulateEvent('mode', {
-    nick: 'ChanServ',
-    ident: 'ChanServ',
-    hostname: 'services.',
-    target: channel,
-    modes: [{ mode: '+o', param: nick }],
   });
 }
 

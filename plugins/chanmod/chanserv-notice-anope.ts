@@ -3,6 +3,38 @@
 // Parses Anope ACCESS LIST responses (XOP + numeric), GETKEY replies, and
 // INFO responses (founder detection). Called from chanserv-notice.ts when
 // the configured backend is Anope.
+//
+// -------- Race windows worth knowing about --------
+//
+// 1. INFO ↔ ACCESS LIST interleave. ChanServ emits ACCESS LIST and INFO
+//    as separate multi-line replies with no correlation id. The parser
+//    tracks `probeState.activeInfoChannel` — set when the INFO header
+//    arrives and cleared on the "For more verbose information" trailer.
+//    If a second INFO response starts before the first completes (two
+//    nearly-simultaneous `.chanset` probes on different channels, or a
+//    manual `/cs INFO` from an operator), the trailer clears the wrong
+//    channel. Mitigation: we only set `activeInfoChannel` when the
+//    header's channel matches a channel we asked about, so stray INFOs
+//    from operator traffic are ignored.
+//
+// 2. Deferred "no access" commit. When ACCESS LIST returns empty we defer
+//    the `'none'` commit in `probeState.deferredAnopeNoAccess` until
+//    INFO finishes ruling out implicit founder status — otherwise we'd
+//    churn the chanset through `founder → none → founder`. During the
+//    defer window an operator can run `.chanset chanserv_access founder`
+//    and we must not clobber that write. The snapshot comparison at the
+//    flush point (line ~178) is the guard: if the current chanset no
+//    longer matches what we snapshotted when the defer was recorded, we
+//    skip the flush. The race is real but one-sided — the worst outcome
+//    is the deferred commit being dropped, which is intentional.
+//
+// 3. GETKEY callback expiry. `requestRemoveKey` in AnopeBackend registers
+//    a pending callback with a 10s timeout. If the key arrives AFTER the
+//    timeout cleanup has fired, the late NOTICE is still routed through
+//    `resolveGetKey` but there's no callback to invoke — the response is
+//    silently dropped. This is intentional: operators retrying on a
+//    failed rejoin should drive a fresh probe rather than race with a
+//    stale one.
 import type { PluginAPI } from '../../src/types';
 import type { AnopeNoticeBackend, ProbeState } from './chanserv-notice';
 import {

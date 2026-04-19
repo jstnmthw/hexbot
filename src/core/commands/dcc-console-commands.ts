@@ -16,6 +16,12 @@ import {
   parseFlagsMutation,
 } from '../dcc';
 
+export interface DccConsoleCommandsDeps {
+  handler: CommandHandler;
+  dccManager: DCCManager;
+  db: BotDatabase | null;
+}
+
 /**
  * Register the `.console` command on the given command handler. The
  * command is DCC-only — REPL and IRC callers receive a clear error.
@@ -26,11 +32,8 @@ import {
  * owner the ability to silently pipe another user's traffic into their
  * own console.
  */
-export function registerDccConsoleCommands(
-  handler: CommandHandler,
-  dccManager: DCCManager,
-  db: BotDatabase | null,
-): void {
+export function registerDccConsoleCommands(deps: DccConsoleCommandsDeps): void {
+  const { handler, dccManager, db } = deps;
   handler.registerCommand(
     'console',
     {

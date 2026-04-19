@@ -8,6 +8,7 @@ import type { CommandContext } from '../../command-handler';
 import type { LoggerLike } from '../../logger';
 import type { BotlinkConfig } from '../../types';
 import { executeCmdFrame } from './cmd-exec.js';
+import { Heartbeat } from './heartbeat';
 import { PendingRequestMap } from './pending';
 import { BotLinkProtocol, hashPassword } from './protocol';
 import type {
@@ -33,10 +34,13 @@ export class BotLinkLeaf {
   private disconnecting = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelay: number;
-  private pingTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Shared PING/timeout driver. Lazily installed in {@link startHeartbeat}
+   * once steady-state is reached and torn down on every disconnect path.
+   */
+  private heartbeat: Heartbeat | null = null;
   private lastHeartbeatAt = 0;
   private hubBotname = '';
-  private pingSeq = 0;
   private pingIntervalMs: number;
   private linkTimeoutMs: number;
   private reconnectDelayMs: number;
@@ -437,27 +441,26 @@ export class BotLinkLeaf {
   // -----------------------------------------------------------------------
 
   private startHeartbeat(): void {
-    this.pingTimer = setInterval(() => {
-      if (Date.now() - this.lastHeartbeatAt > this.linkTimeoutMs) {
+    // Heartbeat.stop() fires before onTimeout, so double-dispatch from a
+    // concurrent socket error cannot re-enter the timeout branch. We
+    // still call `stopHeartbeat()` anyway to drop the reference —
+    // keeping the semantics explicit for the reconnect path.
+    this.heartbeat = new Heartbeat({
+      intervalMs: this.pingIntervalMs,
+      timeoutMs: this.linkTimeoutMs,
+      getLastMessageAt: () => this.lastHeartbeatAt,
+      sendPing: (seq) => this.protocol?.send({ type: 'PING', seq }),
+      onTimeout: () => {
         this.logger?.warn('Hub timed out');
-        // Stop the interval inline before closing the socket: a concurrent
-        // destroyed-socket condition can suppress the `onClose` path that
-        // would otherwise drain the timer. See audit finding W-BL1
-        // (2026-04-14). The hub's analogous branch in hub.ts already does
-        // this; this brings the leaf in line.
         this.stopHeartbeat();
         this.protocol?.close();
-        return;
-      }
-      this.pingSeq++;
-      this.protocol?.send({ type: 'PING', seq: this.pingSeq });
-    }, this.pingIntervalMs);
+      },
+    });
+    this.heartbeat.start();
   }
 
   private stopHeartbeat(): void {
-    if (this.pingTimer) {
-      clearInterval(this.pingTimer);
-      this.pingTimer = null;
-    }
+    this.heartbeat?.stop();
+    this.heartbeat = null;
   }
 }

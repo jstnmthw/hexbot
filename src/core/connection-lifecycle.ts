@@ -9,6 +9,7 @@ import type { BindHandler, BindType } from '../types';
 import { toEventObject } from '../utils/irc-event';
 import { ListenerGroup } from '../utils/listener-group';
 import { ircLower } from '../utils/wildcard';
+import { startChannelPresenceCheck as startPresenceCheck } from './channel-presence-checker';
 import { type ReconnectPolicy, classifyCloseReason } from './close-reason-classifier';
 import { type ServerCapabilities, parseISupport } from './isupport';
 import type { ReconnectDriver } from './reconnect-driver';
@@ -523,43 +524,23 @@ function joinConfiguredChannels(deps: ConnectionLifecycleDeps): void {
 }
 
 /**
- * Periodically check that the bot is in all configured channels.
- * If missing from any, attempt to rejoin (with key if configured).
- * Channels in `permanentFailureChannels` are skipped so the bot
- * doesn't hammer a server with JOINs that can never succeed
- * (+b/+i/+k/+r). See stability audit 2026-04-14.
- *
- * Returns the interval handle, or null if disabled (interval = 0 or no channelState).
+ * Thin adapter that hands the connection-lifecycle deps off to the shared
+ * {@link startPresenceCheck} helper in `channel-presence-checker.ts`. Keeps
+ * the call site in {@link registerConnectionEvents} unchanged while the
+ * policy lives in its own file.
  */
 function startChannelPresenceCheck(
   deps: ConnectionLifecycleDeps,
   permanentFailureChannels: Set<string>,
 ): ReturnType<typeof setInterval> | null {
-  const intervalMs = deps.config.channel_rejoin_interval_ms ?? 30_000;
-  if (intervalMs <= 0 || !deps.channelState) return null;
-
-  const { client, configuredChannels, channelState, logger } = deps;
-  const warnedChannels = new Set<string>();
-
-  return setInterval(() => {
-    for (const ch of configuredChannels) {
-      const inChannel = channelState.getChannel(ch.name) !== undefined;
-      if (inChannel) {
-        warnedChannels.delete(ch.name);
-        continue;
-      }
-      // Stop retrying channels we already know are permanently failing
-      // until the next reconnect reshuffles server state.
-      if (permanentFailureChannels.has(ircLower(ch.name, 'rfc1459'))) {
-        continue;
-      }
-      if (!warnedChannels.has(ch.name)) {
-        logger.warn(`Not in configured channel ${ch.name} — attempting rejoin`);
-        warnedChannels.add(ch.name);
-      } else {
-        logger.debug(`Retrying join for ${ch.name}`);
-      }
-      client.join(ch.name, ch.key);
-    }
-  }, intervalMs);
+  return startPresenceCheck(
+    {
+      client: deps.client,
+      channelState: deps.channelState ?? null,
+      configuredChannels: deps.configuredChannels,
+      logger: deps.logger,
+      intervalMs: deps.config.channel_rejoin_interval_ms ?? 30_000,
+    },
+    permanentFailureChannels,
+  );
 }

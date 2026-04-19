@@ -11,10 +11,10 @@ import type { LoggerLike } from '../../logger';
 import type { BotlinkConfig } from '../../types';
 import type { Permissions } from '../permissions';
 import { type AuthBanEntry, BotLinkAuthManager } from './auth';
-import { executeCmdFrame } from './cmd-exec.js';
-import { FrameType } from './frame-types.js';
+import { Heartbeat } from './heartbeat';
+import { type HubFrameDispatchContext, dispatchSteadyStateFrame } from './hub-frame-dispatch.js';
 import { PendingRequestMap } from './pending';
-import { BotLinkProtocol, HUB_ONLY_FRAMES } from './protocol';
+import { BotLinkProtocol } from './protocol';
 import { RateCounter } from './rate-counter.js';
 import { BotLinkRelayRouter } from './relay-router';
 import { PermissionSyncer } from './sync';
@@ -36,8 +36,13 @@ interface LeafConnection {
   partyRate: RateCounter;
   protectRate: RateCounter;
   lastMessageAt: number;
-  pingTimer: ReturnType<typeof setInterval> | null;
-  pingSeq: number;
+  /**
+   * Heartbeat driver — owns the PING interval, sequence counter, and
+   * timeout detection. Replaces the old `pingTimer` + `pingSeq` pair so
+   * cleanup is a single `.stop()` call. Lazily installed in
+   * {@link BotLinkHub.acceptHandshake}.
+   */
+  heartbeat: Heartbeat | null;
 }
 
 /**
@@ -264,48 +269,6 @@ export class BotLinkHub {
     ];
   }
 
-  /** Handle an incoming CMD frame from a leaf. */
-  private handleCmdRelay(fromBot: string, frame: LinkFrame): void {
-    const cmdHandler = this.cmdHandler;
-    const cmdPermissions = this.cmdPermissions;
-    /* v8 ignore next -- defensive: handleCmdRelay is only called after setHandler */
-    if (!cmdHandler || !cmdPermissions) return;
-
-    const handle = String(frame.fromHandle ?? '');
-    const ref = String(frame.ref ?? '');
-
-    // Route to a specific target bot if toBot is set and not this hub
-    const toBot = frame.toBot != null ? String(frame.toBot) : null;
-    if (toBot && toBot !== this.config.botname) {
-      if (!this.leaves.has(toBot)) {
-        this.send(fromBot, {
-          type: 'CMD_RESULT',
-          ref,
-          output: [`Bot "${toBot}" is not connected.`],
-        });
-        return;
-      }
-      this.routes.trackCmdRoute(ref, fromBot);
-      this.send(toBot, frame);
-      return;
-    }
-
-    // Verify the handle has an active DCC session on the sending leaf.
-    // This prevents a compromised leaf from forging commands as arbitrary handles.
-    if (!this.routes.hasRemoteSession(handle, fromBot)) {
-      this.send(fromBot, {
-        type: 'CMD_RESULT',
-        ref,
-        output: [`No active session for "${handle}" on ${fromBot}.`],
-      });
-      return;
-    }
-
-    executeCmdFrame(frame, cmdHandler, cmdPermissions, (cmdRef, output) => {
-      this.send(fromBot, { type: 'CMD_RESULT', ref: cmdRef, output });
-    });
-  }
-
   /** Send a command to a specific leaf and await the result. Used by .bot command. */
   async sendCommandToBot(
     botname: string,
@@ -329,33 +292,6 @@ export class BotLinkHub {
 
     const CMD_TIMEOUT_MS = 10_000;
     return this.pendingCmds.create(ref, CMD_TIMEOUT_MS, ['Command relay timed out.']);
-  }
-
-  // -----------------------------------------------------------------------
-  // BSAY routing
-  // -----------------------------------------------------------------------
-
-  /** Handle BSAY frame: route to target bot(s) and/or deliver locally. */
-  private handleBsay(fromBot: string, frame: LinkFrame): void {
-    const target = String(frame.target ?? '');
-    const message = String(frame.message ?? '');
-    const toBot = String(frame.toBot ?? '*');
-
-    // TODO (Phase 3 audit): when BSAY frames gain a `fromHandle` field,
-    // re-verify the sending handle has `+m` here before fanning out.
-    // Today the only check is on the originating leaf; a compromised
-    // leaf can craft a raw BSAY frame and bypass that gate. The fix is
-    // a protocol addition (carry handle, verify on hub) and lives with
-    // the broader botlink HELLO challenge-response migration in §11.
-
-    if (toBot === '*') {
-      this.broadcast(frame, fromBot);
-      this.onBsay?.(target, message);
-    } else if (toBot === this.config.botname) {
-      this.onBsay?.(target, message);
-    } else if (this.leaves.has(toBot)) {
-      this.send(toBot, frame);
-    }
   }
 
   // -----------------------------------------------------------------------
@@ -389,8 +325,7 @@ export class BotLinkHub {
     const conn = this.leaves.get(botname);
     if (!conn) return false;
 
-    if (conn.pingTimer) clearInterval(conn.pingTimer);
-    conn.pingTimer = null;
+    conn.heartbeat?.stop();
     conn.protocol.onClose = null; // Prevent double-handling via onLeafClose
     conn.protocol.send({ type: 'ERROR', code: 'CLOSING', message: reason });
     conn.protocol.close();
@@ -426,7 +361,7 @@ export class BotLinkHub {
   /** Shut down the hub: close all leaf connections and the server. */
   close(): void {
     for (const leaf of this.leaves.values()) {
-      if (leaf.pingTimer) clearInterval(leaf.pingTimer);
+      leaf.heartbeat?.stop();
       leaf.protocol.onClose = null; // Prevent double-handling during shutdown
       leaf.protocol.send({ type: 'ERROR', code: 'CLOSING', message: 'Hub shutting down' });
       leaf.protocol.close(); // close() is idempotent
@@ -630,8 +565,7 @@ export class BotLinkHub {
       partyRate: new RateCounter(5, 1_000),
       protectRate: new RateCounter(20, 1_000),
       lastMessageAt: Date.now(),
-      pingTimer: null,
-      pingSeq: 0,
+      heartbeat: null,
     };
     this.leaves.set(botname, conn);
 
@@ -674,6 +608,26 @@ export class BotLinkHub {
   // Steady state
   // -----------------------------------------------------------------------
 
+  /**
+   * Build the context object passed to the extracted frame dispatcher.
+   * Done once per steady-state frame so the dispatcher sees current
+   * `cmdHandler` / callback state without reaching into hub internals.
+   */
+  private frameDispatchContext(): HubFrameDispatchContext {
+    return {
+      botname: this.config.botname,
+      routes: this.routes,
+      pendingCmds: this.pendingCmds,
+      cmdHandler: this.cmdHandler,
+      cmdPermissions: this.cmdPermissions,
+      send: (bot, frame) => this.send(bot, frame),
+      broadcast: (frame, excludeBot) => this.broadcast(frame, excludeBot),
+      hasLeaf: (bot) => this.leaves.has(bot),
+      onLeafFrame: this.onLeafFrame,
+      onBsay: this.onBsay,
+    };
+  }
+
   private onSteadyState(botname: string, frame: LinkFrame): void {
     const conn = this.leaves.get(botname);
     if (!conn) return;
@@ -683,94 +637,17 @@ export class BotLinkHub {
     // Enforce authenticated identity — prevent a leaf from spoofing another leaf's name
     if ('fromBot' in frame) frame.fromBot = botname;
 
-    // Heartbeat
-    if (frame.type === FrameType.PONG) return;
-    if (frame.type === FrameType.PING) {
-      conn.protocol.send({ type: FrameType.PONG, seq: frame.seq });
-      return;
-    }
-
-    // Rate limiting
-    if (frame.type === FrameType.CMD && !conn.cmdRate.check()) {
-      conn.protocol.send({
-        type: FrameType.ERROR,
-        code: 'RATE_LIMITED',
-        message: 'CMD rate limit exceeded',
-      });
-      return;
-    }
-    if (frame.type === FrameType.PARTY_CHAT && !conn.partyRate.check()) {
-      return; // Silently drop
-    }
-    if (frame.type.startsWith('PROTECT_') && frame.type !== FrameType.PROTECT_ACK) {
-      if (!conn.protectRate.check()) return; // Silently drop
-    }
-
-    // Fan-out to other leaves (unless hub-only)
-    if (!HUB_ONLY_FRAMES.has(frame.type)) {
-      this.broadcast(frame, botname);
-    }
-
-    // Dispatch by frame type
-    switch (frame.type) {
-      case FrameType.CMD_RESULT: {
-        const ref = String(frame.ref ?? '');
-        const output = Array.isArray(frame.output)
-          ? frame.output.filter((s): s is string => typeof s === 'string')
-          : [];
-        if (this.pendingCmds.resolve(ref, output)) return;
-        const originBot = this.routes.popCmdRoute(ref);
-        if (originBot) {
-          this.send(originBot, frame);
-          return;
-        }
-        break;
-      }
-
-      case FrameType.CMD:
-        if (this.cmdHandler) this.handleCmdRelay(botname, frame);
-        break;
-
-      case FrameType.BSAY:
-        this.handleBsay(botname, frame);
-        break;
-
-      case FrameType.PARTY_JOIN:
-        this.routes.trackPartyJoin(botname, frame);
-        break;
-
-      case FrameType.PARTY_PART:
-        this.routes.trackPartyPart(frame);
-        break;
-
-      case FrameType.PARTY_WHOM:
-        this.routes.handlePartyWhom(botname, String(frame.ref ?? ''));
-        break;
-
-      case FrameType.PROTECT_ACK:
-        this.routes.handleProtectAck(frame);
-        break;
-
-      default:
-        // PROTECT_* requests (not ACK) — use raw startsWith since we don't
-        // enumerate each PROTECT_* variant in the switch.
-        if (frame.type.startsWith('PROTECT_')) {
-          if (frame.ref) this.routes.trackProtectRequest(String(frame.ref), botname);
-        }
-        break;
-    }
-
-    // Relay routing applies to all RELAY_* frames. routeRelayFrame is
-    // authoritative: it delivers locally via deliverLocal → onLeafFrame when
-    // the hub itself is the relay origin/target, so skip the generic
-    // notification below to avoid double-dispatching the same frame.
-    if (frame.type.startsWith('RELAY_')) {
-      this.routes.routeRelayFrame(botname, frame);
-      return;
-    }
-
-    // Notify external handler
-    this.onLeafFrame?.(botname, frame);
+    dispatchSteadyStateFrame(
+      this.frameDispatchContext(),
+      {
+        botname,
+        send: (f) => conn.protocol.send(f),
+        cmdRate: conn.cmdRate,
+        partyRate: conn.partyRate,
+        protectRate: conn.protectRate,
+      },
+      frame,
+    );
   }
 
   /** Clean up all hub-side state associated with a leaf (relays, routes, etc.). */
@@ -782,8 +659,7 @@ export class BotLinkHub {
     const conn = this.leaves.get(botname);
     if (!conn) return;
 
-    if (conn.pingTimer !== null) clearInterval(conn.pingTimer);
-    conn.pingTimer = null;
+    conn.heartbeat?.stop();
     this.leaves.delete(botname);
 
     this.cleanupLeafState(botname);
@@ -797,25 +673,29 @@ export class BotLinkHub {
   // Heartbeat
   // -----------------------------------------------------------------------
 
+  /**
+   * Install a per-leaf {@link Heartbeat}. `onTimeout` tears the leaf down
+   * the same way {@link onLeafClose} would — Heartbeat.stop() already
+   * fired before this callback runs, so we only handle the state
+   * cleanup and broadcast path.
+   */
   private startHeartbeat(conn: LeafConnection): void {
-    conn.pingTimer = setInterval(() => {
-      // Check for link timeout
-      if (Date.now() - conn.lastMessageAt > this.linkTimeoutMs) {
+    conn.heartbeat = new Heartbeat({
+      intervalMs: this.pingIntervalMs,
+      timeoutMs: this.linkTimeoutMs,
+      getLastMessageAt: () => conn.lastMessageAt,
+      sendPing: (seq) => conn.protocol.send({ type: 'PING', seq }),
+      onTimeout: () => {
         this.logger?.warn(`Leaf "${conn.botname}" timed out`);
-        if (conn.pingTimer !== null) clearInterval(conn.pingTimer);
-        conn.pingTimer = null;
         this.leaves.delete(conn.botname);
         this.cleanupLeafState(conn.botname);
         conn.protocol.send({ type: 'ERROR', code: 'TIMEOUT', message: 'Link timeout' });
         conn.protocol.close();
         this.broadcast({ type: 'BOTPART', botname: conn.botname, reason: 'Link timeout' });
         this.onLeafDisconnected?.(conn.botname, 'Link timeout');
-        return;
-      }
-
-      conn.pingSeq++;
-      conn.protocol.send({ type: 'PING', seq: conn.pingSeq });
-      this.routes.sweepStaleRoutes();
-    }, this.pingIntervalMs);
+      },
+      onTick: () => this.routes.sweepStaleRoutes(),
+    });
+    conn.heartbeat.start();
   }
 }

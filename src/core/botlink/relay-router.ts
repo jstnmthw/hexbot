@@ -19,6 +19,24 @@ interface PendingEntry {
   createdAt: number;
 }
 
+/**
+ * Delete entries from `map` whose timestamp (as extracted by `getTs`) is
+ * older than `ttl` relative to `now`. Shared by the four routing maps on
+ * BotLinkRelayRouter so the TTL loop lives in one place and the four call
+ * sites stay readable — each line in the caller documents its own TTL and
+ * timestamp field.
+ */
+function sweepExpired<V>(
+  map: Map<string, V>,
+  now: number,
+  ttl: number,
+  getTs: (v: V) => number,
+): void {
+  for (const [key, value] of map) {
+    if (now - getTs(value) > ttl) map.delete(key);
+  }
+}
+
 const SHORT_TTL = 30_000; // 30 seconds — request/reply cycles
 const RELAY_TTL = 60 * 60_000; // 1 hour — live relay sessions
 const PARTY_TTL = 7 * 86_400_000; // 7 days — remote DCC party members
@@ -270,22 +288,16 @@ export class BotLinkRelayRouter {
   /**
    * TTL sweep across all four maps. Covers the case where the matching
    * END/PART frame is lost in transit so the Map never gets cleaned via its
-   * normal path.
+   * normal path. Each line names its own TTL so the numbers stay visible —
+   * the repetition here is shallow (`age > ttl`) and doesn't merit
+   * hiding behind a `RoutingMap<T>` abstraction.
    */
   sweepStaleRoutes(): void {
     const now = Date.now();
-    for (const [ref, entry] of this.protectRequests) {
-      if (now - entry.createdAt > SHORT_TTL) this.protectRequests.delete(ref);
-    }
-    for (const [ref, entry] of this.cmdRoutes) {
-      if (now - entry.createdAt > SHORT_TTL) this.cmdRoutes.delete(ref);
-    }
-    for (const [handle, entry] of this.activeRelays) {
-      if (now - entry.createdAt > RELAY_TTL) this.activeRelays.delete(handle);
-    }
-    for (const [key, user] of this.remotePartyUsers) {
-      if (now - user.connectedAt > PARTY_TTL) this.remotePartyUsers.delete(key);
-    }
+    sweepExpired(this.protectRequests, now, SHORT_TTL, (e) => e.createdAt);
+    sweepExpired(this.cmdRoutes, now, SHORT_TTL, (e) => e.createdAt);
+    sweepExpired(this.activeRelays, now, RELAY_TTL, (e) => e.createdAt);
+    sweepExpired(this.remotePartyUsers, now, PARTY_TTL, (u) => u.connectedAt);
   }
 
   /** Drop every routing entry — called from hub.close(). */

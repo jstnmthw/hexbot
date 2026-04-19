@@ -21,7 +21,7 @@ describe('permission-commands', () => {
   beforeEach(() => {
     handler = new CommandHandler();
     perms = new Permissions();
-    registerPermissionCommands(handler, perms);
+    registerPermissionCommands({ handler, permissions: perms });
   });
 
   // -------------------------------------------------------------------------
@@ -283,7 +283,7 @@ describe('permission-commands (IRC source)', () => {
     // Owner-level user so all permission checks pass
     perms.addUser('owner', '*!owner@host', 'n', 'setup');
     handler = new CommandHandler(perms);
-    registerPermissionCommands(handler, perms);
+    registerPermissionCommands({ handler, permissions: perms });
   });
 
   it('adduser from IRC uses ctx.nick as the audit source', async () => {
@@ -332,7 +332,7 @@ describe('.flags owner escalation guard', () => {
     // Target user to modify
     perms.addUser('target', '*!t@h', 'o', 'setup');
     handler = new CommandHandler(perms);
-    registerPermissionCommands(handler, perms);
+    registerPermissionCommands({ handler, permissions: perms });
   });
 
   it('a +m user trying to set +n flags gets rejected', async () => {

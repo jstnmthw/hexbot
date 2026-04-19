@@ -33,7 +33,6 @@
 // `ModeContext` object so handler signatures stay manageable — previously they
 // threaded up to 9 positional args each.
 import type { PluginAPI } from '../../src/types';
-import { wildcardMatch } from '../../src/utils/wildcard';
 import {
   botHasOps,
   getBotNick,
@@ -122,7 +121,7 @@ function handleBotBannedThreat(
 
   const botNick = getBotNick(api);
   const botHostmask = api.getUserHostmask(channel, botNick);
-  if (!botHostmask || !wildcardMatch(target, botHostmask, true)) return;
+  if (!botHostmask || !api.util.matchWildcard(target, botHostmask)) return;
 
   if (onThreat) {
     onThreat(channel, 'bot_banned', 5, setter, target);
@@ -149,7 +148,7 @@ function handleEnforceBans(api: PluginAPI, state: SharedState, mctx: ModeContext
   for (const user of ch.users.values()) {
     if (api.isBotNick(user.nick)) continue;
     const hostmask = api.buildHostmask(user);
-    if (wildcardMatch(target, hostmask, true)) {
+    if (api.util.matchWildcard(target, hostmask)) {
       api.log(`Enforcebans: kicking ${user.nick} from ${channel} (matches ${target})`);
       markIntentional(state, api, channel, user.nick);
       api.kick(channel, user.nick, 'You are banned');

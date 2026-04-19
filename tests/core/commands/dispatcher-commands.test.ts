@@ -20,7 +20,7 @@ describe('dispatcher-commands', () => {
   beforeEach(() => {
     handler = new CommandHandler();
     dispatcher = new EventDispatcher();
-    registerDispatcherCommands(handler, dispatcher);
+    registerDispatcherCommands({ handler, dispatcher });
   });
 
   afterEach(() => {

@@ -256,10 +256,9 @@ export class ChannelState {
     this.networkAccounts.set(lower, account);
     // Mirror the change onto any per-channel UserInfo records so plugin code
     // reading `user.accountName` sees the same value as the dispatcher.
-    for (const ch of this.channels.values()) {
-      const user = ch.users.get(lower);
-      if (user) user.accountName = account;
-    }
+    this.updateUserAcrossChannels(lower, (user) => {
+      user.accountName = account;
+    });
   }
 
   getUserModes(channel: string, nick: string): string[] {
@@ -596,12 +595,9 @@ export class ChannelState {
     this.networkAccounts.set(lower, accountName);
 
     // Update accountName on all per-channel UserInfo objects for this nick
-    for (const ch of this.channels.values()) {
-      const user = ch.users.get(lower);
-      if (user) {
-        user.accountName = accountName;
-      }
-    }
+    this.updateUserAcrossChannels(lower, (user) => {
+      user.accountName = accountName;
+    });
 
     if (accountName) {
       this.logger?.debug(`account-notify: ${nick} identified as ${accountName}`);
@@ -622,15 +618,11 @@ export class ChannelState {
     const message = typeof event.message === 'string' ? event.message : '';
     const lower = this.lowerNick(nick);
 
-    let touched = false;
-    for (const ch of this.channels.values()) {
-      const user = ch.users.get(lower);
-      if (!user) continue;
+    const touched = this.updateUserAcrossChannels(lower, (user, ch) => {
       user.away = isAway;
       user.awayMessage = isAway ? message : undefined;
-      touched = true;
       this.eventBus.emit('channel:awayChanged', ch.name, nick, isAway);
-    }
+    });
 
     if (touched) {
       this.logger?.debug(`away-notify: ${nick} is ${isAway ? 'away' : 'back'}`);
@@ -644,19 +636,39 @@ export class ChannelState {
     const newHostname = event.new_hostname !== undefined ? String(event.new_hostname) : undefined;
 
     const lower = this.lowerNick(nick);
-    for (const ch of this.channels.values()) {
-      const user = ch.users.get(lower);
-      if (user) {
-        if (newIdent) user.ident = newIdent;
-        if (newHostname) user.hostname = newHostname;
-        user.hostmask = `${user.nick}!${user.ident}@${user.hostname}`;
-      }
-    }
+    this.updateUserAcrossChannels(lower, (user) => {
+      if (newIdent) user.ident = newIdent;
+      if (newHostname) user.hostname = newHostname;
+      user.hostmask = `${user.nick}!${user.ident}@${user.hostname}`;
+    });
   }
 
   // -------------------------------------------------------------------------
   // Helpers
   // -------------------------------------------------------------------------
+
+  /**
+   * Iterate every tracked channel and, for each one that has the user keyed
+   * by `lowerNick`, invoke `update(user, channel)`. Returns true if at least
+   * one channel was touched. Collapses the four "for (ch of channels) { get
+   * user; if (!user) continue; mutate }" loops that were duplicated across
+   * account/away/chghost/account-tag handlers — the 2026-04-19 quality
+   * audit flagged them as a dual-source-of-truth hazard because missing
+   * any copy silently drops data.
+   */
+  private updateUserAcrossChannels(
+    lowerNick: string,
+    update: (user: UserInfo, channel: ChannelInfo) => void,
+  ): boolean {
+    let touched = false;
+    for (const ch of this.channels.values()) {
+      const user = ch.users.get(lowerNick);
+      if (!user) continue;
+      update(user, ch);
+      touched = true;
+    }
+    return touched;
+  }
 
   private lowerNick(nick: string): string {
     return ircLower(nick, this.casemapping);

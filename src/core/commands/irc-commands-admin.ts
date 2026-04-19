@@ -2,11 +2,11 @@
 // Registers .say, .join, .part, .invite, .status with the command handler.
 import type { CommandHandler } from '../../command-handler';
 import type { BotDatabase } from '../../database';
-import { validateChannel } from '../../utils/command-helpers';
 import { isValidCommandTarget, parseTargetMessage } from '../../utils/parse-args';
 import { sanitize } from '../../utils/sanitize';
 import { stripFormatting } from '../../utils/strip-formatting';
 import { tryAudit } from '../audit';
+import { validateChannel } from '../command-helpers';
 import type { ReconnectState } from '../reconnect-driver';
 
 /** Minimal IRC client interface for admin commands. */
@@ -52,6 +52,13 @@ export interface AdminBotInfo {
   getStabilityMetrics?(): StabilityMetrics;
 }
 
+export interface IrcAdminCommandsDeps {
+  handler: CommandHandler;
+  client: AdminIRCClient;
+  botInfo: AdminBotInfo;
+  db: BotDatabase | null;
+}
+
 /**
  * Register IRC admin commands on the given command handler.
  *
@@ -61,12 +68,8 @@ export interface AdminBotInfo {
  * in `metadata.message` so an audit reviewer can see both who did what
  * and what was said — this is the single biggest gap the review surfaced.
  */
-export function registerIRCAdminCommands(
-  handler: CommandHandler,
-  client: AdminIRCClient,
-  botInfo: AdminBotInfo,
-  db: BotDatabase | null,
-): void {
+export function registerIRCAdminCommands(deps: IrcAdminCommandsDeps): void {
+  const { handler, client, botInfo, db } = deps;
   handler.registerCommand(
     'say',
     {

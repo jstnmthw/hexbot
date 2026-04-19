@@ -184,6 +184,17 @@ function makeMockAPI(db: BotDatabase, config: Record<string, unknown> = {}): Moc
     getHelpEntries: () => [],
     stripFormatting: (text: string) => text,
     getChannelKey: () => undefined,
+    util: {
+      matchWildcard: () => false,
+      createSlidingWindowCounter: () => ({
+        check: () => false,
+        peek: () => 0,
+        clear: () => {},
+        reset: () => {},
+        sweep: () => {},
+        size: 0,
+      }),
+    },
     log: vi.fn(),
     error: vi.fn(),
     warn: vi.fn(),
