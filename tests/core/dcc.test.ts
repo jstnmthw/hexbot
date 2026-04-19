@@ -1208,6 +1208,28 @@ describe('DCCSession relay mode', () => {
     expect(written.join('')).toContain('Relay ended');
   });
 
+  it('nested .relay is rejected locally with a helpful message', async () => {
+    const { socket, written, duplex } = makeMockSocket();
+    const mgr = makeMockManagerForSession();
+    (mgr.getBotName as ReturnType<typeof vi.fn>).mockReturnValue('HEX');
+    const session = buildSession(socket, { manager: mgr });
+    session.startActiveForTesting('1.0.0', 'hexbot');
+
+    const forwarded: string[] = [];
+    session.enterRelay('BlueAngel', (line) => forwarded.push(line));
+
+    duplex.push('.relay neo\r\n');
+    await flushAsync();
+
+    expect(forwarded).not.toContain('.relay neo');
+    const output = written.join('');
+    expect(output).toContain('Relay already in progress to BlueAngel');
+    expect(output).toContain('.relay end');
+    expect(output).toContain('HEX');
+    expect(session.isRelaying).toBe(true);
+    expect(session.relayTarget).toBe('BlueAngel');
+  });
+
   it('.quit is forwarded in relay mode (does NOT exit)', async () => {
     const { socket, duplex } = makeMockSocket();
     const mgr = makeMockManagerForSession();

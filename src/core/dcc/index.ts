@@ -721,6 +721,16 @@ export class DCCSession implements DCCSessionEntry {
         this.manager.onRelayEnd?.(this.handle, target);
         return;
       }
+      // Reject nested relay attempts locally. Without this guard `.relay <other>`
+      // is forwarded as RELAY_INPUT to the target bot, which either bounces it
+      // (source is 'botlink', not 'dcc') or silently drops it — the operator
+      // just sees nothing happen.
+      if (/^\.relay(\s|$)/i.test(trimmed)) {
+        this.writeLine(
+          `*** Relay already in progress to ${this.relay.target}. Type \x02.relay end\x02 to return to ${this.manager.getBotName()}.`,
+        );
+        return;
+      }
       this.relay.callback(trimmed);
       return;
     }
