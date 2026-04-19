@@ -102,7 +102,7 @@ describe('ai-chat admin commands', () => {
       botConfig: BOT_CONFIG,
       ircClient: null,
     });
-    await loadPlugin(undefined, { provider: mockProvider });
+    await loadPlugin(undefined, { provider: mockProvider, coalescer: null });
   });
 
   afterEach(async () => {
@@ -315,7 +315,9 @@ describe('ai-chat without a provider', () => {
       botConfig: BOT_CONFIG,
       ircClient: null,
     });
-    const result = await loader.load(resolve('./plugins/ai-chat/dist/index.js'));
+    const result = await loader.load(resolve('./plugins/ai-chat/dist/index.js'), undefined, {
+      coalescer: null,
+    } satisfies AIChatDeps);
     expect(result.status).toBe('ok');
   });
 
@@ -408,7 +410,7 @@ describe('ai-chat budget/session edge paths', () => {
     await loader.load(
       resolve('./plugins/ai-chat/dist/index.js'),
       { 'ai-chat': { config: { token_budgets: { per_user_daily: 1, global_daily: 100 } } } },
-      { provider: mockProvider } satisfies AIChatDeps,
+      { provider: mockProvider, coalescer: null } satisfies AIChatDeps,
     );
   });
 
@@ -454,6 +456,7 @@ describe('ai-chat play subcommand edge cases', () => {
     });
     await loader.load(resolve('./plugins/ai-chat/dist/index.js'), undefined, {
       provider: makeMockProvider(),
+      coalescer: null,
     } satisfies AIChatDeps);
   });
 
@@ -502,7 +505,7 @@ describe('ai-chat channel_characters', () => {
           },
         },
       },
-      { provider: mockProvider } satisfies AIChatDeps,
+      { provider: mockProvider, coalescer: null } satisfies AIChatDeps,
     );
     expect(result.status).toBe('ok');
   });

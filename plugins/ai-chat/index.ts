@@ -87,6 +87,7 @@ export interface AIChatDeps {
   moodEngine?: MoodEngine;
   ambientEngine?: AmbientEngine | null;
   engagementTracker?: EngagementTracker;
+  coalescer?: MessageCoalescer | null;
   state?: PluginState;
 }
 
@@ -530,7 +531,9 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
   // (everything that touches context, trackers, or the AI pipeline). The
   // deferred body runs once per coalesced burst — see message-coalescer.ts
   // for the wire-fragment problem this solves.
-  if (!coalescer && cfg.input.coalesceWindowMs > 0) {
+  if (merged.coalescer !== undefined) {
+    coalescer = merged.coalescer;
+  } else if (!coalescer && cfg.input.coalesceWindowMs > 0) {
     // 8 KB cap = 4× the per-entry truncate limit. Generous enough to merge
     // four max-sized fragments; runPipeline's `maxPromptChars` enforces the
     // real upper bound on the merged prompt.
@@ -665,7 +668,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
     );
   };
 
-  api.bind('pubm', '-', '*', (ctx: HandlerContext) => {
+  api.bind('pubm', '-', '*', async (ctx: HandlerContext) => {
     if (!ctx.channel) return;
 
     // Cap message bytes before any in-memory buffer sees them.
@@ -707,7 +710,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
         void processIncomingMessage(msg.ctx, msg.text, msg.fragmentCount);
       });
     } else {
-      void processIncomingMessage(ctx, text, 1);
+      await processIncomingMessage(ctx, text, 1);
     }
   });
 

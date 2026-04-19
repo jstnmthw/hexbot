@@ -90,6 +90,7 @@ describe('ai-chat plugin (integration)', () => {
     });
     const result = await loader.load(resolve('./plugins/ai-chat/dist/index.js'), undefined, {
       provider: mockProvider,
+      coalescer: null,
     } satisfies AIChatDeps);
     expect(result.status).toBe('ok');
   });
