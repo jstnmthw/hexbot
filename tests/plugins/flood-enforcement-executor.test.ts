@@ -88,6 +88,25 @@ describe('EnforcementExecutor drainPending (W-FL5)', () => {
     await ex.drainPending();
   });
 
+  it('drops actions past the per-channel rate cap and warns', () => {
+    // Cap is MAX_ACTIONS_PER_CHANNEL_WINDOW (10) within CHANNEL_WINDOW_MS (5s).
+    // The 11th action in the same window must be dropped with a warn line and
+    // must NOT hit the IRC primitives. Use distinct spies (default helper
+    // shares one) so we can disambiguate notice vs warn.
+    const notice = vi.fn();
+    const warn = vi.fn();
+    const api = { ...makeApi(), notice, warn } as unknown as PluginAPI;
+    const ex = new EnforcementExecutor(api, cfg, () => true, vi.fn());
+    for (let i = 0; i < 10; i++) {
+      ex.apply('warn', '#x', `n${i}`, 'flood');
+    }
+    notice.mockClear();
+    warn.mockClear();
+    ex.apply('warn', '#x', 'n10', 'flood');
+    expect(notice).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('rate cap hit'));
+  });
+
   it('drainPending swallows per-promise rejections via allSettled', async () => {
     // Force applyInner to throw by making notice throw via a broken api
     const brokenApi = {
@@ -160,6 +179,16 @@ describe('EnforcementExecutor liftExpiredBans (W-FL6)', () => {
     ex.liftExpiredBans();
     expect(api.db.del).not.toHaveBeenCalled();
     expect(api.warn).not.toHaveBeenCalled();
+  });
+
+  it('drops malformed JSON records on the next sweep', () => {
+    const api = makeApi();
+    (api.db.list as ReturnType<typeof vi.fn>).mockReturnValue([
+      { key: 'ban:#x:bogus', value: '{not json' },
+    ]);
+    const ex = new EnforcementExecutor(api, cfg, () => true, vi.fn());
+    expect(() => ex.liftExpiredBans()).not.toThrow();
+    expect(api.db.del).toHaveBeenCalledWith('ban:#x:bogus');
   });
 
   it('ignores never-expiring bans (expires=0)', () => {

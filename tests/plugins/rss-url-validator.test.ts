@@ -217,4 +217,25 @@ describe('validateFeedUrl', () => {
       /DNS lookup failed/,
     );
   });
+
+  it('rejects unparseable URLs', async () => {
+    await expect(validateFeedUrl('not a url')).rejects.toThrow(/invalid URL/);
+  });
+
+  it('rejects when DNS returns an empty record set', async () => {
+    stubLookup([]);
+    await expect(validateFeedUrl('https://empty.example.com/feed')).rejects.toThrow(
+      /no addresses resolved/,
+    );
+  });
+
+  it('skips records with non-IP families', async () => {
+    // Older Node returned `family: 0` for some failure modes. Validator
+    // should ignore those rows; if no usable addresses remain, fall through
+    // to the "no addresses resolved" error.
+    stubLookup([{ address: 'whatever', family: 0 }]);
+    await expect(validateFeedUrl('https://weird.example.com/feed')).rejects.toThrow(
+      /no addresses resolved/,
+    );
+  });
 });

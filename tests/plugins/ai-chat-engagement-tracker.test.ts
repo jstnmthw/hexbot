@@ -151,4 +151,45 @@ describe('EngagementTracker', () => {
     t = 101_000;
     expect(tr.isEngaged('#c', 'alice')).toBe(false);
   });
+
+  it('setTimeouts updates active soft/hard windows in place', () => {
+    let t = 0;
+    const tr = makeTracker({ now: () => t, soft: 60_000, hard: 1_000_000 });
+    tr.onBotReply('#c', 'alice');
+    // Tighten the soft window to 1s; the existing entry should now expire.
+    tr.setTimeouts(1_000, 1_000_000);
+    t = 5_000;
+    expect(tr.isEngaged('#c', 'alice')).toBe(false);
+  });
+
+  it('endEngagement is a no-op for an unknown channel', () => {
+    const tr = makeTracker({ now: () => 0 });
+    expect(() => tr.endEngagement('#nope', 'alice')).not.toThrow();
+  });
+
+  it('engaged user addressing the bot itself stays engaged', () => {
+    // The redirect check ignores nicks already in the engaged set, so when
+    // an engaged user re-addresses the bot they don't lose the floor.
+    const tr = makeTracker({ now: () => 0 });
+    tr.onBotReply('#c', 'alice');
+    tr.onBotReply('#c', 'hexbot');
+    tr.onHumanMessage('#c', 'alice', 'hexbot: still here?', ['alice', 'hexbot']);
+    expect(tr.isEngaged('#c', 'alice')).toBe(true);
+  });
+
+  it('evicts the oldest channel once MAX_CHANNELS (256) is exceeded', () => {
+    let t = 0;
+    const tr = makeTracker({ now: () => t });
+    // Fill to the cap. Each channel gets one engagement at a known time.
+    for (let i = 0; i < 256; i++) {
+      t = i * 1000;
+      tr.onBotReply(`#ch${i}`, 'a');
+    }
+    // 257th channel forces eviction of the oldest (#ch0).
+    t = 256 * 1000;
+    tr.onBotReply('#ch256', 'a');
+    expect(tr.isEngaged('#ch0', 'a')).toBe(false);
+    expect(tr.isEngaged('#ch256', 'a')).toBe(true);
+    expect(tr.isEngaged('#ch1', 'a')).toBe(true);
+  });
 });
