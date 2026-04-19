@@ -11,6 +11,11 @@ export const description =
 
 const PREVIEW_COOLDOWN_MS = 60_000;
 
+// Conservative ceiling for topic length warnings. RFC 2812's 512-byte line cap
+// minus the per-server `:nick!user@host TOPIC #channel :` framing and CRLF
+// leaves ~390 usable bytes for the topic on most ircds.
+const TOPIC_LENGTH_WARN = 390;
+
 export function init(api: PluginAPI): void {
   // `previewCooldown` lives inside `init()` as a const so a plugin
   // reload can't leak the old Map into bind closures that still reference
@@ -95,13 +100,10 @@ export function init(api: PluginAPI): void {
         api.notice(ctx.nick, 'Cannot lock: no topic is currently set.');
         return;
       }
-      // 390 is a conservative ceiling: RFC 2812's 512-byte line cap
-      // minus the per-server `:nick!user@host TOPIC #channel :` framing
-      // and CRLF leaves ~390 usable bytes for the topic on most ircds.
-      if (live.length > 390) {
+      if (live.length > TOPIC_LENGTH_WARN) {
         api.notice(
           ctx.nick,
-          `Warning: topic is ${live.length} chars (typical limit is ~390). It may be truncated by the server.`,
+          `Warning: topic is ${live.length} chars (typical limit is ~${TOPIC_LENGTH_WARN}). It may be truncated by the server.`,
         );
       }
       api.channelSettings.set(ctx.channel, 'topic_text', live);
@@ -175,11 +177,10 @@ export function init(api: PluginAPI): void {
     // any. Strip them uniformly here.
     const formatted = template.replace('$text', () => api.stripFormatting(text));
 
-    // Warn if the formatted topic is very long (typical IRC limit ~390 chars)
-    if (formatted.length > 390) {
+    if (formatted.length > TOPIC_LENGTH_WARN) {
       api.notice(
         ctx.nick,
-        `Warning: topic is ${formatted.length} chars (typical limit is ~390). It may be truncated by the server.`,
+        `Warning: topic is ${formatted.length} chars (typical limit is ~${TOPIC_LENGTH_WARN}). It may be truncated by the server.`,
       );
     }
 

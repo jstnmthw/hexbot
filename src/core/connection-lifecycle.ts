@@ -117,6 +117,25 @@ export interface ConnectionLifecycleHandle {
 // Implementation
 // ---------------------------------------------------------------------------
 
+// If the server accepts a connection but doesn't send the IRC greeting within
+// this window, abort and let the reconnect driver retry. Without this,
+// stalled connections wait for TCP timeout (~2.5 min) before retrying.
+const REGISTRATION_TIMEOUT_MS = 30_000;
+
+// `client.quit()` just queues a QUIT line — if the socket is already half-open
+// (SYN-ACK received but RST never arrives) the 'close' event never fires.
+// After this grace period we forcibly destroy the underlying socket so our
+// 'close' listener runs and the reconnect driver picks up. See stability
+// audit 2026-04-14.
+const SOCKET_DESTROY_GRACE_MS = 5_000;
+
+// Wall-clock budget for draining queued mode/kick commands into the
+// irc-framework send buffer when a disconnect is in progress. Most queued
+// messages will evaporate with the socket, but a brief flush expresses
+// operator intent rather than silently dropping it. See stability audit
+// 2026-04-14.
+const DISCONNECT_FLUSH_DEADLINE_MS = 100;
+
 /**
  * Register all IRC connection lifecycle event listeners on the client.
  * The returned promise resolves on the first successful registration so
@@ -142,9 +161,6 @@ export function registerConnectionEvents(
   // Captures the last IRC ERROR reason or socket error so we can classify
   // it when 'close' fires — irc-framework's 'close' event only passes a boolean.
   let lastCloseReason: string | null = null;
-  // If the server accepts a connection but doesn't send the IRC greeting
-  // within 30s, abort and let the reconnect driver retry. Without this,
-  // stalled connections wait for TCP timeout (~2.5 min) before retrying.
   let registrationTimer: ReturnType<typeof setTimeout> | null = null;
 
   const listeners = new ListenerGroup(client);
@@ -164,7 +180,7 @@ export function registerConnectionEvents(
 
   const onConnecting = (): void => {
     // Connecting event fires when client.connect() is called, even if the
-    // socket fails to open or registration times out. Start a 30s registration
+    // socket fails to open or registration times out. Start a registration
     // timeout that will fire even if socket-level events don't arrive.
     if (registrationTimer !== null) {
       clearTimeout(registrationTimer);
@@ -172,18 +188,12 @@ export function registerConnectionEvents(
     registrationTimer = setTimeout(() => {
       registrationTimer = null;
       lastCloseReason = 'registration timeout';
-      logger.warn('IRC registration timeout — no greeting received within 30s');
+      logger.warn(
+        `IRC registration timeout — no greeting received within ${REGISTRATION_TIMEOUT_MS / 1000}s`,
+      );
       // Close the socket so 'close' event fires and reconnect logic runs.
       client.quit('Registration timeout');
-      // `client.quit()` just queues a QUIT line — if the socket is
-      // already half-open (SYN-ACK received but RST never arrives) the
-      // 'close' event never fires and the process hangs for ~2.5 min
-      // waiting for the kernel TCP timeout. Force a destroy after 5s.
-      // See stability audit 2026-04-14.
       setTimeout(() => {
-        // The client hasn't transitioned to 'close' by now — destroy
-        // the underlying socket so our 'close' listener runs and the
-        // reconnect driver picks up.
         const socket = getInternalTlsSocket(client);
         if (socket && typeof (socket as { destroy?: unknown }).destroy === 'function') {
           try {
@@ -195,8 +205,8 @@ export function registerConnectionEvents(
             logger.error('Failed to destroy stalled socket:', err);
           }
         }
-      }, 5_000).unref();
-    }, 30_000);
+      }, SOCKET_DESTROY_GRACE_MS).unref();
+    }, REGISTRATION_TIMEOUT_MS);
   };
 
   const onRegistered = (): void => {
@@ -271,14 +281,8 @@ export function registerConnectionEvents(
     // Drop per-session identity caches and the outgoing message queue on
     // every disconnect. The hook was previously tied to 'reconnecting',
     // but with auto_reconnect:false that event is never emitted.
-    //
-    // Attempt a bounded flush before clearing — the socket is already
-    // dropping but any queued mode/kick commands still land in the
-    // irc-framework send buffer. Most will evaporate with the socket,
-    // but the operator's intent is at least expressed rather than
-    // silently lost. See stability audit 2026-04-14.
     if (deps.messageQueue.flushWithDeadline) {
-      const drained = deps.messageQueue.flushWithDeadline(100);
+      const drained = deps.messageQueue.flushWithDeadline(DISCONNECT_FLUSH_DEADLINE_MS);
       if (drained > 0) {
         logger.debug(`Flushed ${drained} queued message(s) during disconnect`);
       }

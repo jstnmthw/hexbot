@@ -40,6 +40,12 @@ const RATES = {
 /** How long a quiet window must last to recharge energy (ms). */
 const QUIET_WINDOW_MS = 15 * 60_000;
 
+// Symmetric "noticeably low / noticeably high" cutoffs used by renderMoodLine.
+// Anything inside [LOW, HIGH] is considered neutral and produces no modifier
+// — keeps the system prompt quiet when nothing interesting is happening.
+const MOOD_LOW_THRESHOLD = 0.3;
+const MOOD_HIGH_THRESHOLD = 0.7;
+
 const DEFAULT_MOOD: BotMood = { energy: 0.7, engagement: 0.5, patience: 0.8, humor: 0.5 };
 
 /**
@@ -94,15 +100,15 @@ export class MoodEngine {
     this.applyTimeDrift();
     const parts: string[] = [];
 
-    if (this.mood.energy < 0.3) parts.push('low energy, keep it brief');
-    else if (this.mood.energy > 0.7) parts.push('feeling energetic');
+    if (this.mood.energy < MOOD_LOW_THRESHOLD) parts.push('low energy, keep it brief');
+    else if (this.mood.energy > MOOD_HIGH_THRESHOLD) parts.push('feeling energetic');
 
-    if (this.mood.engagement < 0.3) parts.push('not very engaged');
-    else if (this.mood.engagement > 0.7) parts.push('feeling social');
+    if (this.mood.engagement < MOOD_LOW_THRESHOLD) parts.push('not very engaged');
+    else if (this.mood.engagement > MOOD_HIGH_THRESHOLD) parts.push('feeling social');
 
-    if (this.mood.patience < 0.3) parts.push('getting impatient');
+    if (this.mood.patience < MOOD_LOW_THRESHOLD) parts.push('getting impatient');
 
-    if (this.mood.humor > 0.7) parts.push('in a funny mood');
+    if (this.mood.humor > MOOD_HIGH_THRESHOLD) parts.push('in a funny mood');
     else if (this.mood.humor < 0.2) parts.push('serious mood');
 
     if (parts.length === 0) return '';
@@ -117,7 +123,7 @@ export class MoodEngine {
     this.applyTimeDrift();
     // Low energy → fewer lines, high energy + humor → more lines
     const energyFactor = 0.5 + this.mood.energy; // 0.5-1.5
-    const humorBoost = this.mood.humor > 0.7 ? 1.1 : 1.0;
+    const humorBoost = this.mood.humor > MOOD_HIGH_THRESHOLD ? 1.1 : 1.0;
     return clamp(energyFactor * humorBoost, 0.5, 1.5);
   }
 

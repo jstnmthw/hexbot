@@ -25,6 +25,12 @@ const GETKEY_TIMEOUT_MS = 10_000;
  */
 const MAX_PENDING_GETKEY = 64;
 
+// Anope numeric access levels (default schema). These are Anope conventions,
+// not configurable. See header comment block for the full level map.
+const ANOPE_LEVEL_FOUNDER = 10_000;
+const ANOPE_LEVEL_SUPEROP = 10;
+const ANOPE_LEVEL_OP = 5;
+
 /**
  * Anope ChanServ backend.
  *
@@ -221,9 +227,9 @@ export class AnopeBackend extends ChanServBackendBase {
    * <5     → none (VOP=3, HOP=4 don't grant OP capabilities)
    */
   levelToTier(level: number): BackendAccess {
-    if (level >= 10000) return 'founder';
-    if (level >= 10) return 'superop';
-    if (level >= 5) return 'op';
+    if (level >= ANOPE_LEVEL_FOUNDER) return 'founder';
+    if (level >= ANOPE_LEVEL_SUPEROP) return 'superop';
+    if (level >= ANOPE_LEVEL_OP) return 'op';
     return 'none';
   }
 

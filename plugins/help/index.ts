@@ -30,6 +30,13 @@ function filterByPermission(
 /** Valid `reply_type` config values. */
 type ReplyType = 'notice' | 'privmsg' | 'channel_notice';
 
+const DEFAULT_COOLDOWN_MS = 30_000;
+
+// Triggers an inline sweep when the cooldown map grows past this size. Set
+// well above any realistic concurrent-user count so the sweep almost never
+// runs in normal operation.
+const COOLDOWN_MAP_SWEEP_THRESHOLD = 1000;
+
 export function init(api: PluginAPI): void {
   // Per-nick cooldown map scoped inside `init()` — see audit finding
   // W-SP3 (2026-04-14). A module-level Map gets pinned by the stale
@@ -37,7 +44,7 @@ export function init(api: PluginAPI): void {
   const cooldowns = new Map<string, number>();
 
   const rawCooldown = api.config.cooldown_ms;
-  const cooldownMs = typeof rawCooldown === 'number' ? rawCooldown : 30000;
+  const cooldownMs = typeof rawCooldown === 'number' ? rawCooldown : DEFAULT_COOLDOWN_MS;
   const rawReplyType = api.config.reply_type;
   const replyType: ReplyType =
     rawReplyType === 'privmsg' || rawReplyType === 'channel_notice' ? rawReplyType : 'notice';
@@ -126,9 +133,8 @@ export function init(api: PluginAPI): void {
     }
     // Inline sweep: cap map size and drop any entries past their cooldown
     // window so the set is bounded by recent activity, not all-time !help
-    // users. Threshold of 1000 is well above any realistic concurrent-user
-    // count so the sweep almost never runs in normal operation.
-    if (cooldowns.size > 1000) {
+    // users.
+    if (cooldowns.size > COOLDOWN_MAP_SWEEP_THRESHOLD) {
       for (const [k, t] of cooldowns) {
         if (now - t >= cooldownMs) cooldowns.delete(k);
       }

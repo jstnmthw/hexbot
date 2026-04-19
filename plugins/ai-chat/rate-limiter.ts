@@ -53,6 +53,15 @@ export interface RateLimiterInitialState {
   ambientGlobalWindow?: readonly number[];
 }
 
+// A bucket that has been at full capacity longer than this is indistinguishable
+// from a freshly created one — safe to evict so nick-rotation doesn't grow
+// `userBuckets` without bound.
+const STALE_BUCKET_IDLE_MS = 3_600_000;
+
+// Floor on map size before opportunistic eviction runs — prevents thrashing
+// in small deployments where the natural cardinality stays well below this.
+const EVICTION_MIN_BUCKETS = 64;
+
 /** Layered rate limiter: per-user token bucket + RPM + RPD + ambient budgets. All state is in-memory. */
 export class RateLimiter {
   private userBuckets = new Map<string, UserBucket>();
@@ -253,24 +262,21 @@ export class RateLimiter {
     if (earned <= 0) return;
     bucket.tokens = Math.min(this.config.userBurst, bucket.tokens + earned);
     bucket.lastRefill += earned * refillMs;
-    // Opportunistic eviction: a fully-refilled bucket that hasn't been touched
-    // in over an hour is indistinguishable from a fresh one — drop it so
-    // nick-rotation doesn't grow `userBuckets` forever.
-    // Trigger eviction only when the map is large (>64 buckets) AND the
-    // current bucket has been idle ≥1h AND is at full capacity. The size
+    // Opportunistic eviction: only when the map is large AND this bucket has
+    // been idle past STALE_BUCKET_IDLE_MS AND is at full capacity. The size
     // floor prevents thrashing in small deployments; the idle+full check
     // ensures we only evict buckets that look indistinguishable from fresh.
     if (
       bucket.tokens >= this.config.userBurst &&
-      now - bucket.lastRefill > 3_600_000 &&
-      this.userBuckets.size > 64
+      now - bucket.lastRefill > STALE_BUCKET_IDLE_MS &&
+      this.userBuckets.size > EVICTION_MIN_BUCKETS
     ) {
       this.evictStaleBuckets(now);
     }
   }
 
   private evictStaleBuckets(now: number): void {
-    const cutoff = now - 3_600_000;
+    const cutoff = now - STALE_BUCKET_IDLE_MS;
     for (const [key, b] of this.userBuckets) {
       if (b.lastRefill < cutoff && b.tokens >= this.config.userBurst) {
         this.userBuckets.delete(key);
