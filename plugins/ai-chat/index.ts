@@ -481,7 +481,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
     // Feed every non-bot channel message into the context buffer.
     const isBotMsg = ctx.nick.toLowerCase() === botNick().toLowerCase();
     if (!isBotMsg) {
-      contextManager!.addMessage(ctx.channel, ctx.nick, text, false);
+      contextManager?.addMessage(ctx.channel, ctx.nick, text, false);
     }
 
     // Compute the shouldRespond gate once — we use it both to decide whether
@@ -645,7 +645,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
       if (isIgnored(ctx.nick, hostmask, fullIgnore)) return;
 
       const text = truncateForBuffer(ctx.text);
-      contextManager!.addMessage(ctx.channel, ctx.nick, text, false);
+      contextManager?.addMessage(ctx.channel, ctx.nick, text, false);
 
       const args = truncateForBuffer(ctx.args).trim();
       await handleSubcommand(api, cfg, ctx, args);
@@ -717,7 +717,8 @@ const SUB_HANDLERS: Record<string, SubHandler> = {
   },
   stats: ({ ctx, hasAdmin }) => {
     if (!hasAdmin) return;
-    const total = tokenTracker!.getDailyTotal();
+    if (!tokenTracker) return;
+    const total = tokenTracker.getDailyTotal();
     ctx.reply(
       `Today: ${total.requests} requests, ${total.input + total.output} tokens ` +
         `(in:${total.input} out:${total.output})`,
@@ -725,8 +726,9 @@ const SUB_HANDLERS: Record<string, SubHandler> = {
   },
   iter: ({ ctx, subArgs, hasAdmin }) => {
     if (!hasAdmin) return;
+    if (!iterStats) return;
     if (subArgs === 'reset') {
-      iterStats!.reset();
+      iterStats.reset();
       ctx.reply('Iteration stats reset.');
       return;
     }
@@ -734,7 +736,7 @@ const SUB_HANDLERS: Record<string, SubHandler> = {
       ctx.reply('Usage: !ai iter [reset]');
       return;
     }
-    const s = iterStats!.snapshot();
+    const s = iterStats.snapshot();
     ctx.reply(
       `Since reset (${formatIterDuration(s.sinceMs)}): ${s.requests} requests, ` +
         `${s.input + s.output} tokens (in:${s.input} out:${s.output})`,
@@ -742,12 +744,13 @@ const SUB_HANDLERS: Record<string, SubHandler> = {
   },
   reset: ({ api, ctx, subArgs, hasOwner }) => {
     if (!hasOwner) return;
+    if (!tokenTracker) return;
     const target = subArgs;
     if (!target) {
       ctx.reply('Usage: !ai reset <nick>');
       return;
     }
-    tokenTracker!.resetUser(target);
+    tokenTracker.resetUser(target);
     ctx.reply(`Reset token usage for ${api.stripFormatting(target)}.`);
   },
   ignore: ({ api, ctx, subArgs, hasAdmin }) => {
@@ -789,7 +792,7 @@ const SUB_HANDLERS: Record<string, SubHandler> = {
   },
   clear: ({ ctx, hasAdmin }) => {
     if (!hasAdmin) return;
-    if (ctx.channel) contextManager!.clearContext(ctx.channel);
+    if (ctx.channel) contextManager?.clearContext(ctx.channel);
     ctx.reply('Channel context cleared.');
   },
   character: ({ api, cfg, ctx, subArgs, hasAdmin }) => {

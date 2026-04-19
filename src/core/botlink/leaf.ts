@@ -397,9 +397,11 @@ export class BotLinkLeaf {
       if (this.pendingProtect.resolve(String(frame.ref ?? ''), frame.success === true)) return;
     }
 
-    // Execute incoming CMD frames locally (from .bot command routed via hub)
-    if (frame.type === 'CMD' && this.cmdHandler) {
-      executeCmdFrame(frame, this.cmdHandler, this.cmdPermissions!, (ref, output) => {
+    // Execute incoming CMD frames locally (from .bot command routed via hub).
+    // `cmdHandler` and `cmdPermissions` are wired together by `setCommandRelay`,
+    // so checking both here keeps the non-null narrowing local and explicit.
+    if (frame.type === 'CMD' && this.cmdHandler && this.cmdPermissions) {
+      executeCmdFrame(frame, this.cmdHandler, this.cmdPermissions, (ref, output) => {
         this.send({ type: 'CMD_RESULT', ref, output });
       });
       return;

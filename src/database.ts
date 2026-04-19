@@ -344,14 +344,12 @@ export class BotDatabase {
    * or `null` when the write was skipped/degraded.
    */
   logModAction(options: LogModActionOptions): number | null {
-    this.ensureOpen();
-    return this.modLog!.logModAction(options);
+    return this.ensureModLog().logModAction(options);
   }
 
   /** Query the mod log with optional filters. */
   getModLog(filter?: ModLogFilter): ModLogEntry[] {
-    this.ensureOpen();
-    return this.modLog!.getModLog(filter);
+    return this.ensureModLog().getModLog(filter);
   }
 
   /**
@@ -360,14 +358,12 @@ export class BotDatabase {
    * new rows land mid-browse.
    */
   countModLog(filter?: ModLogFilter): number {
-    this.ensureOpen();
-    return this.modLog!.countModLog(filter);
+    return this.ensureModLog().countModLog(filter);
   }
 
   /** Fetch a single mod_log row by id, or null if missing. */
   getModLogById(id: number): ModLogEntry | null {
-    this.ensureOpen();
-    return this.modLog!.getModLogById(id);
+    return this.ensureModLog().getModLogById(id);
   }
 
   // ---------------------------------------------------------------------------
@@ -379,5 +375,13 @@ export class BotDatabase {
       throw new Error('[database] Database is not open. Call open() first.');
     }
     return this.db;
+  }
+
+  private ensureModLog(): ModLog {
+    this.ensureOpen();
+    if (!this.modLog) {
+      throw new Error('[database] ModLog is not initialized. Call open() first.');
+    }
+    return this.modLog;
   }
 }

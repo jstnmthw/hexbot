@@ -158,8 +158,8 @@ export function setupProtection(
           // Only retry if we're not in the channel yet
           if (!api.getChannel(channel)) {
             api.log(`Retry rejoin for ${channel} (first attempt may have failed due to ban)`);
-            if (chain!.canUnban(channel)) {
-              chain!.requestUnban(channel);
+            if (chain && chain.canUnban(channel)) {
+              chain.requestUnban(channel);
             }
             state.cycles.schedule(SERVICES_PROCESSING_MS, () => {
               api.join(channel, api.getChannelKey(channel));
