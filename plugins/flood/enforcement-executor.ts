@@ -49,6 +49,38 @@ const MAX_ACTIONS_PER_CHANNEL_WINDOW = 10;
 const CHANNEL_WINDOW_MS = 5_000;
 
 /**
+ * Minimum gap between offences that actually advances the escalation
+ * ladder. A long response that overflows the rate-limit threshold fires
+ * `check()=true` on every trailing message — without dedup, a single
+ * burst ticks warn→kick→tempban in the same second. Hits on the same key
+ * within this window update `lastSeen` but leave `count` alone, so one
+ * flood event = one strike regardless of how many lines it contained.
+ *
+ * Tuned to 2s (see incident 2026-04-19): tight enough that a deliberate
+ * re-flood after a kick escalates quickly, loose enough that a single
+ * chatbot response overflowing across ~1s of stream doesn't multi-count.
+ * Anything longer (5s, 10s) leaves too much room for a sustained flood
+ * to hide inside "one burst".
+ */
+const SAME_BURST_MS = 2_000;
+
+/**
+ * After a terminal action (kick or tempban) lands on a target, any
+ * follow-up kick/tempban for the same (channel, nick) pair inside this
+ * window is suppressed. Belt-and-braces for {@link SAME_BURST_MS} in
+ * {@link EnforcementExecutor.recordOffence}: if two different rate-limit
+ * kinds trip for the same target at nearly the same moment (msg + join,
+ * say), the redundant second KICK would otherwise race a +b and give an
+ * autorejoining client a window to beat the ban.
+ *
+ * Pinned equal to {@link SAME_BURST_MS}: any longer and a legitimate
+ * burst-to-burst escalation (e.g. kick at T=0, distinct tempban burst
+ * at T=2.5) would be suppressed as if the prior terminal action were
+ * still in flight.
+ */
+const TERMINAL_SUPPRESSION_MS = SAME_BURST_MS;
+
+/**
  * Given a flood hit, decide what action to take (warn/kick/tempban), run it,
  * and persist tempbans so they survive reloads. Also owns the per-channel
  * action-rate cap and the timed-ban lift sweep.
@@ -64,6 +96,13 @@ export class EnforcementExecutor {
    * line. See stability audit 2026-04-14.
    */
   private readonly channelActionRate = new Map<string, { windowStart: number; count: number }>();
+  /**
+   * Last-terminal-action timestamp per `${channel}:${nick}`. Used by
+   * {@link apply} to suppress a follow-up kick/tempban for the same
+   * target inside {@link TERMINAL_SUPPRESSION_MS}. Cleared on reload
+   * (via {@link clear}) and pruned on the periodic sweep.
+   */
+  private readonly recentTerminal = new Map<string, number>();
   /**
    * Fire-and-forget enforcement actions currently awaiting completion.
    * `teardown()` awaits all of them before the plugin unloads so a
@@ -83,6 +122,7 @@ export class EnforcementExecutor {
   clear(): void {
     this.offenceTracker.clear();
     this.channelActionRate.clear();
+    this.recentTerminal.clear();
   }
 
   /**
@@ -113,16 +153,31 @@ export class EnforcementExecutor {
         this.offenceTracker.delete(key);
       }
     }
+    for (const [key, ts] of this.recentTerminal) {
+      if (now - ts > TERMINAL_SUPPRESSION_MS) {
+        this.recentTerminal.delete(key);
+      }
+    }
   }
 
   /**
    * Record an offence against `key` and return the escalation action that
    * matches the current count (capped at the last entry in `actions`).
+   * Returns `null` when the hit falls inside {@link SAME_BURST_MS} of the
+   * last recorded hit — one flood burst is one strike, not one per line.
+   * Callers must skip `apply()` on a null return.
    */
-  recordOffence(key: string): string {
+  recordOffence(key: string): string | null {
     const now = Date.now();
     const entry = this.offenceTracker.get(key);
     if (entry && now - entry.lastSeen < this.cfg.offenceWindowMs) {
+      // Same-burst dedup: update lastSeen (keeps the burst fresh so a
+      // continuing flood doesn't age out mid-burst) but leave count alone
+      // so the escalation ladder only advances once per distinct burst.
+      if (now - entry.lastSeen < SAME_BURST_MS) {
+        entry.lastSeen = now;
+        return null;
+      }
       entry.count++;
       entry.lastSeen = now;
       return this.actionFor(entry.count - 1);
@@ -145,6 +200,24 @@ export class EnforcementExecutor {
   /** Apply the named action (warn/kick/tempban). Fire-and-forget errors are logged. */
   apply(action: string, channel: string, nick: string, reason: string): void {
     if (!this.botHasOps(channel)) return;
+    // Terminal-action suppression per (channel, nick): if we already
+    // kicked or tempbanned this target inside TERMINAL_SUPPRESSION_MS,
+    // drop any follow-up kick/tempban. Prevents a stray second KICK from
+    // racing the +b of a tempban (which would let an autorejoining
+    // target beat the ban). `warn` is never suppressed — it's harmless
+    // and the notice still conveys "you flooded". See incident 2026-04-19.
+    if (action === 'kick' || action === 'tempban') {
+      const targetKey = `${this.api.ircLower(channel)}:${this.api.ircLower(nick)}`;
+      const last = this.recentTerminal.get(targetKey);
+      const now = Date.now();
+      if (last !== undefined && now - last < TERMINAL_SUPPRESSION_MS) {
+        this.api.log(
+          `Flood suppression: dropping duplicate "${action}" for ${nick} in ${channel} (${now - last}ms after prior terminal action)`,
+        );
+        return;
+      }
+      this.recentTerminal.set(targetKey, now);
+    }
     // Per-channel rate cap. Drop excess actions (don't buffer) — the
     // offence tracker ensures repeat offenders are still escalated
     // on their next flood event, and dropping the tail is safer than

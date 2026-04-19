@@ -155,6 +155,8 @@ async function handleMsgFlood(ctx: ChannelHandlerContext): Promise<void> {
   const key = `msg:${stableKeyLower(hostmask)}@${stableKeyLower(channel)}`;
   if (!rateLimits.check('msg', key)) return;
   const action = enforcement.recordOffence(key);
+  // null = same-burst dedup swallowed this hit; one flood = one strike.
+  if (action === null) return;
   enforcement.apply(
     action,
     channel,
@@ -174,7 +176,12 @@ function handleJoinFlood(ctx: JoinContext): void {
   const key = `join:${stableKeyLower(hostmask)}`;
   if (!rateLimits.check('join', key)) return;
   const action = enforcement.recordOffence(key);
+  // Record the lockdown signal even when dedup suppresses the per-user
+  // action — lockdown tracks distinct hostmasks hitting the channel, not
+  // per-user escalation, and the same-burst rule shouldn't mask a real
+  // join-spam wave.
   lockdown.record(channel, hostmask);
+  if (action === null) return;
   enforcement.apply(
     action,
     channel,
@@ -194,7 +201,10 @@ function handlePartFlood(ctx: PartContext): void {
   const key = `part:${stableKeyLower(hostmask)}`;
   if (!rateLimits.check('part', key)) return;
   const action = enforcement.recordOffence(key);
+  // Same rationale as handleJoinFlood: lockdown is a channel-wide signal
+  // and shouldn't be gated by the per-user burst dedup.
   lockdown.record(channel, hostmask);
+  if (action === null) return;
   enforcement.apply(
     action,
     channel,
@@ -230,10 +240,15 @@ function handleNickFlood(ctx: NickContext): void {
   // apply the same action to every channel where the bot has ops — prior
   // behaviour broke after the first hit and left the spammer unopposed
   // elsewhere. See audit 2026-04-19.
-  let action: string | null = null;
+  //
+  // Three-state: `undefined` = not resolved yet (skip if no ops anywhere),
+  // `null` = same-burst dedup swallowed the hit (skip apply in every
+  // channel), `string` = the action to apply.
+  let action: string | null | undefined;
   for (const channel of api.botConfig.irc.channels) {
     if (!botHasOps(channel)) continue;
-    if (action === null) action = enforcement.recordOffence(key);
+    if (action === undefined) action = enforcement.recordOffence(key);
+    if (action === null) return;
     enforcement.apply(
       action,
       channel,

@@ -35,12 +35,22 @@ const cfg = {
 
 describe('EnforcementExecutor offenceTracker cap (C2)', () => {
   it('recordOffence returns the escalation action for the current count', () => {
-    const api = makeApi();
-    const ex = new EnforcementExecutor(api, cfg, () => true, vi.fn());
-    expect(ex.recordOffence('user1')).toBe('warn');
-    expect(ex.recordOffence('user1')).toBe('kick');
-    expect(ex.recordOffence('user1')).toBe('tempban');
-    expect(ex.recordOffence('user1')).toBe('tempban'); // capped at last action
+    // Fake timers so each recordOffence call lands outside the same-burst
+    // window — the ladder advances per burst, not per call.
+    vi.useFakeTimers();
+    try {
+      const api = makeApi();
+      const ex = new EnforcementExecutor(api, cfg, () => true, vi.fn());
+      expect(ex.recordOffence('user1')).toBe('warn');
+      vi.advanceTimersByTime(3_000);
+      expect(ex.recordOffence('user1')).toBe('kick');
+      vi.advanceTimersByTime(3_000);
+      expect(ex.recordOffence('user1')).toBe('tempban');
+      vi.advanceTimersByTime(3_000);
+      expect(ex.recordOffence('user1')).toBe('tempban'); // capped at last action
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('sweep drops entries past offenceWindowMs', () => {
@@ -67,6 +77,122 @@ describe('EnforcementExecutor offenceTracker cap (C2)', () => {
     ex.recordOffence('bob');
     ex.clear();
     expect(ex.recordOffence('alice')).toBe('warn');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Same-burst dedup + terminal suppression (incident 2026-04-19)
+// ---------------------------------------------------------------------------
+
+describe('EnforcementExecutor same-burst dedup', () => {
+  it('returns null for repeat hits inside the same-burst window', () => {
+    vi.useFakeTimers();
+    try {
+      const api = makeApi();
+      const ex = new EnforcementExecutor(api, cfg, () => true, vi.fn());
+      expect(ex.recordOffence('u')).toBe('warn');
+      // Same burst — ladder must not advance.
+      vi.advanceTimersByTime(200);
+      expect(ex.recordOffence('u')).toBeNull();
+      vi.advanceTimersByTime(500);
+      expect(ex.recordOffence('u')).toBeNull();
+      // After the burst window, the next hit advances to strike 2.
+      vi.advanceTimersByTime(3_000);
+      expect(ex.recordOffence('u')).toBe('kick');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the burst fresh so a continuous flood does not age out mid-burst', () => {
+    vi.useFakeTimers();
+    try {
+      const api = makeApi();
+      const ex = new EnforcementExecutor(api, cfg, () => true, vi.fn());
+      expect(ex.recordOffence('u')).toBe('warn');
+      // Drip hits just inside the same-burst window so lastSeen keeps
+      // refreshing. After 4 drips we're 4.8s past the original hit but
+      // still "same burst" from the tracker's POV — each drip lands
+      // inside SAME_BURST_MS of the previous lastSeen.
+      for (let i = 0; i < 4; i++) {
+        vi.advanceTimersByTime(1_200);
+        expect(ex.recordOffence('u')).toBeNull();
+      }
+      // Finally go quiet long enough to escape the burst, then re-flood.
+      vi.advanceTimersByTime(3_000);
+      expect(ex.recordOffence('u')).toBe('kick');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('EnforcementExecutor terminal suppression', () => {
+  it('drops a follow-up kick for the same target after a recent kick', async () => {
+    const api = makeApi();
+    const kick = vi.fn();
+    const ban = vi.fn();
+    const a = { ...api, kick, ban } as unknown as PluginAPI;
+    const ex = new EnforcementExecutor(a, cfg, () => true, vi.fn());
+    ex.apply('kick', '#x', 'alice', 'flood');
+    await ex.drainPending();
+    expect(kick).toHaveBeenCalledTimes(1);
+    // Second kick inside the suppression window — dropped with a log line.
+    ex.apply('kick', '#x', 'alice', 'flood');
+    await ex.drainPending();
+    expect(kick).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops a follow-up tempban after a recent kick (prevents +b race)', async () => {
+    const api = makeApi();
+    const kick = vi.fn();
+    const ban = vi.fn();
+    const getUserHostmask = vi.fn().mockReturnValue('alice!~u@host.example');
+    const a = { ...api, kick, ban, getUserHostmask } as unknown as PluginAPI;
+    const ex = new EnforcementExecutor(a, cfg, () => true, vi.fn());
+    ex.apply('kick', '#x', 'alice', 'flood');
+    await ex.drainPending();
+    expect(kick).toHaveBeenCalledTimes(1);
+    // The concerning case: a second rate-limit kind trips a tempban strike
+    // for the same target right after the kick. Suppression must block it,
+    // otherwise the extra KICK in the tempban path races the +b.
+    ex.apply('tempban', '#x', 'alice', 'flood');
+    await ex.drainPending();
+    expect(ban).not.toHaveBeenCalled();
+    expect(kick).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not suppress a warn after a kick (warns are harmless)', async () => {
+    const api = makeApi();
+    const notice = vi.fn();
+    const kick = vi.fn();
+    const a = { ...api, notice, kick } as unknown as PluginAPI;
+    const ex = new EnforcementExecutor(a, cfg, () => true, vi.fn());
+    ex.apply('kick', '#x', 'alice', 'flood');
+    await ex.drainPending();
+    ex.apply('warn', '#x', 'alice', 'flood');
+    await ex.drainPending();
+    expect(notice).toHaveBeenCalledWith('alice', expect.stringContaining('flood'));
+  });
+
+  it('releases suppression after the window elapses', async () => {
+    vi.useFakeTimers();
+    try {
+      const api = makeApi();
+      const kick = vi.fn();
+      const a = { ...api, kick } as unknown as PluginAPI;
+      const ex = new EnforcementExecutor(a, cfg, () => true, vi.fn());
+      ex.apply('kick', '#x', 'alice', 'flood');
+      await vi.runAllTimersAsync();
+      expect(kick).toHaveBeenCalledTimes(1);
+      // Past the suppression window — a genuinely new event can land.
+      vi.advanceTimersByTime(3_000);
+      ex.apply('kick', '#x', 'alice', 'flood');
+      await vi.runAllTimersAsync();
+      expect(kick).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

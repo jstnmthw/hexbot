@@ -78,16 +78,56 @@ describe('flood plugin — message flood', () => {
   });
 
   it('kicks on second flood offence', async () => {
-    // First flood already recorded from previous test — send another burst
-    for (let i = 0; i < 4; i++) {
-      simulatePrivmsg(bot, 'FloodUser', 'bad', 'bad.host', '#test', `burst2 msg ${i}`);
+    // Two distinct bursts must be separated by > SAME_BURST_MS (2s) so the
+    // escalation ladder advances — within the burst window a sustained
+    // flood is one strike, not many. Use a fresh nick so this test is
+    // independent of the prior one's sliding-window + offence state.
+    vi.useFakeTimers();
+    try {
+      // Burst 1 → warn
+      for (let i = 0; i < 4; i++) {
+        simulatePrivmsg(bot, 'BurstUser', 'bu', 'bu.host', '#test', `b1 ${i}`);
+      }
+      await flush();
+      bot.client.clearMessages();
+      // Skip past the same-burst window so burst 2 is a distinct event.
+      vi.advanceTimersByTime(3_000);
+      // Burst 2 → kick
+      for (let i = 0; i < 4; i++) {
+        simulatePrivmsg(bot, 'BurstUser', 'bu', 'bu.host', '#test', `b2 ${i}`);
+      }
+      await flush();
+      expect(
+        bot.client.messages.find(
+          (m) =>
+            m.type === 'raw' && m.message?.includes('KICK') && m.message?.includes('BurstUser'),
+        ),
+      ).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('treats a sustained burst as one strike, not many', async () => {
+    // Regression test for incident 2026-04-19: a long chatbot response
+    // triggered warn+kick+tempban in ~1s because every line past the
+    // threshold counted as a separate strike. With same-burst dedup the
+    // sustained burst should escalate by at most one strike.
+    for (let i = 0; i < 20; i++) {
+      simulatePrivmsg(bot, 'LongReply', 'lr', 'lr.host', '#test', `line ${i}`);
     }
     await flush();
-    expect(
-      bot.client.messages.find(
-        (m) => m.type === 'raw' && m.message?.includes('KICK') && m.message?.includes('FloodUser'),
-      ),
-    ).toBeDefined();
+    const kicks = bot.client.messages.filter(
+      (m) => m.type === 'raw' && m.message?.includes('KICK') && m.message?.includes('LongReply'),
+    );
+    const bans = bot.client.messages.filter(
+      (m) => m.type === 'raw' && m.message?.includes('MODE') && m.message?.includes('+b'),
+    );
+    // At most one kick, no tempban. Which specific strike lands depends on
+    // whatever prior state the shared bot has built up, so the assertion
+    // is "did NOT escalate through multiple strikes in one burst".
+    expect(kicks.length).toBeLessThanOrEqual(1);
+    expect(bans.length).toBe(0);
   });
 
   it('does nothing when bot has no ops', async () => {
