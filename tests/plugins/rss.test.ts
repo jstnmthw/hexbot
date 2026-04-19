@@ -561,6 +561,39 @@ describe('rss plugin — integration', () => {
     expect(api._says.length).toBe(2);
   });
 
+  it('does not silently absorb new items on reload', async () => {
+    // First boot: silent seed marks current items as seen.
+    await init(api);
+    expect(db.list('rss', 'rss:seen:testfeed:').length).toBe(3);
+
+    // Simulate a plugin reload: teardown, then init again with an extra
+    // item the feed published between boots. The previous behaviour was
+    // to re-run silent seed on every init, which would mark `between`
+    // seen without announcing it — the regression this test pins.
+    teardown();
+    const betweenItem = {
+      guid: 'guid-between',
+      title: 'Published Between Boots',
+      link: 'https://example.com/between',
+    };
+    mockParseURL.mockResolvedValue({ items: [...SAMPLE_ITEMS, betweenItem] });
+    api = makeMockAPI(db, BASE_CONFIG);
+    await init(api);
+
+    // The new item must NOT have been silently marked seen.
+    expect(db.list('rss', 'rss:seen:testfeed:').length).toBe(3);
+    expect(api._says).toHaveLength(0);
+
+    // Force the interval elapsed and fire the tick — the item should
+    // now announce on the first scheduled poll.
+    db.set('rss', 'rss:last_poll:testfeed', new Date(Date.now() - 400_000).toISOString());
+    await api._fireTime('60');
+
+    expect(db.list('rss', 'rss:seen:testfeed:').length).toBe(4);
+    expect(api._says.length).toBe(1);
+    expect(api._says[0].message).toContain('Published Between Boots');
+  });
+
   it('announces to multiple channels when configured', async () => {
     const multiCfg = {
       ...BASE_CONFIG,

@@ -112,8 +112,15 @@ export async function init(api: PluginAPI): Promise<void> {
 
   const fetchOpts = fetchOptsFor(cfg);
 
-  // Silent first-run seeding: mark all existing items as seen without announcing
+  // Silent first-run seeding: mark all existing items as seen without announcing.
+  // Gated on `getLastPoll === 0` (feed has never been polled) so a restart
+  // doesn't silently absorb items that were published between boots and
+  // doesn't re-stamp lastPoll to now (which would defer the next announce
+  // poll by a full interval). Previously-announced items are already
+  // filtered by the `hasSeen` dedup check in pollFeed, so we don't need
+  // another pass here to prevent replay on reload.
   for (const feed of activeFeeds.values()) {
+    if (getLastPoll(api, feed.id) > 0) continue;
     try {
       await pollFeed(api, parser, feed, 'silent', cfg.max_per_poll, fetchOpts);
     } catch (err) {
@@ -143,9 +150,12 @@ export async function init(api: PluginAPI): Promise<void> {
       if (circuitBreaker.isOpen(feed.id, now)) continue;
 
       activePolls.add(feed.id);
+      const startMs = Date.now();
       try {
         const items = await pollFeed(api, parser, feed, 'announce', cfg.max_per_poll, fetchOpts);
         circuitBreaker.recordSuccess(feed.id);
+        const elapsed = Date.now() - startMs;
+        api.log(`Polled "${feed.id}" — ${items.length} new item(s) in ${elapsed}ms`);
         if (items.length > 0) {
           await announceItems(api, feed, items, cfg.max_title_length, abortController?.signal);
         }
