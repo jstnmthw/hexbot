@@ -16,7 +16,7 @@ Three distinct issues explain everything in the transcript: (1) the "dark" fabri
 
 **Biggest win available:** upgrade the Ollama model from `llama3.2:3b-instruct-q4_K_M` to `llama3.1:8b-instruct-q4_K_M` (or `llama3:8b-instruct-q4_K_M`). That single change (a) auto-lifts `modelClass` to `medium` which un-gates ambient, (b) ~2-3× improves lore-attribution accuracy, (c) reduces reflexive-nick opening because 8B follows SAFETY_CLAUSE rule 3 more reliably. Expected latency cost on a NUC 13 ANH (CPU-only, i7-1360P): ~10s median → ~25s median. For a recruitment-archetype character that's the right trade.
 
-**Findings:** 4 high, 3 medium, 2 suggestion
+**Findings:** 4 high, 3 medium, 1 suggestion
 
 ## Phase 1 — High priority (immediate fixes + the single model upgrade)
 
@@ -34,7 +34,7 @@ Three distinct issues explain everything in the transcript: (1) the "dark" fabri
       **Why:** "You are Neo" + "explain Matrix lore" is incoherent for a small model. Telling Neo his own life is "lore" is like telling an actor to describe their own memories in the third person — the path of least resistance is to talk about Neo-the-character instead of being Neo.
       **Fix (applied):** (a) persona body rewritten — "willingly explain, debate, and philosophise about Matrix lore, consciousness, machines, AI, choice, and the war" replaced with concrete personal-memory anchors ("the pod, the training, the crew of the Nebuchadnezzar, Morpheus and Trinity, the Oracle, the Architect, the war, the choices that brought you here"). (b) `style.notes[4]` — "lore questions get real answers" replaced with "when someone asks about any of that, answer from what you've lived and been shown, not like someone describing a film". (c) new `style.notes[1]` inserted directly after the anti-AI-assistant anchor: `"The One, Neo, and Thomas Anderson are you — not characters you read about. when someone talks about what Neo did, what The One can do, or what Thomas Anderson chose, they are talking about YOU. answer from inside the memory, in first person — never describe yourself in the third person, never narrate your own life as if it happened to someone else"`. Small models still may slip occasionally; combine with the model upgrade below for the best result.
 
-- [ ] **`config/plugins.json` (ai-chat model) — upgrade from `llama3.2:3b-instruct-q4_K_M` to `llama3.1:8b-instruct-q4_K_M`** — `references/self-hosting.md` explicitly lists `llama3.2:3b` as acceptable for "minimal / deadpan" archetypes only, and calls out lore-heavy characters (Neo specifically) as needing 8B or newer for correct name recall. The Morpheus-as-Oracle misattribution in the 17:51:18 reply is the canonical failure mode — a 3B model doesn't have the retention to keep "who said what" straight across the trilogy. Upgrading to 8B is the single highest-leverage change for both (a) coherence / "is this a 5/10 or 8/10 replies" axis and (b) un-gating ambient (see next finding).
+- [x] **`config/plugins.json` (ai-chat model) — upgrade from `llama3.2:3b-instruct-q4_K_M` to `llama3.1:8b-instruct-q4_K_M`** — `references/self-hosting.md` explicitly lists `llama3.2:3b` as acceptable for "minimal / deadpan" archetypes only, and calls out lore-heavy characters (Neo specifically) as needing 8B or newer for correct name recall. The Morpheus-as-Oracle misattribution in the 17:51:18 reply is the canonical failure mode — a 3B model doesn't have the retention to keep "who said what" straight across the trilogy. Upgrading to 8B is the single highest-leverage change for both (a) coherence / "is this a 5/10 or 8/10 replies" axis and (b) un-gating ambient (see next finding).
       **Why:** 3B Q4 has ~1.6B effective parameters after quantisation. The Matrix trilogy's dense internal lore (Morpheus, Oracle, Trinity, Smith, Architect, Zion, Nebuchadnezzar, The One, red/blue pill, "there is no spoon", "follow the white rabbit" — multiple characters saying thematically-similar lines) is well above what a 3B can attribute reliably. 8B doesn't fix lore recall completely, but it measurably helps and is what the `self-hosting.md` reference points to specifically for this archetype.
       **Fix:** in `config/plugins.json`, change:
 
@@ -73,7 +73,7 @@ Three distinct issues explain everything in the transcript: (1) the "dark" fabri
 
 ## Phase 2 — Medium priority (tune for the new 8B deployment)
 
-- [ ] **`config/plugins.json` — add `context.max_tokens: 2000`** — currently unset, so it resolves to the small-tier default of `1000` tokens. That's a tight ceiling for Neo's 20-message context cap and leaves no headroom for lore-heavy multi-turn debates. After the 8B upgrade the resolved default will be `2000` (medium tier), so this becomes a no-op — but setting it explicitly now means the config doesn't shift behaviour silently when you change the model tag.
+- [x] **`config/plugins.json` — add `context.max_tokens: 2000`** — currently unset, so it resolves to the small-tier default of `1000` tokens. That's a tight ceiling for Neo's 20-message context cap and leaves no headroom for lore-heavy multi-turn debates. After the 8B upgrade the resolved default will be `2000` (medium tier), so this becomes a no-op — but setting it explicitly now means the config doesn't shift behaviour silently when you change the model tag.
       **Why:** the byte-budget enforcement in `context-manager.ts:118` (`maxBytes = maxTokens * 4`) silently evicts oldest entries when cumulative bytes exceed the budget. On small-tier 1000 tokens = 4000 chars, which a 20-message Matrix debate will blow through in minutes.
       **Fix:** add to the plugins.json `config` block:
 
@@ -110,8 +110,6 @@ Three distinct issues explain everything in the transcript: (1) the "dark" fabri
       **Why:** `code` is one of the hottest false-positive keywords on a technical channel. The `avoids: ["programming"]` entry only steers _content_ away; the `triggers` list steers _when to reply_ toward it.
       **Fix:** in `triggers`, replace `"code"` with `"the code"` and `"Matrix code"`. Consider also dropping bare `"real"` if it's still there (prior audit flagged; confirm it isn't).
 
-- [ ] **Rate limits are fine but `global_rpd: 1000000` signals the operator is running "effectively uncapped"** — that's correct for local Ollama (no external quota), but it also means a future bug in the loop-breaker or a persistent prompt-injection could burn CPU cycles indefinitely. Not a persona-audit finding per se — just noting it. Consider dropping to something like `100000` (still far beyond any realistic single-day Neo usage). Leave it if the operator is confident in the circuit breaker.
-
 ## What looks good (do not change)
 
 - **`persona` body** — the 2026-04-19 rewrite is still strong. Directive framing, `{nick}`/`{channel}`/`{network}` placeholders, in-narrative close about "never admit the Matrix is fiction." Keep verbatim.
@@ -122,7 +120,7 @@ Three distinct issues explain everything in the transcript: (1) the "dark" fabri
 - **`generation.repeatPenalty: 1.2`** — correct for Neo's short catchphrase list on llama3-family. Keep when you move to 8B (the medium tier default is `1.1`, but Neo specifically benefits from the harder penalty given the catchphrase count; override with `generation.repeatPenalty: 1.2` on the character so it rides the model swap).
 - **`generation.maxOutputTokens: 220`** and **`maxContextMessages: 20`** — prior audit's numbers; fine for 8B. No change.
 - **`avoids: ["weather", "sports", "tech support", "programming"]`** — right-sized after the prior audit's trim.
-- **`rate_limits` shape** — `user_burst: 5`, `user_refill_seconds: 6`, `global_rpm: 120`, `rpm_backpressure_pct: 80` — all appropriate for local Ollama. Leave alone.
+- **`rate_limits` shape** — `user_burst: 5`, `user_refill_seconds: 6`, `global_rpm: 120`, `rpm_backpressure_pct: 80`, `global_rpd: 1000000` — all appropriate for local Ollama. `global_rpd` at 1M is effectively a "no external quota" sentinel; the binding defensive cap for abuse is `per_user_daily: 50000` tokens (~47 Neo replies/user/day), with `global_daily: 10000000` tokens as the admin-bypass backstop. Don't lower `global_rpd`; token budgets already bite first in every abuse scenario.
 - **`output.max_lines: 2`** — this is an explicit override of the small-tier default of 1. Correct for Neo's "sometimes a short paragraph when asked" profile. Keep after the 8B upgrade too — the medium tier default is 4, but 2 lines is what Neo should target.
 
 ## Tuning cheat-sheet

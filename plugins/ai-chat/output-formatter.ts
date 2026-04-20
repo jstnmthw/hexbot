@@ -116,15 +116,27 @@ function collapseWhitespace(line: string): string {
  * hyphen) AND the next line does not start with a list marker (`-`, `*`,
  * `1.`) or a fantasy-command prefix (`.`, `!`, `/`, `~`, `@`, `%`, `$`,
  * `&`, `+`). Lines ending in sentence terminators (`.`, `!`, `?`, `:`,
- * `...`, close-quote/paren) are kept as breaks. The fantasy-prefix exclusion
- * preserves the per-line drop in `formatResponse` — merging across into a
- * "safe-prefix" line would otherwise smuggle a `.deop` past it. The input
- * is NFKC-normalised in `formatResponse` before this runs, so fullwidth
- * compat forms (`．`, `！`, `／`) fold to ASCII and are caught by the
- * lookahead too.
+ * close-quote/paren) are kept as breaks.
+ *
+ * Exception: `...` (ellipsis) is treated as a continuation marker when the
+ * next line starts with a lowercase letter. LLMs routinely emit `...\n` at
+ * the end of a dramatic pause mid-thought; the trailing `.` would otherwise
+ * block the merge and leave the next fragment as its own IRC line.
+ *
+ * The fantasy-prefix exclusion preserves the per-line drop in
+ * `formatResponse` — merging across into a "safe-prefix" line would
+ * otherwise smuggle a `.deop` past it. The input is NFKC-normalised in
+ * `formatResponse` before this runs, so fullwidth compat forms (`．`, `！`,
+ * `／`) fold to ASCII and are caught by the lookahead too.
  */
 function joinSoftWraps(text: string): string {
-  return text.replace(/([\p{L}\p{N},'’-])[ \t]*\n(?!\s*[-*.!/~@%$&+]|\s*\d+\.)/gu, '$1 ');
+  // Standard continuation: line ends with letter/digit/comma/apostrophe/hyphen.
+  let out = text.replace(/([\p{L}\p{N},’’-])[ \t]*\n(?!\s*[-*.!/~@%$&+]|\s*\d+\.)/gu, '$1 ');
+  // Ellipsis continuation: "...\n" followed by a lowercase letter is a
+  // mid-thought soft-wrap, not a sentence break. The negative lookahead
+  // still blocks fantasy-command prefixes.
+  out = out.replace(/\.\.\.[ \t]*\n(?=[a-z])(?!\s*[-*.!/~@%$&+]|\s*\d+\.)/gu, '... ');
+  return out;
 }
 
 /**
@@ -190,13 +202,21 @@ function splitLongLine(line: string, maxByteLen: number): string[] {
       continue;
     }
     const chunk = remaining.substring(0, cut);
-    // Even at a found break, the chunk could exceed the byte cap when
-    // multibyte chars sit between the break and the line start. Re-cap by
-    // bytes in that case rather than emitting an over-budget line.
+    // Even at a found break, the chunk could exceed the byte cap when the
+    // sentence boundary landed between byte 440 and 444, or when multibyte
+    // chars sit between the break and the line start. Fall back to the last
+    // space within the byte cap rather than hard-cutting mid-word.
     if (utf8ByteLen(chunk) > maxByteLen) {
-      const { head, tail } = sliceByBytes(remaining, maxByteLen);
-      out.push(head.trimEnd());
-      remaining = tail.trimStart();
+      const { head: capWindow } = sliceByBytes(remaining, maxByteLen);
+      const wordCut = capWindow.lastIndexOf(' ');
+      if (wordCut > 0) {
+        out.push(capWindow.substring(0, wordCut).trimEnd());
+        remaining = remaining.substring(wordCut).trimStart();
+      } else {
+        // Genuinely no space within the cap (e.g. a single very long token).
+        out.push(capWindow.trimEnd());
+        remaining = remaining.substring(capWindow.length).trimStart();
+      }
       continue;
     }
     out.push(chunk.trimEnd());
