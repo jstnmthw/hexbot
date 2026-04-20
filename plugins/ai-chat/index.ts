@@ -405,6 +405,19 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
   if (merged.ambientEngine !== undefined) {
     ambientEngine = merged.ambientEngine;
   } else if (cfg.ambient.enabled) {
+    // Small models tend to ramble, echo the prompt, fabricate speakers, and
+    // parrot catchphrase lists when speaking unprompted — every small-tier
+    // pathology is amplified on an unprompted utterance. Warn loudly so the
+    // operator knows the risk, but honour the explicit config.
+    if (cfg.modelClass === 'small') {
+      api.warn(
+        `ambient.enabled=true on modelClass=small (model=${cfg.model}). Small ` +
+          `models tend to ramble, echo prompts, and fabricate speakers when ` +
+          `speaking unprompted. Upgrade to a 7B+ model (e.g. ` +
+          `llama3.1:8b-instruct-q4_K_M) if ambient output looks off. ` +
+          `Proceeding per explicit config.`,
+      );
+    }
     ambientEngine = new AmbientEngine(cfg.ambient, socialTracker, Date.now, (msg) => api.warn(msg));
   }
   if (ambientEngine && cfg.ambient.enabled) {

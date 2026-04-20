@@ -317,14 +317,8 @@ export function parseConfig(
       const idle = asRecord(ambient.idle);
       const uq = asRecord(ambient.unanswered_questions);
       const er = asRecord(ambient.event_reactions);
-      // Small models can't ad-lib coherently. Force-disable ambient on the
-      // small tier regardless of operator intent — an unprompted small-model
-      // utterance during a noisy channel amplifies every pathology (echoes
-      // the prompt, fabricates speakers, rambles from the lore catalogue).
-      const enabledRaw = asBool(ambient.enabled, false);
-      const enabled = modelClass === 'small' ? false : enabledRaw;
       return {
-        enabled,
+        enabled: asBool(ambient.enabled, false),
         idle: {
           afterMinutes: asNum(idle.after_minutes, 15),
           chance: asNum(idle.chance, 0.3),

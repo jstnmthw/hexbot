@@ -98,7 +98,7 @@ Ollama keeps every prompt and response on your own hardware. No API key, no per-
    }
    ```
 
-   The plugin auto-infers `model_class: "medium"` from `llama3.2:3b-instruct-q4_K_M`? No — `3b` belongs to the `small` tier. The resolved defaults (below) then fill in leak-defence presets: single-line output, `80` max tokens, `repeat_penalty: 1.2`, stop sequences, inline `nick:` prefix stripped from history, ambient forced off. Override any field explicitly in config and the tier stays out of your way.
+   The plugin auto-infers `model_class: "medium"` from `llama3.2:3b-instruct-q4_K_M`? No — `3b` belongs to the `small` tier. The resolved defaults (below) then fill in leak-defence presets: single-line output, `80` max tokens, `repeat_penalty: 1.2`, stop sequences, inline `nick:` prefix stripped from history. `ambient.enabled` still defaults to `false` like every other tier — if you set it `true` on `small`, it's honoured but the plugin logs a warning at init pointing at the known small-model pathologies (ramble, prompt echo, speaker fabrication). Override any field explicitly in config and the tier stays out of your way.
 
 3. Because local inference has no external quota but is latency-bound, raise the rate-limit ceilings so one slow reply doesn't drain the per-user bucket:
 
@@ -335,23 +335,22 @@ Defaults live in `config.json` in this directory. Override per-channel or global
 
 **Resolved defaults by tier:**
 
-| Key                                 | small        | medium          | large   |
-| ----------------------------------- | ------------ | --------------- | ------- |
-| `context.max_messages`              | 5            | 25              | 50      |
-| `context.max_tokens`                | 1000         | 2000            | 4000    |
-| `output.max_lines`                  | 1            | 4               | 4       |
-| `output.prompt_leak_threshold`      | 60           | 80              | 100     |
-| `max_output_tokens`                 | 80           | 256             | 512     |
-| `temperature`                       | 0.7          | 0.8             | 0.9     |
-| `ollama.repeat_penalty`             | 1.20         | 1.10            | unset   |
-| `ollama.repeat_last_n`              | 64           | 64              | unset   |
-| `ollama.num_ctx`                    | 4096         | 8192            | 8192    |
-| `ollama.stop[]`                     | full list    | EOS + H2 header | unset   |
-| `ambient.enabled` ceiling           | forced false | honored         | honored |
-| `engagement.soft_timeout_minutes`   | 2            | 10              | 10      |
-| `engagement.hard_ceiling_minutes`   | 5            | 30              | 30      |
-| `drop_inline_nick_prefix` (history) | on           | off             | off     |
-| `defensive_volatile_header`         | on           | off             | off     |
+| Key                                 | small     | medium          | large |
+| ----------------------------------- | --------- | --------------- | ----- |
+| `context.max_messages`              | 5         | 25              | 50    |
+| `context.max_tokens`                | 1000      | 2000            | 4000  |
+| `output.max_lines`                  | 1         | 4               | 4     |
+| `output.prompt_leak_threshold`      | 60        | 80              | 100   |
+| `max_output_tokens`                 | 80        | 256             | 512   |
+| `temperature`                       | 0.7       | 0.8             | 0.9   |
+| `ollama.repeat_penalty`             | 1.20      | 1.10            | unset |
+| `ollama.repeat_last_n`              | 64        | 64              | unset |
+| `ollama.num_ctx`                    | 4096      | 8192            | 8192  |
+| `ollama.stop[]`                     | full list | EOS + H2 header | unset |
+| `engagement.soft_timeout_minutes`   | 2         | 10              | 10    |
+| `engagement.hard_ceiling_minutes`   | 5         | 30              | 30    |
+| `drop_inline_nick_prefix` (history) | on        | off             | off   |
+| `defensive_volatile_header`         | on        | off             | off   |
 
 On the `small` tier the plugin hardens the prompt path against small-model pathologies (prompt echo, speaker fabrication, ambient ramble) without you having to learn each knob. On `large` the defaults stay open since hosted APIs don't leak.
 

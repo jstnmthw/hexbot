@@ -541,11 +541,18 @@ describe('parseConfig model_class', () => {
     expect(cfg.defensiveVolatileHeader).toBe(false);
   });
 
-  it('ambient.enabled is force-disabled on the small tier even when operator sets true', () => {
+  it('ambient.enabled honours operator intent on the small tier (warn is emitted at init, not here)', () => {
     const cfg = parseConfig({
       model: 'llama3.2:3b-instruct-q4_K_M',
       ambient: { enabled: true },
     });
+    expect(cfg.modelClass).toBe('small');
+    expect(cfg.ambient.enabled).toBe(true);
+  });
+
+  it('ambient.enabled default remains false on the small tier when unset', () => {
+    const cfg = parseConfig({ model: 'llama3.2:3b-instruct-q4_K_M' });
+    expect(cfg.modelClass).toBe('small');
     expect(cfg.ambient.enabled).toBe(false);
   });
 
