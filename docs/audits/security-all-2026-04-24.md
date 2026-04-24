@@ -19,7 +19,12 @@ No finding is exploitable on the currently-deployed single-bot topology over a T
 
 Batches 2, 3, 4, 5 landed in one pass — 39 checkbox items ticked `[x]` below (2 of the 4 CRITICALs, the 4 downgraded CRITICAL/WARNINGs, and the majority of chanmod / plugin-API / defence-in-depth / plugin-polish WARNINGs and a handful of INFOs). Batch 1 (botlink handshake rewrite + BSAY fromHandle + per-frame rate limits + `listen.host` default + RELAY_REQUEST hub gate) is scoped into a dedicated plan at `docs/plans/botlink-handshake-v2.md` — implementation deferred to a follow-up /build on that plan.
 
-**Follow-up refinement (2026-04-24, post-build):** the services-unavailable branch of `grantMode()` originally fell through to hostmask-only with no floor — raised during review as still-permissive on services-free networks. Tightened to require `patternSpecificity(matchedHostmask) >= 100` (the project-wide `WEAK_HOSTMASK_THRESHOLD`) before granting. Weak masks like `nick!*@*` are refused with a loud `api.warn()`; `nick!ident@stable.cloak.example` clears. Also lifted IRCv3 account-tag `$a:` matching out of the services-available conditional — an account match is authoritative regardless of `services.type`. New `api.util.patternSpecificity()` helper added to the plugin API for this. Tests cover both weak-refuse and specific-allow on the services-free path. Post-refinement: 3853/3853.
+**Follow-up refinement (2026-04-24, post-build):** the services-unavailable branch of `grantMode()` originally fell through to hostmask-only with no floor — raised during review as still-permissive on services-free networks. Tightened in two rounds:
+
+1. Require `patternSpecificity(matchedHostmask) >= 100` on the services-unavailable path; lift IRCv3 `$a:` account-tag matching out of the services-available conditional (authoritative regardless of `services.type`); expose `api.util.patternSpecificity()` on the plugin API.
+2. Extend the specificity floor to **every** grant path that isn't an `$a:` account-tag match — services-available + weak mask + identified is now refused too. Rationale: `verifyUser`/account-tag proves "someone legitimate holds this nick," but on a record with only weak masks the hostmask alone isn't strong enough to bind that identity to the record. Belt-and-suspenders with the `auditWeakHostmasks()` startup sweep. Records should pin either a strong hostmask (`alice!ident@stable.cloak`) or an account pattern (`$a:AliceAcct`) — weak masks are no longer eligible for auto-op regardless of services availability.
+
+Tests cover weak-refuse and specific-allow paths. Post-refinement: 3853/3853.
 
 ---
 
