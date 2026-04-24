@@ -30,6 +30,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Branch `feature/ai-chat-plugin` — expands the ai-chat plugin substantially beyond the one-line mention under 0.3.0. Pending merge into `main`.
 
+### Removed
+
+- **`ollama.allow_private_url` config key and SSRF guard removed** (`plugins/ai-chat/providers/ollama.ts`): the guard validated the operator-configured `base_url` against a private-IP blocklist before connecting to Ollama. Because ai-chat is text-only (no user-supplied image URLs), there is no user-controlled fetch path — the SSRF threat model requires a path from untrusted input to an outbound HTTP request, which doesn't exist here. Operators running a local Ollama daemon no longer need to set `allow_private_url: true`; the key is silently ignored if present in existing configs. The RSS plugin's URL validator (`plugins/rss/url-validator.ts`) remains in place — that guard covers a real surface (operator-supplied feed URLs from IRC).
+
 ### Added
 
 - **Bounded retry for channel join failures** (`src/core/channel-presence-checker.ts`, `src/core/connection-lifecycle.ts`): channels that failed JOIN with a permanent-error numeric (+b/+i/+k/+r) are no longer stuck until reconnect. The presence check now walks a configurable backoff schedule — default `[5min, 15min, 45min]` — and retries JOIN at each tier. Recovers automatically from time-limited flood bans without operator intervention. Configurable via `channel_retry_schedule_ms` in `bot.json`; set to `[]` to restore the previous permanent-failure-until-reconnect behavior. Complements the chanmod plugin's ChanServ-mediated recovery for bots without channel access.

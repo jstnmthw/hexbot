@@ -72,14 +72,6 @@ export interface AIProviderConfig {
    * Ollama pick.
    */
   numCtx?: number;
-  /**
-   * Ollama-only: allow `base_url` to point at loopback/link-local/private
-   * addresses. Defaults to `false` — a misconfigured or config-write-attacker
-   * base_url otherwise routes bot requests at cloud-metadata endpoints
-   * (`169.254.169.254`) or internal admin panels. Operators running Ollama
-   * on localhost must opt in explicitly. See audit 2026-04-19.
-   */
-  allowPrivateUrl?: boolean;
 }
 
 /**

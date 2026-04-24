@@ -429,7 +429,6 @@ describe('shouldRespond logic', () => {
       useServerTokenizer: false,
       keepAlive: '30m',
       numCtx: 4096,
-      allowPrivateUrl: false,
       repeatPenalty: 0,
       repeatLastN: 0,
       stop: [],

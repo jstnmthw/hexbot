@@ -56,10 +56,6 @@ async function makeProvider(overrides: Partial<Parameters<OllamaProvider['initia
     maxOutputTokens: 128,
     temperature: 0.7,
     requestTimeoutMs: 30_000,
-    // Tests run against 127.0.0.1 so the SSRF guard would reject them
-    // without this opt-in. Real deployments set ollama.allow_private_url
-    // explicitly via plugin config.
-    allowPrivateUrl: true,
     ...overrides,
   });
   return provider;
@@ -81,7 +77,6 @@ describe('OllamaProvider.initialize', () => {
       model: 'llama3',
       maxOutputTokens: 64,
       temperature: 0.6,
-      allowPrivateUrl: true,
     });
     expect(provider.getModelName()).toBe('llama3');
     // Subsequent call will use the stripped base URL.
@@ -102,7 +97,6 @@ describe('OllamaProvider.initialize', () => {
       model: 'llama3',
       maxOutputTokens: 64,
       temperature: 0.6,
-      allowPrivateUrl: true,
     });
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
@@ -120,93 +114,8 @@ describe('OllamaProvider.initialize', () => {
         model: 'llama3',
         maxOutputTokens: 64,
         temperature: 0.6,
-        allowPrivateUrl: true,
       }),
     ).rejects.toMatchObject({ kind: 'network' });
-  });
-
-  // -------------------------------------------------------------------------
-  // SSRF guard — rejects private base_url unless allow_private_url is set.
-  // Audit 2026-04-19 (WARNING).
-  // -------------------------------------------------------------------------
-
-  it('rejects loopback base_url when allow_private_url is false', async () => {
-    const provider = new OllamaProvider();
-    await expect(
-      provider.initialize({
-        baseUrl: 'http://127.0.0.1:11434',
-        model: 'llama3',
-        maxOutputTokens: 64,
-        temperature: 0.6,
-        allowPrivateUrl: false,
-      }),
-    ).rejects.toThrow(/blocked address|allow_private_url/);
-  });
-
-  it('rejects cloud-metadata base_url even when allow_private_url is true', async () => {
-    const provider = new OllamaProvider();
-    await expect(
-      provider.initialize({
-        baseUrl: 'http://169.254.169.254',
-        model: 'llama3',
-        maxOutputTokens: 64,
-        temperature: 0.6,
-        allowPrivateUrl: false,
-      }),
-    ).rejects.toThrow(/blocked address/);
-  });
-
-  it('rejects private-range base_url (10.x) when allow_private_url is false', async () => {
-    const provider = new OllamaProvider();
-    await expect(
-      provider.initialize({
-        baseUrl: 'http://10.0.0.5:11434',
-        model: 'llama3',
-        maxOutputTokens: 64,
-        temperature: 0.6,
-        allowPrivateUrl: false,
-      }),
-    ).rejects.toThrow(/blocked address/);
-  });
-
-  it('rejects non-http scheme', async () => {
-    const provider = new OllamaProvider();
-    await expect(
-      provider.initialize({
-        baseUrl: 'file:///etc/passwd',
-        model: 'llama3',
-        maxOutputTokens: 64,
-        temperature: 0.6,
-        allowPrivateUrl: true,
-      }),
-    ).rejects.toThrow(/scheme must be http/);
-  });
-
-  it('rejects malformed URL', async () => {
-    const provider = new OllamaProvider();
-    await expect(
-      provider.initialize({
-        baseUrl: 'not-a-url',
-        model: 'llama3',
-        maxOutputTokens: 64,
-        temperature: 0.6,
-        allowPrivateUrl: true,
-      }),
-    ).rejects.toThrow(/not a valid URL/);
-  });
-
-  it('accepts loopback base_url when allow_private_url is true', async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse({ models: [{ name: 'llama3' }] }));
-    const provider = new OllamaProvider();
-    await expect(
-      provider.initialize({
-        baseUrl: 'http://127.0.0.1:11434',
-        model: 'llama3',
-        maxOutputTokens: 64,
-        temperature: 0.6,
-        allowPrivateUrl: true,
-      }),
-    ).resolves.toBeUndefined();
   });
 });
 

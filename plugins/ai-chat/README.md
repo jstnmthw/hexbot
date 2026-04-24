@@ -470,7 +470,6 @@ Only read when `provider` is `"ollama"`.
 | `use_server_tokenizer` | boolean  | `false`                    | Call `/api/tokenize` for accurate counts instead of the 4-char heuristic.          |
 | `keep_alive`           | string   | `"30m"`                    | How long Ollama keeps the model resident between requests. Empty = daemon default. |
 | `num_ctx`              | number   | _tiered_                   | Pinned context window size. Defaults: 4096 / 8192 / 8192.                          |
-| `allow_private_url`    | boolean  | `false`                    | Opt-in to private/loopback base_urls. Default-deny SSRF guard.                     |
 | `repeat_penalty`       | number   | _tiered_                   | llama.cpp `repeat_penalty`. Defaults: 1.20 / 1.10 / unset. `0` = unset.            |
 | `repeat_last_n`        | number   | _tiered_                   | llama.cpp `repeat_last_n`. Defaults: 64 / 64 / unset. `0` = unset.                 |
 | `stop`                 | string[] | _tiered_                   | Stop sequences. Operator entries merge on top of the tier list, capped at 10.      |

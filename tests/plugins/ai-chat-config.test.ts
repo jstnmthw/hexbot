@@ -227,7 +227,6 @@ describe('parseConfig', () => {
       useServerTokenizer: true,
       keepAlive: '1h',
       numCtx: 8192,
-      allowPrivateUrl: false,
       // Large tier defaults (no model_class override, default model = Gemini).
       repeatPenalty: 0,
       repeatLastN: 0,
@@ -243,13 +242,6 @@ describe('parseConfig', () => {
     expect(cfg.ollama.keepAlive).toBe('30m');
     // Default model is gemini-2.5-flash-lite → large tier → numCtx=8192.
     expect(cfg.ollama.numCtx).toBe(8192);
-    // Defaults to false — SSRF guard is secure-by-default.
-    expect(cfg.ollama.allowPrivateUrl).toBe(false);
-  });
-
-  it('reads allow_private_url from config', () => {
-    const cfg = parseConfig({ ollama: { allow_private_url: true } });
-    expect(cfg.ollama.allowPrivateUrl).toBe(true);
   });
 
   it('parses channel_characters as a record', () => {

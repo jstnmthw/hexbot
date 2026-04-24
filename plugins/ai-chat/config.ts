@@ -153,12 +153,6 @@ export interface AiChatConfig {
     /** Pinned context window. `0` leaves it unset (daemon default). */
     numCtx: number;
     /**
-     * Allow `base_url` to point at loopback/link-local/private addresses.
-     * Defaults to `false`; operators running Ollama on localhost must opt
-     * in explicitly. See SSRF guard in `providers/ollama.ts`.
-     */
-    allowPrivateUrl: boolean;
-    /**
      * Sampling repetition penalty (llama.cpp `repeat_penalty`). Small models
      * loop without this. `0` → leave unset (daemon default).
      */
@@ -357,7 +351,6 @@ export function parseConfig(
       useServerTokenizer: asBool(ollama.use_server_tokenizer, false),
       keepAlive: asString(ollama.keep_alive, '30m'),
       numCtx: 'num_ctx' in ollama ? asNum(ollama.num_ctx, t.numCtx) : t.numCtx,
-      allowPrivateUrl: asBool(ollama.allow_private_url, false),
       repeatPenalty:
         'repeat_penalty' in ollama
           ? asNum(ollama.repeat_penalty, t.repeatPenalty)
@@ -592,7 +585,6 @@ export function buildProviderConfig(
         // uses its own default (5m). Any non-empty string is passed through.
         keepAlive: cfg.ollama.keepAlive || undefined,
         numCtx: cfg.ollama.numCtx,
-        allowPrivateUrl: cfg.ollama.allowPrivateUrl,
         samplingOptions,
         stop: cfg.ollama.stop.length > 0 ? cfg.ollama.stop : undefined,
       };
