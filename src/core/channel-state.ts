@@ -5,6 +5,7 @@ import type { BotEventBus } from '../event-bus';
 import type { LoggerLike } from '../logger';
 import { isModeArray, isObjectArray, toEventObject } from '../utils/irc-event';
 import { ListenerGroup } from '../utils/listener-group';
+import { sanitize } from '../utils/sanitize';
 import { type Casemapping, ircLower } from '../utils/wildcard';
 import { type ServerCapabilities, defaultServerCapabilities } from './isupport';
 
@@ -641,7 +642,12 @@ export class ChannelState {
   private onAway(event: Record<string, unknown>, isAway: boolean): void {
     const nick = String(event.nick ?? '');
     if (!nick) return;
-    const message = typeof event.message === 'string' ? event.message : '';
+    // Sanitise the away reason even though the bridge runs on PRIVMSG-style
+    // events — AWAY notifications come through a different irc-framework
+    // path and don't all hit the bridge's `sanitizeField`. A reason carrying
+    // `\r\n` would otherwise surface verbatim wherever a plugin renders it.
+    const rawMessage = typeof event.message === 'string' ? event.message : '';
+    const message = sanitize(rawMessage);
     const lower = this.lowerNick(nick);
 
     const touched = this.updateUserAcrossChannels(lower, (user, ch) => {
@@ -658,8 +664,14 @@ export class ChannelState {
   /** IRCv3 chghost: fires when a user's displayed ident/hostname changes. */
   private onUserUpdated(event: Record<string, unknown>): void {
     const nick = String(event.nick ?? '');
-    const newIdent = event.new_ident !== undefined ? String(event.new_ident) : undefined;
-    const newHostname = event.new_hostname !== undefined ? String(event.new_hostname) : undefined;
+    // Sanitise chghost payloads — irc-framework delivers them via a
+    // dedicated event that skips the bridge's PRIVMSG sanitise pass. A
+    // malformed server (or a proxied event from a link compromise) could
+    // ship `\r\n` in the new ident/hostname string and smuggle extra
+    // lines through any plugin that echoes the field.
+    const newIdent = event.new_ident !== undefined ? sanitize(String(event.new_ident)) : undefined;
+    const newHostname =
+      event.new_hostname !== undefined ? sanitize(String(event.new_hostname)) : undefined;
 
     const lower = this.lowerNick(nick);
     this.updateUserAcrossChannels(lower, (user) => {

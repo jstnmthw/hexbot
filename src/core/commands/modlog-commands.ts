@@ -348,7 +348,13 @@ function renderHeader(): string {
 }
 
 function renderRow(row: ModLogEntry): string {
-  return COLUMNS.map((c) => truncate(c.get(row), c.width).padEnd(c.width)).join(' ');
+  // Strip IRC formatting before emission — the `.modlog show` path already
+  // does this; keeping the pager/audit-tail row rendering symmetrical
+  // avoids colour bytes smuggled through a `by`/`reason`/`metadata` cell
+  // from painting the REPL view.
+  return COLUMNS.map((c) => truncate(stripFormatting(c.get(row)), c.width).padEnd(c.width)).join(
+    ' ',
+  );
 }
 
 function renderPage(state: PagerState, _db: BotDatabase): string[] {

@@ -19,6 +19,7 @@ import type { BotEventBus, BotEvents } from '../../event-bus';
 import type { LogRecord, LogSink, LoggerLike } from '../../logger';
 import { Logger as LoggerClass } from '../../logger';
 import type { DccConfig, HandlerContext, PluginServices, UserRecord } from '../../types';
+import { stripFormatting } from '../../utils/strip-formatting';
 import type { Casemapping } from '../../utils/wildcard';
 import { tryLogModAction } from '../audit';
 import { clearAuditTailForSession, clearPagerForSession } from '../commands/modlog-commands';
@@ -1377,7 +1378,10 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
   private async onDccCtcp(ctx: HandlerContext): Promise<void> {
     const { nick } = ctx;
-    this.logger?.debug(`DCC CTCP from ${nick}: args="${ctx.args}"`);
+    // Strip IRC formatting before debug-logging the CTCP args. The bridge
+    // already removes `\r\n\0`, but bold / colour / reverse codes survive
+    // and can repaint the operator's terminal when the log is tailed.
+    this.logger?.debug(`DCC CTCP from ${nick}: args="${stripFormatting(ctx.args)}"`);
     const parsed = parseDccChatPayload(ctx.args);
     if (!parsed) {
       this.logger?.debug(`DCC CTCP from ${nick}: not a CHAT subtype, ignoring`);

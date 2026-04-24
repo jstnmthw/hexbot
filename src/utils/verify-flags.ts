@@ -38,6 +38,12 @@ export function validateRequireAccFor(
 /**
  * Determine whether the bind's required flags are at or above any threshold
  * in `config.identity.require_acc_for`. Used by the VerificationProvider.
+ *
+ * Invariant: unknown flags resolve to level 0. Taken in isolation that's a
+ * fail-open shape ("treat the unknown flag as not meeting the threshold"),
+ * but every upstream caller already rejects unknown flags before this point
+ * (binds reject at registration, command flags reject at parse). The net
+ * behaviour is fail-closed — verify this holds before relaxing either path.
  */
 export function requiresVerificationForFlags(
   bindFlags: string,

@@ -6,7 +6,7 @@ import type { LoggerLike } from '../logger';
 import type { ServicesConfig, VerifyResult } from '../types';
 import { toEventObject } from '../utils/irc-event';
 import { ListenerGroup } from '../utils/listener-group';
-import { type Casemapping, ircLower } from '../utils/wildcard';
+import { type Casemapping, ircLower, wildcardMatch } from '../utils/wildcard';
 import { tryLogModAction } from './audit';
 import { tryParseAccResponse, tryParseStatusResponse } from './services-parser';
 
@@ -98,6 +98,13 @@ export class Services {
   private listeners: ListenerGroup;
   private casemapping: Casemapping = 'rfc1459';
   /**
+   * Resolved `services.services_host_pattern` — empty string when the
+   * operator hasn't configured a pattern. Cached as a plain string (not
+   * the config reference) so the hot notice-ingest path skips the
+   * config lookup and fallback on every call.
+   */
+  private readonly servicesHostPattern: string;
+  /**
    * Running count of NickServ verifications that failed due to timeout
    * (as opposed to a real "not identified" response). Surfaced via
    * {@link getServicesTimeoutCount} so `.status` can show an operator
@@ -150,6 +157,7 @@ export class Services {
     this.db = deps.db ?? null;
     this.botNick = deps.botNick ?? '';
     this.listeners = new ListenerGroup(deps.client);
+    this.servicesHostPattern = (deps.servicesConfig.services_host_pattern ?? '').trim();
 
     // Capture listener refs for removal in detach() — arrow functions lose
     // identity if created inline in on/off pairs.
@@ -315,6 +323,22 @@ export class Services {
         `Pending verify cap reached (${MAX_PENDING_VERIFIES}) — failing closed for ${nick}. ` +
           `Services provider is likely overloaded or unreachable.`,
       );
+      // Audit the cap rejection — the stability-audit baseline for the
+      // pending-verify cap requires a `mod_log` trail so review can tell a
+      // real services outage (many `nickserv-verify-cap` rows in a short
+      // window) apart from a single user-triggered anomaly.
+      tryLogModAction(
+        this.db,
+        {
+          action: 'nickserv-verify-cap',
+          by: 'bot',
+          source: 'system',
+          target: nick,
+          reason: `pending verify cap (${MAX_PENDING_VERIFIES}) reached`,
+          metadata: { totalRejected: this.pendingCapRejectionCount },
+        },
+        this.logger,
+      );
       return { verified: false, account: null };
     }
 
@@ -436,6 +460,7 @@ export class Services {
   private onNotice(event: Record<string, unknown>): void {
     const nick = String(event.nick ?? '');
     const message = String(event.message ?? '');
+    const hostname = String(event.hostname ?? '');
 
     // Only process notices from NickServ
     const nickServTarget = this.getNickServTarget();
@@ -450,7 +475,33 @@ export class Services {
       return;
     }
 
+    // Defence-in-depth: when a services_host_pattern is configured, reject
+    // notices from a sender whose hostname doesn't match it. On
+    // non-services-reserved networks a user can `/nick NickServ` and craft
+    // ACC replies to resolve pending verifications with whatever level
+    // they want. Matching against `services.servicesConfig` at construction
+    // time keeps the hot path allocation-free.
+    if (this.servicesHostPattern && !wildcardMatch(this.servicesHostPattern, hostname, true)) {
+      this.logger?.warn(
+        `[security] Ignoring NickServ-nick notice from unexpected host ${hostname} ` +
+          `(does not match services_host_pattern="${this.servicesHostPattern}")`,
+      );
+      return;
+    }
+
     this.logger?.debug(`NickServ notice: ${message}`);
+
+    // GHOST ack fast-path: unblock any pending `ghostAndReclaim` caller as
+    // soon as NickServ confirms the ghost landed (Atheme "has been ghosted",
+    // Anope "has been killed" / "is not online"). Lets reclaim proceed
+    // ahead of the 1.5s upper bound without changing the semantics of the
+    // legacy sleep. Unknown phrases fall through to the timeout as before.
+    if (
+      this.pendingGhostResolver &&
+      /\bghost(?:ed)?\b|\bhas been killed\b|\bis not online\b/i.test(message)
+    ) {
+      this.pendingGhostResolver();
+    }
 
     const acc = tryParseAccResponse(message);
     if (acc) {
@@ -616,11 +667,34 @@ export class Services {
     this._identifyFallbackSent = false; // reset so the re-identify path can fire
     const target = this.getNickServTarget();
     this.client.say(target, `GHOST ${nick} ${password}`);
-    this.logger?.warn(`Sent GHOST for ${nick} — waiting 1.5s before reclaiming`);
-    await new Promise<void>((resolve) => setTimeout(resolve, 1500).unref());
+    this.logger?.warn(`Sent GHOST for ${nick} — waiting for NickServ ack (1.5s cap)`);
+    // Race the NickServ ack notice against the legacy 1.5s upper-bound
+    // sleep — whichever fires first. Most services respond in < 100 ms, so
+    // the earlier-ack path lets reclaim complete sooner; the sleep stays as
+    // a safety net for services that never reply.
+    await new Promise<void>((resolve) => {
+      let done = false;
+      const finish = (): void => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        this.pendingGhostResolver = null;
+        resolve();
+      };
+      this.pendingGhostResolver = finish;
+      const timer = setTimeout(finish, 1500).unref();
+    });
     this.client.changeNick(nick);
     this.logger?.info(`Sent NICK ${nick} to reclaim primary nick after GHOST`);
   }
+
+  /**
+   * Pending `ghostAndReclaim` resolver — set while the race is active,
+   * cleared when either the ack arrives or the timeout fires. The notice
+   * handler matches GHOST-success / already-offline phrases and calls this
+   * to unblock the reclaim early.
+   */
+  private pendingGhostResolver: (() => void) | null = null;
 
   // -------------------------------------------------------------------------
   // Helpers

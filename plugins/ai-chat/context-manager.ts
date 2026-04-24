@@ -2,6 +2,18 @@
 // Keeps per-channel and per-PM buffers of recent messages, trimmed to fit a token budget.
 import type { AIMessage } from './providers/types';
 
+/**
+ * Strip a nick to the RFC 2812 reserved character set (and truncate) before
+ * surfacing it in a prompt. Keeps the inline `nick: text` attribution safe
+ * against a nick containing `:`, whitespace, or control bytes that a model
+ * might mis-parse as role metadata or prompt injection. Same regex used by
+ * the volatile header's speaker sanitiser, kept here so history entries and
+ * session `[nick]` prefixes apply the same filter.
+ */
+export function safeSpeakerName(nick: string): string {
+  return nick.replace(/[^A-Za-z0-9_`{}[\]\\^|-]/g, '').slice(0, 30);
+}
+
 /** A buffered message in a channel or PM. */
 export interface ContextEntry {
   nick: string;
@@ -172,7 +184,11 @@ export class ContextManager {
       // and large-class models benefit from the inline attribution. On
       // small-class deployments the caller sets `dropNickPrefix: true` and
       // we rely on the volatile header to carry the speaker identity.
-      const content = e.isBot || options?.dropNickPrefix ? e.text : `${e.nick}: ${e.text}`;
+      // Apply the same `safeSpeakerName` filter here as the volatile header
+      // so a nick with punctuation can't masquerade as role metadata inside
+      // the history stream.
+      const speaker = safeSpeakerName(e.nick) || 'user';
+      const content = e.isBot || options?.dropNickPrefix ? e.text : `${speaker}: ${e.text}`;
       if (chars + content.length > maxChars && messages.length > 0) break;
       messages.push({ role: e.isBot ? 'assistant' : 'user', content });
       chars += content.length;

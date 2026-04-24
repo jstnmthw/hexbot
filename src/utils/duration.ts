@@ -19,6 +19,9 @@ const MAX_DURATION_MS = 365 * 86_400_000;
  * Parse a human-readable duration string into milliseconds.
  * Supports: bare number (minutes for backward compat), `Nm`, `Nh`, `Nd`, `0` (permanent → 0).
  * Returns null for invalid input.
+ *
+ * Multi-unit compositions like `"1h30m"` are NOT supported and return null —
+ * operators must pass a single-unit string or the already-summed minutes.
  */
 export function parseDuration(input: string): number | null {
   const trimmed = input.trim();

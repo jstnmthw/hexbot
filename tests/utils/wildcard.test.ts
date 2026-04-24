@@ -193,3 +193,15 @@ describe('wildcardMatch with casemapping', () => {
     expect(wildcardMatch('~*', '^user', true, 'rfc1459')).toBe(true);
   });
 });
+
+describe('wildcardMatch — DoS length caps', () => {
+  it('returns false immediately for over-long patterns', () => {
+    const pattern = '*'.repeat(1024); // > MAX_PATTERN_LEN (512)
+    expect(wildcardMatch(pattern, 'anything')).toBe(false);
+  });
+
+  it('returns false immediately for over-long text', () => {
+    const text = 'x'.repeat(10_000); // > MAX_TEXT_LEN (4096)
+    expect(wildcardMatch('x*', text)).toBe(false);
+  });
+});

@@ -16,10 +16,21 @@ import {
   parseFlagsMutation,
 } from '../dcc';
 
+/**
+ * Minimal read surface a live permissions lookup needs to expose for the
+ * cross-handle `.console` gate. `getUser` returns the authoritative
+ * {@link UserRecord}; we call it on every cross-handle mutation so a `+n`
+ * revoked mid-session takes effect immediately rather than on next login.
+ */
+export interface ConsolePermissionsProvider {
+  getUser(handle: string): { global: string } | null;
+}
+
 export interface DccConsoleCommandsDeps {
   handler: CommandHandler;
   dccManager: DCCManager;
   db: BotDatabase | null;
+  permissions: ConsolePermissionsProvider;
 }
 
 /**
@@ -33,7 +44,7 @@ export interface DccConsoleCommandsDeps {
  * own console.
  */
 export function registerDccConsoleCommands(deps: DccConsoleCommandsDeps): void {
-  const { handler, dccManager, db } = deps;
+  const { handler, dccManager, db, permissions } = deps;
   handler.registerCommand(
     'console',
     {
@@ -43,7 +54,7 @@ export function registerDccConsoleCommands(deps: DccConsoleCommandsDeps): void {
       category: 'dcc',
     },
     (args, ctx) => {
-      handleConsoleCommand(args, ctx, dccManager, db);
+      handleConsoleCommand(args, ctx, dccManager, db, permissions);
     },
   );
 }
@@ -53,6 +64,7 @@ function handleConsoleCommand(
   ctx: CommandContext,
   dccManager: DCCManager,
   db: BotDatabase | null,
+  permissions: ConsolePermissionsProvider,
 ): void {
   if (!ctx.dccSession) {
     ctx.reply('This command is DCC-only.');
@@ -74,7 +86,7 @@ function handleConsoleCommand(
     return;
   }
 
-  mutateOtherHandleFlags(trimmed, ctx, dccManager, db);
+  mutateOtherHandleFlags(trimmed, ctx, dccManager, db, permissions);
 }
 
 function recordConsoleAudit(
@@ -147,6 +159,7 @@ function mutateOtherHandleFlags(
   ctx: CommandContext,
   dccManager: DCCManager,
   db: BotDatabase | null,
+  permissions: ConsolePermissionsProvider,
 ): void {
   // Split off the first token as the target handle; the rest is the
   // mutation body. The permission flag on registerCommand already
@@ -159,7 +172,17 @@ function mutateOtherHandleFlags(
     return;
   }
 
-  if (!ctx.dccSession || !ctx.dccSession.handleFlags.includes('n')) {
+  if (!ctx.dccSession) {
+    ctx.reply('This command is DCC-only.');
+    return;
+  }
+  // Re-resolve the caller's flags from the live permissions store instead
+  // of trusting the session-opened `handleFlags` snapshot. A `+n` revoked
+  // mid-session would otherwise keep passing the gate until the session
+  // closes — giving an owner-since-demoted user time to silently rewire
+  // another handle's console subscriptions.
+  const liveCaller = permissions.getUser(ctx.dccSession.handle);
+  if (!liveCaller || !liveCaller.global.includes('n')) {
     ctx.reply('Only owners (+n) can set console flags for another handle.');
     return;
   }

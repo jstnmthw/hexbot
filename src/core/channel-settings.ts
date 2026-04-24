@@ -15,6 +15,8 @@ import type {
   ChannelSettingEntry,
   ChannelSettingValue,
 } from '../types';
+import type { ModActor } from './audit';
+import { tryLogModAction } from './audit';
 
 export type { ChannelSettingChangeCallback };
 
@@ -114,14 +116,41 @@ export class ChannelSettings {
 
   /**
    * Store a per-channel setting value. No-ops with a warning if the key is unknown.
+   *
+   * `actor` is optional but strongly encouraged — when provided, the mutation
+   * is recorded to `mod_log` as a `chanset` action. Leaving it unset is the
+   * "unattributed plugin internals" path (migrations, boot-time seeding).
+   * Plugins should always pass `api.auditActor(ctx)` when a user triggers
+   * the change, otherwise the mutation becomes invisible to audit review.
    */
-  set(channel: string, key: string, value: ChannelSettingValue): void {
+  set(channel: string, key: string, value: ChannelSettingValue, actor?: ModActor): void {
     if (!this.defs.has(key)) {
       console.warn(`[channel-settings] Unknown key "${key}" — cannot set`);
       return;
     }
     this.db.set(NAMESPACE, this.makeKey(channel, key), String(value));
     this.notifyChange(channel, key, value);
+    if (actor) {
+      const entry = this.defs.get(key);
+      // The `plugin` field is required on plugin-source rows and forbidden
+      // on every other source. Delegate plugin-id resolution to the actor
+      // if it already carries one (plugin-sourced audits do), otherwise
+      // attach the def's owning plugin when the actor's source demands it.
+      const pluginId = actor.plugin ?? (actor.source === 'plugin' ? entry?.pluginId : undefined);
+      tryLogModAction(
+        this.db,
+        {
+          action: 'chanset',
+          channel,
+          target: key,
+          reason: String(value),
+          source: actor.source,
+          by: actor.by,
+          ...(pluginId ? { plugin: pluginId } : {}),
+        },
+        this.logger ?? null,
+      );
+    }
   }
 
   /**

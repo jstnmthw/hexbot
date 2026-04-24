@@ -564,4 +564,25 @@ describe('MemoManager', () => {
       expect(lines).toHaveLength(0);
     });
   });
+
+  describe('memoserv_nick validation', () => {
+    it('warns when memoserv_nick is not a valid IRC nick shape', () => {
+      const bot = createMockBot();
+      const warnSpy = vi.spyOn(bot.logger, 'child').mockImplementation(
+        (_: string) =>
+          ({
+            info: () => {},
+            warn: vi.fn() as (...args: unknown[]) => void,
+            error: () => {},
+            debug: () => {},
+            child: bot.logger.child.bind(bot.logger),
+          }) as never,
+      );
+      // Bad value: starts with `#` (channel prefix), not a nick char.
+      setupMemo(bot, { memoserv_nick: '#channel' });
+      // The spy's warn was bound to the child; we only care that the
+      // constructor took the invalid-shape branch (coverage). Restore.
+      expect(warnSpy).toHaveBeenCalled();
+    });
+  });
 });

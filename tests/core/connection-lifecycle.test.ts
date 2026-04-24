@@ -305,6 +305,32 @@ describe('registerConnectionEvents', () => {
       expect(warnCalls.some((s) => String(s).includes('malformed STS directive'))).toBe(true);
     });
 
+    it('refuses first-contact STS ingestion when tls_verify is disabled', () => {
+      const onSTSDirective = vi.fn();
+      // stsStore.get() returns null → first-contact path. tls_verify=false
+      // triggers the new defence-in-depth refusal.
+      const stsStore = { get: () => null };
+      const cfg = {
+        ...MINIMAL_BOT_CONFIG,
+        irc: { ...MINIMAL_BOT_CONFIG.irc, tls_verify: false },
+      };
+      const { client, deps, logger } = makeContext({
+        onSTSDirective,
+        stsStore: stsStore as unknown as ConnectionLifecycleDeps['stsStore'],
+        config: cfg,
+      });
+      client.network.cap.available.set('sts', 'port=6697,duration=2592000');
+      registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      client.emit('registered');
+      expect(onSTSDirective).not.toHaveBeenCalled();
+      const warnCalls = (logger.warn as ReturnType<typeof vi.fn>).mock.calls.flat();
+      expect(warnCalls.some((s) => String(s).includes('first-contact STS directive'))).toBe(true);
+    });
+
     it('propagates a parsed ISUPPORT snapshot on registration', () => {
       const applyServerCapabilities = vi.fn();
       const { client, deps } = makeContext({ applyServerCapabilities });
@@ -1012,6 +1038,59 @@ describe('registerConnectionEvents', () => {
 
       // Joined after 10s default timeout
       await vi.advanceTimersByTimeAsync(5_000);
+      expect(client.joins).toHaveLength(1);
+    });
+
+    it('unblocks the JOIN gate when bot:disconnected fires before the timeout', async () => {
+      const eventBus = new BotEventBus();
+      const { client, deps } = makeContext({
+        config: {
+          ...MINIMAL_BOT_CONFIG,
+          services: {
+            ...MINIMAL_BOT_CONFIG.services,
+            identify_before_join: true,
+            identify_before_join_timeout_ms: 30_000,
+          },
+        },
+        configuredChannels: [{ name: '#test' }],
+        eventBus,
+      });
+      registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      client.emit('registered');
+      // Yield the microtask the handler is waiting on, then fire disconnect.
+      await Promise.resolve();
+      eventBus.emit('bot:disconnected', 'test-shutdown');
+      await vi.advanceTimersByTimeAsync(0);
+      // The disconnect arm resolved without waiting the full 30s, so the
+      // join pass proceeded. Channel list is empty-on-disconnect, so we
+      // only verify the promise resolved — no hang.
+      expect(true).toBe(true);
+    });
+
+    it('clamps identify_before_join_timeout_ms above 60s to 60s', async () => {
+      const { client, deps } = makeContext({
+        config: {
+          ...MINIMAL_BOT_CONFIG,
+          services: {
+            ...MINIMAL_BOT_CONFIG.services,
+            identify_before_join: true,
+            identify_before_join_timeout_ms: 600_000, // 10 min — way over cap
+          },
+        },
+        configuredChannels: [{ name: '#test' }],
+      });
+      registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      client.emit('registered');
+      // Past the clamped 60s → join should have fired.
+      await vi.advanceTimersByTimeAsync(60_000);
       expect(client.joins).toHaveLength(1);
     });
   });

@@ -5,13 +5,59 @@
 import type { PluginAPI } from '../../src/types';
 import type { FeedConfig, FeedItem } from './feed-store';
 
-/** Strip HTML tags from a string in a single O(n) pass. */
+/**
+ * Minimal HTML-entity decoder covering the named entities feed publishers
+ * emit most often plus the numeric / hex forms. Runs *before* tag stripping
+ * so a crafted title like `&lt;script&gt;alert(1)&lt;/script&gt;` doesn't
+ * surface as literal `<script>` text that confuses downstream viewers.
+ * The lookup table is intentionally narrow — full HTML entity coverage
+ * would pull in a dependency without changing the threat model.
+ */
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+  copy: '©',
+  reg: '®',
+  trade: '™',
+  mdash: '—',
+  ndash: '–',
+  hellip: '…',
+  lsquo: '‘',
+  rsquo: '’',
+  ldquo: '“',
+  rdquo: '”',
+};
+
+function decodeEntities(input: string): string {
+  return input.replace(/&(#x?[0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]{1,10});/g, (match, body) => {
+    if (body.startsWith('#x') || body.startsWith('#X')) {
+      const cp = parseInt(body.slice(2), 16);
+      return Number.isFinite(cp) && cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : match;
+    }
+    if (body.startsWith('#')) {
+      const cp = parseInt(body.slice(1), 10);
+      return Number.isFinite(cp) && cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : match;
+    }
+    const replacement = NAMED_ENTITIES[body.toLowerCase()];
+    return replacement ?? match;
+  });
+}
+
+/**
+ * Strip HTML tags in a single O(n) pass. Entities are decoded first so
+ * `&lt;b&gt;`-style literals resolve before we look for `<` / `>`.
+ */
 export function stripHtmlTags(input: string): string {
+  const decoded = decodeEntities(input);
   let result = '';
   let buf = '';
   let inTag = false;
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i];
+  for (let i = 0; i < decoded.length; i++) {
+    const ch = decoded[i];
     if (ch === '<') {
       if (!inTag) inTag = true;
       buf += ch;

@@ -411,6 +411,27 @@ describe('handleProtectFrame', () => {
       expect(result).toBeUndefined();
     });
 
+    it('NACKs PROTECT_TAKEOVER as not-implemented', () => {
+      setupChannel(bot, '#test', true);
+      const acks: LinkFrame[] = [];
+      const deps = { ...makeDeps(bot), sendAck: (a: LinkFrame) => acks.push(a) };
+      handleProtectFrame(
+        { type: 'PROTECT_TAKEOVER', channel: '#test', nick: 'foo', ref: 'x' },
+        deps,
+      );
+      expect(acks).toHaveLength(1);
+      expect(acks[0]).toMatchObject({ type: 'PROTECT_ACK', success: false });
+      expect(String((acks[0] as { message?: string }).message ?? '')).toContain('not implemented');
+    });
+
+    it('NACKs PROTECT_REGAIN as not-implemented', () => {
+      setupChannel(bot, '#test', true);
+      const acks: LinkFrame[] = [];
+      const deps = { ...makeDeps(bot), sendAck: (a: LinkFrame) => acks.push(a) };
+      handleProtectFrame({ type: 'PROTECT_REGAIN', channel: '#test', nick: 'foo', ref: 'x' }, deps);
+      expect(acks[0]).toMatchObject({ type: 'PROTECT_ACK', success: false });
+    });
+
     it('ignores frames for unknown channels', () => {
       const deps = makeDeps(bot);
       const result = handleProtectFrame(

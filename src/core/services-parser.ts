@@ -18,16 +18,25 @@ export interface ServicesVerificationReply {
   level: number;
 }
 
-/** Parse an Atheme `<nick> ACC <level>` reply. Returns null on mismatch. */
+/**
+ * Parse an Atheme `<nick> ACC <level>` reply. Returns null on mismatch.
+ *
+ * Anchored with `(?:\s|$)` after the level so trailing text (e.g. a
+ * human-readable "(identified)" suffix some backends append) doesn't
+ * silently re-interpret a malformed `<nick> ACC 3evil` as a valid reply.
+ */
 export function tryParseAccResponse(message: string): ServicesVerificationReply | null {
-  const m = message.match(/^(\S+)\s+ACC\s+(\d+)/i);
+  const m = message.match(/^(\S+)\s+ACC\s+(\d+)(?:\s|$)/i);
   if (!m) return null;
   return { nick: m[1], level: parseInt(m[2], 10) };
 }
 
-/** Parse an Anope `STATUS <nick> <level>` reply. Returns null on mismatch. */
+/**
+ * Parse an Anope `STATUS <nick> <level>` reply. Returns null on mismatch.
+ * Same anchor rationale as {@link tryParseAccResponse}.
+ */
 export function tryParseStatusResponse(message: string): ServicesVerificationReply | null {
-  const m = message.match(/^STATUS\s+(\S+)\s+(\d+)/i);
+  const m = message.match(/^STATUS\s+(\S+)\s+(\d+)(?:\s|$)/i);
   if (!m) return null;
   return { nick: m[1], level: parseInt(m[2], 10) };
 }

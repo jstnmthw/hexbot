@@ -3,6 +3,7 @@
 import type { CommandHandler } from '../../command-handler';
 import type { BotDatabase } from '../../database';
 import { formatDuration, parseDuration } from '../../utils/duration';
+import { stripFormatting } from '../../utils/strip-formatting';
 import { tryAudit } from '../audit';
 import type { BanStore } from '../ban-store';
 import type { BotLinkHub, SharedBanList } from '../botlink';
@@ -82,12 +83,15 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
         const remaining = ban.expires === 0 ? 'permanent' : formatDuration(ban.expires - now);
         const stickyTag = ban.sticky ? ' [sticky]' : '';
         lines.push(
-          `  ${ban.channel.padEnd(12)} ${ban.mask.padEnd(25)} by ${ban.by.padEnd(10)} ${remaining}${stickyTag}`,
+          `  ${stripFormatting(ban.channel).padEnd(12)} ${stripFormatting(ban.mask).padEnd(25)} by ${stripFormatting(ban.by).padEnd(10)} ${remaining}${stickyTag}`,
         );
       }
       for (const entry of sharedEntries) {
+        // Shared entries arrive over botlink — sanitized at the frame
+        // boundary, but strip-format again for defence-in-depth so a
+        // crafted `by` never repaints the operator's terminal.
         lines.push(
-          `  ${entry.channel.padEnd(12)} ${entry.mask.padEnd(25)} by ${entry.by.padEnd(10)} [shared]`,
+          `  ${stripFormatting(entry.channel).padEnd(12)} ${stripFormatting(entry.mask).padEnd(25)} by ${stripFormatting(entry.by).padEnd(10)} [shared]`,
         );
       }
       ctx.reply(lines.join('\n'));

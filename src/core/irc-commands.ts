@@ -38,6 +38,34 @@ export interface BanOperator {
  */
 const DEFAULT_ACTOR: ModActor = { by: 'bot', source: 'system' };
 
+/**
+ * Byte caps on kick reason / topic text. An IRC line caps at 512 bytes
+ * including prefix + verb + target + CRLF; a long reason pushes the KICK
+ * past that and servers drop it silently — leaving the mod_log row
+ * claiming a kick the server never applied. Capping at 250 leaves comfort
+ * for prefix framing and multibyte encoding.
+ */
+const MAX_KICK_REASON_BYTES = 250;
+const MAX_TOPIC_BYTES = 350;
+
+/**
+ * Clamp a string to `maxBytes` UTF-8 bytes, truncating by code point so a
+ * multibyte character never splits across the boundary. Returns the input
+ * unchanged if it already fits.
+ */
+function clampBytes(s: string, maxBytes: number): string {
+  if (Buffer.byteLength(s, 'utf8') <= maxBytes) return s;
+  let out = '';
+  let used = 0;
+  for (const cp of s) {
+    const cpBytes = Buffer.byteLength(cp, 'utf8');
+    if (used + cpBytes > maxBytes) break;
+    out += cp;
+    used += cpBytes;
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Mode-string parsing
 // ---------------------------------------------------------------------------
@@ -152,7 +180,7 @@ export class IRCCommands {
   }
 
   kick(channel: string, nick: string, reason?: string, actor?: ModActor): void {
-    const safe = sanitize(reason ?? '');
+    const safe = clampBytes(sanitize(reason ?? ''), MAX_KICK_REASON_BYTES);
     this.client.raw(`KICK ${sanitize(channel)} ${sanitize(nick)} :${safe}`);
     this.logMod('kick', channel, nick, actor, reason ?? null);
   }
@@ -203,7 +231,7 @@ export class IRCCommands {
   }
 
   topic(channel: string, text: string, actor?: ModActor): void {
-    const safe = sanitize(text);
+    const safe = clampBytes(sanitize(text), MAX_TOPIC_BYTES);
     this.client.raw(`TOPIC ${sanitize(channel)} :${safe}`);
     // Persist the new topic as `reason` so audit queries can grep topic
     // changes by substring. Text is user-controlled but safely stored
@@ -316,7 +344,22 @@ export class IRCCommands {
   private sendModeRaw(channel: string, modeString: string, params: string[]): void {
     const safeChannel = sanitize(channel);
     const safeModes = sanitize(modeString);
-    const safeParams = params.map((p) => sanitize(p));
+    // Reject params carrying whitespace / comma / leading colon before the
+    // MODE line is assembled. A param with a space would split into two on
+    // the wire ("MODE #c +o alice bob" from one call) and silently turn one
+    // op into two; a leading `:` is the IRC trailing-arg sentinel and would
+    // swallow every subsequent param into the reason/hostmask tail.
+    const safeParams: string[] = [];
+    for (const raw of params) {
+      const p = sanitize(raw);
+      if (p === '' || /[\s,]/.test(p) || p.startsWith(':')) {
+        throw new Error(
+          `IRCCommands.mode(): refusing unsafe MODE param ${JSON.stringify(raw)} — ` +
+            `params may not contain whitespace, commas, or a leading ':'`,
+        );
+      }
+      safeParams.push(p);
+    }
     const line =
       safeParams.length > 0
         ? `MODE ${safeChannel} ${safeModes} ${safeParams.join(' ')}`

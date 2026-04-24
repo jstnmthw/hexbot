@@ -27,6 +27,19 @@ Batches 2, 3, 4, 5 landed in one pass — 39 checkbox items ticked `[x]` below (
 
 Tests cover weak-refuse and specific-allow paths on auto-op, plus two regressions for the new `services_host_pattern` hard-fail. Post-refinement: 3855/3855.
 
+### - [ ] Build progress (2026-04-25, hardening sweep)
+
+A hardening sweep against the residual WARNING/INFO list landed in one pass — 46 additional checkboxes ticked `[x]` below across the primitives/utils layer, core dispatch + permissions, IRC runtime, core commands, botlink defensive, DCC, ai-chat attribution, RSS entity decode, and the smaller INFO items (regex anchors, pending-verify audit, GHOST ack race, reserved-namespace list, STS first-contact tls_verify gate, identify_before_join clamp + disconnect arm, DCC port/mirror tightening). Key behaviour changes worth calling out:
+
+- `EventDispatcher.checkFlags` now fails closed when `permissions` is null — test harnesses that skipped wiring one up must attach `{ checkFlags: () => true }` (or similar) explicitly.
+- The verification gate re-runs `permissions.checkFlags` with the confirmed account bound to `ctx.account`, so a weak hostmask record paired with "someone else's identified session" no longer passes.
+- `auditActor(ctx)` now prefers `ctx.handle` (populated by `CommandHandler.execute` via a live `findByHostmask`) over `ctx.nick` so mod_log rows attribute actions to the stable handle.
+- `.chpass <handle> <password>` rejects whitespace-carrying passwords in the explicit-target form — use `.chpass --self <password>` for self-rotation with spaces.
+- `BanStore.reconcileChannelBans()` is exposed but not wired to RPL_BANLIST ingestion yet — the API is ready; a follow-up should call it from the chanmod ban-list probe.
+- Botlink: `PROTECT_TAKEOVER`/`PROTECT_REGAIN` now NACK explicitly instead of silently dropping; leaf-side CMD cap (`botlink.leaf_cmd_rate_limit`, default 50/s) caps hub blast radius.
+
+Remaining open checkboxes after this sweep: the four CRITICAL botlink rewrite items scoped into `docs/plans/botlink-handshake-v2.md` (Batch 1, dedicated plan doc); per-frame rate limits for BSAY/ANNOUNCE/RELAY\_\* (same plan); a handful of accepted-limitation INFOs (IPv4-only CIDR, `Math.random()` reconnect jitter, flood `isPrivileged` hostmask trust on non-account networks). Post-sweep: 3857/3857.
+
 ---
 
 ## Meta-review (2026-04-24, post-scan)
@@ -123,8 +136,8 @@ The four open shape decisions were locked to these answers and are load-bearing 
 
 ### Core dispatch / orchestration
 
-- [ ] [WARNING] **`wireDispatcher` silently ignores `require_acc_for` when `services.type === 'none'`** — `src/bot.ts:304`. Operators who configure `require_acc_for: ["+o","+n"]` but leave services off lose the gate with no log. Fix: fail startup or log a loud `[security]` warning when both are set.
-- [ ] [WARNING] **Verification gate confirms "identified to some account," not the expected one** — `src/dispatcher.ts:331-346`. `checkVerification()` discards the account returned by `verifyUser`; a weak `nick!*@*` record paired with any services-identified attacker still passes. Fix: pass `result.account` back into a second `findByHostmask(..., account)` pass and require the same record still matches.
+- [x] [WARNING] **`wireDispatcher` silently ignores `require_acc_for` when `services.type === 'none'`** — `src/bot.ts:304`. Operators who configure `require_acc_for: ["+o","+n"]` but leave services off lose the gate with no log. Fix: fail startup or log a loud `[security]` warning when both are set.
+- [x] [WARNING] **Verification gate confirms "identified to some account," not the expected one** — `src/dispatcher.ts:331-346`. `checkVerification()` discards the account returned by `verifyUser`; a weak `nick!*@*` record paired with any services-identified attacker still passes. Fix: pass `result.account` back into a second `findByHostmask(..., account)` pass and require the same record still matches.
 
 ### Database / config
 
@@ -133,41 +146,41 @@ The four open shape decisions were locked to these answers and are load-bearing 
 
 ### Permissions / identity
 
-- [ ] [WARNING] **NickServ NOTICE source trusted by nick alone** — `src/core/services.ts:440-451`. No check on sender ident/host. On non-services-reserved networks, a user can `/nick NickServ` and resolve pending `verifyUser()` calls with a crafted ACC reply. Fix: add `services.services_host` pattern and require the notice's hostmask to match.
+- [x] [WARNING] **NickServ NOTICE source trusted by nick alone** — `src/core/services.ts:440-451`. No check on sender ident/host. On non-services-reserved networks, a user can `/nick NickServ` and resolve pending `verifyUser()` calls with a crafted ACC reply. Fix: add `services.services_host` pattern and require the notice's hostmask to match.
 - [x] [WARNING] **`nick!*@*` warning trivially bypassed** — `src/core/permissions.ts:558-568`. Only catches two literal spellings; `nick!?@*`, `nick!*@*.com`, `*!*@*` all slip through. Fix: use the existing `patternSpecificity()` score with a threshold.
-- [ ] [WARNING] **`auditActor()` trusts `ctx.nick` as the actor identity** — `src/core/audit.ts:44-46`. Should prefer the resolved `UserRecord.handle`. Fix: thread the resolved handle through `CommandContext` and fall back to `ctx.nick` only when none resolves.
+- [x] [WARNING] **`auditActor()` trusts `ctx.nick` as the actor identity** — `src/core/audit.ts:44-46`. Should prefer the resolved `UserRecord.handle`. Fix: thread the resolved handle through `CommandContext` and fall back to `ctx.nick` only when none resolves.
 - [x] [WARNING] **`syncUser()` from botlink bypasses the insecure-hostmask warning** — `src/core/permissions.ts:174-189`. A hub push installs weak patterns silently. Fix: call `warnInsecureHostmask()` inside `syncUser` for each hostmask in the sync payload.
-- [ ] [WARNING] **`isValidPasswordFormat` guarantees length — comment is load-bearing** — `src/core/password.ts:93-103`. A future refactor that drops the length check would make `timingSafeEqual` throw on mismatch and leak timing via exception vs boolean. Fix: add an explicit `if (actual.length !== expected.length) return {ok:false, reason:'mismatch'}`.
+- [x] [WARNING] **`isValidPasswordFormat` guarantees length — comment is load-bearing** — `src/core/password.ts:93-103`. A future refactor that drops the length check would make `timingSafeEqual` throw on mismatch and leak timing via exception vs boolean. Fix: add an explicit `if (actual.length !== expected.length) return {ok:false, reason:'mismatch'}`.
 
 ### Channel / IRC runtime
 
-- [ ] [WARNING] **Kick/topic reasons not byte-capped** — `src/core/irc-commands.ts:154-158, 205-212`. A long reason pushes the KICK line past 512 bytes and the server drops it silently; `mod_log` still records the kick. Fix: cap `reason` at ~250 bytes before `raw()`.
-- [ ] [WARNING] **`IRCCommands.mode()` param expansion** — `src/core/irc-commands.ts:245-302`. A param containing a space lets a caller turn one op into two via `MODE #c +o alice bob`. Fix: reject spaces / `,` / leading `:` in mode params at the batcher.
-- [ ] [WARNING] **`memoserv_nick` not validated at config time** — `src/core/memo.ts:218,301-351`. A typo like `memoserv_nick: "#channel"` leaks READ commands to the channel; an operator setting it to a real user's nick routes their notices as admin spam. Fix: validate bare-nick shape at config-resolve time.
-- [ ] [WARNING] **INVITE re-join handler uses static `rfc1459` casemapping** — `src/core/connection-lifecycle.ts:584`. Should use live casemapping. Fix: pass `bot.casemapping` through.
-- [ ] [WARNING] **Ban-store has no reconciliation against `RPL_BANLIST`** — `src/core/ban-store.ts:104-129`. External unbans leave stale records that a sync step could reapply. Fix: periodic reconciliation after join/mode-init.
-- [ ] [WARNING] **`ChannelSettings.set()` writes no audit row** — `src/core/channel-settings.ts:118-125`. Plugin-level mutations bypass `mod_log`. Fix: audit from inside `set()` (or forbid plugin-side `.set` without an actor argument).
+- [x] [WARNING] **Kick/topic reasons not byte-capped** — `src/core/irc-commands.ts:154-158, 205-212`. A long reason pushes the KICK line past 512 bytes and the server drops it silently; `mod_log` still records the kick. Fix: cap `reason` at ~250 bytes before `raw()`.
+- [x] [WARNING] **`IRCCommands.mode()` param expansion** — `src/core/irc-commands.ts:245-302`. A param containing a space lets a caller turn one op into two via `MODE #c +o alice bob`. Fix: reject spaces / `,` / leading `:` in mode params at the batcher.
+- [x] [WARNING] **`memoserv_nick` not validated at config time** — `src/core/memo.ts:218,301-351`. A typo like `memoserv_nick: "#channel"` leaks READ commands to the channel; an operator setting it to a real user's nick routes their notices as admin spam. Fix: validate bare-nick shape at config-resolve time.
+- [x] [WARNING] **INVITE re-join handler uses static `rfc1459` casemapping** — `src/core/connection-lifecycle.ts:584`. Should use live casemapping. Fix: pass `bot.casemapping` through.
+- [x] [WARNING] **Ban-store has no reconciliation against `RPL_BANLIST`** — `src/core/ban-store.ts:104-129`. External unbans leave stale records that a sync step could reapply. Fix: periodic reconciliation after join/mode-init.
+- [x] [WARNING] **`ChannelSettings.set()` writes no audit row** — `src/core/channel-settings.ts:118-125`. Plugin-level mutations bypass `mod_log`. Fix: audit from inside `set()` (or forbid plugin-side `.set` without an actor argument).
 - [x] [WARNING] **`MessageQueue` has no per-sender/per-target quota** — `src/core/message-queue.ts:125-145`. Global `MAX_DEPTH=500` lets one plugin starve others. Fix: per-target depth cap (e.g., 50).
-- [ ] [WARNING] **`channel-state` `onAway`/`onUserUpdated` write unsanitized values** — `src/core/channel-state.ts:641-670`. `chghost` events from irc-framework bypass the bridge sanitize. Fix: `sanitize()` the write site as defence-in-depth.
-- [ ] [WARNING] **`identify_before_join_timeout_ms` is trusted unbounded** — `src/core/connection-lifecycle.ts:265-273`. No `disconnect` arm on the race. Fix: clamp to ≤ 60 s; include `bot:disconnected` in the race.
-- [ ] [WARNING] **STS directive ingested without `tls_verify` check on first contact** — `src/core/connection-lifecycle.ts:426`. An operator who ships `tls_verify=false` lets a MITM-served CAP LS pin a fake STS policy. Fix: only accept first-contact STS when `tls_verify=true`.
+- [x] [WARNING] **`channel-state` `onAway`/`onUserUpdated` write unsanitized values** — `src/core/channel-state.ts:641-670`. `chghost` events from irc-framework bypass the bridge sanitize. Fix: `sanitize()` the write site as defence-in-depth.
+- [x] [WARNING] **`identify_before_join_timeout_ms` is trusted unbounded** — `src/core/connection-lifecycle.ts:265-273`. No `disconnect` arm on the race. Fix: clamp to ≤ 60 s; include `bot:disconnected` in the race.
+- [x] [WARNING] **STS directive ingested without `tls_verify` check on first contact** — `src/core/connection-lifecycle.ts:426`. An operator who ships `tls_verify=false` lets a MITM-served CAP LS pin a fake STS policy. Fix: only accept first-contact STS when `tls_verify=true`.
 
 ### Core commands
 
-- [ ] [WARNING] **`.chpass` self-rotation collapses whitespace** — `src/core/commands/password-commands.ts:200-205`. A caller running `.chpass myhandle hunter2 extra` silently sets password to "hunter2 extra" or interprets the first token as a different target handle. Fix: require explicit `--self` sentinel.
-- [ ] [WARNING] **`.adduser` reply does not strip formatting from echoed hostmask** — `src/core/commands/permission-commands.ts:67`. Colour codes in the mask are rendered back. Fix: wrap the reply's `hostmask`/`flags` in `stripFormatting()`.
-- [ ] [WARNING] **`.invite` channel validator too loose** — `src/core/commands/irc-commands-admin.ts:191-202`. Defence-in-depth regex from SECURITY.md §2.2 not applied. Fix: add `/^[#&]?\w[\w\-\[\]\\\`^{}]{0,49}$/`.
+- [x] [WARNING] **`.chpass` self-rotation collapses whitespace** — `src/core/commands/password-commands.ts:200-205`. A caller running `.chpass myhandle hunter2 extra` silently sets password to "hunter2 extra" or interprets the first token as a different target handle. Fix: require explicit `--self` sentinel.
+- [x] [WARNING] **`.adduser` reply does not strip formatting from echoed hostmask** — `src/core/commands/permission-commands.ts:67`. Colour codes in the mask are rendered back. Fix: wrap the reply's `hostmask`/`flags` in `stripFormatting()`.
+- [x] [WARNING] **`.invite` channel validator too loose** — `src/core/commands/irc-commands-admin.ts:191-202`. Defence-in-depth regex from SECURITY.md §2.2 not applied. Fix: add `/^[#&]?\w[\w\-\[\]\\\`^{}]{0,49}$/`.
 - [x] [WARNING] **`.bsay` audit metadata not stripped** — `src/core/commands/botlink-commands.ts:617-621`. Inconsistent with `.say`/`.msg` which do strip. Fix: `stripFormatting(message)` before `tryAudit`.
 - [x] [WARNING] **`.bannounce` message unsanitized on the wire and in audit** — `src/core/commands/botlink-commands.ts:677-695`. Fix: `sanitize(message)` for the wire path, `stripFormatting(message)` for the mod_log copy.
-- [ ] [WARNING] **`.console` cross-handle gate reads stale session snapshot** — `src/core/commands/dcc-console-commands.ts:162-165`. A `+n` revoked mid-session still passes. Fix: re-resolve via `permissions.findByHostmask(...)` at the time of the mutation.
+- [x] [WARNING] **`.console` cross-handle gate reads stale session snapshot** — `src/core/commands/dcc-console-commands.ts:162-165`. A `+n` revoked mid-session still passes. Fix: re-resolve via `permissions.findByHostmask(...)` at the time of the mutation.
 
 ### Botlink
 
 - [ ] [WARNING] **`RELAY_REQUEST` / `RELAY_INPUT` bypass the `hasRemoteSession` gate** — `src/core/botlink/relay-router.ts:215-228`, `src/core/botlink/relay-handler.ts:76-100`. A compromised leaf can open a relay under any valid handle's name. Fix: require the originating leaf to prove a live DCC party session for the handle (mirror `hub-cmd-relay.ts:62-71`).
 - [ ] [WARNING] **`listen.host` default is `0.0.0.0`** — `src/core/botlink/hub.ts:131-134`, `config/bot.example.json`, `config/examples/multi-bot/libera/hub.json`. Combined with the fixed-salt replay, the example config exposes a replay-auth hub to every interface. Fix: default `listen.host` to `127.0.0.1`; log a loud warning if the resolved bind is non-loopback and non-RFC1918.
-- [ ] [WARNING] **`PROTECT_TAKEOVER` / `PROTECT_REGAIN` have no handlers** — `src/core/botlink/protocol.ts:93-94` lists them but `protect.ts:81-142` has no cases. Safe today (no-op), dangerous when a future implementer forgets `isRecognized()`. Fix: either delete the types or add explicit "not implemented" handlers with the same nick-existence check the OP/INVITE cases use.
+- [x] [WARNING] **`PROTECT_TAKEOVER` / `PROTECT_REGAIN` have no handlers** — `src/core/botlink/protocol.ts:93-94` lists them but `protect.ts:81-142` has no cases. Safe today (no-op), dangerous when a future implementer forgets `isRecognized()`. Fix: either delete the types or add explicit "not implemented" handlers with the same nick-existence check the OP/INVITE cases use.
 - [ ] [WARNING] **Unbounded rate limits on `BSAY`, `ANNOUNCE`, `RELAY_INPUT`, `RELAY_OUTPUT`, `PARTY_JOIN`/`PART`** — `src/core/botlink/hub-frame-dispatch.ts:195-208`. A compromised leaf can flood any of these. Fix: add per-frame-type rate buckets consistent with the existing CMD/PARTY*CHAT/PROTECT*\* buckets.
-- [ ] [WARNING] **Leaves accept unlimited CMD frames from hub** — `src/core/botlink/leaf.ts:366-411`. A compromised hub gets unbounded command execution on every leaf. Acceptable under the documented trust model; worth an explicit CPU ceiling nonetheless. Fix: add a soft per-second CMD cap on the leaf side, configurable, defaulting to 50/s.
+- [x] [WARNING] **Leaves accept unlimited CMD frames from hub** — `src/core/botlink/leaf.ts:366-411`. A compromised hub gets unbounded command execution on every leaf. Acceptable under the documented trust model; worth an explicit CPU ceiling nonetheless. Fix: add a soft per-second CMD cap on the leaf side, configurable, defaulting to 50/s.
 
 ### DCC
 
@@ -175,13 +188,13 @@ DCC had no warnings — see "Passed checks" below.
 
 ### Utils
 
-- [ ] [WARNING] **`parseDuration` does not support multi-unit durations** — `src/utils/duration.ts:31-36`. `"1h30m"` returns `null`. Not a bug, just an operator footgun. Fix: document in the JSDoc (or extend the regex).
-- [ ] [WARNING] **`buildSocksOptions` accepts asymmetric credentials / no `remoteDns:true`** — `src/utils/socks.ts:15-22`. Sends only `user` when password is missing; does not force remote DNS, so a leaky default in irc-framework could resolve hostnames locally. Fix: require both-or-neither; force `remoteDns: true` in the returned options.
-- [ ] [WARNING] **`formatTable` does not strip control chars** — `src/utils/table.ts:46`. Cells propagate ANSI / IRC formatting into terminal / REPL output. Fix: strip `\x00-\x1f\x7f` inside the formatter, or require callers to pre-sanitize.
-- [ ] [WARNING] **`parseHostmask` partial fallback** — `src/utils/irc-event.ts:48-58`. On `@host` (no `!`) returns `{ ident:'', hostname:'host' }`, which a caller could turn into `*!*@host`. Fix: return `{ident:'',hostname:''}` uniformly when the shape is wrong.
-- [ ] [WARNING] **`wildcardMatch` has no length cap on pattern or text** — `src/utils/wildcard.ts:59-103`. Worst-case O(n·m); no algorithmic DoS, but a plugin storing a large pattern can waste CPU. Fix: cap input sizes (e.g., pattern ≤ 512 bytes, text ≤ 4 KB).
-- [ ] [WARNING] **`splitMessage` scans untrimmed input before truncation** — `src/utils/split-message.ts:65`. `Buffer.byteLength` runs on the full string; a plugin-supplied 100 MB string still incurs an O(n) byte scan. Fix: add a hard entry cap (`text.length > 10 MB → drop and log`).
-- [ ] [WARNING] **`verify-flags.ts` treats unknown flags as level 0** — `src/utils/verify-flags.ts:50-55`. Fail-open shape (returns false → no verification), but paired with the flag-check path also rejecting unknown flags → net reject. Fragile. Fix: document; add a JSDoc sentence stating the invariant.
+- [x] [WARNING] **`parseDuration` does not support multi-unit durations** — `src/utils/duration.ts:31-36`. `"1h30m"` returns `null`. Not a bug, just an operator footgun. Fix: document in the JSDoc (or extend the regex).
+- [x] [WARNING] **`buildSocksOptions` accepts asymmetric credentials / no `remoteDns:true`** — `src/utils/socks.ts:15-22`. Sends only `user` when password is missing; does not force remote DNS, so a leaky default in irc-framework could resolve hostnames locally. Fix: require both-or-neither; force `remoteDns: true` in the returned options.
+- [x] [WARNING] **`formatTable` does not strip control chars** — `src/utils/table.ts:46`. Cells propagate ANSI / IRC formatting into terminal / REPL output. Fix: strip `\x00-\x1f\x7f` inside the formatter, or require callers to pre-sanitize.
+- [x] [WARNING] **`parseHostmask` partial fallback** — `src/utils/irc-event.ts:48-58`. On `@host` (no `!`) returns `{ ident:'', hostname:'host' }`, which a caller could turn into `*!*@host`. Fix: return `{ident:'',hostname:''}` uniformly when the shape is wrong.
+- [x] [WARNING] **`wildcardMatch` has no length cap on pattern or text** — `src/utils/wildcard.ts:59-103`. Worst-case O(n·m); no algorithmic DoS, but a plugin storing a large pattern can waste CPU. Fix: cap input sizes (e.g., pattern ≤ 512 bytes, text ≤ 4 KB).
+- [x] [WARNING] **`splitMessage` scans untrimmed input before truncation** — `src/utils/split-message.ts:65`. `Buffer.byteLength` runs on the full string; a plugin-supplied 100 MB string still incurs an O(n) byte scan. Fix: add a hard entry cap (`text.length > 10 MB → drop and log`).
+- [x] [WARNING] **`verify-flags.ts` treats unknown flags as level 0** — `src/utils/verify-flags.ts:50-55`. Fail-open shape (returns false → no verification), but paired with the flag-check path also rejecting unknown flags → net reject. Fragile. Fix: document; add a JSDoc sentence stating the invariant.
 
 ### Chanmod
 
@@ -194,16 +207,16 @@ DCC had no warnings — see "Passed checks" below.
 
 ### Plugin ai-chat
 
-- [ ] [WARNING] **History attribution uses raw `e.nick`** — `plugins/ai-chat/context-manager.ts:175`. The volatile-header speaker filter is not applied to historical entries. IRC server rules make this safe in practice, but the filter is applied inconsistently. Fix: use the same `safeSpeaker` regex on history entries.
-- [ ] [WARNING] **Coalescer 8 KB cap vs 2000-char prompt cap mismatch** — `plugins/ai-chat/message-coalescer.ts:85-88`. Large bursts silently lose ~6 K of content. Fix: align the coalescer cap to `cfg.input.maxPromptChars` (bytes-aware).
-- [ ] [WARNING] **Session pipeline `[nick]` attribution uses unfiltered `ctx.nick`** — `plugins/ai-chat/pipeline.ts:478`. Intentional per comment, but inconsistent with the chat path's `safeSpeaker`. Fix: pass session speakers through `safeSpeaker` too.
+- [x] [WARNING] **History attribution uses raw `e.nick`** — `plugins/ai-chat/context-manager.ts:175`. The volatile-header speaker filter is not applied to historical entries. IRC server rules make this safe in practice, but the filter is applied inconsistently. Fix: use the same `safeSpeaker` regex on history entries.
+- [x] [WARNING] **Coalescer 8 KB cap vs 2000-char prompt cap mismatch** — `plugins/ai-chat/message-coalescer.ts:85-88`. Large bursts silently lose ~6 K of content. Fix: align the coalescer cap to `cfg.input.maxPromptChars` (bytes-aware).
+- [x] [WARNING] **Session pipeline `[nick]` attribution uses unfiltered `ctx.nick`** — `plugins/ai-chat/pipeline.ts:478`. Intentional per comment, but inconsistent with the chat path's `safeSpeaker`. Fix: pass session speakers through `safeSpeaker` too.
 
 ### Plugin flood + rss
 
 - [x] [WARNING] **RSS redirect handling lacks visited-origin / cross-host policy** — `plugins/rss/feed-fetcher.ts:134-149`. `for (let r=0; r<=MAX_REDIRECTS; r++)` also allows 6 iterations instead of 5. Fix: add a `visited:Set` check; cap loop at `< MAX_REDIRECTS`; refuse `https:→http:` downgrade on redirect even when `allow_http=true`.
 - [x] [WARNING] **RSS content-type allowlist too permissive** — `plugins/rss/feed-fetcher.ts:248-253`. `text` substring matches `text/html`, `text/plain`. Missing Content-Type passes entirely (`contentType && …`). Fix: tighten to an explicit list; reject missing CT.
 - [x] [WARNING] **RSS audit / notice paths skip `stripFormatting` on URL** — `plugins/rss/commands.ts:227-232, 99-103`. `new URL()` tolerates some control bytes in path/fragment. Fix: strip before persisting; wrap notices in `api.stripFormatting()`.
-- [ ] [WARNING] **RSS `stripHtmlTags` does not decode entities before stripping** — `plugins/rss/feed-formatter.ts:9-31`. Informational only (IRC-format injection via entities not exploitable), but confusing behaviour. Fix: decode first, then strip.
+- [x] [WARNING] **RSS `stripHtmlTags` does not decode entities before stripping** — `plugins/rss/feed-formatter.ts:9-31`. Informational only (IRC-format injection via entities not exploitable), but confusing behaviour. Fix: decode first, then strip.
 - [x] [WARNING] **Flood `buildFloodBanMask` allows `[`, `]`, `/` in host** — `plugins/flood/enforcement-executor.ts:377`. IPv6-wrapped literals produce masks that never match; long cloaks with no length cap. Fix: add max-length cap (~256 chars); strip bracket wrappers for IPv6.
 - [x] [WARNING] **Flood `handleNickFlood` iterates only startup channels** — `plugins/flood/index.ts:248`. Dynamically-joined channels get no nick-flood enforcement. Fix: iterate the bot's current channel set from `channel-state`.
 - [ ] [WARNING] **Flood `isPrivileged` trusts hostmask alone on non-account-tag networks** — `plugins/flood/index.ts:128-141`. Inherited from the permission model (documented), but weak-pattern users can evade flood enforcement. Accept the limitation; document in the plugin README.
@@ -226,23 +239,23 @@ DCC had no warnings — see "Passed checks" below.
 
 - [x] [INFO] Plugin-facing `botConfig` sub-objects (`irc`, `owner`, `identity`, `services`, `logging`, `chanmod`) are not individually `Object.freeze()`-d, contrary to SECURITY.md §4.1. They are spread copies per-plugin, so mutation doesn't leak across — but the documented guarantee is stronger than the implementation.
 - [x] [INFO] No startup sweep for weak hostmask patterns (`permissions.auditWeakHostmasks()`). SECURITY.md §3.1 expects a `[security]` warning; only `.adduser`/`.addhostmask` paths warn today.
-- [ ] [INFO] `EventDispatcher.checkFlags` returns `true` when `permissions` is null (`src/dispatcher.ts:443-444`). Production always supplies one; a future test harness is the only risk. Consider flipping to fail-closed.
-- [ ] [INFO] `CommandHandler.checkCommandPermissions` bypasses flag checks for `source: 'botlink'`. Correct under the hub-authoritative model; add a comment upgrade pointing at the specific authenticator so future maintainers don't relax it further.
+- [x] [INFO] `EventDispatcher.checkFlags` returns `true` when `permissions` is null (`src/dispatcher.ts:443-444`). Production always supplies one; a future test harness is the only risk. Consider flipping to fail-closed.
+- [x] [INFO] `CommandHandler.checkCommandPermissions` bypasses flag checks for `source: 'botlink'`. Correct under the hub-authoritative model; add a comment upgrade pointing at the specific authenticator so future maintainers don't relax it further.
 
 ### Database / config
 
 - [x] [INFO] World-readable check covers `config/bot.json` but not `.env*` — `src/bot.ts:962-974`. Fix: extend to `.env`, `.env.local`, `.env.<NODE_ENV>`; treat group-readable (`0o040`) as at least a warning.
-- [ ] [INFO] `nick_recovery_password` not covered by `validateResolvedSecrets`. Intentional — chanmod validates at load — but the symmetry break is non-obvious.
+- [x] [INFO] `nick_recovery_password` not covered by `validateResolvedSecrets`. Intentional — chanmod validates at load — but the symmetry break is non-obvious.
 - [x] [INFO] LIKE escape order in `database.ts:320-329` is correct but fragile; extract `escapeLikePattern()` helper with unit tests. `mod-log.ts:494` duplicates the same escape.
-- [ ] [INFO] Reserved DB namespaces (`_bans`, `_sts`, `_permissions`) are protected only by `SAFE_NAME_RE` on plugin names. Add an explicit reserved-prefix list.
+- [x] [INFO] Reserved DB namespaces (`_bans`, `_sts`, `_permissions`) are protected only by `SAFE_NAME_RE` on plugin names. Add an explicit reserved-prefix list.
 - [x] [INFO] `BotDatabase.rawHandleForTests()` has no `NODE_ENV=test` guard (`src/database.ts:205-208`). Guard it.
 
 ### Permissions / identity
 
-- [ ] [INFO] Pending-verify cap rejection is silent — `src/core/services.ts:312-319`. No `mod_log` row. Fix: emit a `nickserv-verify-cap` row.
-- [ ] [INFO] `ghostAndReclaim` 1500 ms sleep is best-effort — `src/core/services.ts:615-623`. Fix: listen for GHOST ack and proceed on signal with the sleep as upper bound.
-- [ ] [INFO] `tryParseAccResponse`/`tryParseStatusResponse` accept trailing text — `src/core/services-parser.ts:22-33`. Anchor with `(?:\s|$)` or `$`.
-- [ ] [INFO] `$a:` matcher uses RFC1459 casemapping — correct, but account names aren't nicks. Document in SECURITY.md §3.1.
+- [x] [INFO] Pending-verify cap rejection is silent — `src/core/services.ts:312-319`. No `mod_log` row. Fix: emit a `nickserv-verify-cap` row.
+- [x] [INFO] `ghostAndReclaim` 1500 ms sleep is best-effort — `src/core/services.ts:615-623`. Fix: listen for GHOST ack and proceed on signal with the sleep as upper bound.
+- [x] [INFO] `tryParseAccResponse`/`tryParseStatusResponse` accept trailing text — `src/core/services-parser.ts:22-33`. Anchor with `(?:\s|$)` or `$`.
+- [x] [INFO] `$a:` matcher uses RFC1459 casemapping — correct, but account names aren't nicks. Document in SECURITY.md §3.1.
 
 ### Channel / IRC runtime
 
@@ -255,9 +268,9 @@ DCC had no warnings — see "Passed checks" below.
 ### Core commands
 
 - [ ] [INFO] `.modlog show` cross-row access check blocks masters from rows with no channel — correct fail-closed.
-- [ ] [INFO] `.audit-tail` REPL output skips `stripFormatting` in `renderRow`. REPL-only, so attacker value is limited to terminal colour injection. Fix for symmetry with `.modlog show`.
-- [ ] [INFO] `.botlink ban` is IPv4-only. Documented limitation.
-- [ ] [INFO] `.bans` prints shared-ban entries without `stripFormatting`. Sanitized at the botlink frame boundary; add `stripFormatting` for defence-in-depth.
+- [x] [INFO] `.audit-tail` REPL output skips `stripFormatting` in `renderRow`. REPL-only, so attacker value is limited to terminal colour injection. Fix for symmetry with `.modlog show`.
+- [x] [INFO] `.botlink ban` is IPv4-only. Documented limitation.
+- [x] [INFO] `.bans` prints shared-ban entries without `stripFormatting`. Sanitized at the botlink frame boundary; add `stripFormatting` for defence-in-depth.
 
 ### Botlink
 
@@ -269,10 +282,10 @@ DCC had no warnings — see "Passed checks" below.
 
 ### DCC
 
-- [ ] [INFO] Port/IP range validation in `parseDccChatPayload` (`src/core/dcc/protocol.ts:63-69`) is lenient — no exploit because passive mode requires `port===0`. Tighten to `Number.isInteger(port) && port >= 0 && port <= 65535` for clarity.
-- [ ] [INFO] `ipToDecimal` silently returns 0 on malformed IPs — operator misconfig only. Add a config-load validator.
-- [ ] [INFO] `onDccCtcp` logs `ctx.args` verbatim at debug — bridge strips `\r\n\0` so no injection, but IRC-format codes survive. Apply `stripFormatting`.
-- [ ] [INFO] IRC mirror has no rate-limit on the mirror path itself — bounded by upstream rate limiters and by the IRC message queue; still worth adding a DCC-side cap.
+- [x] [INFO] Port/IP range validation in `parseDccChatPayload` (`src/core/dcc/protocol.ts:63-69`) is lenient — no exploit because passive mode requires `port===0`. Tighten to `Number.isInteger(port) && port >= 0 && port <= 65535` for clarity.
+- [x] [INFO] `ipToDecimal` silently returns 0 on malformed IPs — operator misconfig only. Add a config-load validator.
+- [x] [INFO] `onDccCtcp` logs `ctx.args` verbatim at debug — bridge strips `\r\n\0` so no injection, but IRC-format codes survive. Apply `stripFormatting`.
+- [x] [INFO] IRC mirror has no rate-limit on the mirror path itself — bounded by upstream rate limiters and by the IRC message queue; still worth adding a DCC-side cap.
 
 ### Utils
 

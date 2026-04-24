@@ -71,13 +71,21 @@ export function parseBanArgs(
 
 /**
  * Validate a single-token `<#channel>` argument. Returns the trimmed
- * channel on success or `null` if the arg is missing or doesn't start
- * with `#`. Used by `.join`, `.part`, and anywhere else a channel is the
- * sole required argument.
+ * channel on success or `null` if the arg is missing or doesn't match
+ * the defence-in-depth shape from SECURITY.md §2.2. Used by `.join`,
+ * `.part`, `.invite`, and anywhere else a channel is the sole required
+ * argument.
+ *
+ * The regex accepts `&` in addition to `#` (RFC 1459 &-channels still
+ * exist on legacy networks), a leading channel char, then 1–49 of the
+ * permitted RFC nick / channel byte set. Rejects whitespace, `,`, `:`
+ * (IRC trailing-arg sentinel), and control bytes outright.
  */
+const CHANNEL_SHAPE_RE = /^[#&][\w\-[\]\\`^{}]{1,49}$/;
 export function validateChannel(arg: string): string | null {
   const channel = arg.trim();
-  if (!channel || !channel.startsWith('#')) return null;
+  if (!channel) return null;
+  if (!CHANNEL_SHAPE_RE.test(channel)) return null;
   return channel;
 }
 

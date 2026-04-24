@@ -288,15 +288,17 @@ describe('EventDispatcher', () => {
       expect(handler).toHaveBeenCalledOnce();
     });
 
-    it('should allow all flags when no permissions system is attached', async () => {
+    it('should fail closed when no permissions system is attached', async () => {
       const handler = vi.fn();
       dispatcher.bind('pub', 'n', '!admin', handler, 'test-plugin');
 
       const ctx = makeCtx({ command: '!admin' });
       await dispatcher.dispatch('pub', ctx);
 
-      // No permissions system → always allows
-      expect(handler).toHaveBeenCalledOnce();
+      // No permissions system → deny flag-gated binds. Production always
+      // supplies one; a test harness that skips it should fail closed so
+      // a regression doesn't silently strip the flag check from every bind.
+      expect(handler).not.toHaveBeenCalled();
     });
 
     it('should check flags via permissions provider when attached', async () => {

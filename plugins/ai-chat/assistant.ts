@@ -1,7 +1,7 @@
 // Assistant — orchestrates provider + context + rate limit + token budget + output formatting.
 // Kept separate from the plugin entry so it can be unit-tested with a mock provider.
 import type { ProviderSemaphore } from './concurrency';
-import type { ContextManager } from './context-manager';
+import { type ContextManager, safeSpeakerName } from './context-manager';
 import type { IterStats } from './iter-stats';
 import { detectPromptEcho, formatResponse } from './output-formatter';
 import {
@@ -347,12 +347,12 @@ export function renderVolatileHeader(ctx: PromptContext): string {
     parts.push(`a private chat on ${ctx.network}.`);
   }
   if (ctx.speaker) {
-    const safeSpeaker = ctx.speaker.replace(/[^A-Za-z0-9_`{}[\]\\^|-]/g, '').slice(0, 30);
+    const safeSpeaker = safeSpeakerName(ctx.speaker);
     if (safeSpeaker) parts.push(`Speaking to you now: ${safeSpeaker}.`);
   }
   if (ctx.recentSpeakers && ctx.recentSpeakers.length > 0) {
     const safeRecent = ctx.recentSpeakers
-      .map((n) => n.replace(/[^A-Za-z0-9_`{}[\]\\^|-]/g, '').slice(0, 30))
+      .map((n) => safeSpeakerName(n))
       .filter((n) => n.length > 0)
       .slice(0, 3);
     if (safeRecent.length > 0) parts.push(`Recently spoke: ${safeRecent.join(', ')}.`);

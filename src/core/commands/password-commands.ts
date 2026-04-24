@@ -181,8 +181,33 @@ function resolveCallerAndTarget(
   ctx: CommandContext,
   permissions: Permissions,
 ): ResolvedCall {
+  // `--self` sentinel: explicit self-rotation. Prevents the ambiguity in
+  // `.chpass myhandle hunter2 extra` where the user's intent could be
+  // "rotate my own password to 'hunter2 extra'" or "rotate myhandle's
+  // password to 'hunter2 extra'" depending on interpretation. Requiring
+  // the sentinel makes the choice explicit and eliminates the quiet
+  // whitespace collapse below from becoming a credential-assignment bug.
+  if (parts[0] === '--self') {
+    if (parts.length < 2) {
+      return { error: 'chpass: usage: .chpass --self <new-password>' };
+    }
+    const callerHandle = resolveCallerHandle(ctx, permissions);
+    if (!callerHandle) {
+      return {
+        error:
+          'chpass: could not resolve your user handle. Provide <handle> explicitly or ask an owner.',
+      };
+    }
+    return {
+      targetHandle: callerHandle,
+      newpass: parts.slice(1).join(' '),
+      isSelfRotation: true,
+    };
+  }
+
   if (parts.length === 1) {
-    // Self-rotation — resolve the caller to a handle.
+    // Legacy single-arg path — self-rotation with no sentinel. Kept for
+    // ergonomics (the common case: a DCC-authed user typing one arg).
     const callerHandle = resolveCallerHandle(ctx, permissions);
     if (!callerHandle) {
       return {
@@ -193,14 +218,20 @@ function resolveCallerAndTarget(
     return { targetHandle: callerHandle, newpass: parts[0], isSelfRotation: true };
   }
 
-  // parts.length >= 2 — split produced multiple segments. Passwords may
-  // contain spaces if the transport preserves them, but `.split` above already
-  // dropped empty segments; rejoin the rest with single spaces. This is the
-  // documented behavior — nested whitespace is collapsed.
+  // parts.length >= 2 — two-arg form is explicit-target: `.chpass <handle> <newpass>`.
+  // Refuse passwords containing whitespace in this shape; the caller should
+  // use `.chpass --self ...` to disambiguate, or quote-strip upstream.
   const [handle, ...rest] = parts;
+  if (rest.length > 1) {
+    return {
+      error:
+        'chpass: password contains whitespace — use `.chpass --self <password>` for self-rotation ' +
+        'or ensure the explicit-target form passes exactly two arguments.',
+    };
+  }
   return {
     targetHandle: handle,
-    newpass: rest.join(' '),
+    newpass: rest[0],
     isSelfRotation: resolveCallerHandle(ctx, permissions)?.toLowerCase() === handle.toLowerCase(),
   };
 }

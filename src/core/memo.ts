@@ -140,6 +140,18 @@ export class MemoManager {
     this.dccManager = deps.dccManager ?? null;
     this.hasRelayConsole = deps.hasRelayConsole ?? (() => false);
     this.eventBus = deps.eventBus ?? null;
+    // Validate the configured MemoServ nick at construction so typos surface
+    // at startup — a `memoserv_nick: "#channel"` would otherwise leak READ
+    // commands to a channel, and a `memoserv_nick: "alice"` would route a
+    // real user's notices as privileged admin spam. RFC 2812 nick charset:
+    // letter or special, then letter/digit/special/hyphen.
+    const nick = this.config.memoserv_nick;
+    if (!/^[A-Za-z_\-[\]\\`^{}|][A-Za-z0-9_\-[\]\\`^{}|]{0,31}$/.test(nick)) {
+      this.logger?.warn(
+        `[security] memo.memoserv_nick=${JSON.stringify(nick)} is not a valid IRC nick — ` +
+          `MemoServ relay will misfire. Fix the config before the next memo arrives.`,
+      );
+    }
   }
 
   /** Update casemapping when the server announces it. */

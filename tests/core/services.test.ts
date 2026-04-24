@@ -338,6 +338,40 @@ describe('Services', () => {
       services.detach();
       await Promise.all(pending);
     });
+
+    it('emits a nickserv-verify-cap audit row when the cap is exceeded', async () => {
+      const { BotDatabase } = await import('../../src/database');
+      const db = new BotDatabase(':memory:');
+      db.open();
+      const client = new MockClient();
+      const eventBus = new BotEventBus();
+      const services = new Services({
+        client,
+        servicesConfig: {
+          type: 'atheme',
+          nickserv: 'NickServ',
+          password: 'pw',
+          sasl: false,
+        },
+        eventBus,
+        db,
+      });
+      services.attach();
+
+      const pending: Array<Promise<unknown>> = [];
+      for (let i = 0; i < 128; i++) {
+        pending.push(services.verifyUser(`nick${i}`, 60_000));
+      }
+      await services.verifyUser('overflow', 60_000);
+
+      const rows = db.getModLog({ action: 'nickserv-verify-cap' });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].target).toBe('overflow');
+
+      services.detach();
+      await Promise.all(pending);
+      db.close();
+    });
   });
 
   describe('event emission', () => {
@@ -896,6 +930,77 @@ describe('Services', () => {
       client.sent = [];
       client.simulateNotice('NickServ', 'This nickname is registered');
       expect(client.sent.some((m) => m.message.startsWith('IDENTIFY'))).toBe(true);
+    });
+
+    it('races the 1.5s delay against a GHOST ack notice and proceeds early', async () => {
+      const { services, client } = createServices({ password: 'botpass' });
+      const changeNickSpy = vi.spyOn(client, 'changeNick');
+
+      const promise = services.ghostAndReclaim('HEX', 'botpass');
+      // Before the 1.5s sleep expires, simulate an Atheme-style ack.
+      await vi.advanceTimersByTimeAsync(100);
+      client.simulateNotice('NickServ', 'HEX has been ghosted.');
+      // Drain pending microtasks so the race resolves and changeNick fires
+      // without having to burn the full 1500ms.
+      await vi.advanceTimersByTimeAsync(0);
+      await promise;
+      expect(changeNickSpy).toHaveBeenCalledWith('HEX');
+    });
+  });
+
+  describe('services_host_pattern NickServ source guard', () => {
+    it('accepts NickServ notices from a matching host', () => {
+      const client = new MockClient();
+      const eventBus = new BotEventBus();
+      const services = new Services({
+        client,
+        servicesConfig: {
+          type: 'atheme',
+          nickserv: 'NickServ',
+          password: 'pw',
+          sasl: false,
+          services_host_pattern: 'services.*',
+        },
+        eventBus,
+      });
+      services.attach();
+      const verify = services.verifyUser('alice');
+      client.emit('notice', {
+        nick: 'NickServ',
+        hostname: 'services.example.net',
+        message: 'alice ACC 3',
+      });
+      return verify.then((r) => expect(r.verified).toBe(true));
+    });
+
+    it('rejects NickServ-nick notices from an unexpected host', async () => {
+      vi.useFakeTimers();
+      const client = new MockClient();
+      const eventBus = new BotEventBus();
+      const services = new Services({
+        client,
+        servicesConfig: {
+          type: 'atheme',
+          nickserv: 'NickServ',
+          password: 'pw',
+          sasl: false,
+          services_host_pattern: 'services.*',
+        },
+        eventBus,
+      });
+      services.attach();
+      const verifyPromise = services.verifyUser('alice');
+      // Spoofed notice from a non-services host — must be ignored.
+      client.emit('notice', {
+        nick: 'NickServ',
+        hostname: 'evil.badnet.org',
+        message: 'alice ACC 3',
+      });
+      // No ack → falls through the natural 5s timeout path.
+      await vi.advanceTimersByTimeAsync(5_000);
+      const result = await verifyPromise;
+      expect(result.verified).toBe(false);
+      vi.useRealTimers();
     });
   });
 });

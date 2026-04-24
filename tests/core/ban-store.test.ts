@@ -303,4 +303,29 @@ describe('BanStore', () => {
       expect(db.get('chanmod', 'ban:#test:nullrow')).toBeNull();
     });
   });
+
+  describe('reconcileChannelBans', () => {
+    it('drops records whose masks are no longer on the server', () => {
+      store.storeBan('#test', '*!*@evil.com', 'admin', 0);
+      store.storeBan('#test', '*!*@lifted.com', 'admin', 0);
+      const dropped = store.reconcileChannelBans('#test', ['*!*@evil.com']);
+      expect(dropped).toBe(1);
+      expect(store.getBan('#test', '*!*@evil.com')).not.toBeNull();
+      expect(store.getBan('#test', '*!*@lifted.com')).toBeNull();
+    });
+
+    it('returns zero when every stored mask is still on the server', () => {
+      store.storeBan('#test', '*!*@a', 'admin', 0);
+      store.storeBan('#test', '*!*@b', 'admin', 0);
+      expect(store.reconcileChannelBans('#test', ['*!*@a', '*!*@b', '*!*@c'])).toBe(0);
+    });
+
+    it('scopes reconciliation to the specified channel', () => {
+      store.storeBan('#one', '*!*@keep', 'admin', 0);
+      store.storeBan('#two', '*!*@drop', 'admin', 0);
+      store.reconcileChannelBans('#one', ['*!*@keep']);
+      // #two was out of scope — still present
+      expect(store.getBan('#two', '*!*@drop')).not.toBeNull();
+    });
+  });
 });

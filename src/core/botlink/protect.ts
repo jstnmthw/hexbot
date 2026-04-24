@@ -137,6 +137,15 @@ export function handleProtectFrame(
       deps.ircCommands.kick(channel, nick, reason);
       return sendAndReturn(true);
     }
+    case 'PROTECT_TAKEOVER':
+    case 'PROTECT_REGAIN': {
+      // Reserved frame types — the protocol enumerates them so a future
+      // release can add the logic, but no handler exists today. Return an
+      // explicit NACK so a leaf that speaks a newer protocol isn't left
+      // waiting on an ACK. Avoids the footgun where silently dropping the
+      // frame leaves the requester thinking the action succeeded.
+      return sendAndReturn(false, `${frame.type} not implemented`);
+    }
     default:
       return undefined;
   }

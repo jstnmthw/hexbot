@@ -287,4 +287,36 @@ describe('ChannelSettings', () => {
       expect(entry.isDefault).toBe(false);
     });
   });
+
+  describe('set with actor — mod_log audit', () => {
+    it('writes a chanset row when an actor is supplied', () => {
+      cs.register('myplugin', [flagDef]);
+      cs.set('#chan', 'bitch', true, { by: 'alice', source: 'irc' });
+
+      const rows = db.getModLog({ action: 'chanset' });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].by).toBe('alice');
+      expect(rows[0].target).toBe('bitch');
+      expect(rows[0].reason).toBe('true');
+      // `plugin` is absent for non-plugin sources (it would be rejected by
+      // the mod_log insert).
+      expect(rows[0].plugin).toBe(null);
+    });
+
+    it('attaches plugin=<def.pluginId> on plugin-sourced mutations', () => {
+      cs.register('myplugin', [flagDef]);
+      cs.set('#chan', 'bitch', true, { by: 'bot', source: 'plugin', plugin: 'myplugin' });
+
+      const rows = db.getModLog({ action: 'chanset' });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].source).toBe('plugin');
+      expect(rows[0].plugin).toBe('myplugin');
+    });
+
+    it('skips the audit row when no actor is supplied (legacy caller)', () => {
+      cs.register('myplugin', [flagDef]);
+      cs.set('#chan', 'bitch', true);
+      expect(db.getModLog({ action: 'chanset' })).toHaveLength(0);
+    });
+  });
 });

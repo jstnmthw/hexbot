@@ -64,7 +64,19 @@ export function parseDccChatPayload(args: string): DccChatPayload | null {
   const port = parseInt(parts[3], 10);
   const token = parts[4] !== undefined ? parseInt(parts[4], 10) : 0;
 
-  if (!Number.isFinite(ip) || !Number.isFinite(port)) return null;
+  // Tighten the numeric guards: reject NaN, Infinity, fractional values, and
+  // out-of-range numbers. Port must be a non-negative 16-bit integer (0 is
+  // the passive-DCC sentinel); IP must be a non-negative 32-bit integer.
+  if (
+    !Number.isInteger(ip) ||
+    ip < 0 ||
+    ip > 0xffffffff ||
+    !Number.isInteger(port) ||
+    port < 0 ||
+    port > 65535
+  ) {
+    return null;
+  }
 
   return { subtype, ip, port, token };
 }

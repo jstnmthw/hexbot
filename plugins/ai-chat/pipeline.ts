@@ -21,7 +21,7 @@ import {
 import type { Character } from './characters/types';
 import type { ProviderSemaphore } from './concurrency';
 import type { AiChatConfig } from './config';
-import type { ContextManager } from './context-manager';
+import { type ContextManager, safeSpeakerName } from './context-manager';
 import type { EngagementTracker } from './engagement-tracker';
 import type { IterStats } from './iter-stats';
 import type { MoodEngine } from './mood';
@@ -473,9 +473,14 @@ export async function runSessionPipeline(
   // treat the player as a distinct entity ("the player said: …") and the
   // bracket tag makes that boundary obvious to the model even inside games
   // with multi-role transcripts (trivia host / contestant).
+  // Apply the same `safeSpeakerName` filter as the chat path before
+  // surfacing the session's `[nick]` tag into the prompt. A nick carrying
+  // punctuation could otherwise be interpreted by some models as role
+  // metadata; keep session transcripts consistent with the header sanitiser.
+  const safeNick = safeSpeakerName(ctx.nick) || 'user';
   const userMsg: AIMessage = {
     role: 'user',
-    content: volatileHeader ? `${volatileHeader} [${ctx.nick}] ${text}` : `[${ctx.nick}] ${text}`,
+    content: volatileHeader ? `${volatileHeader} [${safeNick}] ${text}` : `[${safeNick}] ${text}`,
   };
 
   // Concurrency gate — same rationale as runPipeline. Acquire after the cheap

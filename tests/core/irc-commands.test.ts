@@ -525,4 +525,38 @@ describe('IRCCommands', () => {
 
     expect(warnSpy).toHaveBeenCalledWith('Failed to record mod_log entry for ban:', dbError);
   });
+
+  describe('byte caps and MODE param validation', () => {
+    it('clamps long kick reasons to the byte cap before writing to the wire', () => {
+      const longReason = 'A'.repeat(500);
+      irc.kick('#test', 'alice', longReason);
+      const raw = client.sent.find((s) => s.type === 'raw')!;
+      const line = raw.args[0] as string;
+      // 250-byte cap leaves a line well under the 512-byte IRC ceiling.
+      expect(line.length).toBeLessThanOrEqual(350);
+      expect(line).toMatch(/^KICK #test alice :A+$/);
+    });
+
+    it('clamps long topics to the topic byte cap', () => {
+      const longTopic = 'B'.repeat(500);
+      irc.topic('#test', longTopic);
+      const raw = client.sent.find(
+        (s) => s.type === 'raw' && (s.args[0] as string).startsWith('TOPIC'),
+      )!;
+      const line = raw.args[0] as string;
+      expect(line.length).toBeLessThanOrEqual(450);
+    });
+
+    it('rejects MODE params containing whitespace', () => {
+      expect(() => irc.mode('#test', '+o', 'alice bob')).toThrow(/unsafe MODE param/);
+    });
+
+    it('rejects MODE params with a leading colon', () => {
+      expect(() => irc.mode('#test', '+b', ':sneaky')).toThrow(/unsafe MODE param/);
+    });
+
+    it('rejects MODE params containing a comma', () => {
+      expect(() => irc.mode('#test', '+o', 'alice,bob')).toThrow(/unsafe MODE param/);
+    });
+  });
 });

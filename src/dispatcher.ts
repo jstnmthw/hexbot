@@ -327,22 +327,39 @@ export class EventDispatcher {
    * or if the user is already known to be identified (from account-notify/extended-join),
    * or if NickServ ACC confirms identity. Returns false (deny) if verification
    * is required and the user is not identified or the query timed out.
+   *
+   * Once identification is confirmed, re-runs the flag check with the
+   * resolved account bound to `ctx.account`. A weak hostmask record
+   * (`nick!*@*`) plus "identified to some other account" originally
+   * passed the gate — because the first check only asked "is this nick
+   * identified?" not "does this nick identify as the account the winning
+   * record expects?". The second pass forces the record resolved through
+   * the pattern matcher to still win after the account bond is applied.
    */
   private async checkVerification(flags: string, ctx: HandlerContext): Promise<boolean> {
     const verification = this.verification;
     if (verification === null) return true;
     if (!verification.requiresVerificationForFlags(flags)) return true;
 
+    let confirmedAccount: string | null;
     // Fast path: check the live account map populated by account-notify / extended-join
     const known = verification.getAccountForNick(ctx.nick);
     if (known !== undefined) {
-      // We have definitive information — no NickServ round-trip needed
-      return known !== null; // null = known not identified
+      if (known === null) return false; // known not identified
+      confirmedAccount = known;
+    } else {
+      // Slow path: fall back to NickServ ACC query (pre-IRCv3 or if account data not yet received)
+      const result = await verification.verifyUser(ctx.nick);
+      if (!result.verified) return false;
+      confirmedAccount = result.account;
     }
 
-    // Slow path: fall back to NickServ ACC query (pre-IRCv3 or if account data not yet received)
-    const result = await verification.verifyUser(ctx.nick);
-    return result.verified;
+    // Second pass with the confirmed account bound — ensures the record that
+    // originally satisfied the flag check still wins when the account is
+    // known. If `permissions` is null, fail closed (dispatcher.checkFlags
+    // already enforces that on the first pass).
+    if (!this.permissions) return false;
+    return this.permissions.checkFlags(flags, { ...ctx, account: confirmedAccount });
   }
 
   /** List registered binds, optionally filtered. */
@@ -440,8 +457,11 @@ export class EventDispatcher {
     // No flags required — anyone can trigger
     if (requiredFlags === '-' || requiredFlags === '') return true;
 
-    // If no permissions system is attached, allow everything
-    if (!this.permissions) return true;
+    // Fail-closed when no permissions system is attached. Production always
+    // wires one up; only a misconfigured test harness or a mid-teardown
+    // dispatcher would hit this branch, and both should deny rather than
+    // silently allow flag-gated binds through.
+    if (!this.permissions) return false;
 
     return this.permissions.checkFlags(requiredFlags, ctx);
   }

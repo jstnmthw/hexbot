@@ -88,8 +88,6 @@ export async function verifyPassword(
 ): Promise<VerifyPasswordResult> {
   if (!isValidPasswordFormat(stored)) return { ok: false, reason: 'malformed' };
   const [, saltHex, hashHex] = stored.split('$');
-  // Lengths are already guaranteed by isValidPasswordFormat — the hex decode
-  // can't produce a mismatched buffer given that gate, so we skip a second check.
   const salt = Buffer.from(saltHex, 'hex');
   const expected = Buffer.from(hashHex, 'hex');
   let actual: Buffer;
@@ -100,6 +98,13 @@ export async function verifyPassword(
     return { ok: false, reason: 'scrypt-error' };
   }
   /* v8 ignore stop */
+  // Explicit length equality before timingSafeEqual. isValidPasswordFormat
+  // already enforces the expected hex length, so on the current code path
+  // `actual.length` and `expected.length` always agree — but timingSafeEqual
+  // throws on mismatched lengths, and a future refactor that weakens the
+  // format check would leak timing via exception-vs-boolean. The guard keeps
+  // the two defences independent.
+  if (actual.length !== expected.length) return { ok: false, reason: 'mismatch' };
   return timingSafeEqual(actual, expected) ? { ok: true } : { ok: false, reason: 'mismatch' };
 }
 

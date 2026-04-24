@@ -11,6 +11,7 @@ import { executeCmdFrame } from './cmd-exec.js';
 import { Heartbeat } from './heartbeat';
 import { PendingRequestMap } from './pending';
 import { BotLinkProtocol, hashPassword } from './protocol';
+import { RateCounter } from './rate-counter.js';
 import type {
   CommandRelay,
   LinkFrame,
@@ -51,6 +52,15 @@ export class BotLinkLeaf {
   private cmdRefCounter = 0;
   private cmdHandler: CommandRelay | null = null;
   private cmdPermissions: LinkPermissions | null = null;
+  /**
+   * Soft rate cap on hub→leaf CMD frames. The documented trust model puts
+   * the hub on the authenticated side, but a compromised hub would
+   * otherwise get unbounded command execution on every leaf — a CPU-level
+   * blast radius far beyond what any single hub operation should incur.
+   * Default 50/s matches the audit's suggested ceiling; operators that run
+   * batched admin scripts can raise it via `botlink.leaf_cmd_rate_limit`.
+   */
+  private cmdRateLimit: RateCounter;
 
   /** Fired when handshake completes. */
   onConnected: ((hubBotname: string) => void) | null = null;
@@ -74,6 +84,8 @@ export class BotLinkLeaf {
     this.reconnectDelay = this.reconnectDelayMs;
     this.pingIntervalMs = config.ping_interval_ms ?? 30_000;
     this.linkTimeoutMs = config.link_timeout_ms ?? 90_000;
+    const cmdLimit = Math.max(1, config.leaf_cmd_rate_limit ?? 50);
+    this.cmdRateLimit = new RateCounter(cmdLimit, 1_000);
   }
 
   /** Connect to the hub via TCP. */
@@ -401,6 +413,19 @@ export class BotLinkLeaf {
     // `cmdHandler` and `cmdPermissions` are wired together by `setCommandRelay`,
     // so checking both here keeps the non-null narrowing local and explicit.
     if (frame.type === 'CMD' && this.cmdHandler && this.cmdPermissions) {
+      if (!this.cmdRateLimit.check()) {
+        // Reply with an empty CMD_RESULT so the hub's pending handler
+        // resolves rather than timing out. Log a warning so a compromised
+        // or misbehaving hub surfaces in the leaf log.
+        this.logger?.warn(
+          '[security] leaf CMD rate limit exceeded — refusing hub CMD frame until next second',
+        );
+        const ref = typeof frame.ref === 'string' ? frame.ref : '';
+        if (ref) {
+          this.send({ type: 'CMD_RESULT', ref, output: ['Rate limit exceeded'] });
+        }
+        return;
+      }
       executeCmdFrame(frame, this.cmdHandler, this.cmdPermissions, (ref, output) => {
         this.send({ type: 'CMD_RESULT', ref, output });
       });

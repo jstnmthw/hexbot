@@ -78,4 +78,17 @@ describe('formatTable', () => {
     const result = formatTable(rows, { indent: '', gap: '-' });
     expect(result).toBe('x-y');
   });
+
+  it('strips ASCII control bytes from every cell before measurement', () => {
+    const rows = [
+      ['ab\x03c', 'plain'],
+      ['\x02bold', 'val'],
+    ];
+    const result = formatTable(rows, { indent: '', gap: ' ' });
+    const lines = result.split('\n');
+    // Both cells emit without control bytes; first column widths recompute
+    // using the visible length (4 chars max, not 5/6 with the control).
+    expect(lines[0]).toBe('abc  plain');
+    expect(lines[1]).toBe('bold val');
+  });
 });

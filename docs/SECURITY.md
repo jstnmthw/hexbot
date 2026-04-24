@@ -87,6 +87,8 @@ Hostmask matching is the primary identity mechanism. Security depends on pattern
 
 **Account-based identity (`$a:` patterns):** The permissions system supports `$a:<accountpattern>` patterns that match a user's services account name instead of their hostmask. These are stronger than any hostmask pattern because they require the user to have identified with NickServ. The pattern supports wildcards (e.g., `$a:alice*`). Account data is sourced from IRCv3 `account-tag`, `account-notify`, and `extended-join` capabilities. When no account data is available for a user, `$a:` patterns are silently skipped and only hostmask patterns match.
 
+**Case folding for `$a:` patterns:** Account-pattern matching uses the network's active `CASEMAPPING` (typically `rfc1459`). Account names are not nicks — services treat them as case-insensitive but not under the same folding rules RFC 1459 defines for nicks/channels (`[]\~` → `{}|^`). In practice every services implementation we target collapses account case the same way NickServ does for the nick space, so reusing the IRC folder is safe. If a future services vendor returns account strings whose canonical case differs from the nick casemapping, that assumption needs to be revisited.
+
 **Rule:** Warn when an admin adds a `nick!*@*` hostmask for a user with `+o` or higher flags. Log a `[security]` warning. Account patterns (`$a:`) skip this warning — they are inherently secure.
 
 ### 3.2 NickServ race condition

@@ -33,6 +33,12 @@ export interface ModActor {
  * source: ... }` so an audit review can grep for the helper as the single
  * call-site-to-actor translation.
  *
+ * Prefers `ctx.handle` (the resolved {@link UserRecord.handle}) over
+ * `ctx.nick`. Nicks are user-chosen and change across sessions; a handle
+ * is the stable identity permissions records live under, which makes
+ * later audit review actually useful. Falls back to `ctx.nick` for
+ * transports that don't resolve a record (REPL, DCC pre-auth).
+ *
  * @example
  * handler.registerCommand('op', opts, (args, ctx) => {
  *   const [channel, nick] = args.split(/\s+/);
@@ -42,7 +48,7 @@ export interface ModActor {
  * });
  */
 export function auditActor(ctx: CommandContext): ModActor {
-  return { by: ctx.nick, source: ctx.source };
+  return { by: ctx.handle ?? ctx.nick, source: ctx.source };
 }
 
 /**
@@ -56,7 +62,7 @@ export function auditOptions(
   ctx: CommandContext,
   options: Omit<LogModActionOptions, 'source' | 'by' | 'plugin'>,
 ): LogModActionOptions {
-  return { ...options, source: ctx.source, by: ctx.nick };
+  return { ...options, source: ctx.source, by: ctx.handle ?? ctx.nick };
 }
 
 /**

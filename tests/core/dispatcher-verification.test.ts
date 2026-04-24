@@ -69,6 +69,12 @@ describe('requiresVerificationForFlags', () => {
 // ---------------------------------------------------------------------------
 
 describe('EventDispatcher verification gating', () => {
+  // Permissive permissions provider — the verification-gate tests aren't
+  // exercising the flag-check path, so return `true` unconditionally.
+  // Dispatcher.checkFlags fails closed when no permissions is attached, so
+  // this mock is required to even reach the verification pass.
+  const passAllPermissions = { checkFlags: () => true };
+
   function makeVerificationProvider(
     overrides: Partial<VerificationProvider> = {},
   ): VerificationProvider {
@@ -81,7 +87,7 @@ describe('EventDispatcher verification gating', () => {
   }
 
   it('passes handler when verification is not set', async () => {
-    const dispatcher = new EventDispatcher();
+    const dispatcher = new EventDispatcher(passAllPermissions);
     const handler = vi.fn();
     dispatcher.bind('pub', 'o', '!op', handler, 'test');
     await dispatcher.dispatch('pub', makeCtx({ command: '!op' }));
@@ -90,7 +96,7 @@ describe('EventDispatcher verification gating', () => {
   });
 
   it('passes handler when flags are - (no verification needed)', async () => {
-    const dispatcher = new EventDispatcher();
+    const dispatcher = new EventDispatcher(passAllPermissions);
     dispatcher.setVerification(makeVerificationProvider());
     const handler = vi.fn();
     dispatcher.bind('pub', '-', '!hello', handler, 'test');
@@ -100,7 +106,7 @@ describe('EventDispatcher verification gating', () => {
   });
 
   it('allows handler when account is known (fast path from account-notify)', async () => {
-    const dispatcher = new EventDispatcher();
+    const dispatcher = new EventDispatcher(passAllPermissions);
     dispatcher.setVerification(
       makeVerificationProvider({
         getAccountForNick: () => 'SomeAccount',
@@ -114,7 +120,7 @@ describe('EventDispatcher verification gating', () => {
   });
 
   it('blocks handler when account is known null (user not identified)', async () => {
-    const dispatcher = new EventDispatcher();
+    const dispatcher = new EventDispatcher(passAllPermissions);
     dispatcher.setVerification(
       makeVerificationProvider({
         getAccountForNick: () => null, // known not identified
@@ -129,7 +135,7 @@ describe('EventDispatcher verification gating', () => {
 
   it('falls back to NickServ when account is unknown (undefined)', async () => {
     const verifyUser = vi.fn().mockResolvedValue({ verified: true, account: 'TestAccount' });
-    const dispatcher = new EventDispatcher();
+    const dispatcher = new EventDispatcher(passAllPermissions);
     dispatcher.setVerification(
       makeVerificationProvider({
         getAccountForNick: () => undefined,
@@ -145,11 +151,57 @@ describe('EventDispatcher verification gating', () => {
   });
 
   it('blocks handler when NickServ fallback returns not verified', async () => {
-    const dispatcher = new EventDispatcher();
+    const dispatcher = new EventDispatcher(passAllPermissions);
     dispatcher.setVerification(
       makeVerificationProvider({
         getAccountForNick: () => undefined,
         verifyUser: async () => ({ verified: false, account: null }),
+      }),
+    );
+    const handler = vi.fn();
+    dispatcher.bind('pub', 'o', '!op', handler, 'test');
+    await dispatcher.dispatch('pub', makeCtx({ command: '!op' }));
+    expect(handler).not.toHaveBeenCalled();
+    dispatcher.unbindAll('test');
+  });
+
+  it('re-checks flags with the confirmed account after ACC verifies', async () => {
+    // New second-pass guard: after verification, permissions.checkFlags is
+    // called a second time with `ctx.account` bound to the verified account
+    // so a weak hostmask record can't satisfy the gate just because "some
+    // other account" happened to be identified.
+    const checkFlags = vi.fn().mockReturnValue(true);
+    const permissions = { checkFlags };
+    const dispatcher = new EventDispatcher(permissions);
+    dispatcher.setVerification(
+      makeVerificationProvider({
+        getAccountForNick: () => undefined,
+        verifyUser: async () => ({ verified: true, account: 'Confirmed' }),
+      }),
+    );
+    const handler = vi.fn();
+    dispatcher.bind('pub', 'o', '!op', handler, 'test');
+    await dispatcher.dispatch('pub', makeCtx({ command: '!op' }));
+    // First call: initial flag gate. Second call: verification rescan with
+    // `account: 'Confirmed'` attached.
+    expect(checkFlags).toHaveBeenCalledTimes(2);
+    expect(checkFlags.mock.calls[1][1].account).toBe('Confirmed');
+    dispatcher.unbindAll('test');
+  });
+
+  it('blocks handler when the account rescan no longer matches the record', async () => {
+    let callCount = 0;
+    const permissions = {
+      checkFlags: vi.fn(() => {
+        callCount += 1;
+        return callCount === 1; // pass the first gate, fail the rescan
+      }),
+    };
+    const dispatcher = new EventDispatcher(permissions);
+    dispatcher.setVerification(
+      makeVerificationProvider({
+        getAccountForNick: () => undefined,
+        verifyUser: async () => ({ verified: true, account: 'Other' }),
       }),
     );
     const handler = vi.fn();

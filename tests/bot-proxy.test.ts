@@ -26,15 +26,15 @@ describe('buildSocksOptions', () => {
     expect(opts).toEqual({ host: 'proxy.example.com', port: 1080, user: 'alice', pass: 's3cret' });
   });
 
-  it('omits user/pass when only username is provided (no password)', () => {
+  it('omits both user and pass when only username is provided (no password)', () => {
     const proxy: ProxyConfig = { enabled: true, host: '127.0.0.1', port: 1080, username: 'bob' };
     const opts = buildSocksOptions(proxy);
 
-    expect(opts.user).toBe('bob');
+    expect('user' in opts).toBe(false);
     expect('pass' in opts).toBe(false);
   });
 
-  it('omits user/pass when only password is provided (no username)', () => {
+  it('omits both user and pass when only password is provided (no username)', () => {
     const proxy: ProxyConfig = {
       enabled: true,
       host: '127.0.0.1',
@@ -44,7 +44,7 @@ describe('buildSocksOptions', () => {
     const opts = buildSocksOptions(proxy);
 
     expect('user' in opts).toBe(false);
-    expect(opts.pass).toBe('only-pass');
+    expect('pass' in opts).toBe(false);
   });
 
   it('does not include credential keys with undefined values', () => {

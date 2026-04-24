@@ -115,6 +115,13 @@ export interface PluginLoaderDeps {
  * leading-dot dotfiles, and anything that would render strangely in
  * `[plugin:<name>]` log prefixes. Enforced both on `mod.name` and on the
  * directory name a plugin is loaded from.
+ *
+ * Plugin DB namespaces share the same key space as core reserved namespaces
+ * (`_bans`, `_sts`, `_permissions`, `_linkbans`). The leading-alphanumeric
+ * requirement here is what keeps plugins from colliding with them — every
+ * reserved core namespace starts with an underscore, which this regex's
+ * anchor rejects. Do not loosen the anchor without wiring a separate
+ * reserved-prefix check.
  */
 const SAFE_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 
@@ -281,7 +288,9 @@ export class PluginLoader {
     // Validate the directory name against SAFE_NAME_RE before import. The
     // inferred name is the plugin directory (two levels up from
     // `dist/index.js`); it must match the same character set we enforce
-    // on `mod.name`.
+    // on `mod.name`. SAFE_NAME_RE's leading-alphanumeric requirement is
+    // what keeps plugin names out of the reserved core DB namespace space
+    // (`_bans`, `_sts`, `_permissions`); do not loosen that anchor.
     const inferredName = this.inferPluginName(absPath);
     if (!SAFE_NAME_RE.test(inferredName)) {
       return {

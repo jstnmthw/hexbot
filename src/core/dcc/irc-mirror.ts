@@ -12,6 +12,26 @@ import { toEventObject } from '../../utils/irc-event';
 import { sanitize } from '../../utils/sanitize';
 
 /**
+ * Soft per-second ceiling on mirror lines forwarded to DCC consoles. The
+ * upstream IRC queue and the bridge's own CTCP rate limiter already slow
+ * a flood down before it reaches the mirror, but a private-message burst
+ * from a target with no upstream cap (e.g. services chatter on a network
+ * without `+R`) could still spray a DCC console. Drop above the ceiling.
+ */
+const MIRROR_RATE_LIMIT = 60;
+const mirrorTimestamps: number[] = [];
+function mirrorRateAllow(): boolean {
+  const now = Date.now();
+  // Trim stale entries (older than 1 s) without allocating a new array.
+  while (mirrorTimestamps.length > 0 && mirrorTimestamps[0] <= now - 1_000) {
+    mirrorTimestamps.shift();
+  }
+  if (mirrorTimestamps.length >= MIRROR_RATE_LIMIT) return false;
+  mirrorTimestamps.push(now);
+  return true;
+}
+
+/**
  * Minimal services view used by {@link mirrorNotice} — callable via both
  * the real `Services` implementation and a lightweight test mock.
  */
@@ -62,6 +82,7 @@ export function mirrorNotice(
   const event = extractMirrorEvent(raw);
   if (!event) return;
   if (services.isNickServVerificationReply(event.nick, event.message)) return;
+  if (!mirrorRateAllow()) return;
   announce(`-${sanitize(event.nick)}- ${sanitize(event.message)}`);
 }
 
@@ -72,5 +93,6 @@ export function mirrorNotice(
 export function mirrorPrivmsg(announce: (line: string) => void, raw: unknown): void {
   const event = extractMirrorEvent(raw);
   if (!event) return;
+  if (!mirrorRateAllow()) return;
   announce(`<${sanitize(event.nick)}> ${sanitize(event.message)}`);
 }

@@ -129,6 +129,33 @@ export class BanStore {
   }
 
   /**
+   * Reconcile stored ban records against a snapshot of the server's
+   * `MODE #chan +b` list (RPL_BANLIST / 367). Any stored record whose mask
+   * does not appear in the snapshot has been lifted externally (manual
+   * `-b` by an operator, a services akick removal, an IRCd reset); dropping
+   * those records prevents a future `liftExpiredBans` sweep from re-applying
+   * a `-b` whose target was already unbanned. Conversely, masks on the
+   * server but not in the store aren't our concern here — those were set by
+   * someone else and {@link storeBan} never saw them.
+   *
+   * @param channel - The channel whose ban list was fetched
+   * @param serverMasks - Every mask currently listed on the server
+   * @returns count of stale records dropped
+   */
+  reconcileChannelBans(channel: string, serverMasks: Iterable<string>): number {
+    const serverSet = new Set<string>();
+    for (const mask of serverMasks) serverSet.add(mask);
+    let dropped = 0;
+    for (const record of this.getChannelBans(channel)) {
+      if (!serverSet.has(record.mask)) {
+        this.removeBan(record.channel, record.mask);
+        dropped++;
+      }
+    }
+    return dropped;
+  }
+
+  /**
    * Migrate ban records from a plugin's namespace to the core _bans namespace.
    * Safe to run multiple times (idempotent — skips if _bans already has the key).
    * @returns count of records migrated

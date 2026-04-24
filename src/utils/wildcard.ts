@@ -48,6 +48,21 @@ export function caseCompare(a: string, b: string, casemapping: Casemapping = 'rf
 }
 
 /**
+ * Maximum pattern byte length accepted by {@link wildcardMatch}. The DP
+ * algorithm is O(pattern * text) in the worst case; capping both sides
+ * protects against a plugin persisting a pathological pattern that would
+ * burn CPU on every message.
+ */
+const MAX_PATTERN_LEN = 512;
+
+/**
+ * Maximum text byte length accepted by {@link wildcardMatch}. 4 KiB
+ * comfortably covers any IRC-sourced string (hostmask, channel, message)
+ * while refusing plugin-supplied multi-MB inputs.
+ */
+const MAX_TEXT_LEN = 4096;
+
+/**
  * Match a string against a wildcard pattern.
  *
  * @param pattern  - Wildcard pattern (`*` = any string, `?` = any single char)
@@ -55,6 +70,9 @@ export function caseCompare(a: string, b: string, casemapping: Casemapping = 'rf
  * @param caseInsensitive - When true, matching uses IRC-aware case folding (default: false)
  * @param casemapping - Which IRC CASEMAPPING to use when caseInsensitive is true (default: 'rfc1459')
  * @returns true if the text matches the pattern
+ *
+ * Inputs exceeding {@link MAX_PATTERN_LEN} or {@link MAX_TEXT_LEN} return
+ * `false` immediately — no partial match is attempted.
  */
 export function wildcardMatch(
   pattern: string,
@@ -62,6 +80,7 @@ export function wildcardMatch(
   caseInsensitive = false,
   casemapping: Casemapping = 'rfc1459',
 ): boolean {
+  if (pattern.length > MAX_PATTERN_LEN || text.length > MAX_TEXT_LEN) return false;
   if (caseInsensitive) {
     pattern = ircLower(pattern, casemapping);
     text = ircLower(text, casemapping);

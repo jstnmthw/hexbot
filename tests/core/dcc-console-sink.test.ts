@@ -93,6 +93,24 @@ function fakeSession(
   };
 }
 
+/**
+ * Build a `ConsolePermissionsProvider` whose `getUser` reflects the
+ * `handleFlags` of the matching fake session. Keeps the cross-handle
+ * `.console` gate in sync with the session's declared flags so tests
+ * don't have to hand-roll a permissions map per case.
+ */
+function makeConsolePerms(sessions: Map<string, DCCSessionEntry>): {
+  getUser(handle: string): { global: string } | null;
+} {
+  return {
+    getUser(handle) {
+      const session = sessions.get(handle);
+      if (!session) return null;
+      return { global: session.handleFlags };
+    },
+  };
+}
+
 function makeManager(sessions: Map<string, DCCSessionEntry>, store?: ConsoleFlagStore): DCCManager {
   return new DCCManager({
     client: new StubIrcClient() as never,
@@ -213,7 +231,12 @@ describe('.console command', () => {
     const sessions = new Map<string, DCCSessionEntry>();
     const mgr = makeManager(sessions);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands({ handler, dccManager: mgr, db: null });
+    registerDccConsoleCommands({
+      handler,
+      dccManager: mgr,
+      db: null,
+      permissions: makeConsolePerms(sessions),
+    });
 
     const replies: string[] = [];
     await handler.execute('.console +d', {
@@ -232,7 +255,12 @@ describe('.console command', () => {
     sessions.set('alice', session);
     const mgr = makeManager(sessions);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands({ handler, dccManager: mgr, db: null });
+    registerDccConsoleCommands({
+      handler,
+      dccManager: mgr,
+      db: null,
+      permissions: makeConsolePerms(sessions),
+    });
 
     const replies: string[] = [];
     await handler.execute('.console', {
@@ -252,7 +280,12 @@ describe('.console command', () => {
     sessions.set('alice', session);
     const mgr = makeManager(sessions);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands({ handler, dccManager: mgr, db: null });
+    registerDccConsoleCommands({
+      handler,
+      dccManager: mgr,
+      db: null,
+      permissions: makeConsolePerms(sessions),
+    });
 
     const replies: string[] = [];
     await handler.execute('.console +d', {
@@ -276,7 +309,12 @@ describe('.console command', () => {
     sessions.set('alice', session);
     const mgr = makeManager(sessions);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands({ handler, dccManager: mgr, db: null });
+    registerDccConsoleCommands({
+      handler,
+      dccManager: mgr,
+      db: null,
+      permissions: makeConsolePerms(sessions),
+    });
 
     const replies: string[] = [];
     await handler.execute('.console +z', {
@@ -297,7 +335,12 @@ describe('.console command', () => {
     sessions.set('admin', owner);
     const mgr = makeManager(sessions, store);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands({ handler, dccManager: mgr, db: null });
+    registerDccConsoleCommands({
+      handler,
+      dccManager: mgr,
+      db: null,
+      permissions: makeConsolePerms(sessions),
+    });
 
     const replies: string[] = [];
     await handler.execute('.console bob +b', {
@@ -318,7 +361,12 @@ describe('.console command', () => {
     sessions.set('admin', owner);
     const mgr = makeManager(sessions, store);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands({ handler, dccManager: mgr, db: null });
+    registerDccConsoleCommands({
+      handler,
+      dccManager: mgr,
+      db: null,
+      permissions: makeConsolePerms(sessions),
+    });
 
     const replies: string[] = [];
     await handler.execute('.console bob', {
@@ -339,7 +387,12 @@ describe('.console command', () => {
     sessions.set('admin', owner);
     const mgr = makeManager(sessions, store);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands({ handler, dccManager: mgr, db: null });
+    registerDccConsoleCommands({
+      handler,
+      dccManager: mgr,
+      db: null,
+      permissions: makeConsolePerms(sessions),
+    });
 
     const replies: string[] = [];
     await handler.execute('.console bob +z', {
@@ -360,7 +413,12 @@ describe('.console command', () => {
     sessions.set('alice', session);
     const mgr = makeManager(sessions);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands({ handler, dccManager: mgr, db: null });
+    registerDccConsoleCommands({
+      handler,
+      dccManager: mgr,
+      db: null,
+      permissions: makeConsolePerms(sessions),
+    });
 
     const replies: string[] = [];
     await handler.execute('.console -all', {
@@ -382,7 +440,12 @@ describe('.console command', () => {
     sessions.set('master', master);
     const mgr = makeManager(sessions, store);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands({ handler, dccManager: mgr, db: null });
+    registerDccConsoleCommands({
+      handler,
+      dccManager: mgr,
+      db: null,
+      permissions: makeConsolePerms(sessions),
+    });
 
     const replies: string[] = [];
     await handler.execute('.console bob +b', {
@@ -409,7 +472,12 @@ describe('.console command', () => {
     sessions.set('alice', session);
     const mgr = makeManager(sessions);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands({ handler, dccManager: mgr, db });
+    registerDccConsoleCommands({
+      handler,
+      dccManager: mgr,
+      db,
+      permissions: makeConsolePerms(sessions),
+    });
 
     await handler.execute('.console +d', {
       source: 'dcc',
@@ -436,7 +504,12 @@ describe('.console command', () => {
     sessions.set('admin', owner);
     const mgr = makeManager(sessions, store);
     const handler = new CommandHandler(allowAll);
-    registerDccConsoleCommands({ handler, dccManager: mgr, db });
+    registerDccConsoleCommands({
+      handler,
+      dccManager: mgr,
+      db,
+      permissions: makeConsolePerms(sessions),
+    });
 
     await handler.execute('.console bob +b', {
       source: 'dcc',

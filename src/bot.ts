@@ -356,6 +356,20 @@ export class Bot {
     };
     if (this.config.identity.require_acc_for.length > 0 && this.config.services.type !== 'none') {
       this.dispatcher.setVerification(verificationProvider);
+    } else if (
+      this.config.identity.require_acc_for.length > 0 &&
+      this.config.services.type === 'none'
+    ) {
+      // The operator asked for an ACC gate but the network has no services to
+      // verify against. Silently dropping the gate would leave privileged
+      // dispatch passing on hostmask alone — exactly the thing `require_acc_for`
+      // was configured to prevent. Warn loudly so the misconfig is visible in
+      // the startup log rather than surfacing later as a mysterious bypass.
+      this.botLogger?.warn(
+        `[security] identity.require_acc_for=${JSON.stringify(this.config.identity.require_acc_for)} ` +
+          `is set but services.type="none" — NO ACC verification will run on these flags. ` +
+          `Either enable services or remove require_acc_for to clear this warning.`,
+      );
     }
 
     if (this.config.flood) {
@@ -608,6 +622,7 @@ export class Bot {
       handler: this.commandHandler,
       dccManager: this._dccManager,
       db: this.db,
+      permissions: this.permissions,
     });
     this.botLogger.info('DCC CHAT enabled');
   }
@@ -850,6 +865,7 @@ export class Bot {
             if (this._dccManager) this._dccManager.setCasemapping(cm);
             this.memo.setCasemapping(cm);
           },
+          getCasemapping: () => this._casemapping,
           applyServerCapabilities: (caps) => {
             this.channelState.setCapabilities(caps);
             this.ircCommands.setCapabilities(caps);

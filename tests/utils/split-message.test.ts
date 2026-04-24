@@ -200,4 +200,19 @@ describe('splitMessage', () => {
       for (const chunk of result) expect(chunk.length).toBeGreaterThan(0);
     });
   });
+
+  describe('hard input-size cap', () => {
+    it('clips inputs beyond 10 MiB before byte-scanning them', () => {
+      // A plugin forwarding a multi-MB buffer would otherwise have every
+      // newline segment run through `Buffer.byteLength`. The entry cap
+      // keeps that scan bounded. Just verify we don't hang and the
+      // output is limited to maxLines.
+      const oversized = 'x'.repeat(12 * 1024 * 1024);
+      const start = Date.now();
+      const result = splitMessage(oversized, 400, 4);
+      const elapsed = Date.now() - start;
+      expect(elapsed).toBeLessThan(1_000); // sanity: no megabyte-scale O(n²)
+      expect(result.length).toBeLessThanOrEqual(4);
+    });
+  });
 });

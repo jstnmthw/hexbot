@@ -64,7 +64,9 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
 
       const source = getAuditSource(ctx);
       permissions.addUser(handle, hostmask, flags, source, ctx.source);
-      ctx.reply(`User "${handle}" added with hostmask ${hostmask} and flags ${flags}`);
+      ctx.reply(
+        `User "${stripFormatting(handle)}" added with hostmask ${stripFormatting(hostmask)} and flags ${stripFormatting(flags)}`,
+      );
     },
   );
 

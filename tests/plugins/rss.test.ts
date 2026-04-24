@@ -435,6 +435,28 @@ describe('rss plugin — stripHtmlTags', () => {
     // And the result must have no `<...>` substrings left.
     expect(result).not.toMatch(/<[^>]*>/);
   });
+
+  it('decodes common named HTML entities before stripping', () => {
+    expect(stripHtmlTags('A &amp; B')).toBe('A & B');
+    expect(stripHtmlTags('&ldquo;hi&rdquo;')).toBe('“hi”');
+  });
+
+  it('decodes entities before stripping so escaped tags are treated as tags', () => {
+    // Audit 2026-04-24 asked for decode-first behaviour so publishers
+    // can't smuggle `<script>` through as `&lt;script&gt;` and surface
+    // the bracket sequence raw on the wire. The decoded content is then
+    // tag-stripped just like literal HTML. (Informational only — no
+    // exploit on IRC, which doesn't render HTML — but consistent output.)
+    expect(stripHtmlTags('&lt;b&gt;literal&lt;/b&gt;')).toBe('literal');
+  });
+
+  it('decodes numeric and hex entities', () => {
+    expect(stripHtmlTags('&#65;&#x42;')).toBe('AB');
+  });
+
+  it('leaves unknown named entities untouched', () => {
+    expect(stripHtmlTags('&zzz;')).toBe('&zzz;');
+  });
 });
 
 // ---------------------------------------------------------------------------

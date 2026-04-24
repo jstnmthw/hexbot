@@ -30,6 +30,17 @@ export interface CommandContext {
    * by DCC-only commands (e.g. `.console`) to reach per-session state.
    */
   dccSession?: DCCSessionEntry;
+  /**
+   * Resolved `UserRecord.handle` when the triggering nick matched a
+   * permission record (populated by {@link CommandHandler.execute} via the
+   * flag check). Audit-actor code prefers this over `ctx.nick` so `.mod_log`
+   * rows identify the user by their stable handle rather than whatever
+   * nick they happened to be using.
+   *
+   * Unset for REPL (`ctx.nick` is the owner/operator label) and botlink
+   * (the hub already resolved the handle before relay).
+   */
+  handle?: string;
   reply(msg: string): void;
 }
 
@@ -198,10 +209,13 @@ export class CommandHandler {
   ): boolean {
     // REPL: trusted local console — only reachable by someone who can already
     // read config/bot.json off disk, so flag enforcement is moot.
-    // Botlink: command was already permission-checked on the originating
-    // leaf (and again on the hub if it routes onward); re-checking here would
-    // double-deny against the relay actor's hostmask, which never matches.
-    // See docs/SECURITY.md for the trust-boundary rationale.
+    // Botlink: the authenticator is `src/core/botlink/hub-cmd-relay.ts`:
+    // `hub-frame-dispatch` checks `permissions.checkFlagsByHandle(fromHandle, …)`
+    // plus a live DCC-session proof before emitting a `source:'botlink'`
+    // frame. Re-checking here would double-deny against the relay actor's
+    // hostmask, which never matches. Do not relax that hub-side gate without
+    // tightening this one — see docs/SECURITY.md §11 for the trust-boundary
+    // rationale.
     if (ctx.source === 'repl' || ctx.source === 'botlink') return true;
     if (entry.options.flags === '-' || entry.options.flags === '') return true;
 
@@ -224,6 +238,22 @@ export class CommandHandler {
     // patterns resolve on the first command after a nick change, before
     // channel-state has received a fresh account-notify for the new nick.
     if (ctx.account !== undefined) handlerCtx.account = ctx.account;
+    // Resolve the user record so the audit actor can attribute the action
+    // to the stable handle instead of whatever nick happened to trigger it.
+    // Best-effort: not every permissions implementation exposes
+    // findByHostmask — fall back to ctx.nick when it's missing or no record
+    // matches. Typed through a narrow interface so plugin-test doubles keep
+    // working without implementing the full Permissions API.
+    const resolver = this.permissions as CommandPermissionsProvider & {
+      findByHostmask?: (mask: string, account?: string | null) => { handle: string } | null;
+    };
+    if (typeof resolver.findByHostmask === 'function' && ctx.ident && ctx.hostname) {
+      const record = resolver.findByHostmask(
+        `${ctx.nick}!${ctx.ident}@${ctx.hostname}`,
+        ctx.account ?? null,
+      );
+      if (record) ctx.handle = record.handle;
+    }
     if (!this.permissions.checkFlags(entry.options.flags, handlerCtx)) {
       ctx.reply('Permission denied.');
       return false;

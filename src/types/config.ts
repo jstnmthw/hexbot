@@ -114,6 +114,17 @@ export interface ServicesConfig {
    * Only used when `identify_before_join` is true. Default: 10000.
    */
   identify_before_join_timeout_ms?: number;
+  /**
+   * Wildcard pattern the NickServ NOTICE sender's hostmask must match
+   * before the bot trusts it as a services response. Defence-in-depth
+   * against a user `/nick NickServ` on a non-services-reserved network
+   * resolving pending `verifyUser()` calls with a crafted ACC reply.
+   *
+   * Empty or unset disables the check (compatible with networks that
+   * don't pin NickServ to a fixed services hostname). Typical values:
+   * `services.*`, `*.libera.chat`, `services.rizon.net`.
+   */
+  services_host_pattern?: string;
 }
 
 /** Logging settings. */
@@ -212,6 +223,12 @@ export interface BotlinkConfig {
   handshake_timeout_ms?: number;
   /** Max concurrent unauthenticated connections per IP. Default: 3. */
   max_pending_handshakes?: number;
+  /**
+   * Leaf-side soft ceiling on hub→leaf CMD frames per second. A compromised
+   * hub would otherwise run unbounded command execution on every leaf; this
+   * caps that blast radius to a reasonable admin-burst rate. Default: 50.
+   */
+  leaf_cmd_rate_limit?: number;
 }
 
 /** Plugin-specific credentials stored in bot.json (not plugins.json) per SECURITY.md §6. */

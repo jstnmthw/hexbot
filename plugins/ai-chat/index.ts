@@ -566,10 +566,13 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
   if (merged.coalescer !== undefined) {
     coalescer = merged.coalescer;
   } else if (!coalescer && cfg.input.coalesceWindowMs > 0) {
-    // 8 KB cap = 4× the per-entry truncate limit. Generous enough to merge
-    // four max-sized fragments; runPipeline's `maxPromptChars` enforces the
-    // real upper bound on the merged prompt.
-    coalescer = new MessageCoalescer(cfg.input.coalesceWindowMs, 8192);
+    // Byte cap aligned to `input.maxPromptChars` (bytes-aware worst case:
+    // UTF-8 is up to 4 B/codepoint). Keeping the coalescer cap at or above
+    // the pipeline's prompt cap ensures a burst that merges into a
+    // still-accepted prompt isn't silently truncated inside the coalescer
+    // before the pipeline cap ever gets a chance to run.
+    const coalesceBytes = Math.max(1024, cfg.input.maxPromptChars * 4);
+    coalescer = new MessageCoalescer(cfg.input.coalesceWindowMs, coalesceBytes);
   }
 
   /**

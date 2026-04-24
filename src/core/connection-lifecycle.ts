@@ -68,6 +68,14 @@ export interface ConnectionLifecycleDeps {
   /** Callback to propagate the server's casemapping to the Bot and all modules. */
   applyCasemapping: (cm: Casemapping) => void;
   /**
+   * Read the currently-active casemapping. Defaults to `'rfc1459'` until the
+   * server's 005 ISUPPORT lands. Needed by the INVITE re-join handler so it
+   * folds channel names under the live mapping instead of assuming rfc1459
+   * — on a network announcing `CASEMAPPING=strict-rfc1459` or `ascii`, the
+   * `~`/`^` folding would otherwise differ from the rest of the bot.
+   */
+  getCasemapping?: () => Casemapping;
+  /**
    * Callback to propagate a parsed ISUPPORT snapshot to the Bot and all
    * capability-aware modules (channel-state, irc-commands, irc-bridge, …).
    * Fires on every successful registration so reconnecting to a different
@@ -269,16 +277,36 @@ export function registerConnectionEvents(
     // lands first. See docs/services-identify-before-join.md.
     deps.identifyWithServices?.();
 
-    // W-1: gate JOINs on identity when configured. Waits for bot:identified
-    // or the timeout, then proceeds. This eliminates the IDENTIFY/ChanServ
-    // probe race on non-SASL networks. See stability audit 2026-04-21.
+    // W-1: gate JOINs on identity when configured. Waits for bot:identified,
+    // `bot:disconnected`, or the timeout — whichever fires first. Without
+    // the disconnect arm, a session that dropped mid-wait would keep the
+    // promise hanging until the timeout elapsed, delaying the next
+    // connection attempt by up to `timeoutMs`. Clamp `timeoutMs` to 60 s so
+    // a misconfig can't park a JOIN pass indefinitely. See stability audit
+    // 2026-04-21 and follow-up 2026-04-24.
     const svcCfg = deps.config.services;
     if (svcCfg.identify_before_join) {
-      const timeoutMs = svcCfg.identify_before_join_timeout_ms ?? 10_000;
-      await Promise.race([
-        new Promise<void>((res) => deps.eventBus.once('bot:identified', res)),
-        new Promise<void>((res) => setTimeout(res, timeoutMs).unref()),
-      ]);
+      const rawTimeout = svcCfg.identify_before_join_timeout_ms ?? 10_000;
+      const timeoutMs = Math.min(Math.max(rawTimeout, 0), 60_000);
+      await new Promise<void>((resolve) => {
+        const onIdentified = (): void => {
+          clearTimeout(timer);
+          deps.eventBus.off('bot:disconnected', onDisconnect);
+          resolve();
+        };
+        const onDisconnect = (): void => {
+          clearTimeout(timer);
+          deps.eventBus.off('bot:identified', onIdentified);
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          deps.eventBus.off('bot:identified', onIdentified);
+          deps.eventBus.off('bot:disconnected', onDisconnect);
+          resolve();
+        }, timeoutMs).unref();
+        deps.eventBus.once('bot:identified', onIdentified);
+        deps.eventBus.once('bot:disconnected', onDisconnect);
+      });
     }
 
     joinConfiguredChannels(deps);
@@ -447,6 +475,21 @@ function ingestSTSDirective(deps: ConnectionLifecycleDeps): void {
     );
     return;
   }
+  // First-contact defence: a MITM-served CAP LS over TLS with
+  // `tls_verify=false` could pin a fake STS policy against a host the bot
+  // has never spoken to before. With verification disabled, the cert the
+  // bot trusted isn't authoritative — neither is the CAP list it returned.
+  // Refuse to ingest under that shape and warn loudly. Operators on
+  // networks without a stable CA chain are already warned at startup;
+  // this closes the policy-pin channel on top of that.
+  const tlsVerifyDisabled = deps.config.irc.tls_verify === false;
+  if (tlsVerifyDisabled && !deps.stsStore?.get(deps.config.irc.host)) {
+    deps.logger.warn(
+      `Refusing to ingest first-contact STS directive for ${deps.config.irc.host} with tls_verify=false — ` +
+        `untrusted TLS session cannot authoritatively pin a policy. Set tls_verify=true to enable STS pinning.`,
+    );
+    return;
+  }
   const directive = parseSTSDirective(rawValue);
   if (!directive) {
     deps.logger.warn(`Ignoring malformed STS directive "${rawValue}"`);
@@ -593,7 +636,7 @@ function registerJoinErrorListeners(
  * Plugins may add their own 'invite' binds with flag checking.
  */
 function bindCoreInviteHandler(deps: ConnectionLifecycleDeps): void {
-  const { client, configuredChannels, dispatcher, logger } = deps;
+  const { client, configuredChannels, dispatcher, logger, getCasemapping } = deps;
   dispatcher.bind(
     'invite',
     '-',
@@ -601,10 +644,10 @@ function bindCoreInviteHandler(deps: ConnectionLifecycleDeps): void {
     (ctx) => {
       const channel = ctx.channel;
       if (!channel) return;
-      // Use IRC-aware casemapping (rfc1459 as safe default — superset of all mappings)
-      const ch = configuredChannels.find(
-        (c) => ircLower(c.name, 'rfc1459') === ircLower(channel, 'rfc1459'),
-      );
+      // Fold under the live casemapping — fallback to rfc1459 (the safest
+      // superset) only when the lifecycle deps pre-date this field.
+      const cm = getCasemapping ? getCasemapping() : 'rfc1459';
+      const ch = configuredChannels.find((c) => ircLower(c.name, cm) === ircLower(channel, cm));
       if (!ch) return;
       client.join(ch.name, ch.key);
       logger.info(`INVITE from ${ctx.nick}: re-joining configured channel ${ch.name}`);
