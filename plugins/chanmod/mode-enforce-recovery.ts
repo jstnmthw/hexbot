@@ -252,63 +252,122 @@ function performHostileResponse(
   channel: string,
   chain?: ProtectionChain,
 ): void {
-  const punishMode = api.channelSettings.getString(channel, 'takeover_punish');
-  if (punishMode === 'none') return;
-
   const threat = getThreatState(api, state, channel);
   if (!threat) return;
 
-  // Collect unique hostile actors from the threat event log
-  const hostileActors = new Set<string>();
+  // Collect unique hostile actors from the threat event log.
+  const hostileActors: string[] = [];
+  const seen = new Set<string>();
   for (const event of threat.events) {
-    if (event.actor) hostileActors.add(event.actor);
+    if (!event.actor) continue;
+    const key = api.ircLower(event.actor);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    hostileActors.push(event.actor);
   }
+
+  // Cap per-tick batch at HOSTILE_BATCH_SIZE. Spill the remainder to a
+  // delayed second pass — a large chaotic burst (split-rejoin flood)
+  // would otherwise produce a same-tick kick+ban flood that trips the
+  // bot's own send-rate limiter and gets us flood-killed by the
+  // server. See audit 2026-04-24 WARNING.
+  const firstBatch = hostileActors.slice(0, HOSTILE_BATCH_SIZE);
+  const spill = hostileActors.slice(HOSTILE_BATCH_SIZE);
+
+  performHostileResponseFromList(api, config, state, channel, firstBatch, chain);
+
+  if (spill.length > 0) {
+    api.log(
+      `Hostile response: ${spill.length} actor(s) deferred to second pass in ${channel} to avoid send-rate trip`,
+    );
+    // Use the state.cycles timer owner so teardown cancels the spill
+    // pass — prevents a late-firing punishment after plugin unload.
+    state.cycles.schedule(HOSTILE_SPILL_DELAY_MS, () => {
+      performHostileResponseFromList(api, config, state, channel, spill, chain);
+    });
+  }
+}
+
+/**
+ * Cap the number of hostile actors the response handles per same-tick
+ * batch. A large chaotic burst (e.g. a split-rejoin flood where the
+ * takeover scorer records 50 actors) would otherwise produce a
+ * kick+ban flood that trips the bot's own send-rate limiter and gets
+ * the bot flood-killed by the server. 5 actors per tick + a
+ * 3-second spill pass keeps the queue under the limiter's threshold.
+ * See audit 2026-04-24 WARNING.
+ */
+const HOSTILE_BATCH_SIZE = 5;
+const HOSTILE_SPILL_DELAY_MS = 3000;
+
+/**
+ * Hand-rolled actor for takeover-recovery `api.op/deop/ban/kick` paths.
+ * No `ctx` is available here — the response fires in a deferred
+ * timer, driven by threat-score state rather than a user command.
+ * Keeps `mod_log.by` meaningful instead of NULL.
+ */
+const HOSTILE_RESPONSE_ACTOR = Object.freeze({
+  by: 'hostile-response',
+  source: 'plugin' as const,
+  plugin: 'chanmod',
+});
+
+/**
+ * Inner loop used by both the initial and spill passes of
+ * {@link performHostileResponse}. Applies the configured punishment
+ * to each actor in `actors`. Does NOT re-check the threat state —
+ * that check happens in the outer wrapper, and we want the spill
+ * pass to still complete its own slice even if the threat score has
+ * decayed by the time it fires.
+ */
+function performHostileResponseFromList(
+  api: PluginAPI,
+  config: ChanmodConfig,
+  state: SharedState,
+  channel: string,
+  actors: string[],
+  chain?: ProtectionChain,
+): void {
+  const punishMode = api.channelSettings.getString(channel, 'takeover_punish');
+  if (punishMode === 'none') return;
 
   const ch = api.getChannel(channel);
   if (!ch) return;
 
-  for (const actor of hostileActors) {
-    // Skip the bot itself
+  for (const actor of actors) {
     if (api.isBotNick(actor)) continue;
-
-    // Skip nodesynch nicks
     if (config.nodesynch_nicks.some((n) => api.ircLower(n) === api.ircLower(actor))) continue;
-
-    // Respect revenge_exempt_flags — n/m users are never counter-attacked
     const flags = getUserFlags(api, channel, actor);
     if (flags && hasAnyFlag(flags, config.revenge_exempt_flags)) {
-      api.log(`Hostile response: skipping ${actor} in ${channel} — exempt flag`);
+      api.log(
+        `Hostile response: skipping ${api.stripFormatting(actor)} in ${channel} — exempt flag`,
+      );
       continue;
     }
-
-    // Check if the actor is still in the channel
     const actorLower = api.ircLower(actor);
     if (!ch.users.has(actorLower)) continue;
 
+    const safeActor = api.stripFormatting(actor);
     if (punishMode === 'deop') {
-      // Direct deop if bot has ops, or via chain
       if (botHasOps(api, channel)) {
         markIntentional(state, api, channel, actor);
-        api.deop(channel, actor);
-        api.log(`Hostile response: deopped ${actor} in ${channel}`);
+        api.deop(channel, actor, HOSTILE_RESPONSE_ACTOR);
+        api.log(`Hostile response: deopped ${safeActor} in ${channel}`);
       } else if (chain?.canDeop(channel)) {
         chain.requestDeop(channel, actor);
-        api.log(`Hostile response: requested DEOP for ${actor} in ${channel} via backend`);
+        api.log(`Hostile response: requested DEOP for ${safeActor} in ${channel} via backend`);
       }
     } else if (punishMode === 'kickban' || punishMode === 'akick') {
       const hostmask = api.getUserHostmask(channel, actor);
       const mask = hostmask ? buildBanMask(hostmask, config.default_ban_type) : null;
-
       if (punishMode === 'akick' && chain?.canAkick(channel)) {
-        // AKICK via backend (persistent — survives rejoin)
         if (mask) {
           chain.requestAkick(channel, mask, 'Takeover response');
           api.log(`Hostile response: AKICK ${mask} in ${channel} via backend`);
         }
       } else {
-        // kickban (or akick fallback when backend unavailable)
         if (mask) {
-          api.ban(channel, mask);
+          api.ban(channel, mask, HOSTILE_RESPONSE_ACTOR);
           api.banStore.storeBan(
             channel,
             mask,
@@ -317,9 +376,9 @@ function performHostileResponse(
           );
         }
         markIntentional(state, api, channel, actor);
-        api.kick(channel, actor, 'Takeover response');
+        api.kick(channel, actor, 'Takeover response', HOSTILE_RESPONSE_ACTOR);
         const suffix = punishMode === 'akick' ? ' (AKICK unavailable)' : '';
-        api.log(`Hostile response: kickbanned ${actor} from ${channel}${suffix}`);
+        api.log(`Hostile response: kickbanned ${safeActor} from ${channel}${suffix}`);
       }
     }
   }

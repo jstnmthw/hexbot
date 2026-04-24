@@ -6,7 +6,7 @@ import type { LoggerLike } from '../logger';
 import type { HandlerContext, UserRecord } from '../types';
 import { type Casemapping, ircLower } from '../utils/wildcard';
 import { tryLogModAction } from './audit';
-import { ACCOUNT_PATTERN_PREFIX, HostmaskMatcher } from './hostmask-matcher';
+import { ACCOUNT_PATTERN_PREFIX, HostmaskMatcher, patternSpecificity } from './hostmask-matcher';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -23,6 +23,28 @@ export const OWNER_FLAG = 'n';
 
 /** Master flag — one step below owner, granted most administrative commands. */
 export const MASTER_FLAG = 'm';
+
+/**
+ * Specificity threshold below which a hostmask pattern is considered weak
+ * enough to warrant a `[security]` warning for privileged users. Calibrated
+ * against `patternSpecificity()` in `./hostmask-matcher`:
+ *
+ *   `*!*@*`                 17   weak
+ *   `nick!*@*`              58   weak
+ *   `nick!?@*`              58   weak
+ *   `nick!*@*.*`            67   weak
+ *   `nick!*@*.com`          98   weak
+ *   `nick!*@*.co.uk`       118   borderline — allowed; a TLD is still meaningful
+ *   `alice!*@host.isp.net` 189   allowed
+ *   `nick!ident@cloak`     260+  allowed
+ *
+ * A threshold of 100 catches the common "one literal segment, wildcarded
+ * everything else" footguns without flagging masks that pin enough of the
+ * host/ident to make spoofing non-trivial. Tweak with care — raising it
+ * will warn on legitimately cloaked hostmasks; lowering it silences real
+ * footguns.
+ */
+const WEAK_HOSTMASK_THRESHOLD = 100;
 
 /**
  * Return true if the record has owner (`n`) or master (`m`) globally. This is
@@ -180,6 +202,12 @@ export class Permissions {
   ): void {
     const lower = handle.toLowerCase();
     const flags = this.normalizeFlags(globalFlags);
+    // Warn on weak hostmasks even when the record arrives via botlink —
+    // previously the hub could quietly propagate `admin!*@*` out to every
+    // leaf with no surfacing of the risk.
+    for (const hostmask of hostmasks) {
+      this.warnInsecureHostmask(hostmask, flags, handle);
+    }
     this.users.set(lower, { handle, hostmasks, global: flags, channels: channelFlags });
     this.persist();
 
@@ -544,6 +572,13 @@ export class Permissions {
    * Warn about insecure hostmask patterns for privileged users. Account
    * patterns (`$a:accountname`) skip the warning — they're stronger than any
    * hostmask because they require the user to have identified with services.
+   *
+   * Uses `patternSpecificity()` (from `./hostmask-matcher`) rather than a
+   * handful of literal-string checks so every weak shape gets warned on:
+   * `nick!*@*`, `nick!?@*`, `nick!*@*.com`, `*!*@*`, and anything else with
+   * too few literal characters. A literal hostmask like
+   * `nick!ident@cloaked.example` scores far above the threshold and is
+   * treated as adequately specific.
    */
   private warnInsecureHostmask(hostmask: string, flags: string, handle: string): void {
     // Check if user has +o or higher
@@ -553,18 +588,41 @@ export class Permissions {
     // Account patterns are inherently stronger than hostmask patterns — skip.
     if (hostmask.startsWith(ACCOUNT_PATTERN_PREFIX)) return;
 
-    // Check for nick!*@* pattern (only nick portion is specific). Either
-    // exact form is treated the same — the `*.*` variant is a common mistake
-    // operators copy off old eggdrop tutorials thinking it's stricter.
-    const bangIdx = hostmask.indexOf('!');
-    if (bangIdx === -1) return;
+    // Hostmasks without a `!` can't be scored meaningfully against the
+    // nick!ident@host shape — keep the historical "skip quietly" behaviour.
+    if (!hostmask.includes('!')) return;
 
-    const afterBang = hostmask.substring(bangIdx + 1);
-    if (afterBang === '*@*' || afterBang === '*@*.*') {
+    if (patternSpecificity(hostmask) < WEAK_HOSTMASK_THRESHOLD) {
       this.logger?.warn(
         `SECURITY: User "${handle}" has privileged flags (${flags}) ` +
-          `with insecure hostmask "${hostmask}" — nick-only matching is easily spoofed`,
+          `with insecure hostmask "${hostmask}" — pattern is too broad and easily spoofed`,
       );
+    }
+  }
+
+  /**
+   * Scan every stored user for weak hostmasks. Intended as a one-shot audit
+   * at startup so operators see a consolidated warning list instead of
+   * discovering issues only when the record is edited. Emits one `[security]`
+   * log line per `(handle, weakPattern)` pair; silent when everything is
+   * above threshold. Account patterns (`$a:…`) and bare hostnames without
+   * `!` are skipped, matching `warnInsecureHostmask()`.
+   */
+  auditWeakHostmasks(): void {
+    for (const record of this.users.values()) {
+      const hasPrivilege =
+        record.global.includes('n') || record.global.includes('m') || record.global.includes('o');
+      if (!hasPrivilege) continue;
+      for (const hostmask of record.hostmasks) {
+        if (hostmask.startsWith(ACCOUNT_PATTERN_PREFIX)) continue;
+        if (!hostmask.includes('!')) continue;
+        if (patternSpecificity(hostmask) < WEAK_HOSTMASK_THRESHOLD) {
+          this.logger?.warn(
+            `SECURITY: User "${record.handle}" has privileged flags (${record.global}) ` +
+              `with insecure hostmask "${hostmask}" — pattern is too broad and easily spoofed`,
+          );
+        }
+      }
     }
   }
 

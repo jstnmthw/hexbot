@@ -16,7 +16,7 @@ import {
 import { type ReconnectPolicy, classifyCloseReason } from './close-reason-classifier';
 import { type ServerCapabilities, parseISupport } from './isupport';
 import type { ReconnectDriver } from './reconnect-driver';
-import { type STSDirective, parseSTSDirective } from './sts';
+import { type STSDirective, type STSStore, parseSTSDirective } from './sts';
 
 // Re-export so external callers (reconnect-driver, tests) keep importing from
 // connection-lifecycle — the classifier is now the source of truth but the
@@ -96,6 +96,15 @@ export interface ConnectionLifecycleDeps {
    * so the caller can tell plaintext ingestion from TLS refresh.
    */
   onSTSDirective?: (directive: STSDirective, currentTls: boolean) => void;
+  /**
+   * Read-only view of the STS store, consulted before mutating on a
+   * plaintext ingestion. Lets `ingestSTSDirective` short-circuit when a
+   * policy already exists and the session is plaintext — defence in depth
+   * on top of `enforceSTS`, in case an attacker somehow gets us onto a
+   * plaintext socket mid-policy and tries to extend or replace the stored
+   * directive from the same host.
+   */
+  stsStore?: STSStore;
   messageQueue: { clear(): void; flushWithDeadline?(maxMs: number): number };
   dispatcher: {
     bind(type: BindType, flags: string, mask: string, handler: BindHandler, owner?: string): void;
@@ -425,6 +434,19 @@ function ingestSTSDirective(deps: ConnectionLifecycleDeps): void {
   if (!callback) return;
   const rawValue = deps.client.network.cap?.available?.get('sts');
   if (!rawValue) return;
+  // Defence in depth on top of `enforceSTS`: if we're on plaintext and a
+  // policy already exists for this host, never let the plaintext session
+  // mutate the stored directive. `enforceSTS` already refuses to run on
+  // plaintext under an active policy, so reaching this code path means
+  // something upstream went wrong — bail out loudly rather than quietly
+  // extending the expiry or swapping the recorded port from the attacker-
+  // controlled session.
+  if (deps.config.irc.tls === false && deps.stsStore?.get(deps.config.irc.host)) {
+    deps.logger.warn(
+      `Refusing to ingest STS directive from plaintext session for ${deps.config.irc.host} — a policy already exists`,
+    );
+    return;
+  }
   const directive = parseSTSDirective(rawValue);
   if (!directive) {
     deps.logger.warn(`Ignoring malformed STS directive "${rawValue}"`);

@@ -1,11 +1,29 @@
 // chanmod — auto-op/halfop/voice on join, with optional NickServ verification
-import type { PluginAPI, PublicUserRecord } from '../../src/types';
+import type { PluginAPI, PluginModActor, PublicUserRecord } from '../../src/types';
 import type { ProbeState } from './chanserv-notice';
 import { markProbePending } from './chanserv-notice';
 import { botCanHalfop, botHasOps, hasAnyFlag } from './helpers';
 import type { ProtectionChain } from './protection-backend';
 import { toBackendAccess } from './protection-backend';
 import type { ChanmodConfig, SharedState } from './state';
+
+/** Flags that must go through the hard-gate verification inside grantMode. */
+const GRANT_FLAGS = ['+o', '+h', '+v'] as const;
+
+/**
+ * Hand-rolled actor used by auto-op paths that run without a triggering
+ * user `ctx` (join reconciliation, identify/deidentify reconcilers,
+ * revoke-on-deidentify sweeps). `source='plugin'` and `plugin='chanmod'`
+ * are forced by the plugin-api factory's `resolveActor` either way — we
+ * set them here for readability. Keeps `mod_log.by` meaningful instead
+ * of NULL for the swath of chanmod rows that do not originate from a
+ * bound command handler. See audit 2026-04-24.
+ */
+const AUTO_OP_ACTOR: PluginModActor = Object.freeze({
+  by: 'auto-op',
+  source: 'plugin',
+  plugin: 'chanmod',
+});
 
 /** Desired prefix mode for a user based on their flags, or null for nothing. */
 type DesiredMode = 'o' | 'h' | 'v' | null;
@@ -30,17 +48,26 @@ function computeDesiredMode(allFlags: string, config: ChanmodConfig): DesiredMod
 }
 
 /**
- * Apply `desired` to `nick` in `channel`, with NickServ verification when
- * `require_acc_for` demands it. Used by both the join handler and the
- * flag-change reconciler.
+ * Apply `desired` to `nick` in `channel`. For `+o/+h/+v` grants this
+ * function applies a HARD GATE regardless of `require_acc_for`: no grant
+ * is ever issued unless the caller's identity is vouched for by either
+ * (a) an IRCv3 account-tag that resolves to a non-empty account, OR
+ * (b) a completed NickServ `verifyUser` that returned `verified:true`.
  *
- * When `knownAccount` is defined (non-empty string), it came from IRCv3
- * extended-join / account-tag / account-notify — the server has already
- * vouched for the identity and we can skip the NickServ ACC round-trip.
- * `null` means the server explicitly said the nick is NOT identified; we
- * reject the grant without ever asking NickServ.
+ * This closes the race the audit flagged: the join bind uses flag `-`,
+ * which bypasses the dispatcher's verification gate, so an operator who
+ * does not include `+o` in `require_acc_for` was previously opping a
+ * nick-squatter on hostmask alone. See audit 2026-04-24 CRITICAL.
  *
- * Returns once the grant is queued (or skipped). Errors are logged, not thrown.
+ * When `knownAccount` is a non-empty string, it came from IRCv3
+ * extended-join / account-tag / account-notify — authoritative and
+ * skips the NickServ ACC round-trip. `null` means the server
+ * explicitly said "not identified"; we refuse the grant. `undefined`
+ * means no account data was attached to the event — fall through to
+ * `verifyUser()`.
+ *
+ * Returns once the grant is queued (or skipped). Errors are logged,
+ * not thrown.
  */
 async function grantMode(
   api: PluginAPI,
@@ -50,65 +77,84 @@ async function grantMode(
   desired: 'o' | 'h' | 'v',
   knownAccount: string | null | undefined = undefined,
 ): Promise<void> {
-  const requireAccFor = api.botConfig.identity.require_acc_for;
-  const flagToApply = desired === 'o' ? '+o' : desired === 'h' ? '+h' : '+v';
-  const needsVerification = requireAccFor.includes(flagToApply) && api.services.isAvailable();
+  const flagToApply: '+o' | '+h' | '+v' = desired === 'o' ? '+o' : desired === 'h' ? '+h' : '+v';
+  const safeNick = api.stripFormatting(nick);
 
-  if (needsVerification) {
-    // Fast path: IRCv3 account data is authoritative and means we do not
-    // have to wait on NickServ. null = server says "not identified" — the
-    // only correct response is to refuse the grant (this closes the race
-    // the audit flagged even without the dispatcher verification gate).
+  // Hard gate — required for prefix-mode grants whenever services
+  // ARE available, regardless of `require_acc_for`. The previous
+  // conditional-on-config behaviour is the vulnerability; see audit
+  // 2026-04-24 CRITICAL.
+  //
+  // When services are entirely unavailable (`services.type === 'none'`),
+  // there's no way for the bot to distinguish an identified user from a
+  // nick-squatter — so we fall through to hostmask-only matching. The
+  // operator has explicitly opted out of services; the startup warning
+  // in `warnAutoOpMisconfig` alerts them that this mode is weaker than
+  // a services-gated deployment. This keeps auto-op usable on
+  // services-free networks without blessing it as secure.
+  if (api.services.isAvailable()) {
+    // null = server explicitly said "not identified". Refuse.
     if (knownAccount === null) {
       api.log(
-        `Skipping ${flagToApply} for ${nick} in ${channel} — IRCv3 account-tag says not identified`,
+        `Skipping ${flagToApply} for ${safeNick} in ${channel} — IRCv3 account-tag says not identified`,
       );
       if (config.notify_on_fail) {
         api.notice(nick, 'Auto-op: NickServ verification failed. Please identify and rejoin.');
       }
       return;
     }
+
     if (typeof knownAccount === 'string' && knownAccount.length > 0) {
+      // Account-tag is authoritative. Accept without a NickServ
+      // round-trip — the server has already vouched for the identity.
       api.log(
-        `Verified ${nick} via IRCv3 account-tag (${knownAccount}) — applying ${flagToApply} in ${channel}`,
+        `Verified ${safeNick} via IRCv3 account-tag (${api.stripFormatting(knownAccount)}) — applying ${flagToApply} in ${channel}`,
       );
     } else {
-      api.log(`Verifying ${nick} via NickServ before applying ${flagToApply} in ${channel}`);
+      // No account-tag attached to the event. Must wait for NickServ.
+      api.log(`Verifying ${safeNick} via NickServ before applying ${flagToApply} in ${channel}`);
       const result = await api.services.verifyUser(nick);
       if (!result.verified) {
-        api.log(`Verification failed for ${nick} in ${channel} — not applying ${flagToApply}`);
+        api.log(`Verification failed for ${safeNick} in ${channel} — not applying ${flagToApply}`);
         if (config.notify_on_fail) {
           api.notice(nick, 'Auto-op: NickServ verification failed. Please identify and rejoin.');
         }
         return;
       }
       api.log(
-        `Verified ${nick} (account: ${result.account}) — applying ${flagToApply} in ${channel}`,
+        `Verified ${safeNick} (account: ${result.account ? api.stripFormatting(result.account) : 'unknown'}) — applying ${flagToApply} in ${channel}`,
       );
     }
+  } else {
+    // Services unavailable — legacy hostmask-only behaviour. Startup
+    // warning in warnAutoOpMisconfig + this debug log make the
+    // degraded posture visible.
+    api.debug(
+      `Granting ${flagToApply} for ${safeNick} in ${channel} on hostmask alone — services unavailable`,
+    );
   }
 
   if (desired === 'o') {
     if (!botHasOps(api, channel)) {
-      api.log(`Cannot auto-op ${nick} in ${channel} — I am not opped`);
+      api.log(`Cannot auto-op ${safeNick} in ${channel} — I am not opped`);
       return;
     }
-    api.op(channel, nick);
-    api.log(`Auto-opped ${nick} in ${channel}`);
+    api.op(channel, nick, AUTO_OP_ACTOR);
+    api.log(`Auto-opped ${safeNick} in ${channel}`);
   } else if (desired === 'h') {
     if (!botCanHalfop(api, channel)) {
-      api.log(`Cannot auto-halfop ${nick} in ${channel} — I do not have +h or +o`);
+      api.log(`Cannot auto-halfop ${safeNick} in ${channel} — I do not have +h or +o`);
       return;
     }
-    api.halfop(channel, nick);
-    api.log(`Auto-halfopped ${nick} in ${channel}`);
+    api.halfop(channel, nick, AUTO_OP_ACTOR);
+    api.log(`Auto-halfopped ${safeNick} in ${channel}`);
   } else {
     if (!botHasOps(api, channel)) {
-      api.log(`Cannot auto-voice ${nick} in ${channel} — I am not opped`);
+      api.log(`Cannot auto-voice ${safeNick} in ${channel} — I am not opped`);
       return;
     }
-    api.voice(channel, nick);
-    api.log(`Auto-voiced ${nick} in ${channel}`);
+    api.voice(channel, nick, AUTO_OP_ACTOR);
+    api.log(`Auto-voiced ${safeNick} in ${channel}`);
   }
 }
 
@@ -135,24 +181,26 @@ async function reconcileUserInChannel(
   const allFlags = globalFlags + channelFlags;
   const desired = computeDesiredMode(allFlags, config);
 
+  const safeNick = api.stripFormatting(nick);
+
   // Downgrades first — revoke any prefix mode the user holds that their
   // current flags don't justify. Skip the mode we're about to grant.
   if (desired !== 'o' && currentModes.includes('o')) {
     if (botHasOps(api, channel)) {
-      api.deop(channel, nick);
-      api.log(`Auto-deopped ${nick} in ${channel} — flags no longer grant +o`);
+      api.deop(channel, nick, AUTO_OP_ACTOR);
+      api.log(`Auto-deopped ${safeNick} in ${channel} — flags no longer grant +o`);
     }
   }
   if (desired !== 'h' && desired !== 'o' && currentModes.includes('h')) {
     if (botCanHalfop(api, channel)) {
-      api.dehalfop(channel, nick);
-      api.log(`Auto-dehalfopped ${nick} in ${channel} — flags no longer grant +h`);
+      api.dehalfop(channel, nick, AUTO_OP_ACTOR);
+      api.log(`Auto-dehalfopped ${safeNick} in ${channel} — flags no longer grant +h`);
     }
   }
   if (desired === null && currentModes.includes('v')) {
     if (botHasOps(api, channel)) {
-      api.devoice(channel, nick);
-      api.log(`Auto-devoiced ${nick} in ${channel} — flags no longer grant +v`);
+      api.devoice(channel, nick, AUTO_OP_ACTOR);
+      api.log(`Auto-devoiced ${safeNick} in ${channel} — flags no longer grant +v`);
     }
   }
 
@@ -162,6 +210,44 @@ async function reconcileUserInChannel(
   }
 }
 
+/**
+ * Audit-defence-in-depth: log a loud `[security]` warning if auto-op is
+ * enabled (globally or per-channel via chanset) but `require_acc_for`
+ * does not include the grant flags. The hard gate inside `grantMode()`
+ * neutralises the attack — this warning exists so operators SEE the
+ * misconfig and fix the config layer too, instead of silently relying
+ * on the in-code gate. See audit 2026-04-24 CRITICAL.
+ */
+function warnAutoOpMisconfig(api: PluginAPI, config: ChanmodConfig): void {
+  // Auto-op is a per-channel setting; treat it as "enabled" for warning
+  // purposes when the default is true OR any configured channel has it
+  // explicitly set. (The channelSettings layer doesn't expose a "scan
+  // all" API to plugins, so we settle for the default + the configured
+  // startup channels here — good enough for a misconfig warning.)
+  let anyAutoOpEnabled = config.auto_op;
+  if (!anyAutoOpEnabled) {
+    for (const ch of api.botConfig.irc.channels) {
+      if (api.channelSettings.getFlag(ch, 'auto_op')) {
+        anyAutoOpEnabled = true;
+        break;
+      }
+    }
+  }
+  if (!anyAutoOpEnabled) return;
+
+  const requireAccFor = api.botConfig.identity.require_acc_for ?? [];
+  const missing = GRANT_FLAGS.filter((f) => !requireAccFor.includes(f));
+  if (missing.length === 0) return;
+
+  api.warn(
+    `[security] auto-op is enabled but require_acc_for is missing ${missing.join(', ')}. ` +
+      `The grantMode() hard gate still requires NickServ verification for prefix-mode grants, ` +
+      `but operators should add these flags to identity.require_acc_for in bot.json for ` +
+      `defence in depth (the dispatcher gate blocks unverified ops from ever reaching the ` +
+      `handler; the grantMode gate is the second layer). See docs/SECURITY.md §3.2.`,
+  );
+}
+
 export function setupAutoOp(
   api: PluginAPI,
   config: ChanmodConfig,
@@ -169,6 +255,8 @@ export function setupAutoOp(
   chain?: ProtectionChain,
   probeState?: ProbeState,
 ): () => void {
+  warnAutoOpMisconfig(api, config);
+
   api.bind('join', '-', '*', async (ctx) => {
     const { nick, channel } = ctx;
 
@@ -333,17 +421,20 @@ function revokeAutoGrants(
   nick: string,
   currentModes: string,
 ): void {
+  const safeNick = api.stripFormatting(nick);
   if (currentModes.includes('o') && botHasOps(api, channel)) {
-    api.deop(channel, nick);
-    api.log(`Auto-deopped ${nick} in ${channel} — no longer identified to a flagged account`);
+    api.deop(channel, nick, AUTO_OP_ACTOR);
+    api.log(`Auto-deopped ${safeNick} in ${channel} — no longer identified to a flagged account`);
   }
   if (currentModes.includes('h') && botCanHalfop(api, channel)) {
-    api.dehalfop(channel, nick);
-    api.log(`Auto-dehalfopped ${nick} in ${channel} — no longer identified to a flagged account`);
+    api.dehalfop(channel, nick, AUTO_OP_ACTOR);
+    api.log(
+      `Auto-dehalfopped ${safeNick} in ${channel} — no longer identified to a flagged account`,
+    );
   }
   if (currentModes.includes('v') && botHasOps(api, channel)) {
-    api.devoice(channel, nick);
-    api.log(`Auto-devoiced ${nick} in ${channel} — no longer identified to a flagged account`);
+    api.devoice(channel, nick, AUTO_OP_ACTOR);
+    api.log(`Auto-devoiced ${safeNick} in ${channel} — no longer identified to a flagged account`);
   }
 }
 

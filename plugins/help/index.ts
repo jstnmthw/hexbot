@@ -124,9 +124,17 @@ export function init(api: PluginAPI): void {
       return;
     }
 
-    // List view: !help with no args — enforce per-user cooldown
+    // List view: !help with no args — enforce per-user cooldown.
+    //
+    // Keyed on `ident@host` (case-folded host), not nick: a user on a stable
+    // cloak can otherwise trivially bypass the cooldown by cycling nicks
+    // (/nick a → !help → /nick b → !help). Ident+host is the closest stable
+    // identity the bot sees without a services lookup; a determined attacker
+    // can spoof ident on non-identd networks, but on an identd network or
+    // against a services cloak this is effectively per-user.
+    // See audit 2026-04-24.
     const now = Date.now();
-    const cooldownKey = api.ircLower(ctx.nick);
+    const cooldownKey = `${ctx.ident}@${api.ircLower(ctx.hostname)}`;
     const last = cooldowns.get(cooldownKey);
     if (last !== undefined && now - last < cooldownMs) {
       return; // silently drop — still in cooldown

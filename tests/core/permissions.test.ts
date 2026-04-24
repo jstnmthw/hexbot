@@ -486,6 +486,24 @@ describe('Permissions', () => {
       expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('SECURITY'));
       warnSpy.mockRestore();
     });
+
+    it('auditWeakHostmasks emits one warning per weak privileged hostmask and skips safe / non-privileged entries', () => {
+      const logger = createLogger('debug');
+      const permsWithLogger = new Permissions(null, logger);
+      permsWithLogger.addUser('weakOp', 'admin!*@*', 'o', 'REPL');
+      permsWithLogger.addUser('strongOp', 'admin!ident@specific.host.example', 'o', 'REPL');
+      permsWithLogger.addUser('noPriv', 'alice!*@*', '', 'REPL');
+      permsWithLogger.addUser('acctOnly', '$a:someAccount', 'o', 'REPL');
+
+      const warnSpy = vi.spyOn(logger.constructor.prototype, 'warn');
+      permsWithLogger.auditWeakHostmasks();
+      const securityWarns = warnSpy.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && (c[0] as string).includes('SECURITY'),
+      );
+      expect(securityWarns).toHaveLength(1);
+      expect(securityWarns[0][0]).toContain('weakOp');
+      warnSpy.mockRestore();
+    });
   });
 
   // -------------------------------------------------------------------------

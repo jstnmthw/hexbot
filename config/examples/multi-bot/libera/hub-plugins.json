@@ -7,7 +7,8 @@
       "enforce_channel_modes": "+nt",
       "revenge_on_kick": true,
       "nick_recovery": true,
-      "nick_recovery_ghost": true
+      "nick_recovery_ghost": true,
+      "services_host_pattern": "*.libera.chat"
     }
   },
   "greeter": {

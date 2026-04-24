@@ -10,6 +10,7 @@ import { DatabaseBusyError, DatabaseFullError } from '../database-errors';
 import type { BotEventBus } from '../event-bus';
 import type { LoggerLike } from '../logger';
 import { sanitize } from '../utils/sanitize';
+import { escapeLikePattern } from '../utils/sql';
 import { stripFormatting } from '../utils/strip-formatting';
 
 /** Instance type of the runtime `SqliteError` class from better-sqlite3. */
@@ -491,8 +492,7 @@ export class ModLog {
       params.push(filter.sinceTimestamp);
     }
     if (filter?.grep) {
-      const escaped = filter.grep.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
-      const like = `%${escaped}%`;
+      const like = `%${escapeLikePattern(filter.grep)}%`;
       conditions.push("(reason LIKE ? ESCAPE '\\' OR metadata LIKE ? ESCAPE '\\')");
       params.push(like, like);
     }

@@ -97,6 +97,7 @@ function createTestConfig(overrides?: Partial<ChanmodConfig>): ChanmodConfig {
     chanserv_nick: 'ChanServ',
     chanserv_op_delay_ms: 1000,
     chanserv_services_type: 'atheme',
+    services_host_pattern: 'services.*',
     chanserv_unban_retry_ms: 2000,
     chanserv_unban_max_retries: 3,
     chanserv_recover_cooldown_ms: 60_000,

@@ -110,7 +110,7 @@ Plugins must never read `process.env` directly — declare a `_env` field so the
 
 #### `botConfig: PluginBotConfig`
 
-Read-only, deep-frozen view of `config/bot.json`. Contains: `irc` (host, port, tls, tls_verify, tls_cert, tls_key, nick, username, realname, channels), `owner` (handle, hostmask), `identity` (method, require_acc_for), `services` (type, nickserv, sasl), and `logging` (level, mod_actions). The NickServ password is omitted from `services`. The `channels` array contains only channel name strings (keys are never exposed). The `database` and `pluginDir` filesystem paths are omitted. The `chanmod` key is present only for the chanmod plugin.
+Read-only, deep-frozen view of `config/bot.json`. Contains: `irc` (host, port, tls, nick, username, realname, channels), `identity` (method, require_acc_for), `services` (type, nickserv, sasl), and `logging` (level, mod_actions). The NickServ password is omitted from `services`. The `channels` array contains only channel name strings (keys are never exposed). TLS client-certificate paths (`tls_cert`, `tls_key`) are omitted. The `owner` block is omitted entirely — use the permissions API if you need to check for owner privileges. The `database` and `pluginDir` filesystem paths are omitted. The `chanmod` key is present only for the chanmod plugin. Every sub-object is individually frozen per SECURITY.md §4.1.
 
 #### `permissions: PluginPermissions`
 
@@ -230,7 +230,21 @@ Send a CTCP reply. Used to respond to CTCP requests like VERSION or TIME.
 
 These are delegated to the IRCCommands core module, which handles mode batching and mod action logging.
 
-> **Auto-audit:** Every `api.op` / `api.deop` / `api.kick` / `api.ban` / `api.voice` / `api.devoice` / `api.halfop` / `api.dehalfop` / `api.invite` / `api.topic` / `api.mode` call writes a `mod_log` row tagged with `source='plugin'`, `plugin=<your plugin id>`, and `by=<your plugin id>`. You don't need to call `api.audit.log` for these — the wrapper does it for free, and trying to override the source or plugin name is impossible because the factory captures them in a frozen actor object. See [docs/AUDIT.md](AUDIT.md) for the full action vocabulary.
+> **Auto-audit:** Every `api.op` / `api.deop` / `api.kick` / `api.ban` / `api.voice` / `api.devoice` / `api.halfop` / `api.dehalfop` / `api.invite` / `api.topic` / `api.mode` call writes a `mod_log` row tagged with `source='plugin'` and `plugin=<your plugin id>`. The `by` attribution defaults to `<your plugin id>` — pass `api.auditActor(ctx)` as the trailing `actor` argument to attribute the action to the triggering user (`ctx.nick`) instead. You don't need to call `api.audit.log` for these — the wrapper does it for free, and trying to override `source` or `plugin` is impossible because the factory rebuilds them in a frozen actor object. See [docs/AUDIT.md](AUDIT.md) for the full action vocabulary.
+>
+> ```typescript
+> api.bind('pub', 'o', '!op', (ctx) => {
+>   const [nick] = ctx.args.split(/\s+/);
+>   // Attribute the mod_log row to ctx.nick, not to the plugin id
+>   api.op(ctx.channel, nick, api.auditActor(ctx));
+> });
+>
+> // Timer-driven action with no triggering user — omit the actor so `by`
+> // falls back to the plugin id
+> api.bind('time', '-', '300', () => {
+>   api.mode('#lobby', '+m');
+> });
+> ```
 
 #### `join(channel, key?)`
 
@@ -240,35 +254,37 @@ Join a channel, optionally with a key.
 
 Leave a channel with an optional part message.
 
-#### `op(channel, nick)`
+Every mutating method below takes an optional trailing `actor?: PluginModActor` argument. Build one with [`auditActor(ctx)`](#auditactorctx) to attribute the `mod_log` `by` column to the triggering user; omit it for plugin-autonomous actions (timers, event reactions) where the plugin itself is the actor.
+
+#### `op(channel, nick, actor?)`
 
 Set +o on a user. Logged to mod_log.
 
-#### `deop(channel, nick)`
+#### `deop(channel, nick, actor?)`
 
 Set -o on a user. Logged to mod_log.
 
-#### `halfop(channel, nick)`
+#### `halfop(channel, nick, actor?)`
 
 Set +h on a user. Requires the bot to hold +h or +o in the channel. Not all networks support half-op — check ISUPPORT PREFIX before using.
 
-#### `dehalfop(channel, nick)`
+#### `dehalfop(channel, nick, actor?)`
 
 Set -h on a user.
 
-#### `voice(channel, nick)`
+#### `voice(channel, nick, actor?)`
 
 Set +v on a user.
 
-#### `devoice(channel, nick)`
+#### `devoice(channel, nick, actor?)`
 
 Set -v on a user.
 
-#### `kick(channel, nick, reason?)`
+#### `kick(channel, nick, reason?, actor?)`
 
 Kick a user from a channel. Logged to mod_log.
 
-#### `ban(channel, mask)`
+#### `ban(channel, mask, actor?)`
 
 Set +b on a mask. Logged to mod_log.
 
@@ -284,11 +300,11 @@ api.mode('#channel', '+oo', 'nick1', 'nick2');
 
 Request the current channel modes from the server (`MODE #channel` with no args). The server replies with RPL_CHANNELMODEIS (324), which populates channel-state (`ch.modes`, `ch.key`, `ch.limit`) and fires `channel:modesReady`. This is automatically sent on bot join.
 
-#### `topic(channel, text)`
+#### `topic(channel, text, actor?)`
 
 Set the channel topic.
 
-#### `invite(channel, nick)`
+#### `invite(channel, nick, actor?)`
 
 Invite a user to a channel.
 
@@ -346,6 +362,21 @@ api.audit.log('rss-feed-add', {
 For privileged actions that map onto an `api.irc.*` call, you don't need to call `api.audit.log` at all — the IRC wrapper auto-logs the row. Reach for `api.audit.log` only when the event has no IRC analogue. The full action vocabulary, plus the rules for plugin authors, lives in [docs/AUDIT.md](AUDIT.md).
 
 A plugin **must not** call `db.logModAction` directly. The scoped API doesn't expose the database directly, and the audit factory is the only supported path.
+
+#### `auditActor(ctx): PluginModActor`
+
+Build the `{ by, source, plugin }` triple you pass as the trailing `actor` argument to `api.op` / `api.ban` / `api.kick` / `api.mode` / etc. so the resulting `mod_log` row attributes the action to `ctx.nick` rather than to the plugin id.
+
+```typescript
+api.bind('pub', 'o', '!kick', (ctx) => {
+  const [nick, ...rest] = ctx.args.split(/\s+/);
+  api.kick(ctx.channel, nick, rest.join(' '), api.auditActor(ctx));
+});
+```
+
+The factory hard-codes `source = 'plugin'` and `plugin = <your plugin id>` — passing a hand-rolled object with a different `source` or `plugin` has no effect. Only `by` (the nick attribution) is taken from the returned actor. This is the enforcement point that prevents a misbehaving plugin from spoofing another plugin's identity.
+
+Use this for every plugin mutation that was triggered by a user command. Omit the actor for plugin-autonomous actions (timers, event reactions) where the plugin itself is the actor — `by` will default to the plugin id.
 
 ---
 

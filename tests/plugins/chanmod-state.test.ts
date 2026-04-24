@@ -21,6 +21,9 @@ function makeConfigApi(pluginConfig: Record<string, unknown>, logs: string[]): P
       chanmod: { nick_recovery_password: '' },
     },
     log: (msg: string) => logs.push(msg),
+    // readConfig also calls api.warn for the [security] services_host_pattern
+    // unset warning (added 2026-04-24). Tests capture both streams together.
+    warn: (msg: string) => logs.push(msg),
     // The rest of PluginAPI is unused by readConfig — cast through unknown.
   } as unknown as PluginAPI;
 }

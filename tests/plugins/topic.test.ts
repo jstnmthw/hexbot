@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { themeNames } from '../../plugins/topic/themes';
 import { type MockBot, createMockBot } from '../helpers/mock-bot';
-import { simulatePrivmsg, tick } from '../helpers/plugin-test-helpers';
+import { giveBotOps, simulatePrivmsg, tick } from '../helpers/plugin-test-helpers';
 
 const PLUGIN_PATH = resolve('./plugins/topic/index.ts');
 
@@ -175,8 +175,8 @@ describe('topic plugin', () => {
     expect(bot.pluginLoader.isLoaded('topic')).toBe(false);
   });
 
-  it('should warn when formatted topic exceeds 390 chars', async () => {
-    // Create a very long text that will exceed 390 chars after theming
+  it('should warn when formatted topic exceeds 390 bytes', async () => {
+    // Create a very long text that will exceed 390 bytes after theming
     const longText = 'A'.repeat(400);
     const themeName = themeNames[0];
     simulatePrivmsg(
@@ -193,7 +193,10 @@ describe('topic plugin', () => {
       (m) => m.type === 'notice' && m.message?.includes('Warning'),
     );
     expect(warning).toBeDefined();
-    expect(warning!.message).toContain('chars');
+    // Warning now expresses the limit in bytes (UTF-8 byte length), not
+    // UTF-16 code units, so multi-byte code points aren't silently
+    // over-permitted against a byte-counted server cap. See audit 2026-04-24.
+    expect(warning!.message).toContain('bytes');
   });
 
   // ---------------------------------------------------------------------------
@@ -316,6 +319,10 @@ describe('topic plugin', () => {
     });
 
     it('non-op change after lock → bot restores enforced topic', async () => {
+      // Bot must hold `+o` on the channel for the restore path to fire —
+      // without ops the plugin now skips the restore to avoid burning the
+      // message-queue on a takeover. See audit 2026-04-24.
+      giveBotOps(bot, '#test');
       setLiveTopic(bot, '#test', 'locked topic');
       simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!topic lock');
       await tick();
@@ -429,6 +436,10 @@ describe('topic plugin', () => {
     });
 
     it('unauthorized topic change (different text) triggers one restore', async () => {
+      // Bot must hold `+o` on the channel for the restore path to fire —
+      // without ops the plugin now skips the restore to avoid burning the
+      // message-queue on a takeover. See audit 2026-04-24.
+      giveBotOps(bot, '#test');
       bot.channelSettings.set('#test', 'topic_text', 'locked text');
       bot.channelSettings.set('#test', 'topic_lock', true);
 
@@ -450,6 +461,31 @@ describe('topic plugin', () => {
       );
       expect(topicCmds).toHaveLength(1);
       expect(topicCmds[0].message).toContain('locked text');
+    });
+
+    it('unauthorized topic change with bot deopped → no restore', async () => {
+      // Without ops, the restore path is skipped outright so a takeover
+      // that deops the bot can't trigger the bot to flood its message
+      // queue with rejected TOPIC attempts. See audit 2026-04-24.
+      bot.channelSettings.set('#test', 'topic_text', 'locked text');
+      bot.channelSettings.set('#test', 'topic_lock', true);
+
+      await advancePastGrace();
+      bot.client.clearMessages();
+
+      bot.client.simulateEvent('topic', {
+        nick: 'someuser',
+        ident: 'user',
+        hostname: 'user.host',
+        channel: '#test',
+        topic: 'rogue topic',
+      });
+      await tick();
+
+      const topicCmds = bot.client.messages.filter(
+        (m) => m.type === 'raw' && m.message?.startsWith('TOPIC'),
+      );
+      expect(topicCmds).toHaveLength(0);
     });
   });
 });

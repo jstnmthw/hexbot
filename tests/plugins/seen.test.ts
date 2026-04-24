@@ -11,6 +11,7 @@ import {
   vi,
 } from 'vitest';
 
+import { ChannelState } from '../../src/core/channel-state';
 import { Permissions } from '../../src/core/permissions';
 import { BotDatabase } from '../../src/database';
 import { EventDispatcher } from '../../src/dispatcher';
@@ -63,12 +64,44 @@ describe('seen plugin', () => {
   let dispatcher: EventDispatcher;
   let loader: PluginLoader;
   let db: BotDatabase;
+  let channelState: ChannelState;
+
+  // Seed channel-state with every user present in every channel they're
+  // cited in. The cross-channel sighting oracle guard (audit 2026-04-24)
+  // refuses to reveal a sighting when the querier doesn't share the
+  // stored channel with the bot, so tests that expect a detail reply
+  // need both the target and the querier registered in the stored
+  // channel. `populateChannel` is the single seeding helper; tests
+  // call it before dispatching the `!seen` query.
+  function populateChannel(channel: string, users: string[]): void {
+    channelState.injectChannelSync({
+      channel,
+      topic: '',
+      modes: '',
+      users: users.map((nick) => ({
+        nick,
+        ident: 'user',
+        hostname: 'host.com',
+        modes: [],
+      })),
+    });
+  }
 
   beforeAll(async () => {
     db = new BotDatabase(':memory:');
     db.open();
     dispatcher = new EventDispatcher();
     const eventBus = new BotEventBus();
+    // ChannelState only needs `on`/`removeListener` stubs — the seen
+    // plugin's privacy check reads `getChannel(...)?.users.has(nick)`,
+    // which depends on the injected sync data, not live JOIN events.
+    const fakeClient = {
+      on: () => {},
+      removeListener: () => {},
+      say: () => {},
+      changeNick: () => {},
+    };
+    channelState = new ChannelState(fakeClient, eventBus);
 
     loader = new PluginLoader({
       pluginDir: resolve('./plugins'),
@@ -78,6 +111,7 @@ describe('seen plugin', () => {
       permissions: new Permissions(db),
       botConfig: MINIMAL_BOT_CONFIG,
       ircClient: null,
+      channelState,
     });
 
     const result = await loader.load(resolve('./plugins/seen/index.ts'));
@@ -106,6 +140,9 @@ describe('seen plugin', () => {
   });
 
   it('should report full detail when queried from the same channel', async () => {
+    // Both alice (target) and bob (querier) must be in the stored
+    // channel for the privacy guard to release the sighting.
+    populateChannel('#dev', ['alice', 'bob']);
     const msgCtx = makePubCtx('alice', 'hello there', '#dev');
     await dispatcher.dispatch('pubm', msgCtx);
 
@@ -122,10 +159,14 @@ describe('seen plugin', () => {
   });
 
   it('should omit channel and message when queried from a different channel', async () => {
+    // Record is in #dev, but bob shares #dev so the sighting is revealed
+    // — the reply is the terse form that omits channel/message because
+    // the querier's current channel differs from the stored one.
+    populateChannel('#dev', ['alice', 'bob']);
     const msgCtx = makePubCtx('alice', 'hello there', '#dev');
     await dispatcher.dispatch('pubm', msgCtx);
 
-    // Query from a different channel
+    // Query from a different channel (bob is in #other now but still in #dev)
     const queryCtx = makePubCtx('bob', '!seen alice', '#other');
     await dispatcher.dispatch('pub', queryCtx);
 
@@ -135,6 +176,44 @@ describe('seen plugin', () => {
     expect(response).not.toContain('#dev');
     expect(response).not.toContain('hello there');
     expect(response).toMatch(/\d+s ago/);
+  });
+
+  it('does NOT reveal a sighting from a channel the querier does not share', async () => {
+    // Cross-channel sighting oracle fix (audit 2026-04-24): if bob isn't
+    // in #private, querying `!seen alice` must not reveal that alice was
+    // active there. The reply collapses to the same "haven't seen" wording
+    // used for truly-unknown nicks so the querier can't distinguish
+    // "no record" from "record exists but hidden".
+    populateChannel('#private', ['alice']); // bob is NOT a member
+    const msgCtx = makePubCtx('alice', 'secret channel chatter', '#private');
+    await dispatcher.dispatch('pubm', msgCtx);
+
+    const queryCtx = makePubCtx('bob', '!seen alice', '#other');
+    await dispatcher.dispatch('pub', queryCtx);
+
+    expect(queryCtx.reply).toHaveBeenCalledOnce();
+    expect(queryCtx.reply.mock.calls[0][0]).toBe("I haven't seen alice.");
+  });
+
+  it("does NOT store a `!seen foo` query as the querier's own sighting", async () => {
+    // Audit 2026-04-24: the `pubm *` bind previously recorded the
+    // querier's literal `!seen foo` line as their last-seen message,
+    // clobbering whatever they'd actually said last and leaking the
+    // target nick into the stored record. The trigger-prefix filter now
+    // strips these before they hit the KV store.
+    populateChannel('#test', ['querier']);
+    const firstCtx = makePubCtx('querier', 'my real last line', '#test');
+    await dispatcher.dispatch('pubm', firstCtx);
+
+    // Now the same user queries — this should NOT overwrite the record.
+    const queryCtx = makePubCtx('querier', '!seen someone', '#test');
+    await dispatcher.dispatch('pubm', queryCtx);
+
+    const raw = db.get('seen', 'seen:querier');
+    expect(raw).toBeTruthy();
+    const record = JSON.parse(raw!);
+    expect(record.text).toBe('my real last line');
+    expect(record.text).not.toContain('!seen');
   });
 
   it('should return "haven\'t seen" for unknown user', async () => {
@@ -152,6 +231,7 @@ describe('seen plugin', () => {
   });
 
   it('should be case-insensitive for nick lookups', async () => {
+    populateChannel('#test', ['Alice', 'bob']);
     const msgCtx = makePubCtx('Alice', 'hi');
     await dispatcher.dispatch('pubm', msgCtx);
 
@@ -163,6 +243,7 @@ describe('seen plugin', () => {
   });
 
   it('should persist data across plugin reload', async () => {
+    populateChannel('#test', ['charlie', 'bob']);
     // Track a message
     const msgCtx = makePubCtx('charlie', 'some message');
     await dispatcher.dispatch('pubm', msgCtx);
@@ -285,7 +366,10 @@ describe('seen plugin', () => {
   });
 
   it('should format relative time in minutes', async () => {
-    // Insert a record from ~5 minutes ago
+    // Insert a record from ~5 minutes ago. The sighting channel (#test)
+    // must include both the target and the querier for the privacy guard
+    // to release the reply.
+    populateChannel('#test', ['minuser', 'bob']);
     const fiveMinAgo = Date.now() - (5 * 60 * 1000 + 500);
     db.set(
       'seen',
@@ -307,6 +391,7 @@ describe('seen plugin', () => {
 
   it('should format relative time in hours', async () => {
     // Insert a record from ~3 hours ago
+    populateChannel('#test', ['houruser', 'bob']);
     const threeHrsAgo = Date.now() - (3 * 60 * 60 * 1000 + 500);
     db.set(
       'seen',
@@ -328,6 +413,7 @@ describe('seen plugin', () => {
 
   it('should format relative time in days', async () => {
     // Insert a record from ~2 days ago
+    populateChannel('#test', ['dayuser', 'bob']);
     const twoDaysAgo = Date.now() - (2 * 24 * 60 * 60 * 1000 + 500);
     db.set(
       'seen',

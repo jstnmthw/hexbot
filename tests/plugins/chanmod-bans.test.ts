@@ -71,7 +71,6 @@ function makeApi(botHasOps = true): {
         realname: 'HexBot',
         channels: [],
       },
-      owner: { handle: 'owner', hostmask: '*!*@owner.host' },
       identity: { method: 'hostmask', require_acc_for: [] },
       services: { type: 'none', nickserv: 'NickServ', sasl: false },
       logging: { level: 'info', mod_actions: false },

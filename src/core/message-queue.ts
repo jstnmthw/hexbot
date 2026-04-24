@@ -31,6 +31,12 @@
 //   the oldest — the sender has a chance to observe the drop and back off,
 //   and already-queued traffic stays in FIFO order.
 //
+// - **Per-target depth cap.** `MAX_PER_TARGET_DEPTH=50` prevents a single
+//   runaway target from hogging the global budget. A misbehaving plugin
+//   that spams `#busy` could otherwise fill 90%+ of the global queue before
+//   the global cap kicks in, starving every other target for minutes.
+//   Per-target overflow drops the newest (same policy as global).
+//
 // - **TARGMAX is surfaced, not enforced.** ISUPPORT's `TARGMAX` limits
 //   how many distinct targets a single PRIVMSG line may carry. Hexbot
 //   sends one target per line so the cap is advisory for us; we expose
@@ -65,6 +71,8 @@ const UNTARGETED = '';
 
 export class MessageQueue {
   private static readonly MAX_DEPTH = 500;
+  /** Per-target queue cap — one noisy target can't hold more than this. */
+  private static readonly MAX_PER_TARGET_DEPTH = 50;
 
   /** Per-target FIFO sub-queues, keyed by the target string. */
   private readonly subQueues: Map<string, Array<() => void>> = new Map();
@@ -137,6 +145,19 @@ export class MessageQueue {
     if (this.totalPending >= MessageQueue.MAX_DEPTH) {
       this.logger?.warn(
         `Message queue full (${MessageQueue.MAX_DEPTH}), dropping outgoing message for ${target || '(no target)'}`,
+      );
+      return;
+    }
+
+    // Per-target cap — reject when one target has already accumulated too
+    // much. Matches the global-cap policy (drop the newest; keep queued
+    // FIFO intact) so behaviour is consistent regardless of which limit
+    // trips first.
+    const key = target || UNTARGETED;
+    const existing = this.subQueues.get(key);
+    if (existing && existing.length >= MessageQueue.MAX_PER_TARGET_DEPTH) {
+      this.logger?.warn(
+        `Per-target queue full for ${target || '(no target)'} (${MessageQueue.MAX_PER_TARGET_DEPTH}), dropping outgoing message`,
       );
       return;
     }

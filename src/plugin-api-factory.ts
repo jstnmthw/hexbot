@@ -36,6 +36,7 @@ import type {
   PluginBotConfig,
   PluginChannelSettings,
   PluginDB,
+  PluginModActor,
   PluginPermissions,
   PluginServices,
   PluginSlidingWindowCounter,
@@ -198,24 +199,40 @@ export function createPluginApi(
     return { ...rest };
   };
 
-  const pluginBotConfig: PluginBotConfig = {
-    irc: {
-      ...botConfig.irc,
+  // Each sub-object is independently frozen so SECURITY.md §4.1's documented
+  // guarantee ("individually frozen") matches the implementation. The `irc`
+  // block is explicitly picked (not spread) so new IrcConfig fields like
+  // secret/filesystem paths don't accidentally leak into the plugin view —
+  // `tls_cert` and `tls_key` (CertFP key paths) are the concrete motivation.
+  // `owner` is omitted entirely: plugins have no legitimate need for the
+  // owner handle/hostmask/password; the permissions API is the supported path.
+  const pluginBotConfig: PluginBotConfig = Object.freeze({
+    irc: Object.freeze({
+      host: botConfig.irc.host,
+      port: botConfig.irc.port,
+      tls: botConfig.irc.tls,
+      nick: botConfig.irc.nick,
+      username: botConfig.irc.username,
+      realname: botConfig.irc.realname,
       // Expose only channel names to plugins — never expose channel keys
-      channels: botConfig.irc.channels.map((c) => (typeof c === 'string' ? c : c.name)),
-    },
-    owner: { ...botConfig.owner },
-    identity: { ...botConfig.identity },
-    services: {
+      channels: Object.freeze(
+        botConfig.irc.channels.map((c) => (typeof c === 'string' ? c : c.name)),
+      ),
+    }),
+    identity: Object.freeze({ ...botConfig.identity }),
+    services: Object.freeze({
       type: botConfig.services.type,
       nickserv: botConfig.services.nickserv,
       sasl: botConfig.services.sasl,
       // password intentionally omitted
-    },
+    }),
     // database and pluginDir intentionally omitted — plugins don't need filesystem paths
-    logging: { ...botConfig.logging },
-    chanmod: buildPluginChanmodView(),
-  };
+    logging: Object.freeze({ ...botConfig.logging }),
+    chanmod: (() => {
+      const view = buildPluginChanmodView();
+      return view ? Object.freeze(view) : undefined;
+    })(),
+  });
 
   // Mutable cell shared by every guarded method returned from the factory.
   // `dispose()` flips this; every wrapped method early-returns `undefined`
@@ -268,7 +285,8 @@ export function createPluginApi(
     services: createPluginServicesApi(deps.services),
     db: createPluginDbApi(deps.db, pluginId),
     banStore: createPluginBanStoreApi(deps.banStore),
-    botConfig: Object.freeze(pluginBotConfig),
+    // pluginBotConfig is already individually-frozen (outer + each sub-object) above.
+    botConfig: pluginBotConfig,
     config: Object.freeze({ ...config }),
     getServerSupports(): Record<string, string> {
       return getServerSupports();
@@ -297,6 +315,12 @@ export function createPluginApi(
     },
     util: createPluginUtilApi(getCasemapping),
     audit: createPluginAuditApi(deps.db, pluginId, pluginLogger),
+    auditActor(ctx: HandlerContext): PluginModActor {
+      // Force `source='plugin'` and `plugin=<pluginId>` so a plugin can't
+      // spoof another plugin's identity or pretend to be a non-plugin
+      // source. Only `by` varies with the triggering nick.
+      return Object.freeze({ by: ctx.nick, source: 'plugin', plugin: pluginId });
+    },
     ...createPluginLogApi(pluginLogger),
   };
 
@@ -485,13 +509,21 @@ function createPluginIrcActionsApi(
     if (messageQueue) messageQueue.enqueue(target, fn);
     else fn();
   }
-  // The actor every plugin-driven mutation lands under in mod_log. Frozen
-  // per-plugin so a misbehaving plugin can't mutate it cross-plugin.
-  const actor: ModActor = Object.freeze({
+  // Default actor used when the plugin does not supply one. Frozen
+  // per-plugin so a misbehaving plugin can't mutate it cross-plugin. Used
+  // for plugin-autonomous actions (timers, reactions) where there is no
+  // triggering user to attribute to.
+  const defaultActor: ModActor = Object.freeze({
     by: pluginId,
     source: 'plugin',
     plugin: pluginId,
   });
+  // If the plugin supplies its own actor (via `api.auditActor(ctx)`), force
+  // `source` and `plugin` back to the plugin-scoped values — a plugin must
+  // not be able to spoof another plugin or pretend to be a non-plugin
+  // source, even if it passes a hand-rolled object. Only `by` varies.
+  const resolveActor = (actor: PluginModActor | undefined): ModActor =>
+    actor ? Object.freeze({ by: actor.by, source: 'plugin', plugin: pluginId }) : defaultActor;
   return {
     say(target: string, message: string): void {
       const safe = sanitize(message);
@@ -516,29 +548,29 @@ function createPluginIrcActionsApi(
         safeMsg = sanitize(message);
       send(safeTarget, () => ircClient?.ctcpResponse(safeTarget, safeType, safeMsg));
     },
-    op(channel: string, nick: string): void {
-      ircCommands?.op(channel, nick, actor);
+    op(channel: string, nick: string, actor?: PluginModActor): void {
+      ircCommands?.op(channel, nick, resolveActor(actor));
     },
-    deop(channel: string, nick: string): void {
-      ircCommands?.deop(channel, nick, actor);
+    deop(channel: string, nick: string, actor?: PluginModActor): void {
+      ircCommands?.deop(channel, nick, resolveActor(actor));
     },
-    voice(channel: string, nick: string): void {
-      ircCommands?.voice(channel, nick, actor);
+    voice(channel: string, nick: string, actor?: PluginModActor): void {
+      ircCommands?.voice(channel, nick, resolveActor(actor));
     },
-    devoice(channel: string, nick: string): void {
-      ircCommands?.devoice(channel, nick, actor);
+    devoice(channel: string, nick: string, actor?: PluginModActor): void {
+      ircCommands?.devoice(channel, nick, resolveActor(actor));
     },
-    halfop(channel: string, nick: string): void {
-      ircCommands?.halfop(channel, nick, actor);
+    halfop(channel: string, nick: string, actor?: PluginModActor): void {
+      ircCommands?.halfop(channel, nick, resolveActor(actor));
     },
-    dehalfop(channel: string, nick: string): void {
-      ircCommands?.dehalfop(channel, nick, actor);
+    dehalfop(channel: string, nick: string, actor?: PluginModActor): void {
+      ircCommands?.dehalfop(channel, nick, resolveActor(actor));
     },
-    kick(channel: string, nick: string, reason?: string): void {
-      ircCommands?.kick(channel, nick, reason, actor);
+    kick(channel: string, nick: string, reason?: string, actor?: PluginModActor): void {
+      ircCommands?.kick(channel, nick, reason, resolveActor(actor));
     },
-    ban(channel: string, mask: string): void {
-      ircCommands?.ban(channel, mask, actor);
+    ban(channel: string, mask: string, actor?: PluginModActor): void {
+      ircCommands?.ban(channel, mask, resolveActor(actor));
     },
     mode(channel: string, modes: string, ...params: string[]): void {
       ircCommands?.mode(channel, modes, ...params);
@@ -546,11 +578,11 @@ function createPluginIrcActionsApi(
     requestChannelModes(channel: string): void {
       ircCommands?.requestChannelModes(channel);
     },
-    topic(channel: string, text: string): void {
-      ircCommands?.topic(channel, text, actor);
+    topic(channel: string, text: string, actor?: PluginModActor): void {
+      ircCommands?.topic(channel, text, resolveActor(actor));
     },
-    invite(channel: string, nick: string): void {
-      ircCommands?.invite(channel, nick, actor);
+    invite(channel: string, nick: string, actor?: PluginModActor): void {
+      ircCommands?.invite(channel, nick, resolveActor(actor));
     },
     join(channel: string, key?: string): void {
       ircCommands?.join(channel, key);
@@ -614,6 +646,7 @@ function createPluginChannelStateApi(
   | 'getChannel'
   | 'getUsers'
   | 'getUserHostmask'
+  | 'getJoinedChannels'
   | 'onModesReady'
   | 'offModesReady'
   | 'onPermissionsChanged'
@@ -816,6 +849,10 @@ function createPluginChannelStateApi(
     },
     getUserHostmask(channel: string, nick: string): string | undefined {
       return channelState?.getUserHostmask(channel, nick);
+    },
+    getJoinedChannels(): string[] {
+      if (!channelState) return [];
+      return channelState.getAllChannels().map((ch) => ch.name);
     },
   };
 }

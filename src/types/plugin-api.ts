@@ -8,7 +8,6 @@ import type {
   IdentityConfig,
   IrcConfig,
   LoggingConfig,
-  OwnerConfig,
   ServicesConfig,
 } from './config';
 import type { BindHandler, BindType, HandlerContext } from './dispatch';
@@ -172,6 +171,25 @@ export interface PluginAudit {
   log(action: string, options?: PluginAuditOptions): void;
 }
 
+/**
+ * `{by, source, plugin}` triple a plugin hands to `api.op/ban/kick/mode`
+ * etc. so the resulting `mod_log` row attributes the action to the user
+ * who triggered the plugin handler rather than to the plugin itself.
+ *
+ * Produced by {@link PluginAPI.auditActor} — the factory forces `source =
+ * 'plugin'` and `plugin = <pluginId>` so a plugin cannot spoof another
+ * plugin's identity or pretend to be a non-plugin source; only `by`
+ * varies with `ctx.nick`.
+ *
+ * Duplicated inline here rather than imported from `src/core/audit` so
+ * the plugin-api type module stays free of core-runtime type imports.
+ */
+export interface PluginModActor {
+  readonly by: string;
+  readonly source: 'plugin';
+  readonly plugin: string;
+}
+
 export interface PluginAPI {
   pluginId: string;
 
@@ -186,22 +204,27 @@ export interface PluginAPI {
   ctcpResponse(target: string, type: string, message: string): void;
 
   // IRC channel operations
+  //
+  // The optional `actor` argument attributes the resulting `mod_log` row to
+  // the triggering user rather than to the plugin itself — obtain one from
+  // `api.auditActor(ctx)`. Omit it for plugin-autonomous actions (timers,
+  // event reactions) where the plugin *is* the actor.
   join(channel: string, key?: string): void;
   part(channel: string, message?: string): void;
-  op(channel: string, nick: string): void;
-  deop(channel: string, nick: string): void;
-  voice(channel: string, nick: string): void;
-  devoice(channel: string, nick: string): void;
-  halfop(channel: string, nick: string): void;
-  dehalfop(channel: string, nick: string): void;
-  kick(channel: string, nick: string, reason?: string): void;
-  ban(channel: string, mask: string): void;
+  op(channel: string, nick: string, actor?: PluginModActor): void;
+  deop(channel: string, nick: string, actor?: PluginModActor): void;
+  voice(channel: string, nick: string, actor?: PluginModActor): void;
+  devoice(channel: string, nick: string, actor?: PluginModActor): void;
+  halfop(channel: string, nick: string, actor?: PluginModActor): void;
+  dehalfop(channel: string, nick: string, actor?: PluginModActor): void;
+  kick(channel: string, nick: string, reason?: string, actor?: PluginModActor): void;
+  ban(channel: string, mask: string, actor?: PluginModActor): void;
   mode(channel: string, modes: string, ...params: string[]): void;
   /** Request the current channel modes from the server (triggers RPL_CHANNELMODEIS / channel:modesReady). */
   requestChannelModes(channel: string): void;
-  topic(channel: string, text: string): void;
+  topic(channel: string, text: string, actor?: PluginModActor): void;
   /** Invite a user to a channel. */
-  invite(channel: string, nick: string): void;
+  invite(channel: string, nick: string, actor?: PluginModActor): void;
   /** Change the bot's own IRC nick (e.g. for nick recovery). */
   changeNick(nick: string): void;
 
@@ -213,6 +236,15 @@ export interface PluginAPI {
   getChannel(name: string): ChannelState | undefined;
   getUsers(channel: string): ChannelUser[];
   getUserHostmask(channel: string, nick: string): string | undefined;
+  /**
+   * Names of every channel the bot is currently tracking in live state —
+   * the union of startup-config channels the bot has successfully joined
+   * and channels joined at runtime (via `.join`, INVITE rejoin, etc).
+   * Use this instead of `botConfig.irc.channels` whenever a plugin needs
+   * to act on every channel the bot is actually in (e.g. flood
+   * enforcement), rather than every channel it was configured to join.
+   */
+  getJoinedChannels(): string[];
 
   /**
    * Register a callback for when a bot user's permissions record changes in a
@@ -326,6 +358,23 @@ export interface PluginAPI {
    * auto-audited via the underlying `api.irc.*` wrappers.
    */
   audit: PluginAudit;
+
+  /**
+   * Derive a {@link PluginModActor} from a bind-handler `ctx` so the plugin
+   * can attribute `api.op/ban/kick/mode/...` mod_log rows to the triggering
+   * user (`ctx.nick`) instead of to the plugin itself. Pass the return value
+   * as the `actor` argument to any mutating `api.irc.*` method that accepts
+   * one.
+   *
+   * The factory forces `source = 'plugin'` and `plugin = <pluginId>` — only
+   * `by` varies with `ctx.nick`. See audit 2026-04-24.
+   *
+   * @example
+   * api.bind('pub', 'o', '!op', (ctx) => {
+   *   api.op(ctx.channel, ctx.nick, api.auditActor(ctx));
+   * });
+   */
+  auditActor(ctx: HandlerContext): PluginModActor;
 }
 
 /** What a plugin module must export. */
@@ -483,15 +532,32 @@ export interface HelpEntry {
 // Plugin-facing bot config
 // ---------------------------------------------------------------------------
 
-/** IrcConfig as exposed to plugins — channels is readonly. */
-export interface PluginIrcConfig extends Readonly<Omit<IrcConfig, 'channels'>> {
+/**
+ * IrcConfig as exposed to plugins — an explicit allowlist of public fields.
+ * `tls_cert` / `tls_key` (CertFP key paths) and any other filesystem/secret
+ * material are deliberately excluded. `channels` is narrowed to `readonly
+ * string[]` — the factory flattens `{name, key}` entries so plugins never
+ * see channel keys. See audit 2026-04-24.
+ */
+export interface PluginIrcConfig {
+  readonly host: IrcConfig['host'];
+  readonly port: IrcConfig['port'];
+  readonly tls: IrcConfig['tls'];
+  readonly nick: IrcConfig['nick'];
+  readonly username: IrcConfig['username'];
+  readonly realname: IrcConfig['realname'];
   readonly channels: readonly string[];
 }
 
-/** Plugin-facing bot config (read-only view, password redacted). */
+/**
+ * Plugin-facing bot config (read-only view, password redacted).
+ *
+ * Owner handle / hostmask / password are NOT exposed — plugins have no
+ * legitimate need to read them and the permissions API is the supported
+ * path for any owner-related check. See audit 2026-04-24.
+ */
 export interface PluginBotConfig {
   readonly irc: PluginIrcConfig;
-  readonly owner: Readonly<OwnerConfig>;
   readonly identity: Readonly<IdentityConfig>;
   /** NickServ config with password omitted. */
   readonly services: Readonly<Pick<ServicesConfig, 'type' | 'nickserv' | 'sasl'>>;

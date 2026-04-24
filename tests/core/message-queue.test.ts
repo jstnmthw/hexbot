@@ -189,14 +189,13 @@ describe('MessageQueue', () => {
     const q = new MessageQueue({ rate: 2, burst: 0 });
     const sent: number[] = [];
 
-    // Enqueue 501 messages — first 500 queue up, 501st is dropped
+    // Spread enqueues across many targets so the per-target cap (50) never
+    // trips before the global cap does. We want to observe the global drop.
     for (let i = 0; i < 501; i++) {
-      q.enqueue(T, () => sent.push(i));
+      q.enqueue(`#t${i % 20}`, () => sent.push(i));
     }
 
-    // None sent yet (no tokens, no time elapsed)
     expect(sent).toEqual([]);
-    // Queue should be capped at MAX_DEPTH
     expect(q.pending).toBe(500);
     q.stop();
   });
@@ -255,8 +254,10 @@ describe('MessageQueue', () => {
 
     const q = new MessageQueue({ rate: 2, burst: 0, logger: mockLogger });
 
+    // Spread across many targets so the global cap is what fires, not the
+    // per-target cap (which logs a different message).
     for (let i = 0; i < 501; i++) {
-      q.enqueue(T, () => {});
+      q.enqueue(`#t${i % 20}`, () => {});
     }
 
     expect(warnMsgs).toHaveLength(1);
@@ -316,18 +317,21 @@ describe('MessageQueue', () => {
     });
 
     it('does not starve a quiet target behind a flooding one', () => {
-      // 500 messages to `#busy` fill the whole queue except for 1 slot,
-      // then 1 message to `#quiet` should still drain on the next tick
-      // instead of waiting for `#busy` to finish.
+      // Fill `#busy` up to its per-target cap, then add a single `#quiet`
+      // message. The per-target cap means #busy can't grow further but the
+      // quiet target still gets its slot — and on the next drain tick after
+      // #busy's first message, #quiet drains round-robin.
       const q = new MessageQueue({ rate: 2, burst: 0 });
       const sent: string[] = [];
 
-      for (let i = 0; i < 499; i++) {
+      // Use 49 so `#busy` sits at per-target cap-minus-one; extra enqueues
+      // on `#busy` would be rejected, which would skew the pending count.
+      for (let i = 0; i < 49; i++) {
         q.enqueue('#busy', () => sent.push(`busy${i}`));
       }
       q.enqueue('#quiet', () => sent.push('quiet'));
 
-      expect(q.pending).toBe(500);
+      expect(q.pending).toBe(50);
       // First drain goes to #busy (first in targetOrder), second to #quiet.
       vi.advanceTimersByTime(500);
       vi.advanceTimersByTime(500);
@@ -350,18 +354,42 @@ describe('MessageQueue', () => {
     });
 
     it('drops the newest message on MAX_DEPTH across all targets combined', () => {
-      // Split the 500-slot cap across three targets so we hit it globally
-      // rather than per-target. Target selection for the drop should not
-      // matter — it's a total count.
+      // Split the 500-slot cap across enough targets (each within the
+      // per-target cap) to hit the global limit without tripping the
+      // per-target drop first. 50 msgs/target * 10 targets = 500 total.
       const q = new MessageQueue({ rate: 2, burst: 0 });
-      for (let i = 0; i < 200; i++) q.enqueue('#a', () => {});
-      for (let i = 0; i < 200; i++) q.enqueue('#b', () => {});
-      for (let i = 0; i < 100; i++) q.enqueue('#c', () => {});
+      for (let t = 0; t < 10; t++) {
+        for (let i = 0; i < 50; i++) q.enqueue(`#t${t}`, () => {});
+      }
       expect(q.pending).toBe(500);
-      // Any further enqueue is rejected regardless of target.
-      q.enqueue('#a', () => {});
-      q.enqueue('#d', () => {});
+      // Any further enqueue is rejected — a brand-new target would hit
+      // the global cap before creating its per-target sub-queue.
+      q.enqueue('#new', () => {});
       expect(q.pending).toBe(500);
+      q.stop();
+    });
+
+    it('drops messages when a single target hits the per-target cap (50)', () => {
+      // One noisy target should saturate its sub-queue at 50 regardless of
+      // how much headroom remains in the global 500 pool.
+      const warnMsgs: string[] = [];
+      const mockLogger: LoggerLike = {
+        warn: (msg: string) => warnMsgs.push(msg),
+        debug: () => {},
+        info: () => {},
+        error: () => {},
+        child: () => mockLogger,
+        setLevel: () => {},
+        getLevel: () => 'info',
+      };
+
+      const q = new MessageQueue({ rate: 2, burst: 0, logger: mockLogger });
+      for (let i = 0; i < 60; i++) q.enqueue('#flood', () => {});
+
+      expect(q.pending).toBe(50);
+      // All 10 over-cap enqueues should have logged a per-target warning.
+      expect(warnMsgs.length).toBe(10);
+      expect(warnMsgs[0]).toContain('Per-target queue full');
       q.stop();
     });
 

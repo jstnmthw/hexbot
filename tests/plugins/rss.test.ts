@@ -207,6 +207,8 @@ function makeMockAPI(db: BotDatabase, config: Record<string, unknown> = {}): Moc
     warn: vi.fn(),
     debug: vi.fn(),
     audit: { log: vi.fn() },
+    auditActor: (ctx) => ({ by: ctx.nick, source: 'plugin', plugin: pluginId }),
+    getJoinedChannels: () => [],
   };
 
   return api;

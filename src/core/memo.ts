@@ -16,8 +16,22 @@ import type { EventDispatcher } from '../dispatcher';
 import type { BotEventBus } from '../event-bus';
 import type { LoggerLike } from '../logger';
 import type { Casemapping, HandlerContext, MemoConfig } from '../types';
+import { sanitize } from '../utils/sanitize';
 import { ircLower } from '../utils/wildcard';
 import { hasOwnerOrMaster } from './permissions';
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/**
+ * Cap on the body portion of a `.memo send` forward. IRC PRIVMSG lines top
+ * out around 450 bytes on the wire (512 minus prefix/command/target); MemoServ
+ * on Atheme and Anope silently truncates at 400. Enforcing the cap here gives
+ * the caller a predictable outcome instead of a mid-sentence chop on the
+ * services side.
+ */
+const MEMO_SEND_MAX_LENGTH = 400;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -337,11 +351,22 @@ export class MemoManager {
           ctx.reply(`Invalid nick: "${nick}"`);
           return;
         }
-        const message = trimmed.substring(trimmed.indexOf(nick) + nick.length).trim();
-        if (message.length === 0) {
+        const rawMessage = trimmed.substring(trimmed.indexOf(nick) + nick.length).trim();
+        // Defence in depth: strip CR/LF/NUL/Unicode line separators before
+        // interpolating into the MemoServ command line. Without this, a
+        // crafted memo body could inject a second IRC command (the nick
+        // regex above already blocks the nick field, but historically the
+        // body was passed through unchanged).
+        const sanitized = sanitize(rawMessage);
+        if (sanitized.length === 0) {
           ctx.reply('Usage: .memo send <nick> <message>');
           return;
         }
+        // Cap to avoid a mid-sentence truncation on the services side.
+        const message =
+          sanitized.length > MEMO_SEND_MAX_LENGTH
+            ? sanitized.substring(0, MEMO_SEND_MAX_LENGTH)
+            : sanitized;
         this.client.say(this.config.memoserv_nick, `SEND ${nick} ${message}`);
         break;
       }

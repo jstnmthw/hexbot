@@ -13,6 +13,12 @@ import {
 import { DatabaseBusyError, DatabaseFullError } from './database-errors';
 import type { BotEventBus } from './event-bus';
 import type { LoggerLike } from './logger';
+import { escapeLikePattern } from './utils/sql';
+
+// Re-export the shared SQL helper through the database module so existing
+// `import { escapeLikePattern } from '../database'` call sites keep
+// compiling — utils/sql.ts is the canonical source.
+export { escapeLikePattern } from './utils/sql';
 
 /** Instance type of the runtime `SqliteError` class from better-sqlite3. */
 type SqliteErrorInstance = InstanceType<typeof SqliteError>;
@@ -200,9 +206,20 @@ export class BotDatabase {
    * never call this — all runtime reads/writes go through the typed
    * methods on this class.
    *
-   * @throws if the database has not been opened.
+   * Guarded at runtime by a `NODE_ENV === 'test'` / `VITEST === 'true'`
+   * check so a production build cannot accidentally hand out the raw
+   * SQLite handle even if somebody imports this method elsewhere. Vitest
+   * sets both env vars automatically, so tests pass without changes.
+   *
+   * @throws if the database has not been opened or the current process is
+   *         not running under a recognised test harness.
    */
   rawHandleForTests(): DatabaseType {
+    if (process.env.NODE_ENV !== 'test' && process.env.VITEST !== 'true') {
+      throw new Error(
+        'rawHandleForTests() is only callable under a test harness (NODE_ENV=test or VITEST=true)',
+      );
+    }
     if (!this.db) throw new Error('Database not open');
     return this.db;
   }
@@ -318,11 +335,9 @@ export class BotDatabase {
     this.ensureOpen();
     return this.runClassified('list', () => {
       if (prefix != null) {
-        // Escape LIKE wildcards in the prefix, then append %.
-        // Order matters: escape backslashes FIRST so the `\` we then prepend
-        // to `%` and `_` isn't itself escaped on the next pass. Paired with
-        // the `ESCAPE '\'` clause in `stmtListPrefix`.
-        const escaped = prefix.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+        // Paired with the `ESCAPE '\'` clause in `stmtListPrefix`. See
+        // `escapeLikePattern` for the escape order rationale.
+        const escaped = escapeLikePattern(prefix);
         return this.stmtListPrefix.all(namespace, `${escaped}%`) as Array<{
           key: string;
           value: string;

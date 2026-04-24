@@ -5,6 +5,7 @@ import type { BotDatabase } from '../../database';
 import type { BotlinkConfig } from '../../types';
 import { formatDuration, parseDuration } from '../../utils/duration';
 import { sanitize } from '../../utils/sanitize';
+import { stripFormatting } from '../../utils/strip-formatting';
 import { tryAudit } from '../audit';
 import {
   type BotLinkHub,
@@ -614,10 +615,14 @@ export function registerBotlinkCommands(deps: BotlinkCommandsDeps): void {
       const target = sanitize(rawTarget);
       const message = sanitize(rawMessage);
       const botname = sanitize(rawBotname);
+      // mod_log rows are surfaced back into IRC via `.modlog` output, so strip
+      // IRC colour/format codes from user-controlled strings to keep the audit
+      // view readable and prevent formatting bleed into surrounding rows.
+      // Matches `.say`/`.msg` which already do the same.
       tryAudit(db, ctx, {
         action: 'bsay',
         target,
-        metadata: { botname, message },
+        metadata: { botname, message: stripFormatting(message) },
       });
 
       const sendLocal = (): void => {
@@ -675,12 +680,24 @@ export function registerBotlinkCommands(deps: BotlinkCommandsDeps): void {
     (_args, ctx) => {
       if (!requireEnabled(ctx, config)) return;
 
-      const message = _args.trim();
+      const rawMessage = _args.trim();
+      if (!rawMessage) {
+        ctx.reply('Usage: .bannounce <message>');
+        return;
+      }
+      // Sanitize for the wire path — the announcement fans out to every
+      // linked bot's DCC consoles and those feeds must not carry CR/LF/NUL.
+      // Strip IRC formatting for the mod_log copy so `.modlog` output doesn't
+      // bleed colour/bold into surrounding audit rows.
+      const message = sanitize(rawMessage);
       if (!message) {
         ctx.reply('Usage: .bannounce <message>');
         return;
       }
-      tryAudit(db, ctx, { action: 'bannounce', metadata: { message } });
+      tryAudit(db, ctx, {
+        action: 'bannounce',
+        metadata: { message: stripFormatting(rawMessage) },
+      });
 
       // Announce to local DCC sessions
       dccManager?.announce?.(`*** ${message}`);

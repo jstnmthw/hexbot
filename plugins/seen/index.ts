@@ -62,8 +62,23 @@ export function init(api: PluginAPI): void {
   // any one of them blocking dispatch to the others, unlike `pub` which
   // is exclusive on the trigger.
   api.bind('pubm', '-', '*', (ctx) => {
+    // Skip `!seen <nick>` queries so the querier's own sighting isn't
+    // overwritten with "I was just asking about someone". The pubm bind
+    // fires before the `!seen` pub handler runs, and recording the query
+    // verbatim would (a) clobber the user's real last-spoken line and
+    // (b) leak the target nick into the stored record. Conservative strip
+    // on the bare `!seen ` prefix — the plugin's own trigger is fixed, so
+    // no config lookup is needed. See audit 2026-04-24.
+    if (/^!seen(\s|$)/i.test(ctx.text)) return;
+
+    // Code-point-aware 200-char slice: `.substring` / `.slice` on UTF-16
+    // code units corrupts emoji / rare CJK. `Array.from` iterates by code
+    // point so the truncation never bisects a surrogate pair.
+    const codePoints = Array.from(ctx.text);
     const text =
-      ctx.text.length > MAX_TEXT_LENGTH ? ctx.text.substring(0, MAX_TEXT_LENGTH) + '...' : ctx.text;
+      codePoints.length > MAX_TEXT_LENGTH
+        ? codePoints.slice(0, MAX_TEXT_LENGTH).join('') + '...'
+        : ctx.text;
 
     const record = JSON.stringify({
       nick: ctx.nick,
@@ -120,6 +135,23 @@ export function init(api: PluginAPI): void {
       return;
     }
     /* v8 ignore stop */
+
+    // Cross-channel sighting oracle defence: only reveal a record if the
+    // querier currently shares the stored channel with the bot. Otherwise
+    // the bot becomes a covert membership probe — any user could query
+    // `!seen <nick>` and learn the target has been active in a private
+    // channel they're not invited to. The reply collapses to "never seen
+    // by you" (same wording as the truly-not-seen case) so the querier
+    // can't distinguish "no record" from "record in a channel you can't
+    // see". See audit 2026-04-24.
+    const storedChannel = record.channel;
+    const storedChannelState = api.getChannel(storedChannel);
+    const querierInStoredChannel =
+      storedChannelState !== undefined && storedChannelState.users.has(api.ircLower(ctx.nick));
+    if (!querierInStoredChannel) {
+      ctx.reply(`I haven't seen ${api.stripFormatting(targetNick)}.`);
+      return;
+    }
 
     const ago = formatRelativeTime(age);
     const sameChannel = api.ircLower(record.channel) === api.ircLower(ctx.channel);

@@ -62,6 +62,12 @@ ctx, ...)` for direct `mod_log` writes. Never hand-roll `{ by: ctx.nick,
 source: ctx.source }` — the single call-site-to-actor translation lives in
 `auditActor()` so audit reviews can grep for it.
 
+Plugins use the same convention via `api.auditActor(ctx)` from the scoped
+plugin API. The factory enforces `source='plugin'` and `plugin=<pluginId>`,
+so only `by` varies with `ctx.nick`. Pass the return value as the trailing
+`actor` argument to `api.op/ban/kick/mode/...` so the `mod_log` row
+attributes the action to the triggering user instead of to the plugin itself.
+
 ## Security
 
 All IRC input is untrusted. Follow `docs/SECURITY.md` for the full guide. Key rules:

@@ -131,9 +131,19 @@ export async function pollFeed(
 export async function fetchFeedXml(url: string, opts: FetchFeedOpts): Promise<string> {
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_FEED_BYTES;
   let currentUrl = url;
-  for (let redirect = 0; redirect <= MAX_REDIRECTS; redirect++) {
+  // Track URLs we've already requested in this redirect chain. A deliberate
+  // 301 loop (A → B → A → B ...) would otherwise burn the full MAX_REDIRECTS
+  // budget for no new network fetches; refuse on revisit so the failure is
+  // deterministic. See audit 2026-04-24.
+  const visited = new Set<string>();
+  for (let redirect = 0; redirect < MAX_REDIRECTS; redirect++) {
     if (opts.signal?.aborted) throw new Error('rss fetch aborted');
     const validated = await validateFeedUrl(currentUrl, { allowHttp: opts.allowHttp });
+    if (visited.has(validated.url.toString())) {
+      throw new Error(`redirect loop detected at ${validated.url.toString()}`);
+    }
+    visited.add(validated.url.toString());
+    const previousProtocol = validated.url.protocol;
     const result = await doRequest(
       validated.url,
       validated.resolvedAddresses,
@@ -142,15 +152,17 @@ export async function fetchFeedXml(url: string, opts: FetchFeedOpts): Promise<st
       opts.signal,
     );
     if (result.kind === 'body') return result.body;
-    if (redirect === MAX_REDIRECTS) {
-      throw new Error(`too many redirects fetching ${url}`);
+    const nextUrl = new URL(result.location, validated.url);
+    // Refuse https:→http: downgrade on redirect even when `allow_http=true` is
+    // set — the config flag is for operators who explicitly want an HTTP-only
+    // feed, not for a server to silently downgrade an HTTPS fetch mid-chain.
+    // A downgrade there lets a passive MITM on the redirected hop inject
+    // arbitrary feed XML. See audit 2026-04-24.
+    if (previousProtocol === 'https:' && nextUrl.protocol === 'http:') {
+      throw new Error(`refused https→http downgrade on redirect to ${nextUrl.toString()}`);
     }
-    currentUrl = new URL(result.location, validated.url).toString();
+    currentUrl = nextUrl.toString();
   }
-  // Unreachable — the loop above either returns a body, throws, or enters
-  // another iteration. The explicit throw keeps TypeScript's control flow
-  // analysis happy.
-  /* v8 ignore next */
   throw new Error(`too many redirects fetching ${url}`);
 }
 
@@ -246,9 +258,22 @@ function doRequest(
           return;
         }
         const contentType = String(res.headers['content-type'] ?? '').toLowerCase();
-        if (contentType && !/xml|rss|atom|text/.test(contentType)) {
+        // Explicit allowlist — the previous substring match included
+        // `text/html` and `text/plain` via the bare `text` alternation,
+        // which let a misconfigured upstream funnel HTML responses into
+        // the XML parser. A missing Content-Type is also rejected (prior
+        // code short-circuited past the check when the header was absent).
+        // See audit 2026-04-24.
+        const mediaType = contentType.split(';', 1)[0].trim();
+        const allowedContentTypes = new Set([
+          'application/rss+xml',
+          'application/atom+xml',
+          'application/xml',
+          'text/xml',
+        ]);
+        if (!allowedContentTypes.has(mediaType)) {
           res.resume();
-          rejectOnce(new Error(`unexpected content-type: ${contentType}`));
+          rejectOnce(new Error(`unexpected content-type: ${contentType || '(missing)'}`));
           return;
         }
         let bytes = 0;

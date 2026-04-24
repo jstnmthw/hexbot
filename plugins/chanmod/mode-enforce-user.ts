@@ -60,7 +60,9 @@ export function handleBitchMode(
           !targetFlags?.includes('d');
 
     if (!isAuthorized) {
-      api.log(`Bitch: stripping ${modeStr} from ${target} in ${channel} (not flagged)`);
+      api.log(
+        `Bitch: stripping ${modeStr} from ${api.stripFormatting(target)} in ${channel} (not flagged)`,
+      );
       markIntentional(state, api, channel, target);
       state.scheduleEnforcement(config.enforce_delay_ms, () => {
         if (modeStr === '+o') api.deop(channel, target);

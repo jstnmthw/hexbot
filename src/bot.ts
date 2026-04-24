@@ -60,6 +60,59 @@ import { requiresVerificationForFlags, validateRequireAccFor } from './utils/ver
 import { ircLower } from './utils/wildcard';
 
 // ---------------------------------------------------------------------------
+// Secret file permission checks
+// ---------------------------------------------------------------------------
+
+/**
+ * Enforce POSIX-mode permissions on a file that holds credentials. World-
+ * readable is always fatal (other local users can cat the file); group-
+ * readable is a warning unless `fatal` is true. Silent when the file is
+ * unreadable — `accessSync` already handled "not found" at the config
+ * path.
+ */
+function enforceSecretFilePermissions(path: string, opts: { fatal: boolean }): void {
+  let mode: number;
+  try {
+    mode = statSync(path).mode;
+  } catch {
+    // stat failed — caller's readability check already ran or the file
+    // simply doesn't exist. Not our job to report that here.
+    return;
+  }
+  const octal = (mode & 0o777).toString(8);
+  if (mode & 0o004) {
+    console.error(`[bot] SECURITY: ${path} is world-readable (mode ${octal})`);
+    console.error(`[bot] Run: chmod 600 ${path}`);
+    if (opts.fatal) process.exit(1);
+    return;
+  }
+  if (mode & 0o040) {
+    console.error(
+      `[security] ${path} is group-readable (mode ${octal}) — consider chmod 600 ${path}`,
+    );
+  }
+}
+
+/**
+ * Check `.env`, `.env.local`, and `.env.<NODE_ENV>` in the project root for
+ * overly permissive modes. These aren't consumed directly by hexbot (secrets
+ * land in config via `_env` fields), but operators typically keep
+ * credentials there and the shell that launched the bot has already
+ * sourced them into the process env. A world-readable file on a shared
+ * host is functionally a credential leak, so we abort; group-readable
+ * earns a `[security]` warning.
+ */
+function checkDotenvPermissions(): void {
+  const env = process.env.NODE_ENV;
+  const candidates = ['.env', '.env.local'];
+  if (env) candidates.push(`.env.${env}`);
+  for (const name of candidates) {
+    const path = resolve(name);
+    enforceSecretFilePermissions(path, { fatal: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Bot
 // ---------------------------------------------------------------------------
 
@@ -378,6 +431,11 @@ export class Bot {
       permissions: this.permissions,
       logger: this.botLogger,
     });
+
+    // One-shot sweep for weak hostmasks on privileged users — surfaces at
+    // startup instead of only firing when a record is touched, so operators
+    // see the full picture up front.
+    this.permissions.auditWeakHostmasks();
 
     this.registerCoreCommands();
 
@@ -779,6 +837,10 @@ export class Bot {
           configuredChannels: this.configuredChannels,
           eventBus: this.eventBus,
           reconnectDriver,
+          // Lifecycle consults the store on ingestion so a plaintext session
+          // can never mutate an existing policy — see sts.ts / connection-
+          // lifecycle.ts for the short-circuit.
+          stsStore: this.stsStore,
           applyCasemapping: (cm) => {
             this._casemapping = cm;
             this.channelState.setCasemapping(cm);
@@ -959,19 +1021,17 @@ export class Bot {
       process.exit(1);
     }
 
-    // Warn if the config file is world-readable
-    try {
-      const stat = statSync(configPath);
-      if (stat.mode & 0o004) {
-        console.error(
-          `[bot] SECURITY: ${configPath} is world-readable (mode ${(stat.mode & 0o777).toString(8)})`,
-        );
-        console.error(`[bot] Run: chmod 600 ${configPath}`);
-        process.exit(1);
-      }
-    } catch {
-      // stat failed — file readable check already passed above, ignore
-    }
+    // Refuse to load if the config file is world-readable (mode & 0o004) —
+    // fatal because config is the primary secrets source.
+    enforceSecretFilePermissions(configPath, { fatal: true });
+
+    // Also check any `.env*` files in the project root. These aren't consumed
+    // directly by hexbot (the config uses `_env` fields that read from
+    // process.env), but operators commonly keep credentials there and the
+    // shell that launched the process has already read them. A world-readable
+    // `.env*` file is fatal; group-readable (mode & 0o040) is a `[security]`
+    // warning — matching the advice in SECURITY.md for POSIX-mode secrets.
+    checkDotenvPermissions();
 
     try {
       const raw = readFileSync(configPath, 'utf-8');

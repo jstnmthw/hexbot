@@ -372,23 +372,49 @@ export class EnforcementExecutor {
  * RFC-compliant IRC server won't emit but an upstream bug or
  * non-compliant server could, and which would then be parsed by the
  * server as an extra MODE parameter when interpolated into a ban mask.
- * Bracket-wrapped IPv6 literals are accepted too. See audit 2026-04-19.
+ * See audit 2026-04-19.
+ *
+ * Bracket-wrapped IPv6 literals (`[2001:db8::1]`) are stripped in
+ * {@link buildFloodBanMask} before this regex runs — the shape must
+ * reject bare `[` / `]` so a malformed host doesn't sneak through.
  */
-const HOST_SHAPE_RE = /^[A-Za-z0-9.\-:/[\]]+$/;
+const HOST_SHAPE_RE = /^[A-Za-z0-9.\-:/]+$/;
+
+/**
+ * Hard upper bound on the mask length the bot will emit. A pathological
+ * long cloak (or a malformed server frame we still accepted before the
+ * shape regex rejected it) would otherwise produce a ban mask that
+ * exceeds the 512-byte IRC line limit when combined with the `MODE
+ * #channel +b` framing, silently dropping the ban on the wire while the
+ * record was still persisted. See audit 2026-04-24.
+ */
+const MAX_BAN_MASK_LEN = 256;
 
 /**
  * Build a simple *!*@host ban mask from a hostmask. For cloaked hosts
- * (containing '/'), the exact cloak is preserved. Returns null if the
- * extracted host fails {@link HOST_SHAPE_RE} — caller falls back to a
- * safe default (kick-only).
+ * (containing '/'), the exact cloak is preserved. IPv6 literals arrive
+ * bracket-wrapped (`user@[2001:db8::1]`); the wrapper is stripped before
+ * shape validation so the produced mask (`*!*@2001:db8::1`) actually
+ * matches future joins from that address — IRC ban-mask matching is
+ * character-literal, and the bracketed form would never match. Returns
+ * null if the extracted host fails {@link HOST_SHAPE_RE} or the final
+ * mask exceeds {@link MAX_BAN_MASK_LEN} — caller falls back to a safe
+ * default (kick-only). See audit 2026-04-24.
  */
 function buildFloodBanMask(hostmask: string): string | null {
   const atIdx = hostmask.lastIndexOf('@');
   if (atIdx === -1) return null;
-  const host = hostmask.substring(atIdx + 1);
+  let host = hostmask.substring(atIdx + 1);
   if (!host) return null;
+  // Strip `[…]` IPv6 literal wrappers. The closing bracket without a
+  // matching open (or vice versa) is rejected as malformed.
+  if (host.startsWith('[') && host.endsWith(']') && host.length >= 3) {
+    host = host.substring(1, host.length - 1);
+  }
   if (!HOST_SHAPE_RE.test(host)) return null;
-  return `*!*@${host}`;
+  const mask = `*!*@${host}`;
+  if (mask.length > MAX_BAN_MASK_LEN) return null;
+  return mask;
 }
 
 function isBanRecord(value: unknown): value is BanRecord {

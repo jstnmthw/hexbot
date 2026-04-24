@@ -24,6 +24,18 @@ export function setupInvite(
   api.bind('invite', '+n|+m|+o', '*', (ctx) => {
     const { channel } = ctx;
 
+    // Defence-in-depth shape check on the invited channel. The bridge
+    // sanitizer strips `\r\n\0`, but an invite to a value that doesn't
+    // parse as a channel (missing `#`/`&`, embedded whitespace, empty)
+    // has no legitimate use case and we should refuse rather than pass
+    // it through to `api.join`. See audit 2026-04-24 WARNING.
+    if (!/^[#&]\S+$/.test(channel)) {
+      api.warn(
+        `INVITE rejected: invalid channel shape "${api.stripFormatting(channel)}" from ${api.stripFormatting(ctx.nick)}`,
+      );
+      return;
+    }
+
     const enabled = api.channelSettings.getFlag(channel, 'invite');
     if (!enabled) return;
 
@@ -43,8 +55,15 @@ export function setupInvite(
     // Skip if already in channel
     if (api.getChannel(channel)) return;
 
+    // `api.join` does not accept an actor — emit an explicit audit row
+    // so the invite-driven join is attributed to the triggering user.
+    api.audit.log('invite-join', {
+      channel,
+      reason: `invited by ${ctx.nick}`,
+      metadata: { inviter: ctx.nick, inviterHostmask: fullHostmask },
+    });
     api.join(channel);
-    api.log(`INVITE from ${ctx.nick}: joining ${channel}`);
+    api.log(`INVITE from ${api.stripFormatting(ctx.nick)}: joining ${channel}`);
   });
 
   return () => {};

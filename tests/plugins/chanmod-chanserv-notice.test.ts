@@ -684,6 +684,68 @@ describe('ChanServ notice handler — services source pin', () => {
 
     expect(calls).toHaveLength(2);
   });
+
+  // Regression for audit 2026-04-24 CRITICAL: the first-contact gate
+  // must reject a notice whose hostname does not match the configured
+  // services_host_pattern — closes the trust-on-first-use impostor
+  // hole when a user grabs the ChanServ nick during a services outage.
+  it('refuses to pin on first contact when hostname does not match services_host_pattern', () => {
+    const { api, notice, logs } = createMockApi();
+    const mockApi = api as unknown as {
+      util: { matchWildcard: (p: string, t: string) => boolean };
+    };
+    // Minimal matchWildcard stub — accepts `services.*` against
+    // `services.net` (true) but rejects `services.*` against `evil.net`.
+    mockApi.util = {
+      matchWildcard: (pattern: string, text: string) => {
+        if (pattern === 'services.*') return text.startsWith('services.');
+        return false;
+      },
+    };
+    const { backend, calls } = createMockAthemeBackend();
+    const probeState = createProbeState();
+    const config = { ...createMockConfig(), services_host_pattern: 'services.*' } as ChanmodConfig;
+
+    setupChanServNotice({ api, config, backend, probeState });
+    markProbePending(api, probeState, '#test', 'atheme');
+
+    notice('ChanServ', '2 hexbot +Aov', { ident: 'evil', hostname: 'evil.net' });
+
+    expect(calls).toHaveLength(0);
+    expect(probeState.trustedServicesSource).toBeNull();
+    expect(
+      logs.some(
+        (l) => l.includes('does not match services_host_pattern') && l.includes('services.*'),
+      ),
+    ).toBe(true);
+  });
+
+  it('pins normally when hostname matches services_host_pattern', () => {
+    const { api, notice } = createMockApi();
+    const mockApi = api as unknown as {
+      util: { matchWildcard: (p: string, t: string) => boolean };
+    };
+    mockApi.util = {
+      matchWildcard: (pattern: string, text: string) => {
+        if (pattern === 'services.*') return text.startsWith('services.');
+        return false;
+      },
+    };
+    const { backend, calls } = createMockAthemeBackend();
+    const probeState = createProbeState();
+    const config = { ...createMockConfig(), services_host_pattern: 'services.*' } as ChanmodConfig;
+
+    setupChanServNotice({ api, config, backend, probeState });
+    markProbePending(api, probeState, '#test', 'atheme');
+
+    notice('ChanServ', '2 hexbot +o', { ident: 'services', hostname: 'services.net' });
+
+    expect(calls).toHaveLength(1);
+    expect(probeState.trustedServicesSource).toEqual({
+      ident: 'services',
+      hostname: 'services.net',
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

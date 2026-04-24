@@ -3,7 +3,8 @@
     "config": {
       "auto_op": true,
       "bitch": false,
-      "enforce_modes": false
+      "enforce_modes": false,
+      "services_host_pattern": "services.rizon.net"
     }
   },
   "greeter": {

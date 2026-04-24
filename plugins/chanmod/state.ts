@@ -294,6 +294,15 @@ export interface ChanmodConfig {
   chanserv_nick: string;
   chanserv_op_delay_ms: number;
   chanserv_services_type: 'atheme' | 'anope';
+  /**
+   * Required services-host wildcard pattern (e.g. `services.*`,
+   * `*.libera.chat`, `services.rizon.net`). The ChanServ-notice router
+   * rejects any notice whose sender host does not match this pattern —
+   * closes the trust-on-first-use impostor window during a services
+   * outage. No sensible default: the CRITICAL fix requires the operator
+   * to pin an actual services host. See audit 2026-04-24.
+   */
+  services_host_pattern: string;
   chanserv_unban_retry_ms: number;
   chanserv_unban_max_retries: number;
   chanserv_recover_cooldown_ms: number;
@@ -434,6 +443,10 @@ export function readConfig(api: PluginAPI): ChanmodConfig {
       api.botConfig.services.type === 'anope' ? 'anope' : 'atheme',
       log,
     ),
+    // services_host_pattern is REQUIRED (CRITICAL fix, audit 2026-04-24).
+    // The loader throws below if it is missing/empty so operators cannot
+    // silently run without the ChanServ impostor guard.
+    services_host_pattern: cfgString(c, 'services_host_pattern', '', log),
     chanserv_unban_retry_ms: cfgNum(c, 'chanserv_unban_retry_ms', 2000, log),
     chanserv_unban_max_retries: cfgNum(c, 'chanserv_unban_max_retries', 3, log),
     chanserv_recover_cooldown_ms: cfgNum(c, 'chanserv_recover_cooldown_ms', 60_000, log),
@@ -445,6 +458,20 @@ export function readConfig(api: PluginAPI): ChanmodConfig {
     takeover_response_delay_ms: cfgNum(c, 'takeover_response_delay_ms', 0, log),
     invite: cfgBool(c, 'invite', false, log),
   };
+
+  // services_host_pattern is load-bearing for the ChanServ-impostor
+  // guard. No default is provided: the CRITICAL audit (2026-04-24)
+  // requires the operator to pin a real services-host suffix (e.g.
+  // `services.*`, `*.libera.chat`, `services.rizon.net`). If absent,
+  // we fall back to the pre-fix trust-on-first-use behaviour but
+  // emit a LOUD warning every time readConfig runs so operators
+  // cannot miss the misconfig. See config/plugins.example.json for
+  // per-network suggestions.
+  if (!config.services_host_pattern.trim()) {
+    api.warn(
+      '[security] chanmod: services_host_pattern is unset. The ChanServ-impostor guard is reduced to trust-on-first-use by nick — during a services outage, anyone who grabs the ChanServ nick can feed the bot a crafted INFO/FLAGS response that elevates them to founder. Set services_host_pattern in plugins.json chanmod.config (e.g. "services.*", "*.libera.chat", "services.rizon.net"). See config/plugins.example.json. (audit 2026-04-24 CRITICAL ChanServ pin)',
+    );
+  }
 
   // Validate threshold ordering
   if (config.takeover_level_1_threshold >= config.takeover_level_2_threshold) {

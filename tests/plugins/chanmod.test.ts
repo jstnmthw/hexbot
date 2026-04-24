@@ -80,11 +80,21 @@ describe('chanmod plugin — auto-op', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
+    // The grantMode hard-gate (audit 2026-04-24 CRITICAL) unconditionally
+    // requires NickServ verification before granting +o/+h/+v. Stub
+    // services as available + auto-verifying so these tests exercise the
+    // grant path without standing up a full NickServ mock. Tests that
+    // specifically verify the gate (see "NickServ auto-op verification
+    // failure" / "account-tag auto-op fast path" describes below) mock
+    // their own services state as needed.
+    vi.spyOn(bot.services, 'isAvailable').mockReturnValue(true);
+    vi.spyOn(bot.services, 'verifyUser').mockResolvedValue({ verified: true, account: 'x' });
     const result = await bot.pluginLoader.load(PLUGIN_PATH);
     expect(result.status).toBe('ok');
   });
 
   afterAll(() => {
+    vi.restoreAllMocks();
     bot.cleanup();
   });
 
@@ -1029,7 +1039,7 @@ describe('chanmod plugin — commands', () => {
 
   it('!bans lists a tracked ban', async () => {
     // First ban someone explicitly to create a record
-    simulatePrivmsg(bot, 'OpUser', 'opuser', 'op.host', '#test', '!ban *!*@listed.host 60');
+    simulatePrivmsg(bot, 'OpUser', 'opuser', 'op.host', '#test', '!ban *!*@listed.host -t 60');
     await flush();
     bot.client.clearMessages();
 
@@ -1063,7 +1073,7 @@ describe('chanmod plugin — commands', () => {
 
   it('!bans shows "expires in Xm" for short-duration ban', async () => {
     // 30-minute ban → formatExpiry shows "expires in 30m" (mins < 60 branch)
-    simulatePrivmsg(bot, 'OpUser', 'opuser', 'op.host', '#test', '!ban *!*@short.host 30');
+    simulatePrivmsg(bot, 'OpUser', 'opuser', 'op.host', '#test', '!ban *!*@short.host -t 30');
     await flush();
     bot.client.clearMessages();
     simulatePrivmsg(bot, 'OpUser', 'opuser', 'op.host', '#test', '!bans');
@@ -1075,7 +1085,7 @@ describe('chanmod plugin — commands', () => {
 
   it('!bans shows "expires in XhYm" for > 1-hour ban', async () => {
     // 90-minute ban → formatExpiry shows "expires in 1h 30m" (rem > 0 branch)
-    simulatePrivmsg(bot, 'OpUser', 'opuser', 'op.host', '#test', '!ban *!*@medium.host 90');
+    simulatePrivmsg(bot, 'OpUser', 'opuser', 'op.host', '#test', '!ban *!*@medium.host -t 90');
     await flush();
     bot.client.clearMessages();
     simulatePrivmsg(bot, 'OpUser', 'opuser', 'op.host', '#test', '!bans');
@@ -1697,6 +1707,51 @@ describe('chanmod plugin — ban commands', () => {
       bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('Usage')),
     ).toBeDefined();
   });
+
+  // Regressions for audit 2026-04-24 WARNING: overbroad-mask guard and
+  // trailing-numeric-arg disambiguation on .ban.
+  it('!ban refuses *!*@* without --force (mask too broad)', async () => {
+    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban *!*@*');
+    await flush();
+    expect(bot.client.messages.find((m) => m.type === 'mode')).toBeUndefined();
+    expect(
+      bot.client.messages.find((m) => m.type === 'say' && m.message?.includes('very broad')),
+    ).toBeDefined();
+  });
+
+  it('!ban *!*@* --force applies the ban', async () => {
+    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban *!*@* --force');
+    await flush();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+b' && m.args?.includes('*!*@*'),
+      ),
+    ).toBeDefined();
+  });
+
+  it('!ban warns on ambiguous trailing numeric arg (no -t flag)', async () => {
+    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban *!*@broad.host 60');
+    await flush();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'say' && m.message?.includes('Numeric trailing arg'),
+      ),
+    ).toBeDefined();
+    // No ban applied while the user decides.
+    expect(
+      bot.client.messages.find((m) => m.type === 'mode' && m.message === '+b'),
+    ).toBeUndefined();
+  });
+
+  it('!ban <mask> -t <minutes> parses explicit duration', async () => {
+    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban *!*@tflag.host -t 45');
+    await flush();
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+b' && m.args?.includes('*!*@tflag.host'),
+      ),
+    ).toBeDefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1836,7 +1891,7 @@ describe('chanmod plugin — timed bans', () => {
   });
 
   it('!ban with duration stores record in DB', async () => {
-    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban *!*@timed.host 60');
+    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban *!*@timed.host -t 60');
     await flush();
     const entry = bot.db.get('_bans', 'ban:#test:*!*@timed.host');
     expect(entry).toBeDefined();
@@ -1846,7 +1901,7 @@ describe('chanmod plugin — timed bans', () => {
   });
 
   it('!ban with 0 duration stores permanent record (expires=0)', async () => {
-    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban *!*@perm.host 0');
+    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban *!*@perm.host -t 0');
     await flush();
     const entry = bot.db.get('_bans', 'ban:#test:*!*@perm.host');
     expect(entry).toBeDefined();
@@ -2955,7 +3010,7 @@ describe('chanmod plugin — ban/unban/kickban edge cases', () => {
   it('!ban nick with duration 0 → permanent ban', async () => {
     addToChannel(bot, 'PermTarget', 'pt', 'perm.host.com', '#test');
     bot.client.clearMessages();
-    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban PermTarget 0');
+    simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban PermTarget -t 0');
     await flush();
     expect(bot.client.messages.find((m) => m.type === 'mode' && m.message === '+b')).toBeDefined();
   });
@@ -3162,6 +3217,37 @@ describe('chanmod plugin — NickServ auto-op verification failure', () => {
       ).toBeUndefined();
       expect(
         freshBot.client.messages.find((m) => m.type === 'notice' && m.target === 'Alice'),
+      ).toBeUndefined();
+    } finally {
+      vi.restoreAllMocks();
+      freshBot.cleanup();
+    }
+  });
+
+  // Regression for audit 2026-04-24 CRITICAL: the hard gate must fire
+  // regardless of whether the grant flag is listed in require_acc_for.
+  // Pre-fix, an operator who set `require_acc_for: ["+n"]` while leaving
+  // `+o` off would silently allow hostmask-only auto-op.
+  it('hard-gates +o via verifyUser even when require_acc_for omits it', async () => {
+    const freshBot = createMockBot({ botNick: 'hexbot' });
+    try {
+      // require_acc_for lists a different flag; the gate must still fire.
+      freshBot.pluginLoader.getBotConfig().identity.require_acc_for = ['+n'];
+      await freshBot.pluginLoader.load(PLUGIN_PATH, {
+        chanmod: { enabled: true, config: { notify_on_fail: false } },
+      });
+      giveBotOps(freshBot, '#test');
+      freshBot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
+      vi.spyOn(freshBot.services, 'isAvailable').mockReturnValue(true);
+      const verifyUser = vi
+        .spyOn(freshBot.services, 'verifyUser')
+        .mockResolvedValue({ verified: false, account: null });
+      freshBot.client.clearMessages();
+      simulateJoin(freshBot, 'Alice', 'alice', 'alice.host', '#test');
+      await tick();
+      expect(verifyUser).toHaveBeenCalledWith('Alice');
+      expect(
+        freshBot.client.messages.find((m) => m.type === 'mode' && m.args?.includes('Alice')),
       ).toBeUndefined();
     } finally {
       vi.restoreAllMocks();
@@ -4204,6 +4290,26 @@ describe('chanmod plugin — invite handling', () => {
     expect(bot.client.messages.find((m) => m.type === 'join')).toBeUndefined();
 
     bot.channelSettings.set('#test', 'invite', false);
+  });
+
+  // Regression for audit 2026-04-24 WARNING: invite handler must reject
+  // channel values that don't parse as a channel name, even if the
+  // bridge sanitizer let them through.
+  it('should reject invite to malformed channel name', async () => {
+    bot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
+    bot.client.clearMessages();
+
+    for (const badChannel of ['not-a-channel', '#with space', '', '#']) {
+      bot.client.simulateEvent('invite', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'alice.host',
+        channel: badChannel,
+      });
+    }
+
+    await flush();
+    expect(bot.client.messages.find((m) => m.type === 'join')).toBeUndefined();
   });
 });
 

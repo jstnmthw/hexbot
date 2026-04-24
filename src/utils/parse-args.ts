@@ -4,9 +4,11 @@
 //   - split into N whitespace-separated tokens
 //   - "target message" where target is a single token and message is the rest
 //
-// These helpers parse only — they do NOT sanitize. Callers should run the
-// message portion through `sanitize()` and validate the target with
-// `isValidCommandTarget()` (or a stricter regex) before using the values.
+// `parseTargetMessage` runs the target through `sanitize()` before returning
+// so CR/LF/NUL/Unicode line separators can never reach the IRC transport even
+// if the caller forgets the validator. The message portion is still the
+// caller's responsibility — sanitize/format as appropriate for the command.
+import { sanitize } from './sanitize';
 
 /**
  * Split `args` into at most `n` space/tab-separated tokens. The final token
@@ -67,14 +69,34 @@ export function splitN(args: string, n: number): string[] {
  * `.notice`, `.bsay`, and the like. The target is a single token (channel or
  * nick); the message is everything after the first whitespace, trimmed.
  *
- * @returns `{ target, message }` on success, or `null` if args are empty or
- * don't contain at least one whitespace separator.
+ * The returned `target` is already sanitized (CR/LF/NUL/Unicode line
+ * separators stripped) — defence in depth so callers that skip
+ * `isValidCommandTarget` can't smuggle control characters into the IRC
+ * transport via the target field. If the token contained any line-separator
+ * characters, we return `null` rather than silently cleaning and forwarding
+ * the mangled target: the sanitize contract is "strip-and-pass" for message
+ * bodies, but a target with embedded control characters is almost certainly
+ * an injection attempt and the caller should see the failure. The `message`
+ * is NOT sanitized; callers should run it through `sanitize()` before
+ * handing it to `raw()` or interpolating into IRC strings.
+ *
+ * @returns `{ target, message }` on success, or `null` if args are empty,
+ * the target contained control characters, or there's no whitespace
+ * separator.
  */
 export function parseTargetMessage(args: string): { target: string; message: string } | null {
   const parts = splitN(args, 2);
   if (parts.length !== 2) return null;
-  const [target, message] = parts;
-  if (!target || !message) return null;
+  const [rawTarget, message] = parts;
+  if (!rawTarget || !message) return null;
+  // Sanitize at the parse boundary so a forgotten `sanitize(target)` at the
+  // call site can never leak control characters into IRC output. If the
+  // token changed during sanitize, the caller meant to send to an invalid
+  // target — return `null` rather than silently rewriting it so the
+  // existing "Invalid target." error path still fires.
+  const target = sanitize(rawTarget);
+  if (target !== rawTarget) return null;
+  if (!target) return null;
   return { target, message };
 }
 

@@ -244,8 +244,15 @@ function handleNickFlood(ctx: NickContext): void {
   // Three-state: `undefined` = not resolved yet (skip if no ops anywhere),
   // `null` = same-burst dedup swallowed the hit (skip apply in every
   // channel), `string` = the action to apply.
+  //
+  // Iterate `api.getJoinedChannels()` (live channel state) rather than
+  // `botConfig.irc.channels` (startup config) so dynamically-joined
+  // channels — `.join #other`, INVITE rejoin, botlink-pushed joins — get
+  // enforcement too. Before this fix a spammer could pick a channel the
+  // bot had joined at runtime and escape nick-flood enforcement entirely.
+  // See audit 2026-04-24.
   let action: string | null | undefined;
-  for (const channel of api.botConfig.irc.channels) {
+  for (const channel of api.getJoinedChannels()) {
     if (!botHasOps(channel)) continue;
     if (action === undefined) action = enforcement.recordOffence(key);
     if (action === null) return;

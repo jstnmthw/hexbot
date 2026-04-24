@@ -96,9 +96,14 @@ export function handleList(deps: RssCommandsDeps, ctx: ChannelHandlerContext): v
     const interval = feed.interval ?? 3600;
     const channels = feed.channels.join(', ');
     const source = isRuntimeFeed(api, feed.id) ? 'runtime' : 'config';
+    // Strip IRC formatting from the URL before echoing. `new URL()`
+    // tolerates some control-byte characters in the path/fragment
+    // components, so a feed URL added via `.load` or an older migration
+    // could contain bold/colour bytes that would reshape this line when
+    // rendered in the operator's client. See audit 2026-04-24.
     api.notice(
       ctx.nick,
-      `  ${feed.id} — ${feed.url} → ${channels} (every ${interval}s) [${source}]`,
+      `  ${feed.id} — ${api.stripFormatting(feed.url)} → ${channels} (every ${interval}s) [${source}]`,
     );
   }
   logCmd(api, ctx, 'list', 'ok', `${activeFeeds.size} feeds`);
@@ -224,10 +229,14 @@ export async function handleAdd(
   const feed: FeedConfig = { id, url, channels: [channel], interval };
   saveRuntimeFeed(api, feed);
   activeFeeds.set(id, feed);
+  // Strip IRC formatting from the URL before it lands in mod_log. The
+  // field is scrubbed at display time by the audit writer, but stripping
+  // at the source keeps the raw row byte-clean for downstream consumers
+  // (exports, REPL `.audit-tail`, etc). See audit 2026-04-24.
   api.audit.log('rss-feed-add', {
     channel,
     target: id,
-    reason: url,
+    reason: api.stripFormatting(url),
     metadata: { interval },
   });
 

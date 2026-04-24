@@ -44,6 +44,7 @@ export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginA
     getChannel: vi.fn().mockReturnValue(undefined),
     getUsers: vi.fn().mockReturnValue([]),
     getUserHostmask: vi.fn().mockReturnValue(undefined),
+    getJoinedChannels: vi.fn().mockReturnValue([]),
     permissions: {
       findByHostmask: vi.fn().mockReturnValue(null),
       checkFlags: vi.fn().mockReturnValue(false),
@@ -80,7 +81,6 @@ export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginA
         realname: 'HexBot',
         channels: [],
       },
-      owner: { handle: 'owner', hostmask: '*!*@owner.host' },
       identity: { method: 'hostmask' as const, require_acc_for: [] },
       services: { type: 'none' as const, nickserv: 'NickServ', sasl: false },
       logging: { level: 'info' as const, mod_actions: false },
@@ -123,6 +123,7 @@ export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginA
     audit: {
       log: noop,
     },
+    auditActor: (ctx) => ({ by: ctx.nick, source: 'plugin', plugin: 'test-plugin' }),
     ...overrides,
   };
 }

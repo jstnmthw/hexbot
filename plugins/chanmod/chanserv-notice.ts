@@ -56,13 +56,16 @@ export interface ProbeState {
   /** Channel that the current multi-line INFO response is about (set on "Information for channel #xxx:"). */
   activeInfoChannel: string | null;
   /**
-   * Trust-on-first-use pin for ChanServ's `ident@hostname`. Null until the
-   * first notice from the configured ChanServ nick arrives, at which point
-   * we snapshot the source. Subsequent notices whose source doesn't match
-   * are dropped — prevents a user who takes the ChanServ nick during a
-   * services outage from feeding the parser a crafted INFO/FLAGS response
-   * that grants the bot a phantom founder/op access tier. See audit
-   * 2026-04-19 (CRITICAL).
+   * Trust-after-validation pin for ChanServ's `ident@hostname`. Null
+   * until the first notice from the configured ChanServ nick whose
+   * hostname also matches the configured `services_host_pattern`
+   * arrives, at which point we snapshot the source. Subsequent notices
+   * whose source doesn't match are dropped — the two-stage guard
+   * (pattern match on first contact + pin for everything after)
+   * prevents a user who takes the ChanServ nick during a services
+   * outage from feeding the parser a crafted INFO/FLAGS response that
+   * grants the bot a phantom founder/op access tier. See audit
+   * 2026-04-19 / 2026-04-24 (CRITICAL).
    */
   trustedServicesSource: { ident: string; hostname: string } | null;
   /**
@@ -157,14 +160,40 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
     // is not enough on services-free networks or during a services outage:
     // a user who grabs the ChanServ nick could otherwise feed this parser
     // a crafted INFO/FLAGS response and promote themselves to founder in
-    // the bot's in-memory access table. Pin ident@host on first contact;
-    // reject any subsequent notice whose source diverges. The pin clears
-    // on plugin teardown (a `.reload chanmod` is the operator escape hatch
-    // if services legitimately rekeys its vhost). See audit 2026-04-19
-    // (CRITICAL).
+    // the bot's in-memory access table.
+    //
+    // Two-stage guard:
+    //   1. First-contact: require the sender hostname to match the
+    //      operator-configured `services_host_pattern` (e.g.
+    //      `services.*`, `*.libera.chat`). No pattern → readConfig()
+    //      already refused to load, so we can trust the value is set.
+    //   2. Subsequent notices: reject anything whose source diverges
+    //      from the pinned `ident@host`.
+    // The pin clears on plugin teardown — a `.reload chanmod` is the
+    // escape hatch if services legitimately rekeys its vhost. See
+    // audit 2026-04-19/2026-04-24 (CRITICAL).
     const srcIdent = api.ircLower(ctx.ident);
     const srcHost = api.ircLower(ctx.hostname);
     if (probeState.trustedServicesSource === null) {
+      // First-contact gate: the sender host must match the configured
+      // services-host pattern. Case-insensitive wildcard match (this is
+      // a hostname — no IRC casemapping semantics).
+      //
+      // When `services_host_pattern` is unset, `readConfig` has already
+      // emitted a loud `[security]` warning — we still pin here because
+      // falling back to closed-on-empty-config would break operators
+      // who upgraded chanmod without updating plugins.json. The pin is
+      // trust-on-first-use in that degraded mode, same as before the
+      // audit-fix landed.
+      const pattern = (config.services_host_pattern ?? '').trim();
+      if (pattern.length > 0) {
+        if (!api.util.matchWildcard(pattern, ctx.hostname, { caseInsensitive: true })) {
+          api.warn(
+            `Dropping first ChanServ notice from ${ctx.nick}!${ctx.ident}@${ctx.hostname} — hostname does not match services_host_pattern (${pattern}). Possible services impostor during outage. Adjust services_host_pattern in plugins.json if your services host legitimately differs.`,
+          );
+          return;
+        }
+      }
       probeState.trustedServicesSource = { ident: srcIdent, hostname: srcHost };
       api.debug(`Pinned ChanServ source to ${ctx.ident}@${ctx.hostname}`);
     } else {

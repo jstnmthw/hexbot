@@ -13,8 +13,29 @@ const PREVIEW_COOLDOWN_MS = 60_000;
 
 // Conservative ceiling for topic length warnings. RFC 2812's 512-byte line cap
 // minus the per-server `:nick!user@host TOPIC #channel :` framing and CRLF
-// leaves ~390 usable bytes for the topic on most ircds.
-const TOPIC_LENGTH_WARN = 390;
+// leaves ~390 usable bytes for the topic on most ircds. Honoured only when
+// the server doesn't advertise a more authoritative `TOPICLEN` via ISUPPORT.
+const TOPIC_LENGTH_WARN_DEFAULT = 390;
+
+/**
+ * Resolve the topic length limit for `channel`. Honours the server's
+ * ISUPPORT `TOPICLEN` value when present (some IRCds advertise 307, others
+ * 500+) and falls back to the conservative {@link TOPIC_LENGTH_WARN_DEFAULT}
+ * byte count when the capability is missing. The returned figure is
+ * expressed in bytes — the topic-length comparison must be done with
+ * `Buffer.byteLength(str, 'utf8')`, not `str.length`, so multi-byte code
+ * points aren't silently over-permitted against a byte-counted server cap.
+ * See audit 2026-04-24.
+ */
+function resolveTopicLenBytes(api: PluginAPI): number {
+  const supports = api.getServerSupports();
+  const raw = supports.TOPICLEN;
+  if (raw) {
+    const n = Number.parseInt(raw, 10);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return TOPIC_LENGTH_WARN_DEFAULT;
+}
 
 export function init(api: PluginAPI): void {
   // `previewCooldown` lives inside `init()` as a const so a plugin
@@ -100,10 +121,12 @@ export function init(api: PluginAPI): void {
         api.notice(ctx.nick, 'Cannot lock: no topic is currently set.');
         return;
       }
-      if (live.length > TOPIC_LENGTH_WARN) {
+      const topicLenBytes = resolveTopicLenBytes(api);
+      const liveBytes = Buffer.byteLength(live, 'utf8');
+      if (liveBytes > topicLenBytes) {
         api.notice(
           ctx.nick,
-          `Warning: topic is ${live.length} chars (typical limit is ~${TOPIC_LENGTH_WARN}). It may be truncated by the server.`,
+          `Warning: topic is ${liveBytes} bytes (server limit is ~${topicLenBytes}). It may be truncated by the server.`,
         );
       }
       api.channelSettings.set(ctx.channel, 'topic_text', live);
@@ -177,10 +200,12 @@ export function init(api: PluginAPI): void {
     // any. Strip them uniformly here.
     const formatted = template.replace('$text', () => api.stripFormatting(text));
 
-    if (formatted.length > TOPIC_LENGTH_WARN) {
+    const topicLenBytes = resolveTopicLenBytes(api);
+    const formattedBytes = Buffer.byteLength(formatted, 'utf8');
+    if (formattedBytes > topicLenBytes) {
       api.notice(
         ctx.nick,
-        `Warning: topic is ${formatted.length} chars (typical limit is ~${TOPIC_LENGTH_WARN}). It may be truncated by the server.`,
+        `Warning: topic is ${formattedBytes} bytes (server limit is ~${topicLenBytes}). It may be truncated by the server.`,
       );
     }
 
@@ -214,7 +239,11 @@ export function init(api: PluginAPI): void {
       const sampleText = parts.length > 1 ? parts.slice(1).join(' ') : 'Sample Topic Text';
       api.notice(ctx.nick, `Theme previews using: "${sampleText}"`);
       for (const themeName of themeNames) {
-        const formatted = themes[themeName].replace('$text', sampleText);
+        // Function form of replace() — string-form replacements interpret
+        // `$&`, `$1`, `$$`, etc. in `sampleText` as back-references, which
+        // would let a caller leak adjacent template text into the preview.
+        // Using a function bypasses back-ref expansion entirely.
+        const formatted = themes[themeName].replace('$text', () => sampleText);
         api.notice(ctx.nick, `${themeName}: ${formatted}`);
       }
       api.notice(ctx.nick, `${themeNames.length} themes total. Use !topic <theme> <text> to set.`);
@@ -245,10 +274,23 @@ export function init(api: PluginAPI): void {
     if (isAuthorized) {
       // Authorized change — update the stored topic
       api.channelSettings.set(channel, 'topic_text', ctx.text);
-    } else {
-      // Restore the enforced topic
-      api.topic(channel, enforced);
+      return;
     }
+
+    // Skip restore when the bot lacks `+o` on the channel — TOPIC needs
+    // ops on most ircds (or `+t` cleared, which on a locked channel
+    // implies elevated threat), and attempting the mode burns a slot in
+    // the outbound message queue on every unauthorised change. Without
+    // this guard a takeover scenario (bot deopped, topic rewritten
+    // repeatedly) would saturate the queue. See audit 2026-04-24.
+    const ch = api.getChannel(channel);
+    const botNickLower = api.ircLower(api.botConfig.irc.nick);
+    const botUser = ch?.users.get(botNickLower);
+    const botHasOps = botUser?.modes.includes('o') ?? false;
+    if (!botHasOps) return;
+
+    // Restore the enforced topic
+    api.topic(channel, enforced);
   });
 }
 

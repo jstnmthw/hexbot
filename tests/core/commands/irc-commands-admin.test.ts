@@ -83,8 +83,11 @@ describe('irc-commands-admin', () => {
       const ctx = makeCtx();
       await handler.execute('.say foo\rbar message', ctx);
 
+      // parseTargetMessage sanitizes at the parse boundary and returns null
+      // when the target contained control characters, so the usage error
+      // fires before isValidCommandTarget sees the mangled value.
       expect(mockClient.say).not.toHaveBeenCalled();
-      expect(ctx.reply).toHaveBeenCalledWith('Invalid target.');
+      expect(ctx.reply).toHaveBeenCalledWith('Usage: .say <target> <message>');
     });
 
     it('should show usage when message is empty after trim (space-only arg)', async () => {
@@ -147,11 +150,13 @@ describe('irc-commands-admin', () => {
 
     it('should reject target containing control characters', async () => {
       const ctx = makeCtx();
-      // Target with embedded \r fails the /^[^\s\r\n]+$/ regex
+      // parseTargetMessage sanitizes the target — a `\r` in the token causes
+      // the parser to return null and the handler shows the usage message
+      // rather than forwarding a mangled target to the IRC client.
       await handler.execute('.msg nick\r hello', ctx);
 
       expect(mockClient.say).not.toHaveBeenCalled();
-      expect(ctx.reply).toHaveBeenCalledWith('Invalid target.');
+      expect(ctx.reply).toHaveBeenCalledWith('Usage: .msg <target> <message>');
     });
   });
 

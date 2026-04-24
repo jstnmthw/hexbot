@@ -1,6 +1,6 @@
 // chanmod — IRC commands: !op !deop !halfop !dehalfop !voice !devoice !kick
 // (Ban-related commands live in ./ban-commands.ts.)
-import type { ChannelHandlerContext, PluginAPI } from '../../src/types';
+import type { ChannelHandlerContext, PluginAPI, PluginModActor } from '../../src/types';
 import { registerBanCommands } from './ban-commands';
 import { botCanHalfop, botHasOps, isValidNick, markIntentional } from './helpers';
 import type { ChanmodConfig, SharedState } from './state';
@@ -16,8 +16,13 @@ interface ModeCommandOptions {
   canApply: (api: PluginAPI, channel: string) => boolean;
   /** Reply sent when `canApply` returns false. */
   capabilityError: string;
-  /** Apply the mode to `target` in `channel`. */
-  execute: (api: PluginAPI, channel: string, target: string) => void;
+  /**
+   * Apply the mode to `target` in `channel`. `actor` attributes the
+   * resulting mod_log row to the triggering user via
+   * `api.auditActor(ctx)` — required so chanmod rows are not written
+   * with `by = NULL`. See audit 2026-04-24 W.
+   */
+  execute: (api: PluginAPI, channel: string, target: string, actor: PluginModActor) => void;
   /**
    * Reply sent when the user targets the bot itself with a mode-removal command
    * (e.g. !deop hexbot). Setting this enables the bot-self guard.
@@ -59,8 +64,11 @@ function createModeCommandHandler(
     if (opts.markIntent) {
       markIntentional(state, api, channel, target);
     }
-    opts.execute(api, channel, target);
-    api.log(`${ctx.nick} ${opts.verb} ${target} in ${channel}`);
+    const actor = api.auditActor(ctx);
+    opts.execute(api, channel, target, actor);
+    api.log(
+      `${api.stripFormatting(ctx.nick)} ${opts.verb} ${api.stripFormatting(target)} in ${channel}`,
+    );
   };
 }
 
@@ -143,7 +151,7 @@ export function setupCommands(
       verb: 'opped',
       canApply: botHasOps,
       capabilityError: OPS_REQUIRED_ERROR,
-      execute: (a, c, t) => a.op(c, t),
+      execute: (a, c, t, actor) => a.op(c, t, actor),
       silentSelfIgnore: true,
     }),
   );
@@ -156,7 +164,7 @@ export function setupCommands(
       verb: 'deopped',
       canApply: botHasOps,
       capabilityError: OPS_REQUIRED_ERROR,
-      execute: (a, c, t) => a.deop(c, t),
+      execute: (a, c, t, actor) => a.deop(c, t, actor),
       selfRejectReply: 'I cannot deop myself.',
       markIntent: true,
     }),
@@ -170,7 +178,7 @@ export function setupCommands(
       verb: 'voiced',
       canApply: botHasOps,
       capabilityError: OPS_REQUIRED_ERROR,
-      execute: (a, c, t) => a.voice(c, t),
+      execute: (a, c, t, actor) => a.voice(c, t, actor),
       silentSelfIgnore: true,
     }),
   );
@@ -183,7 +191,7 @@ export function setupCommands(
       verb: 'devoiced',
       canApply: botHasOps,
       capabilityError: OPS_REQUIRED_ERROR,
-      execute: (a, c, t) => a.devoice(c, t),
+      execute: (a, c, t, actor) => a.devoice(c, t, actor),
       markIntent: true,
     }),
   );
@@ -196,7 +204,7 @@ export function setupCommands(
       verb: 'halfopped',
       canApply: botCanHalfop,
       capabilityError: HALFOP_REQUIRED_ERROR,
-      execute: (a, c, t) => a.halfop(c, t),
+      execute: (a, c, t, actor) => a.halfop(c, t, actor),
       silentSelfIgnore: true,
     }),
   );
@@ -209,7 +217,7 @@ export function setupCommands(
       verb: 'dehalfopped',
       canApply: botCanHalfop,
       capabilityError: HALFOP_REQUIRED_ERROR,
-      execute: (a, c, t) => a.dehalfop(c, t),
+      execute: (a, c, t, actor) => a.dehalfop(c, t, actor),
       selfRejectReply: 'I cannot dehalfop myself.',
       markIntent: true,
     }),
@@ -236,8 +244,10 @@ export function setupCommands(
       return;
     }
     const reason = parts.slice(1).join(' ') || config.default_kick_reason;
-    api.kick(channel, target, reason);
-    api.log(`${ctx.nick} kicked ${target} from ${channel} (${reason})`);
+    api.kick(channel, target, reason, api.auditActor(ctx));
+    api.log(
+      `${api.stripFormatting(ctx.nick)} kicked ${api.stripFormatting(target)} from ${channel} (${reason})`,
+    );
   });
 
   registerBanCommands(api, config);
