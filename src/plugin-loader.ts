@@ -150,6 +150,7 @@ export class PluginLoader {
     string,
     Array<(nick: string, previousAccount: string) => void>
   > = new Map();
+  private botIdentifiedListeners: Map<string, Array<() => void>> = new Map();
   /** Absolute paths of plugin entry files already imported in this process. */
   private importedOnce: Set<string> = new Set();
   /**
@@ -598,6 +599,18 @@ export class PluginLoader {
       }
       this.userDeidentifiedListeners.delete(pluginName);
     }
+
+    const botIdentListeners = this.botIdentifiedListeners.get(pluginName);
+    if (botIdentListeners) {
+      for (const fn of botIdentListeners) {
+        try {
+          this.eventBus.off('bot:identified', fn);
+        } catch (err) {
+          this.logger?.error(`[plugin-loader] bot:identified off() for ${pluginName} threw:`, err);
+        }
+      }
+      this.botIdentifiedListeners.delete(pluginName);
+    }
   }
 
   private createPluginApi(
@@ -627,6 +640,7 @@ export class PluginLoader {
         permissionsChangedListeners: this.permissionsChangedListeners,
         userIdentifiedListeners: this.userIdentifiedListeners,
         userDeidentifiedListeners: this.userDeidentifiedListeners,
+        botIdentifiedListeners: this.botIdentifiedListeners,
       },
       pluginId,
       config,

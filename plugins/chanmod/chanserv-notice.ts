@@ -237,7 +237,7 @@ export function markProbePending(
           return;
         }
       }
-      api.debug(
+      api.warn(
         `ChanServ access probe for ${channel} timed out — no services response (access remains 'none')`,
       );
     }

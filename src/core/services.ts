@@ -21,7 +21,16 @@ export interface ServicesClient {
   on(event: string, listener: (...args: unknown[]) => void): void;
   removeListener(event: string, listener: (...args: unknown[]) => void): void;
   say(target: string, message: string): void;
+  changeNick(nick: string): void;
 }
+
+/**
+ * Four-state bot identity: 'unknown' at session start, 'pending' while
+ * waiting for a NickServ ack, 'identified' once confirmed, 'unidentified'
+ * once a "please identify" notice arrives without a successful ack following.
+ * See stability audit 2026-04-21.
+ */
+export type BotIdentifyState = 'unknown' | 'pending' | 'identified' | 'unidentified';
 
 interface PendingVerify {
   nick: string;
@@ -65,6 +74,13 @@ export interface ServicesDeps {
    * audit trail can leave it unset.
    */
   db?: BotDatabase | null;
+  /**
+   * The bot's configured primary nick. Used to detect the bot's own
+   * account-notify (SASL success) and NickServ "please identify" notices.
+   * Optional for backwards compatibility with tests that pre-date the
+   * identify-state tracking. See stability audit 2026-04-21.
+   */
+  botNick?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -77,6 +93,7 @@ export class Services {
   private eventBus: BotEventBus;
   private logger: LoggerLike | null;
   private db: BotDatabase | null;
+  private botNick: string;
   private pending: Map<string, PendingVerify> = new Map();
   private listeners: ListenerGroup;
   private casemapping: Casemapping = 'rfc1459';
@@ -91,13 +108,77 @@ export class Services {
   /** Count of pending verifies rejected because the cap was hit. */
   private pendingCapRejectionCount = 0;
 
+  // -------------------------------------------------------------------------
+  // Bot identify state — see stability audit 2026-04-21
+  // -------------------------------------------------------------------------
+
+  /**
+   * Four-state bot identity. Transitions:
+   *   unknown → pending  : identify() or SASL fallback IDENTIFY sent
+   *   pending → identified : "You are now identified" notice or account-notify
+   *   unknown/pending → unidentified : "please identify" notice (no fallback possible)
+   *   any → unknown : on disconnect (session reset)
+   * Used to skip NickServ verify calls that will never succeed (C-3 fix) and
+   * to surface `botIdentified` in `.status` (W-2 fix).
+   * See stability audit 2026-04-21.
+   */
+  private _botIdentifyState: BotIdentifyState = 'unknown';
+
+  /**
+   * True once an IDENTIFY fallback has been sent for the current session, so
+   * a noisy "please identify" flood doesn't send multiple IDENTIFY lines.
+   */
+  private _identifyFallbackSent = false;
+
+  /**
+   * Timestamp of the last `bot:connected` event. Used by {@link verifyUser}
+   * to apply a longer NickServ timeout in the post-reconnect window, when
+   * services may be catching up from a flood of reconnecting clients.
+   * See stability audit 2026-04-21 (W-3 fix).
+   */
+  private reconnectedAt: number | null = null;
+
+  /** Stored eventBus listeners so they can be removed in {@link detach}. */
+  private readonly _onConnected: () => void;
+  private readonly _onDisconnected: () => void;
+
   constructor(deps: ServicesDeps) {
     this.client = deps.client;
     this.servicesConfig = deps.servicesConfig;
     this.eventBus = deps.eventBus;
     this.logger = deps.logger?.child('services') ?? null;
     this.db = deps.db ?? null;
+    this.botNick = deps.botNick ?? '';
     this.listeners = new ListenerGroup(deps.client);
+
+    // Capture listener refs for removal in detach() — arrow functions lose
+    // identity if created inline in on/off pairs.
+    this._onConnected = () => {
+      this.reconnectedAt = Date.now();
+      this._identifyFallbackSent = false;
+      // I-1: warn if SASL is configured but the bot is still not identified
+      // a few seconds after registration. This fires seconds after reconnect
+      // rather than waiting for chanmod probe timeouts to surface the miss.
+      if (this.servicesConfig.sasl) {
+        setTimeout(() => {
+          if (this._botIdentifyState !== 'identified') {
+            this.logger?.warn(
+              'SASL configured but bot is not identified after connect — SASL may have failed silently. ' +
+                'Check for a "This nickname is registered" NickServ notice.',
+            );
+          }
+        }, 3_000).unref();
+      }
+    };
+    this._onDisconnected = () => {
+      const wasIdentified = this._botIdentifyState === 'identified';
+      this._botIdentifyState = 'unknown';
+      this._identifyFallbackSent = false;
+      this.reconnectedAt = null;
+      if (wasIdentified) {
+        this.eventBus.emit('bot:deidentified');
+      }
+    };
   }
 
   setCasemapping(cm: Casemapping): void {
@@ -109,12 +190,23 @@ export class Services {
     this.listeners.on('notice', (...args: unknown[]) => {
       this.onNotice(toEventObject(args[0]));
     });
+    // IRCv3 account-notify: fires when the bot's own SASL authentication
+    // succeeds (nick='*' pre-registration) or when a post-registration
+    // account change is observed. Used to set _botIdentifyState without
+    // waiting for NickServ notices. See stability audit 2026-04-21.
+    this.listeners.on('account', (...args: unknown[]) => {
+      this.onAccountNotify(toEventObject(args[0]));
+    });
+    this.eventBus.on('bot:connected', this._onConnected);
+    this.eventBus.on('bot:disconnected', this._onDisconnected);
     this.logger?.info('Attached to IRC client');
   }
 
   /** Stop listening. */
   detach(): void {
     this.listeners.removeAll();
+    this.eventBus.off('bot:connected', this._onConnected);
+    this.eventBus.off('bot:disconnected', this._onDisconnected);
     // Clean up pending verifications — abort() fires the signal handler
     // which clears the setTimeout and resolves the awaiting promise.
     for (const p of this.pending.values()) {
@@ -152,6 +244,7 @@ export class Services {
 
     const target = this.getNickServTarget();
     this.client.say(target, `IDENTIFY ${this.servicesConfig.password}`);
+    this._botIdentifyState = 'pending';
     this.logger?.info('Sent IDENTIFY to NickServ');
   }
 
@@ -176,6 +269,29 @@ export class Services {
     if (this.servicesConfig.type === 'none') {
       return { verified: true, account: nick };
     }
+
+    // C-3: if the bot is known-unidentified, NickServ will ignore STATUS/ACC
+    // queries from us (Rizon/Anope silently drops them). Fail fast with a
+    // structured reason so the caller sees a clean verified:false rather than
+    // a 5-second timeout. See stability audit 2026-04-21.
+    if (this._botIdentifyState === 'unidentified') {
+      this.logger?.warn(
+        `Skipping NickServ verify for ${nick} — bot is not identified (will retry once bot identifies)`,
+      );
+      return { verified: false, account: null };
+    }
+
+    // W-3: use a longer timeout in the post-reconnect window. NickServ is
+    // under heavy load when all reconnecting clients flood in simultaneously.
+    // Apply within 30s of bot:connected; once outside the window, the normal
+    // 5s default is appropriate. See stability audit 2026-04-21.
+    const RECONNECT_GRACE_WINDOW_MS = 30_000;
+    const RECONNECT_GRACE_TIMEOUT_MS = 15_000;
+    const inGraceWindow =
+      this.reconnectedAt !== null && Date.now() - this.reconnectedAt < RECONNECT_GRACE_WINDOW_MS;
+    const effectiveTimeout = inGraceWindow
+      ? Math.max(timeoutMs, RECONNECT_GRACE_TIMEOUT_MS)
+      : timeoutMs;
 
     const target = this.getNickServTarget();
     const lowerNick = ircLower(nick, this.casemapping);
@@ -223,12 +339,15 @@ export class Services {
             source: 'system',
             target: nick,
             outcome: 'failure',
-            metadata: { timeoutMs, servicesTimeoutCount: this.servicesTimeoutCount },
+            metadata: {
+              timeoutMs: effectiveTimeout,
+              servicesTimeoutCount: this.servicesTimeoutCount,
+            },
           },
           this.logger,
         );
         resolve({ verified: false, account: null });
-      }, timeoutMs);
+      }, effectiveTimeout);
 
       // `abort()` is the single cancellation idiom for every teardown path
       // (detach, resolveVerification success). Clearing the timer here
@@ -381,6 +500,45 @@ export class Services {
       }
     }
 
+    // C-1: detect NickServ telling the bot to identify (SASL missed).
+    // Covers Anope ("This nickname is registered and protected") and
+    // Atheme ("This nickname is registered"). On match, record the
+    // unidentified state and, if SASL+password is configured, send a
+    // password IDENTIFY as a one-shot fallback for the current session.
+    const pleaseIdentify = /(?:This nickname is registered|nickname.*registered.*protected)/i.test(
+      message,
+    );
+    if (pleaseIdentify) {
+      if (this.servicesConfig.sasl && this.servicesConfig.password && !this._identifyFallbackSent) {
+        this._identifyFallbackSent = true;
+        this.logger?.warn(
+          'NickServ "please identify" received — SASL may have failed; falling back to password IDENTIFY',
+        );
+        this.client.say(this.getNickServTarget(), `IDENTIFY ${this.servicesConfig.password}`);
+        this._botIdentifyState = 'pending';
+      } else {
+        this._botIdentifyState = 'unidentified';
+        if (!this.servicesConfig.sasl) {
+          this.logger?.warn('NickServ "please identify" received while bot is not identified');
+        }
+      }
+      return;
+    }
+
+    // C-1 / W-2: detect NickServ confirming identity (after IDENTIFY fallback
+    // or slow SASL confirm). Covers Anope ("Password accepted"),
+    // Atheme ("You are now identified for"), and generic patterns.
+    const nowIdentified =
+      /(?:you are now identified|password accepted|you are now recognized|you have been logged in)/i.test(
+        message,
+      );
+    if (nowIdentified && this._botIdentifyState !== 'identified') {
+      this._botIdentifyState = 'identified';
+      this.logger?.info('Bot identity confirmed by NickServ notice');
+      this.eventBus.emit('bot:identified');
+      return;
+    }
+
     // No pattern matched — log for debugging
     if (this.pending.size > 0) {
       this.logger?.debug(`NickServ notice did not match ACC or STATUS pattern: ${message}`);
@@ -408,8 +566,99 @@ export class Services {
   }
 
   // -------------------------------------------------------------------------
+  // Bot identify state — public API
+  // -------------------------------------------------------------------------
+
+  /**
+   * True if the bot's own NickServ identity has been confirmed for the current
+   * session (either via SASL account-notify or a "You are now identified"
+   * notice). False while unknown or after a "please identify" prompt.
+   * Surfaced via `.status` so operators can see the identify state at a glance.
+   * See stability audit 2026-04-21 (W-2 fix).
+   */
+  isBotIdentified(): boolean {
+    return this._botIdentifyState === 'identified';
+  }
+
+  /**
+   * Four-value identify state: 'identified', 'pending', 'unidentified', or 'unknown'.
+   * 'unknown' — no NickServ/SASL signal received yet this session.
+   * 'pending' — IDENTIFY sent, waiting for NickServ confirmation.
+   * 'identified' — confirmed by account-notify or "You are now identified" notice.
+   * 'unidentified' — NickServ confirmed the bot is NOT identified (no fallback possible).
+   */
+  getBotIdentifyState(): BotIdentifyState {
+    return this._botIdentifyState;
+  }
+
+  /**
+   * Forcibly mark the bot as identified. Called by external callers (e.g.
+   * after a successful IDENTIFY on a non-SASL network) when the normal
+   * NickServ "You are now identified" notice path has not yet fired.
+   */
+  markBotIdentified(): void {
+    if (this._botIdentifyState !== 'identified') {
+      this._botIdentifyState = 'identified';
+      this.eventBus.emit('bot:identified');
+    }
+  }
+
+  /**
+   * GHOST the squatted primary nick and reclaim it. Sends NickServ GHOST,
+   * waits for the server to kill the squatter, then sends NICK to take the
+   * nick back. The caller is responsible for updating channelState/bridge
+   * botNick before calling this — irc-bridge tracks the nick change via
+   * its own 'nick' listener once the server confirms. After the nick change,
+   * the normal NickServ "please identify" → fallback IDENTIFY path fires
+   * to re-establish identity. See stability audit 2026-04-21 (C-4 fix).
+   */
+  async ghostAndReclaim(nick: string, password: string): Promise<void> {
+    this._identifyFallbackSent = false; // reset so the re-identify path can fire
+    const target = this.getNickServTarget();
+    this.client.say(target, `GHOST ${nick} ${password}`);
+    this.logger?.warn(`Sent GHOST for ${nick} — waiting 1.5s before reclaiming`);
+    await new Promise<void>((resolve) => setTimeout(resolve, 1500).unref());
+    this.client.changeNick(nick);
+    this.logger?.info(`Sent NICK ${nick} to reclaim primary nick after GHOST`);
+  }
+
+  // -------------------------------------------------------------------------
   // Helpers
   // -------------------------------------------------------------------------
+
+  /**
+   * Handle an IRCv3 account-notify for the bot's own nick.
+   * Pre-registration: nick='*', account=<bot account name> (SASL success).
+   * Post-registration: nick=<bot nick>, account=<account name>.
+   * Fires `bot:identified` on the event bus when the bot's own identity is
+   * confirmed. See stability audit 2026-04-21.
+   */
+  private onAccountNotify(event: Record<string, unknown>): void {
+    if (!this.botNick) return; // botNick not configured — skip
+    const nick = String(event.nick ?? '');
+    const account: string | null =
+      event.account === false || event.account === null ? null : String(event.account);
+
+    const lower = ircLower(nick, this.casemapping);
+    const botLower = ircLower(this.botNick, this.casemapping);
+    const isBotOwn = nick === '*' || lower === botLower;
+    if (!isBotOwn) return;
+
+    if (account !== null) {
+      if (this._botIdentifyState !== 'identified') {
+        this._botIdentifyState = 'identified';
+        this.logger?.info(`Bot identified as ${account} via account-notify (SASL)`);
+        this.eventBus.emit('bot:identified');
+      }
+    } else {
+      const wasIdentified = this._botIdentifyState === 'identified';
+      this._botIdentifyState = 'unidentified';
+      this.logger?.debug('Bot deidentified via account-notify');
+      if (wasIdentified) {
+        this.eventBus.emit('bot:deidentified');
+      }
+    }
+  }
 
   private getNickServTarget(): string {
     return this.servicesConfig.nickserv || 'NickServ';

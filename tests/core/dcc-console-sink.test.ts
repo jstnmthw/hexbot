@@ -40,6 +40,7 @@ function makeServices(): PluginServices {
     verifyUser: vi.fn().mockResolvedValue({ verified: true, account: 'x' }),
     isAvailable: vi.fn().mockReturnValue(true),
     isNickServVerificationReply: vi.fn().mockReturnValue(false),
+    isBotIdentified: vi.fn().mockReturnValue(true),
   };
 }
 

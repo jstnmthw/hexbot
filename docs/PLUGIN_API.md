@@ -434,9 +434,39 @@ Check if the user in a HandlerContext has the required flags. Supports OR with `
 
 Query NickServ to verify a user's identity. Returns `{ verified: false, account: null }` on timeout or if services are unavailable.
 
+If the bot is known-unidentified (e.g. SASL failed silently), this returns `{ verified: false, account: null }` immediately without issuing a STATUS/ACC query, since the IRC server would ignore the query anyway.
+
 #### `services.isAvailable(): boolean`
 
 Returns `true` if services are configured and not set to `'none'`.
+
+#### `services.isBotIdentified(): boolean`
+
+Returns `true` if the bot's own NickServ identity has been confirmed for the current session — either via IRCv3 `account-notify` (SASL success) or a NickServ "You are now identified" notice (password IDENTIFY). Returns `false` if identity is `'unknown'`, `'pending'`, or `'unidentified'`.
+
+Useful for gating ChanServ-dependent operations until the bot can actually make them succeed.
+
+```typescript
+api.onBotIdentified(() => {
+  if (!api.services.isBotIdentified()) return; // race guard
+  api.log('Bot is now identified — safe to query ChanServ');
+});
+```
+
+#### `onBotIdentified(callback) / offBotIdentified(callback)`
+
+Register or remove a callback that fires when the bot's own NickServ identity is confirmed. Fires both on initial connect and after a SASL fallback recovery. Callbacks are automatically cleaned up on plugin unload.
+
+```typescript
+api.onBotIdentified(() => {
+  for (const ch of api.botConfig.irc.channels) {
+    // Re-check access if it was unknown during initial probe
+    api.log(`Bot identified — re-probing ${ch}`);
+  }
+});
+```
+
+The symmetric `bot:deidentified` event fires on disconnect and on `account-notify` logout; there is no `onBotDeidentified` API surface yet since plugins tear down on disconnect anyway.
 
 ---
 

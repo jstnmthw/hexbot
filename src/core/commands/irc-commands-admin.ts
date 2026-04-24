@@ -38,6 +38,12 @@ export interface StabilityMetrics {
   failedPluginCount?: number;
   /** Names of plugins that failed to load — used by the startup banner. */
   failedPluginNames?: string[];
+  /**
+   * Whether the bot's own NickServ identity has been confirmed for the current
+   * session. `undefined` when identify-state tracking is not wired up.
+   * See stability audit 2026-04-21 (W-2 fix).
+   */
+  botIdentified?: boolean;
 }
 
 /** Minimal bot interface for status reporting. */
@@ -253,6 +259,9 @@ export function registerIRCAdminCommands(deps: IrcAdminCommandsDeps): void {
         }
         if (m.pendingCapRejections !== undefined && m.pendingCapRejections > 0) {
           parts.push(`verify-cap-rejected=${m.pendingCapRejections}`);
+        }
+        if (m.botIdentified !== undefined) {
+          parts.push(`bot-identified=${m.botIdentified ? 'yes' : 'NO'}`);
         }
         if (m.loadedPluginCount !== undefined) {
           parts.push(`plugins=${m.loadedPluginCount}`);

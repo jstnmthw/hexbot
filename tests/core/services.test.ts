@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Services } from '../../src/core/services';
 import { BotEventBus } from '../../src/event-bus';
@@ -21,6 +21,10 @@ class MockClient extends EventEmitter {
     this.sent.push({ target, message });
   }
 
+  changeNick(_nick: string): void {
+    // no-op in tests
+  }
+
   simulateNotice(nick: string, message: string): void {
     this.emit('notice', { nick, message });
   }
@@ -35,6 +39,7 @@ function createServices(opts?: {
   nickserv?: string;
   password?: string;
   sasl?: boolean;
+  botNick?: string;
 }): { services: Services; client: MockClient; eventBus: BotEventBus } {
   const client = new MockClient();
   const eventBus = new BotEventBus();
@@ -50,6 +55,7 @@ function createServices(opts?: {
     client,
     servicesConfig,
     eventBus,
+    botNick: opts?.botNick,
   });
 
   services.attach();
@@ -358,6 +364,41 @@ describe('Services', () => {
       const result = await promise;
       expect(result.verified).toBe(false);
     });
+
+    it('cancelPendingVerifies aborts all in-flight verifications', async () => {
+      const { services } = createServices({ type: 'atheme' });
+
+      const promise = services.verifyUser('Alice', 10_000);
+      expect(services.getPendingVerifyCount()).toBe(1);
+
+      services.cancelPendingVerifies('socket disconnect');
+
+      const result = await promise;
+      expect(result.verified).toBe(false);
+      expect(services.getPendingVerifyCount()).toBe(0);
+    });
+
+    it('cancelPendingVerifies is a no-op when no verifications are pending', () => {
+      const { services } = createServices({ type: 'atheme' });
+      expect(() => services.cancelPendingVerifies('no pending')).not.toThrow();
+    });
+  });
+
+  describe('observability counters', () => {
+    it('getServicesTimeoutCount starts at zero', () => {
+      const { services } = createServices();
+      expect(services.getServicesTimeoutCount()).toBe(0);
+    });
+
+    it('getPendingVerifyCount reflects current in-flight count', async () => {
+      const { services, client } = createServices({ type: 'atheme' });
+      expect(services.getPendingVerifyCount()).toBe(0);
+      const promise = services.verifyUser('Alice', 5000);
+      expect(services.getPendingVerifyCount()).toBe(1);
+      client.simulateNotice('NickServ', 'Alice ACC 3');
+      await promise;
+      expect(services.getPendingVerifyCount()).toBe(0);
+    });
   });
 
   describe('getNickServTarget fallback', () => {
@@ -531,6 +572,330 @@ describe('Services', () => {
       expect(rows[0].outcome).toBe('failure');
       expect(rows[0].metadata).toMatchObject({ timeoutMs: 1 });
       db.close();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Bot identify state machine (stability audit 2026-04-21)
+  // ---------------------------------------------------------------------------
+
+  describe('bot identify state transitions', () => {
+    it('identify() transitions state to pending on non-SASL network', () => {
+      const { services } = createServices({ sasl: false, password: 'mypass' });
+      expect(services.getBotIdentifyState()).toBe('unknown');
+      services.identify();
+      expect(services.getBotIdentifyState()).toBe('pending');
+      expect(services.isBotIdentified()).toBe(false);
+    });
+
+    it('markBotIdentified() sets state to identified and emits bot:identified', () => {
+      const { services, eventBus } = createServices();
+      const listener = vi.fn();
+      eventBus.on('bot:identified', listener);
+      services.markBotIdentified();
+      expect(services.isBotIdentified()).toBe(true);
+      expect(services.getBotIdentifyState()).toBe('identified');
+      expect(listener).toHaveBeenCalledOnce();
+    });
+
+    it('markBotIdentified() is a no-op when already identified', () => {
+      const { services, eventBus } = createServices();
+      const listener = vi.fn();
+      eventBus.on('bot:identified', listener);
+      services.markBotIdentified();
+      services.markBotIdentified();
+      expect(listener).toHaveBeenCalledOnce();
+    });
+
+    it('NickServ "You are now identified" notice sets identified and emits bot:identified', () => {
+      const { services, client, eventBus } = createServices({ sasl: false, password: 'mypass' });
+      const listener = vi.fn();
+      eventBus.on('bot:identified', listener);
+      services.identify();
+      client.simulateNotice('NickServ', 'You are now identified for myaccount.');
+      expect(services.getBotIdentifyState()).toBe('identified');
+      expect(services.isBotIdentified()).toBe(true);
+      expect(listener).toHaveBeenCalledOnce();
+    });
+
+    it('NickServ "You are now identified" is a no-op if already identified', () => {
+      const { services, client, eventBus } = createServices({ sasl: false, password: 'mypass' });
+      const listener = vi.fn();
+      eventBus.on('bot:identified', listener);
+      services.identify();
+      client.simulateNotice('NickServ', 'You are now identified for myaccount.');
+      client.simulateNotice('NickServ', 'You are now identified for myaccount.');
+      expect(listener).toHaveBeenCalledOnce();
+    });
+
+    it('NickServ "password accepted" also triggers identified state', () => {
+      const { services, client, eventBus } = createServices({ sasl: false, password: 'mypass' });
+      const listener = vi.fn();
+      eventBus.on('bot:identified', listener);
+      services.identify();
+      client.simulateNotice('NickServ', 'Password accepted for myaccount.');
+      expect(services.isBotIdentified()).toBe(true);
+      expect(listener).toHaveBeenCalledOnce();
+    });
+
+    it('NickServ please-identify (SASL+password) sends fallback IDENTIFY and sets pending', () => {
+      const { services, client } = createServices({ sasl: true, password: 'saslpass' });
+      client.simulateNotice(
+        'NickServ',
+        'This nickname is registered. Please identify via /msg NickServ identify.',
+      );
+      expect(services.getBotIdentifyState()).toBe('pending');
+      const identifyMsg = client.sent.find((m) => m.message.startsWith('IDENTIFY'));
+      expect(identifyMsg).toBeDefined();
+      expect(identifyMsg?.message).toBe('IDENTIFY saslpass');
+    });
+
+    it('NickServ please-identify (no SASL) sets state to unidentified and warns', () => {
+      const { services, client } = createServices({ sasl: false, password: '' });
+      client.simulateNotice('NickServ', 'This nickname is registered. Please identify.');
+      expect(services.getBotIdentifyState()).toBe('unidentified');
+      expect(services.isBotIdentified()).toBe(false);
+    });
+
+    it('NickServ please-identify (SASL, no password) sets unidentified without IDENTIFY', () => {
+      const { services, client } = createServices({ sasl: true, password: '' });
+      client.simulateNotice('NickServ', 'This nickname is registered');
+      expect(services.getBotIdentifyState()).toBe('unidentified');
+      // No IDENTIFY sent (no password to use)
+      expect(client.sent).toHaveLength(0);
+    });
+
+    it('NickServ please-identify after fallback already sent sets unidentified', () => {
+      const { services, client } = createServices({ sasl: true, password: 'saslpass' });
+      // First notice — sends fallback, sets pending
+      client.simulateNotice('NickServ', 'This nickname is registered');
+      expect(services.getBotIdentifyState()).toBe('pending');
+      // Second notice — fallback already sent
+      client.simulateNotice('NickServ', 'This nickname is registered');
+      expect(services.getBotIdentifyState()).toBe('unidentified');
+    });
+
+    it('verifyUser fails fast when bot state is unidentified (C-3)', async () => {
+      const { services, client } = createServices({ sasl: false, password: '' });
+      // Drive state to unidentified
+      client.simulateNotice('NickServ', 'This nickname is registered. Please identify.');
+      expect(services.getBotIdentifyState()).toBe('unidentified');
+
+      const sentBefore = client.sent.length;
+      const result = await services.verifyUser('Alice', 5000);
+      expect(result.verified).toBe(false);
+      expect(result.account).toBeNull();
+      // No ACC/STATUS query sent — fast fail
+      expect(client.sent.length).toBe(sentBefore);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // bot:connected / bot:disconnected event handlers
+  // ---------------------------------------------------------------------------
+
+  describe('bot:connected handler', () => {
+    it('clears identifyFallbackSent on connect', () => {
+      const { client, eventBus } = createServices({ sasl: true, password: 'pass' });
+      // Trigger fallback to set the flag
+      client.simulateNotice('NickServ', 'This nickname is registered');
+      // bot:connected should reset the flag so IDENTIFY can be sent again
+      eventBus.emit('bot:connected');
+      client.sent = [];
+      client.simulateNotice('NickServ', 'This nickname is registered');
+      expect(client.sent.some((m) => m.message.startsWith('IDENTIFY'))).toBe(true);
+    });
+
+    it('does not schedule SASL warning when SASL is not configured', () => {
+      const { eventBus } = createServices({ sasl: false });
+      // Should not throw or create dangling timers
+      expect(() => eventBus.emit('bot:connected')).not.toThrow();
+    });
+
+    describe('SASL warning timer (fake timers)', () => {
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it('warns after 3s if SASL configured and bot not yet identified', async () => {
+        const { eventBus } = createServices({ sasl: true, password: 'saslpass' });
+        eventBus.emit('bot:connected');
+        // Advance past the 3s SASL warning threshold
+        await vi.advanceTimersByTimeAsync(3_001);
+        // Just exercises the timer path — no assertion on logger (logger is null in tests)
+      });
+
+      it('does not warn after 3s if bot is already identified', async () => {
+        const { services, eventBus } = createServices({ sasl: true, password: 'saslpass' });
+        services.markBotIdentified();
+        eventBus.emit('bot:connected');
+        await vi.advanceTimersByTimeAsync(3_001);
+        // Exercises the identified branch inside the timer callback (no warn path)
+      });
+    });
+  });
+
+  describe('bot:disconnected handler', () => {
+    it('emits bot:deidentified on disconnect when bot was identified', () => {
+      const { services, client, eventBus } = createServices({ sasl: false, password: 'pass' });
+      const listener = vi.fn();
+      eventBus.on('bot:deidentified', listener);
+      services.identify();
+      client.simulateNotice('NickServ', 'You are now identified for myaccount.');
+      expect(services.isBotIdentified()).toBe(true);
+
+      eventBus.emit('bot:disconnected', 'ping timeout');
+
+      expect(listener).toHaveBeenCalledOnce();
+      expect(services.getBotIdentifyState()).toBe('unknown');
+    });
+
+    it('does not emit bot:deidentified if bot was not identified', () => {
+      const { eventBus } = createServices();
+      const listener = vi.fn();
+      eventBus.on('bot:deidentified', listener);
+      eventBus.emit('bot:disconnected', 'ping timeout');
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it('resets state to unknown on disconnect even when pending', () => {
+      const { services, eventBus } = createServices({ sasl: false, password: 'pass' });
+      services.identify();
+      expect(services.getBotIdentifyState()).toBe('pending');
+      eventBus.emit('bot:disconnected', 'ping timeout');
+      expect(services.getBotIdentifyState()).toBe('unknown');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // IRCv3 account-notify (SASL / extended-join confirmation)
+  // ---------------------------------------------------------------------------
+
+  describe('account-notify (IRCv3 SASL confirmation)', () => {
+    it('emits bot:identified on SASL success (nick=*)', () => {
+      const { services, client, eventBus } = createServices({ botNick: 'HEX' });
+      const listener = vi.fn();
+      eventBus.on('bot:identified', listener);
+      client.emit('account', { nick: '*', account: 'hexaccount' });
+      expect(services.getBotIdentifyState()).toBe('identified');
+      expect(listener).toHaveBeenCalledOnce();
+    });
+
+    it('emits bot:identified on account-notify for the bot own nick', () => {
+      const { services, client, eventBus } = createServices({ botNick: 'HEX' });
+      const listener = vi.fn();
+      eventBus.on('bot:identified', listener);
+      client.emit('account', { nick: 'HEX', account: 'hexaccount' });
+      expect(services.getBotIdentifyState()).toBe('identified');
+      expect(listener).toHaveBeenCalledOnce();
+    });
+
+    it('account-notify is a no-op when already identified', () => {
+      const { client, eventBus } = createServices({ botNick: 'HEX' });
+      const listener = vi.fn();
+      eventBus.on('bot:identified', listener);
+      client.emit('account', { nick: '*', account: 'hexaccount' });
+      client.emit('account', { nick: '*', account: 'hexaccount' });
+      expect(listener).toHaveBeenCalledOnce();
+    });
+
+    it('emits bot:deidentified on null account-notify when bot was identified', () => {
+      const { services, client, eventBus } = createServices({ botNick: 'HEX' });
+      const deidentifiedListener = vi.fn();
+      eventBus.on('bot:deidentified', deidentifiedListener);
+      client.emit('account', { nick: '*', account: 'hexaccount' });
+      expect(services.isBotIdentified()).toBe(true);
+      client.emit('account', { nick: 'HEX', account: null });
+      expect(services.getBotIdentifyState()).toBe('unidentified');
+      expect(deidentifiedListener).toHaveBeenCalledOnce();
+    });
+
+    it('sets unidentified on null account-notify when bot was not identified (no event)', () => {
+      const { services, client, eventBus } = createServices({ botNick: 'HEX' });
+      const listener = vi.fn();
+      eventBus.on('bot:deidentified', listener);
+      client.emit('account', { nick: 'HEX', account: null });
+      expect(services.getBotIdentifyState()).toBe('unidentified');
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it('treats account: false the same as null (IRCv3 deauth)', () => {
+      const { services, client, eventBus } = createServices({ botNick: 'HEX' });
+      const listener = vi.fn();
+      eventBus.on('bot:deidentified', listener);
+      client.emit('account', { nick: '*', account: 'hexaccount' });
+      client.emit('account', { nick: 'HEX', account: false });
+      expect(services.getBotIdentifyState()).toBe('unidentified');
+      expect(listener).toHaveBeenCalledOnce();
+    });
+
+    it('ignores account-notify for other nicks', () => {
+      const { services, client, eventBus } = createServices({ botNick: 'HEX' });
+      const listener = vi.fn();
+      eventBus.on('bot:identified', listener);
+      client.emit('account', { nick: 'OtherBot', account: 'oaccount' });
+      expect(services.getBotIdentifyState()).toBe('unknown');
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op when botNick is not configured', () => {
+      const { services, client, eventBus } = createServices(); // no botNick
+      const listener = vi.fn();
+      eventBus.on('bot:identified', listener);
+      client.emit('account', { nick: '*', account: 'hexaccount' });
+      expect(services.getBotIdentifyState()).toBe('unknown');
+      expect(listener).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // ghostAndReclaim (nick recovery after collision)
+  // ---------------------------------------------------------------------------
+
+  describe('ghostAndReclaim', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('sends GHOST then NICK to NickServ after 1.5s delay', async () => {
+      const { services, client } = createServices({ password: 'botpass' });
+      const changeNickSpy = vi.spyOn(client, 'changeNick');
+
+      const promise = services.ghostAndReclaim('HEX', 'botpass');
+
+      // GHOST sent immediately
+      expect(client.sent).toHaveLength(1);
+      expect(client.sent[0].target).toBe('NickServ');
+      expect(client.sent[0].message).toBe('GHOST HEX botpass');
+      // changeNick not yet called (waiting 1.5s)
+      expect(changeNickSpy).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1500);
+      await promise;
+
+      expect(changeNickSpy).toHaveBeenCalledWith('HEX');
+    });
+
+    it('resets _identifyFallbackSent so the re-identify path can fire after reclaim', async () => {
+      const { services, client } = createServices({ sasl: true, password: 'saslpass' });
+      // Drive _identifyFallbackSent to true
+      client.simulateNotice('NickServ', 'This nickname is registered');
+      expect(services.getBotIdentifyState()).toBe('pending');
+
+      const promise = services.ghostAndReclaim('HEX', 'saslpass');
+      await vi.advanceTimersByTimeAsync(1500);
+      await promise;
+
+      // Clear sent messages to verify re-identify fires on next notice
+      client.sent = [];
+      client.simulateNotice('NickServ', 'This nickname is registered');
+      expect(client.sent.some((m) => m.message.startsWith('IDENTIFY'))).toBe(true);
     });
   });
 });

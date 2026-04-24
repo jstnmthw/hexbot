@@ -27,6 +27,29 @@ export interface BotEvents {
   'bot:connected': [];
   'bot:disconnected': [reason: string];
   'bot:error': [error: Error];
+  /**
+   * Fired by `Services` when the bot's own NickServ identity is confirmed —
+   * either via IRCv3 account-notify (SASL success) or via a NickServ
+   * "You are now identified" notice (password IDENTIFY fallback). Consumers
+   * (chanmod) use this to trigger a ChanServ re-probe after a SASL miss.
+   * See stability audit 2026-04-21.
+   */
+  'bot:identified': [];
+  /**
+   * Fired by `Services` when the bot loses its NickServ identity — either
+   * via IRCv3 account-notify showing the account was removed, or on
+   * disconnect (identity state reset to unknown). The symmetric counterpart
+   * to `bot:identified`. See stability audit 2026-04-21.
+   */
+  'bot:deidentified': [];
+  /**
+   * Fired by `connection-lifecycle` when the bot registers with a nick other
+   * than the one in config (IRC server appended `_` due to collision). Payload
+   * is the actual registered nick. Subscribers (bot.ts) update channelState and
+   * bridge, then initiate GHOST if `ghost_on_recover` is configured.
+   * See stability audit 2026-04-21 (C-4 fix).
+   */
+  'bot:nick-collision': [actualNick: string];
   'plugin:loaded': [pluginId: string];
   'plugin:unloaded': [pluginId: string];
   'plugin:reloaded': [pluginId: string];

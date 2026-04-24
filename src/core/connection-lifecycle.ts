@@ -33,6 +33,8 @@ export interface LifecycleIRCClient {
   removeListener(event: string, listener: (...args: unknown[]) => void): void;
   join(channel: string, key?: string): void;
   quit(message?: string): void;
+  /** The bot's current nick as seen by the server. Used to detect nick collisions after registration. */
+  user?: { nick?: string };
   /**
    * irc-framework's `network.supports()` returns a string for most tokens, a
    * boolean for flag-only tokens, and parsed arrays for a handful of special
@@ -217,7 +219,7 @@ export function registerConnectionEvents(
     }, REGISTRATION_TIMEOUT_MS);
   };
 
-  const onRegistered = (): void => {
+  const onRegistered = async (): Promise<void> => {
     lastCloseReason = null;
     // Registration succeeded, cancel the stall timeout.
     if (registrationTimer !== null) {
@@ -225,13 +227,27 @@ export function registerConnectionEvents(
       registrationTimer = null;
     }
     reconnectDriver.onConnected();
-    logger.info(`Connected to ${cfg.host}:${cfg.port} as ${cfg.nick}`);
+
+    // C-4: detect nick collision — the server may have assigned a different
+    // nick (e.g. HEX_) when the configured nick (HEX) was taken.
+    const actualNick = String(deps.client.user?.nick ?? cfg.nick);
+    const nickCollision = actualNick.toLowerCase() !== cfg.nick.toLowerCase();
+    if (nickCollision) {
+      logger.warn(`Registered as ${actualNick} (expected ${cfg.nick}) — nick collision detected`);
+    } else {
+      logger.info(`Connected to ${cfg.host}:${cfg.port} as ${cfg.nick}`);
+    }
 
     if (cfg.tls) {
       logTlsCipher(client, logger);
     }
 
+    // Emit bot:connected first, then nick-collision so subscribers that
+    // update channelState/bridge run before joinConfiguredChannels.
     deps.eventBus.emit('bot:connected');
+    if (nickCollision) {
+      deps.eventBus.emit('bot:nick-collision', actualNick);
+    }
     applyCasemapping(deps);
     applyServerCapabilities(deps);
     ingestSTSDirective(deps);
@@ -243,6 +259,18 @@ export function registerConnectionEvents(
     // practice NickServ processes IDENTIFY fast enough that the bind
     // lands first. See docs/services-identify-before-join.md.
     deps.identifyWithServices?.();
+
+    // W-1: gate JOINs on identity when configured. Waits for bot:identified
+    // or the timeout, then proceeds. This eliminates the IDENTIFY/ChanServ
+    // probe race on non-SASL networks. See stability audit 2026-04-21.
+    const svcCfg = deps.config.services;
+    if (svcCfg.identify_before_join) {
+      const timeoutMs = svcCfg.identify_before_join_timeout_ms ?? 10_000;
+      await Promise.race([
+        new Promise<void>((res) => deps.eventBus.once('bot:identified', res)),
+        new Promise<void>((res) => setTimeout(res, timeoutMs).unref()),
+      ]);
+    }
 
     joinConfiguredChannels(deps);
 

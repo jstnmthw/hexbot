@@ -43,6 +43,20 @@ export interface IrcConfig {
    * Required when `services.sasl_mechanism` is "EXTERNAL" (CertFP authentication).
    */
   tls_key?: string;
+  /**
+   * Fallback nick used by irc-framework when the primary nick is taken.
+   * If absent, irc-framework appends `_` automatically; setting this lets
+   * the operator choose a predictable collision nick (e.g. "HEX_backup").
+   * Used only as the connection option — the bot still attempts GHOST to
+   * reclaim the primary nick when `ghost_on_recover` is true.
+   */
+  alt_nick?: string;
+  /**
+   * When true, the bot will attempt GHOST + NICK to reclaim its primary nick
+   * if it registers under a collision nick. Requires `services.password` to
+   * be set. Default: false. See stability audit 2026-04-21 (C-4 fix).
+   */
+  ghost_on_recover?: boolean;
 }
 
 /** Owner settings from config/bot.json (runtime shape). */
@@ -88,6 +102,18 @@ export interface ServicesConfig {
    * Requires `irc.tls_cert` and `irc.tls_key` to be set.
    */
   sasl_mechanism?: 'PLAIN' | 'EXTERNAL';
+  /**
+   * When true, the bot waits for `bot:identified` (or the timeout below)
+   * before sending JOIN commands after registration. Eliminates the race
+   * between IDENTIFY and ChanServ probes on non-SASL networks. Default: false.
+   * See stability audit 2026-04-21 (W-1 fix).
+   */
+  identify_before_join?: boolean;
+  /**
+   * Max milliseconds to wait for `bot:identified` before joining anyway.
+   * Only used when `identify_before_join` is true. Default: 10000.
+   */
+  identify_before_join_timeout_ms?: number;
 }
 
 /** Logging settings. */

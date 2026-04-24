@@ -20,6 +20,8 @@ import { createMockLogger } from '../helpers/mock-logger';
 
 class MockClient extends EventEmitter implements LifecycleIRCClient {
   public joins: Array<{ channel: string; key?: string }> = [];
+  /** Simulates irc-framework's client.user.nick — set in tests to trigger nick collision. */
+  public user?: { nick?: string };
   public network: LifecycleIRCClient['network'] & {
     supports: ReturnType<typeof vi.fn>;
     cap: { available: Map<string, string>; enabled: string[] };
@@ -804,6 +806,213 @@ describe('registerConnectionEvents', () => {
       );
       handle.cancelReconnect();
       expect(reconnectDriver.cancel).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('identifyWithServices callback', () => {
+    it('calls identifyWithServices after registration', () => {
+      const identifyWithServices = vi.fn();
+      const { client, deps } = makeContext({ identifyWithServices });
+      registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      client.emit('registered');
+      expect(identifyWithServices).toHaveBeenCalledOnce();
+    });
+
+    it('does not throw when identifyWithServices is omitted', () => {
+      const { client, deps } = makeContext(); // no identifyWithServices
+      expect(() => {
+        registerConnectionEvents(
+          deps,
+          () => {},
+          () => {},
+        );
+        client.emit('registered');
+      }).not.toThrow();
+    });
+  });
+
+  describe('nick collision detection (C-4)', () => {
+    it('emits bot:nick-collision when registered nick differs from configured', async () => {
+      const { client, deps, eventBus } = makeContext({
+        configuredChannels: [{ name: '#test' }],
+      });
+      const collisionListener = vi.fn();
+      eventBus.on('bot:nick-collision', collisionListener);
+      client.user = { nick: 'testbot_' }; // server assigned alternate nick
+      registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      client.emit('registered');
+      await Promise.resolve(); // flush async registered handler
+      expect(collisionListener).toHaveBeenCalledWith('testbot_');
+    });
+
+    it('does not emit bot:nick-collision when nick matches configured', async () => {
+      const { client, deps, eventBus } = makeContext();
+      const collisionListener = vi.fn();
+      eventBus.on('bot:nick-collision', collisionListener);
+      client.user = { nick: 'testbot' };
+      registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      client.emit('registered');
+      await Promise.resolve();
+      expect(collisionListener).not.toHaveBeenCalled();
+    });
+
+    it('warns in log when nick collision is detected', async () => {
+      const { client, deps, logger } = makeContext();
+      client.user = { nick: 'testbot_' };
+      registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      client.emit('registered');
+      await Promise.resolve();
+      const warnCalls = (logger.warn as ReturnType<typeof vi.fn>).mock.calls.flat();
+      expect(warnCalls.some((s) => String(s).includes('nick collision'))).toBe(true);
+    });
+
+    it('logs normal connect message when no collision', async () => {
+      const { client, deps, logger } = makeContext();
+      client.user = { nick: 'testbot' };
+      registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      client.emit('registered');
+      await Promise.resolve();
+      const infoCalls = (logger.info as ReturnType<typeof vi.fn>).mock.calls.flat();
+      expect(infoCalls.some((s) => String(s).includes('Connected to'))).toBe(true);
+    });
+
+    it('falls back to configured nick when client.user is undefined', async () => {
+      const { client, deps, eventBus } = makeContext();
+      const collisionListener = vi.fn();
+      eventBus.on('bot:nick-collision', collisionListener);
+      // client.user is undefined — actualNick falls back to cfg.nick
+      registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      client.emit('registered');
+      await Promise.resolve();
+      expect(collisionListener).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('identify_before_join gate (W-1)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('gates JOIN on bot:identified when identify_before_join is true', async () => {
+      const config: BotConfig = {
+        ...MINIMAL_BOT_CONFIG,
+        services: {
+          ...MINIMAL_BOT_CONFIG.services,
+          identify_before_join: true,
+          identify_before_join_timeout_ms: 5_000,
+        },
+      };
+      const { client, deps, eventBus } = makeContext({
+        config,
+        configuredChannels: [{ name: '#test' }],
+      });
+      registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      client.emit('registered');
+
+      // Let async handler reach the await point
+      await Promise.resolve();
+      // Channels should NOT be joined yet — gate is blocking on bot:identified
+      expect(client.joins).toHaveLength(0);
+
+      // Fire bot:identified to release the gate.
+      // Need two microtask ticks: one for Promise.race to resolve,
+      // one for the onRegistered continuation to run joinConfiguredChannels.
+      eventBus.emit('bot:identified');
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(client.joins).toHaveLength(1);
+      expect(client.joins[0].channel).toBe('#test');
+    });
+
+    it('falls through and JOINs after timeout when bot:identified never fires', async () => {
+      const config: BotConfig = {
+        ...MINIMAL_BOT_CONFIG,
+        services: {
+          ...MINIMAL_BOT_CONFIG.services,
+          identify_before_join: true,
+          identify_before_join_timeout_ms: 5_000,
+        },
+      };
+      const { client, deps } = makeContext({
+        config,
+        configuredChannels: [{ name: '#test' }],
+      });
+      registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      client.emit('registered');
+
+      await Promise.resolve();
+      expect(client.joins).toHaveLength(0);
+
+      // Advance past the identify_before_join timeout
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(client.joins).toHaveLength(1);
+    });
+
+    it('uses 10s default timeout when identify_before_join_timeout_ms is not set', async () => {
+      const config: BotConfig = {
+        ...MINIMAL_BOT_CONFIG,
+        services: {
+          ...MINIMAL_BOT_CONFIG.services,
+          identify_before_join: true,
+          // identify_before_join_timeout_ms omitted → defaults to 10_000
+        },
+      };
+      const { client, deps } = makeContext({
+        config,
+        configuredChannels: [{ name: '#test' }],
+      });
+      registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      client.emit('registered');
+
+      await Promise.resolve();
+      // Not yet joined after 5s
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(client.joins).toHaveLength(0);
+
+      // Joined after 10s default timeout
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(client.joins).toHaveLength(1);
     });
   });
 

@@ -33,6 +33,8 @@ const IrcConfigOnDiskSchema = z.strictObject({
   tls_verify: z.boolean().optional(),
   tls_cert: z.string().optional(),
   tls_key: z.string().optional(),
+  alt_nick: z.string().optional(),
+  ghost_on_recover: z.boolean().optional(),
 });
 
 const OwnerConfigSchema = z.strictObject({
@@ -52,6 +54,8 @@ const ServicesConfigOnDiskSchema = z.strictObject({
   password_env: z.string().optional(),
   sasl: z.boolean(),
   sasl_mechanism: z.enum(['PLAIN', 'EXTERNAL']).optional(),
+  identify_before_join: z.boolean().optional(),
+  identify_before_join_timeout_ms: z.number().int().min(0).optional(),
 });
 
 const LoggingConfigSchema = z.strictObject({

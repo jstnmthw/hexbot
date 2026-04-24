@@ -64,6 +64,10 @@ export class MockIRCClient extends EventEmitter implements LifecycleIRCClient {
     });
   }
 
+  changeNick(nick: string): void {
+    this.user.nick = nick;
+  }
+
   quit(message?: string): void {
     this.messages.push({ type: 'quit', message });
     this.connected = false;

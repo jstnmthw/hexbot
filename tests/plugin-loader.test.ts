@@ -126,6 +126,7 @@ function createLoaderFull(pluginDir: string, overrides?: Partial<PluginLoaderDep
     on: vi.fn<(event: string, listener: (...args: unknown[]) => void) => void>(),
     removeListener: vi.fn<(event: string, listener: (...args: unknown[]) => void) => void>(),
     say: vi.fn(),
+    changeNick: vi.fn(),
   };
 
   const channelState = new ChannelState(mockChannelClient, eventBus);

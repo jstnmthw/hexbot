@@ -385,7 +385,7 @@ Hostmask pattern formats:
 
 Handles the bot's own authentication and NickServ/ChanServ interaction.
 
-**Bot auth:** SASL preferred (via `irc-framework`'s built-in support), falling back to `PRIVMSG NickServ :IDENTIFY` on connect.
+**Bot auth:** SASL preferred (via `irc-framework`'s built-in support). If SASL fails silently (detected via a NickServ "please identify" notice or absence of `account-notify` after connect), the bot falls back to `PRIVMSG NickServ :IDENTIFY` automatically and emits `bot:identified` once confirmed.
 
 **Services adapter:** Different services packages use different commands:
 
@@ -400,18 +400,29 @@ Config:
 
 ```json
 {
+  "irc": {
+    "alt_nick": "Hexbot_",
+    "ghost_on_recover": true
+  },
   "services": {
-    "type": "atheme",
+    "type": "anope",
     "nickserv": "NickServ",
     "password_env": "HEX_NICKSERV_PASSWORD",
     "sasl": true,
     "sasl_mechanism": "PLAIN",
-    "verify_privileged": true
+    "identify_before_join": true,
+    "identify_before_join_timeout_ms": 10000
   }
 }
 ```
 
 Passwords are loaded from environment variables via `password_env` (never stored inline). SASL mechanisms: `"PLAIN"` (default) or `"EXTERNAL"` (TLS client certificate / CertFP). The bot refuses to start if SASL PLAIN is configured over a plaintext connection.
+
+**Bot-identify state machine:** `Services` tracks a four-state identity: `unknown` (session just started) → `pending` (IDENTIFY sent, waiting for ack) → `identified` (confirmed via `account-notify` or NickServ notice) / `unidentified` (NickServ confirmed not identified, no recovery possible). `verifyUser()` returns `{ verified: false }` immediately when the state is `unidentified`, rather than issuing a STATUS/ACC query the server will ignore. Consumers subscribe to `bot:identified` / `bot:deidentified` events on the internal event bus.
+
+**IDENTIFY-before-JOIN gate:** When `services.identify_before_join` is `true`, the bot waits for `bot:identified` (up to `identify_before_join_timeout_ms`, default 10 s) before sending JOIN commands. Eliminates the race between IDENTIFY and ChanServ probes on non-SASL networks where NickServ processes IDENTIFY asynchronously.
+
+**Nick collision recovery:** If the server assigns a collision nick (e.g. `Hexbot_` when `Hexbot` is taken), the bot detects the mismatch after `registered`, updates internal nick tracking, and — when `irc.ghost_on_recover` is `true` — sends `NickServ GHOST <nick> <password>` followed by `NICK <nick>` after 1.5 s. Channel-state and the IRC bridge self-heal their tracked bot nick when the `NICK` event fires. `irc.alt_nick` controls the collision nick irc-framework requests; if absent, the server appends `_`.
 
 ### 2.8 Channel state (core module)
 

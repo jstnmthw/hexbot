@@ -371,6 +371,11 @@ export class ChannelState {
     const oldNick = String(event.nick);
     const newNick = String(event.new_nick);
 
+    // Track bot's own nick changes (e.g. GHOST recovery — HEX_ → HEX).
+    if (this.botNick && this.lowerNick(oldNick) === this.lowerNick(this.botNick)) {
+      this.botNick = newNick;
+    }
+
     const oldLower = this.lowerNick(oldNick);
     const newLower = this.lowerNick(newNick);
 

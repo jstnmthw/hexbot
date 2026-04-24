@@ -90,6 +90,8 @@ export interface PluginApiDeps {
   userIdentifiedListeners: Map<string, Array<(nick: string, account: string) => void>>;
   /** Shared map of onUserDeidentified listeners, keyed by pluginId, for cleanup on unload. */
   userDeidentifiedListeners: Map<string, Array<(nick: string, previousAccount: string) => void>>;
+  /** Shared map of onBotIdentified listeners, keyed by pluginId, for cleanup on unload. */
+  botIdentifiedListeners: Map<string, Array<() => void>>;
 }
 
 /** Internal fan-out list for the permissions-change listener wiring. */
@@ -260,6 +262,7 @@ export function createPluginApi(
       deps.permissionsChangedListeners,
       deps.userIdentifiedListeners,
       deps.userDeidentifiedListeners,
+      deps.botIdentifiedListeners,
     ),
     permissions: createPluginPermissionsApi(deps.permissions),
     services: createPluginServicesApi(deps.services),
@@ -443,6 +446,9 @@ function createPluginServicesApi(services: Services | null): PluginServices {
     isNickServVerificationReply(nick: string, message: string) {
       return services?.isNickServVerificationReply(nick, message) ?? false;
     },
+    isBotIdentified() {
+      return services?.isBotIdentified() ?? false;
+    },
   });
 }
 
@@ -602,6 +608,7 @@ function createPluginChannelStateApi(
   permissionsChangedListeners: Map<string, Array<(handle: string) => void>>,
   userIdentifiedListeners: Map<string, Array<(nick: string, account: string) => void>>,
   userDeidentifiedListeners: Map<string, Array<(nick: string, previousAccount: string) => void>>,
+  botIdentifiedListeners: Map<string, Array<() => void>>,
 ): Pick<
   PluginAPI,
   | 'getChannel'
@@ -615,6 +622,8 @@ function createPluginChannelStateApi(
   | 'offUserIdentified'
   | 'onUserDeidentified'
   | 'offUserDeidentified'
+  | 'onBotIdentified'
+  | 'offBotIdentified'
 > {
   // Per-plugin callback→wrapper maps used by off*() to look up the actual
   // listener that was installed on the event bus. Keyed by the plugin's
@@ -633,6 +642,7 @@ function createPluginChannelStateApi(
     (nick: string, previousAccount: string) => void,
     (nick: string, previousAccount: string) => void
   >();
+  const botIdentifiedByCallback = new Map<() => void, () => void>();
 
   // Error-boundary wrapper — mirrors the dispatcher's handler try/catch.
   // Without this, one plugin's throw from a mode-ready callback would
@@ -737,6 +747,28 @@ function createPluginChannelStateApi(
       eventBus.off('user:deidentified', wrapped);
       userDeidentifiedByCallback.delete(callback);
       const list = userDeidentifiedListeners.get(pluginId);
+      if (list) {
+        const idx = list.indexOf(wrapped);
+        if (idx !== -1) list.splice(idx, 1);
+      }
+    },
+    onBotIdentified(callback: () => void): void {
+      if (botIdentifiedByCallback.has(callback)) return; // idempotent
+      const wrappedListener = (): void => {
+        safeInvoke('bot:identified', pluginId, callback);
+      };
+      eventBus.on('bot:identified', wrappedListener);
+      botIdentifiedByCallback.set(callback, wrappedListener);
+      const list = botIdentifiedListeners.get(pluginId) ?? [];
+      list.push(wrappedListener);
+      botIdentifiedListeners.set(pluginId, list);
+    },
+    offBotIdentified(callback: () => void): void {
+      const wrapped = botIdentifiedByCallback.get(callback);
+      if (!wrapped) return;
+      eventBus.off('bot:identified', wrapped);
+      botIdentifiedByCallback.delete(callback);
+      const list = botIdentifiedListeners.get(pluginId);
       if (list) {
         const idx = list.indexOf(wrapped);
         if (idx !== -1) list.splice(idx, 1);

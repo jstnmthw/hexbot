@@ -6,7 +6,9 @@
     "nick": "Hexbot",
     "username": "hexbot",
     "realname": "HexBot IRC Bot",
-    "channels": ["#hexbot", { "name": "#secret", "key": "channel-key-here" }]
+    "channels": ["#hexbot", { "name": "#secret", "key": "channel-key-here" }],
+    "alt_nick": "Hexbot_",
+    "ghost_on_recover": true
   },
   "owner": {
     "handle": "admin",
@@ -22,7 +24,9 @@
     "nickserv": "NickServ",
     "password_env": "HEX_NICKSERV_PASSWORD",
     "sasl": true,
-    "sasl_mechanism": "PLAIN"
+    "sasl_mechanism": "PLAIN",
+    "identify_before_join": true,
+    "identify_before_join_timeout_ms": 10000
   },
   "database": "./data/hexbot.db",
   "pluginDir": "./plugins",

@@ -39,6 +39,8 @@ export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginA
     offUserIdentified: noop,
     onUserDeidentified: noop,
     offUserDeidentified: noop,
+    onBotIdentified: noop,
+    offBotIdentified: noop,
     getChannel: vi.fn().mockReturnValue(undefined),
     getUsers: vi.fn().mockReturnValue([]),
     getUserHostmask: vi.fn().mockReturnValue(undefined),
@@ -50,6 +52,7 @@ export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginA
       verifyUser: vi.fn().mockResolvedValue({ verified: false, account: null }),
       isAvailable: vi.fn().mockReturnValue(false),
       isNickServVerificationReply: vi.fn().mockReturnValue(false),
+      isBotIdentified: vi.fn().mockReturnValue(false),
     },
     db: {
       get: vi.fn().mockReturnValue(undefined),

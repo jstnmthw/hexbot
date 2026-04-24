@@ -49,6 +49,7 @@ declare module 'irc-framework' {
 
     connect(options?: Partial<ConnectOptions>): void;
     quit(message?: string): void;
+    changeNick(nick: string): void;
     say(target: string, message: string): void;
     notice(target: string, message: string): void;
     action(target: string, message: string): void;

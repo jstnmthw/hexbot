@@ -156,6 +156,8 @@ function makeMockAPI(db: BotDatabase, config: Record<string, unknown> = {}): Moc
     offUserIdentified() {},
     onUserDeidentified() {},
     offUserDeidentified() {},
+    onBotIdentified() {},
+    offBotIdentified() {},
     getChannel() {
       return undefined;
     },
@@ -174,6 +176,7 @@ function makeMockAPI(db: BotDatabase, config: Record<string, unknown> = {}): Moc
       verifyUser: async () => ({ verified: false, account: null }),
       isAvailable: () => false,
       isNickServVerificationReply: () => false,
+      isBotIdentified: () => false,
     },
     db: pluginDb,
     banStore: {} as never,

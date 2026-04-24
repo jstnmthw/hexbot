@@ -82,6 +82,13 @@ export interface PluginServices {
    * verification chatter from operator consoles.
    */
   isNickServVerificationReply(nick: string, message: string): boolean;
+  /**
+   * True if the bot's own NickServ identity has been confirmed for the
+   * current session (SASL account-notify or "You are now identified" notice).
+   * False while unknown or after a "please identify" prompt.
+   * See stability audit 2026-04-21.
+   */
+  isBotIdentified(): boolean;
 }
 
 /** The scoped API object plugins receive in init(). */
@@ -238,6 +245,17 @@ export interface PluginAPI {
   onUserDeidentified(callback: (nick: string, previousAccount: string) => void): void;
   /** Remove a callback previously registered with {@link onUserDeidentified}. No-op if not registered. */
   offUserDeidentified(callback: (nick: string, previousAccount: string) => void): void;
+
+  /**
+   * Register a callback that fires when the bot's own NickServ identity is
+   * confirmed for the current session — either via IRCv3 account-notify (SASL
+   * success) or a NickServ "You are now identified" notice (password IDENTIFY
+   * fallback). Use this to trigger ChanServ re-probes after a dirty reconnect.
+   * Auto-cleaned on plugin unload. See stability audit 2026-04-21.
+   */
+  onBotIdentified(callback: () => void): void;
+  /** Remove a callback previously registered with {@link onBotIdentified}. No-op if not registered. */
+  offBotIdentified(callback: () => void): void;
 
   // Permissions (read-only)
   permissions: PluginPermissions;

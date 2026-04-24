@@ -53,6 +53,7 @@ function makeDeps(): PluginApiDeps {
     permissionsChangedListeners: new Map(),
     userIdentifiedListeners: new Map(),
     userDeidentifiedListeners: new Map(),
+    botIdentifiedListeners: new Map(),
   };
 }
 

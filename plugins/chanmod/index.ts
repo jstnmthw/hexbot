@@ -4,7 +4,7 @@ import { AnopeBackend } from './anope-backend';
 import { AthemeBackend } from './atheme-backend';
 import { setupAutoOp } from './auto-op';
 import { migrateBansToCore, setupBans } from './bans';
-import { createProbeState, setupChanServNotice } from './chanserv-notice';
+import { createProbeState, markProbePending, setupChanServNotice } from './chanserv-notice';
 import { setupCommands } from './commands';
 import { setupInvite } from './invite';
 import { setupJoinRecovery } from './join-recovery';
@@ -213,6 +213,51 @@ export function init(api: PluginAPI): void {
       }
     }
   }
+
+  // I-2: On plugin reload the bot is already in channels, so the bot-join
+  // event never fires. Re-probe ChanServ for each configured channel the bot
+  // is currently present in so protection restores without a manual restart.
+  // Only fires when the chain already has a known non-none access level —
+  // if access is 'none', the C-2 onBotIdentified handler covers that case
+  // (re-probe fires once the bot identifies with NickServ).
+  // See stability audit 2026-04-21.
+  for (const ch of api.botConfig.irc.channels) {
+    if (!api.getChannel(ch)) continue; // not currently in this channel
+    if (chain.getAccess(ch) === 'none') continue; // handled by onBotIdentified re-probe
+    markProbePending(api, probeState, ch, config.chanserv_services_type);
+    if (config.chanserv_services_type === 'anope') {
+      markProbePending(api, probeState, ch, 'anope-info');
+    }
+    chain.verifyAccess(ch);
+    api.log(`ChanServ re-probe on reload for ${ch}`);
+  }
+
+  // C-2 + W-4: After a dirty reconnect (SASL miss → ChanServ probes fail →
+  // access stays 'none'), re-probe once the bot identifies. Clear stale probe
+  // state first so a lingering deferredAnopeNoAccess entry from the timed-out
+  // probe doesn't clobber the new result. See stability audit 2026-04-21.
+  const onBotIdentifiedHandler = (): void => {
+    for (const ch of api.botConfig.irc.channels) {
+      if (chain.getAccess(ch) !== 'none') continue;
+      if (!api.getChannel(ch)) continue; // not in channel
+      // Clear stale probe state so the old timed-out probe can't overwrite
+      // the fresh result (W-4 fix).
+      const key = api.ircLower(ch);
+      probeState.deferredAnopeNoAccess.delete(key);
+      probeState.pendingAnopeProbes.delete(key);
+      probeState.pendingAthemeProbes.delete(key);
+      probeState.pendingInfoProbes.delete(key);
+      // Start fresh probes.
+      markProbePending(api, probeState, ch, config.chanserv_services_type);
+      if (config.chanserv_services_type === 'anope') {
+        markProbePending(api, probeState, ch, 'anope-info');
+      }
+      chain.verifyAccess(ch);
+      api.log(`Re-probing ChanServ for ${ch} after bot identified`);
+    }
+  };
+  api.onBotIdentified(onBotIdentifiedHandler);
+  teardowns.push(() => api.offBotIdentified(onBotIdentifiedHandler));
 
   // --- Threat detection callback ---
   // When takeover_detection is enabled for a channel, route threat events through

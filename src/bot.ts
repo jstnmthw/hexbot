@@ -235,6 +235,7 @@ export class Bot {
       eventBus,
       logger: this.logger,
       db,
+      botNick: this.config.irc.nick,
     });
     const helpRegistry = new HelpRegistry();
     const channelSettings = new ChannelSettings(db, this.logger.child('channel-settings'), (s) =>
@@ -451,6 +452,7 @@ export class Bot {
           servicesTimeoutCount: this.services.getServicesTimeoutCount(),
           pendingVerifyCount: this.services.getPendingVerifyCount(),
           pendingCapRejections: this.services.getPendingCapRejectionCount(),
+          botIdentified: this.services.isBotIdentified(),
           loadedPluginCount: this.pluginLoader.list().length,
           failedPluginCount: this.failedPlugins.length,
           failedPluginNames: this.failedPlugins,
@@ -491,6 +493,27 @@ export class Bot {
     this.channelState.attach();
     this.channelState.setBotNick(this.config.irc.nick);
     this.services.attach();
+
+    // C-4: on nick collision, update channelState and bridge so channel-join
+    // tracking uses the real nick, then attempt GHOST if configured.
+    // The listener fires synchronously before joinConfiguredChannels runs.
+    this.eventBus.on('bot:nick-collision', (actualNick: string) => {
+      this.channelState.setBotNick(actualNick);
+      this.bridge!.setBotNick(actualNick);
+      this.botLogger.warn(
+        `Nick collision: registered as ${actualNick} instead of ${this.config.irc.nick}. ` +
+          (this.config.irc.ghost_on_recover
+            ? 'Attempting GHOST to reclaim primary nick.'
+            : 'Set irc.ghost_on_recover=true to enable automatic recovery.'),
+      );
+      if (this.config.irc.ghost_on_recover && this.config.services.password) {
+        this.services
+          .ghostAndReclaim(this.config.irc.nick, this.config.services.password)
+          .catch((err: unknown) => {
+            this.botLogger.error('GHOST/reclaim failed:', err);
+          });
+      }
+    });
   }
 
   /** Start the DCC CHAT / botnet subsystem when enabled by config. */
@@ -889,6 +912,12 @@ export class Bot {
       // account-notify and extended-join are requested automatically by irc-framework.
       enable_chghost: true,
     };
+
+    // C-4: let irc-framework use the configured alt_nick on collision, rather
+    // than appending `_` blindly. The bot still attempts GHOST on bot:nick-collision.
+    if (cfg.alt_nick) {
+      options.alt_nick = cfg.alt_nick;
+    }
 
     // SASL config
     const saslMechanism = this.config.services.sasl_mechanism ?? 'PLAIN';
