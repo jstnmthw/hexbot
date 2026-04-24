@@ -11,6 +11,7 @@ import type { BanStore } from './core/ban-store';
 import type { ChannelSettings } from './core/channel-settings';
 import type { ChannelState } from './core/channel-state';
 import type { HelpRegistry } from './core/help-registry';
+import { patternSpecificity } from './core/hostmask-matcher';
 import type { IRCCommands } from './core/irc-commands';
 import type { MessageQueue } from './core/message-queue';
 import type { Permissions } from './core/permissions';
@@ -919,6 +920,9 @@ function createPluginUtilApi(getCasemapping: () => Casemapping): PluginUtil {
     matchWildcard(pattern: string, text: string, opts?: { caseInsensitive?: boolean }): boolean {
       const caseInsensitive = opts?.caseInsensitive ?? true;
       return wildcardMatch(pattern, text, caseInsensitive, getCasemapping());
+    },
+    patternSpecificity(pattern: string): number {
+      return patternSpecificity(pattern);
     },
     createSlidingWindowCounter(): PluginSlidingWindowCounter {
       return new SlidingWindowCounter();

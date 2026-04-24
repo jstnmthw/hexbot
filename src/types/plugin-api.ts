@@ -149,6 +149,14 @@ export interface PluginUtil {
    */
   matchWildcard(pattern: string, text: string, opts?: { caseInsensitive?: boolean }): boolean;
   /**
+   * Score a hostmask/account pattern's specificity — the higher the number,
+   * the less spoofable the pattern. Project-wide "weak" threshold is 100;
+   * patterns below that (e.g. `nick!*@*`, `*!*@*.com`) are flagged by the
+   * startup sweep and refused as auto-op justification on services-free
+   * networks. See SECURITY.md §3.1 for the tier definitions.
+   */
+  patternSpecificity(pattern: string): number;
+  /**
    * Create a fresh sliding-window rate counter. See
    * {@link PluginSlidingWindowCounter} for the available operations.
    */

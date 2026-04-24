@@ -11,6 +11,16 @@ import type { ChanmodConfig, SharedState } from './state';
 const GRANT_FLAGS = ['+o', '+h', '+v'] as const;
 
 /**
+ * Specificity floor for auto-op on services-free networks. Mirrors
+ * `WEAK_HOSTMASK_THRESHOLD` in `src/core/permissions.ts` — a stored
+ * pattern must score at or above this to justify a prefix-mode grant
+ * when no NickServ/account-tag signal is available. Masks like
+ * `nick!*@*` (28) and `*!*@*.com` (67) fall below; `nick!ident@cloak.example`
+ * (120+) clears it. See SECURITY.md §3.1 for tier definitions.
+ */
+const AUTO_OP_WEAK_HOSTMASK_THRESHOLD = 100;
+
+/**
  * Hand-rolled actor used by auto-op paths that run without a triggering
  * user `ctx` (join reconciliation, identify/deidentify reconcilers,
  * revoke-on-deidentify sweeps). `source='plugin'` and `plugin='chanmod'`
@@ -76,62 +86,100 @@ async function grantMode(
   nick: string,
   desired: 'o' | 'h' | 'v',
   knownAccount: string | null | undefined = undefined,
+  user: PublicUserRecord | null = null,
+  fullHostmask: string | null = null,
 ): Promise<void> {
   const flagToApply: '+o' | '+h' | '+v' = desired === 'o' ? '+o' : desired === 'h' ? '+h' : '+v';
   const safeNick = api.stripFormatting(nick);
 
-  // Hard gate — required for prefix-mode grants whenever services
-  // ARE available, regardless of `require_acc_for`. The previous
-  // conditional-on-config behaviour is the vulnerability; see audit
-  // 2026-04-24 CRITICAL.
+  // Hard gate for prefix-mode grants. Three paths, in preference order:
+  //   1. IRCv3 account-tag matches a `$a:` pattern on the record —
+  //      authoritative; accept regardless of services availability.
+  //   2. Services are available — accept on account-tag (any non-empty)
+  //      or on a successful NickServ ACC/STATUS round-trip.
+  //   3. Services are unavailable — accept only when the stored hostmask
+  //      pattern is specific enough to resist spoofing (threshold matches
+  //      the project-wide `WEAK_HOSTMASK_THRESHOLD`). Masks like
+  //      `nick!*@*` are refused; `nick!ident@stable.cloak.example` clears.
   //
-  // When services are entirely unavailable (`services.type === 'none'`),
-  // there's no way for the bot to distinguish an identified user from a
-  // nick-squatter — so we fall through to hostmask-only matching. The
-  // operator has explicitly opted out of services; the startup warning
-  // in `warnAutoOpMisconfig` alerts them that this mode is weaker than
-  // a services-gated deployment. This keeps auto-op usable on
-  // services-free networks without blessing it as secure.
-  if (api.services.isAvailable()) {
-    // null = server explicitly said "not identified". Refuse.
-    if (knownAccount === null) {
-      api.log(
-        `Skipping ${flagToApply} for ${safeNick} in ${channel} — IRCv3 account-tag says not identified`,
-      );
-      if (config.notify_on_fail) {
-        api.notice(nick, 'Auto-op: NickServ verification failed. Please identify and rejoin.');
-      }
-      return;
-    }
+  // See audit 2026-04-24 CRITICAL + follow-up on services-free fallback,
+  // and SECURITY.md §3.1 for the specificity tiers.
 
-    if (typeof knownAccount === 'string' && knownAccount.length > 0) {
-      // Account-tag is authoritative. Accept without a NickServ
-      // round-trip — the server has already vouched for the identity.
-      api.log(
-        `Verified ${safeNick} via IRCv3 account-tag (${api.stripFormatting(knownAccount)}) — applying ${flagToApply} in ${channel}`,
-      );
-    } else {
-      // No account-tag attached to the event. Must wait for NickServ.
-      api.log(`Verifying ${safeNick} via NickServ before applying ${flagToApply} in ${channel}`);
-      const result = await api.services.verifyUser(nick);
-      if (!result.verified) {
-        api.log(`Verification failed for ${safeNick} in ${channel} — not applying ${flagToApply}`);
+  // Path 1: account-tag matches a `$a:` pattern on the record.
+  const accountTagMatched =
+    typeof knownAccount === 'string' &&
+    knownAccount.length > 0 &&
+    !!user &&
+    user.hostmasks.some(
+      (pattern) =>
+        pattern.startsWith('$a:') && api.util.matchWildcard(pattern.slice(3), knownAccount),
+    );
+
+  if (accountTagMatched) {
+    api.log(
+      // safe: knownAccount is a non-empty string on this branch
+      `Verified ${safeNick} via IRCv3 account-tag (${api.stripFormatting(knownAccount as string)}) — applying ${flagToApply} in ${channel}`,
+    );
+  } else {
+    if (api.services.isAvailable()) {
+      // Paths 1 + 2 — services-gated.
+      if (knownAccount === null) {
+        api.log(
+          `Skipping ${flagToApply} for ${safeNick} in ${channel} — IRCv3 account-tag says not identified`,
+        );
         if (config.notify_on_fail) {
           api.notice(nick, 'Auto-op: NickServ verification failed. Please identify and rejoin.');
         }
         return;
       }
-      api.log(
-        `Verified ${safeNick} (account: ${result.account ? api.stripFormatting(result.account) : 'unknown'}) — applying ${flagToApply} in ${channel}`,
+      if (typeof knownAccount === 'string' && knownAccount.length > 0) {
+        // Account-tag present but doesn't match any `$a:` on this record —
+        // still authoritative identification, just no account-pinned record.
+        api.log(
+          `Verified ${safeNick} via IRCv3 account-tag (${api.stripFormatting(knownAccount)}) — applying ${flagToApply} in ${channel}`,
+        );
+      } else {
+        // No account-tag attached to the event. Must wait for NickServ.
+        api.log(`Verifying ${safeNick} via NickServ before applying ${flagToApply} in ${channel}`);
+        const result = await api.services.verifyUser(nick);
+        if (!result.verified) {
+          api.log(
+            `Verification failed for ${safeNick} in ${channel} — not applying ${flagToApply}`,
+          );
+          if (config.notify_on_fail) {
+            api.notice(nick, 'Auto-op: NickServ verification failed. Please identify and rejoin.');
+          }
+          return;
+        }
+        api.log(
+          `Verified ${safeNick} (account: ${result.account ? api.stripFormatting(result.account) : 'unknown'}) — applying ${flagToApply} in ${channel}`,
+        );
+      }
+    } else {
+      // Path 3: services unavailable + no account-tag match.
+      if (!user || !fullHostmask) {
+        api.warn(
+          `Skipping ${flagToApply} for ${safeNick} in ${channel} — services unavailable and no record context available`,
+        );
+        return;
+      }
+      const matched = user.hostmasks.filter((pattern) =>
+        api.util.matchWildcard(pattern, fullHostmask),
+      );
+      const bestSpecificity = matched.reduce(
+        (max, pattern) => Math.max(max, api.util.patternSpecificity(pattern)),
+        0,
+      );
+      if (bestSpecificity < AUTO_OP_WEAK_HOSTMASK_THRESHOLD) {
+        api.warn(
+          `Skipping ${flagToApply} for ${safeNick} in ${channel} — services unavailable and user's hostmask pattern is too broad to trust (specificity ${bestSpecificity} < ${AUTO_OP_WEAK_HOSTMASK_THRESHOLD}). Tighten the hostmask with .addhostmask or enable services.`,
+        );
+        return;
+      }
+      api.debug(
+        `Granting ${flagToApply} for ${safeNick} in ${channel} on hostmask alone (specificity ${bestSpecificity}) — services unavailable`,
       );
     }
-  } else {
-    // Services unavailable — legacy hostmask-only behaviour. Startup
-    // warning in warnAutoOpMisconfig + this debug log make the
-    // degraded posture visible.
-    api.debug(
-      `Granting ${flagToApply} for ${safeNick} in ${channel} on hostmask alone — services unavailable`,
-    );
   }
 
   if (desired === 'o') {
@@ -175,6 +223,8 @@ async function reconcileUserInChannel(
   channel: string,
   nick: string,
   currentModes: string,
+  fullHostmask: string,
+  knownAccount: string | null | undefined = undefined,
 ): Promise<void> {
   const globalFlags = user.global;
   const channelFlags = user.channels[api.ircLower(channel)] ?? '';
@@ -206,7 +256,7 @@ async function reconcileUserInChannel(
 
   // Upgrade: grant desired mode if the user doesn't already carry it.
   if (desired && !currentModes.includes(desired)) {
-    await grantMode(api, config, channel, nick, desired);
+    await grantMode(api, config, channel, nick, desired, knownAccount, user, fullHostmask);
   }
 }
 
@@ -325,7 +375,7 @@ export function setupAutoOp(
     // tick loses its auto-op. Fail quietly per-user instead. See stability
     // audit 2026-04-14.
     try {
-      await grantMode(api, config, channel, nick, desired, ctx.account);
+      await grantMode(api, config, channel, nick, desired, ctx.account, user, fullHostmask);
     } catch (err) {
       api.error(`auto-op grantMode threw for ${nick} in ${channel}:`, err);
     }
@@ -404,7 +454,16 @@ async function reconcileNickInAllChannels(
     // back to the channel-state account lookup on its own.
     const record = api.permissions.findByHostmask(hostmask, chanUser.accountName);
     if (record) {
-      await reconcileUserInChannel(api, config, record, channel, chanUser.nick, chanUser.modes);
+      await reconcileUserInChannel(
+        api,
+        config,
+        record,
+        channel,
+        chanUser.nick,
+        chanUser.modes,
+        hostmask,
+        chanUser.accountName,
+      );
       continue;
     }
     // No record matches under current identification. If the user carries
@@ -459,11 +518,20 @@ async function reconcileHandleAcrossChannels(
     for (const chanUser of ch.users.values()) {
       if (api.isBotNick(chanUser.nick)) continue;
       const hostmask = api.buildHostmask(chanUser);
-      const record = api.permissions.findByHostmask(hostmask);
+      const record = api.permissions.findByHostmask(hostmask, chanUser.accountName);
       if (!record) continue;
       if (record.handle.toLowerCase() !== lowerHandle) continue;
 
-      await reconcileUserInChannel(api, config, record, channel, chanUser.nick, chanUser.modes);
+      await reconcileUserInChannel(
+        api,
+        config,
+        record,
+        channel,
+        chanUser.nick,
+        chanUser.modes,
+        hostmask,
+        chanUser.accountName,
+      );
     }
   }
 }
@@ -488,9 +556,18 @@ async function reconcileAllUsersInChannel(
   for (const chanUser of ch.users.values()) {
     if (api.isBotNick(chanUser.nick)) continue;
     const hostmask = api.buildHostmask(chanUser);
-    const record = api.permissions.findByHostmask(hostmask);
+    const record = api.permissions.findByHostmask(hostmask, chanUser.accountName);
     if (!record) continue;
 
-    await reconcileUserInChannel(api, config, record, channel, chanUser.nick, chanUser.modes);
+    await reconcileUserInChannel(
+      api,
+      config,
+      record,
+      channel,
+      chanUser.nick,
+      chanUser.modes,
+      hostmask,
+      chanUser.accountName,
+    );
   }
 }

@@ -107,6 +107,7 @@ export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginA
     getChannelKey: vi.fn().mockReturnValue(undefined),
     util: {
       matchWildcard: vi.fn().mockReturnValue(false),
+      patternSpecificity: vi.fn().mockReturnValue(0),
       createSlidingWindowCounter: vi.fn().mockReturnValue({
         check: vi.fn().mockReturnValue(false),
         peek: vi.fn().mockReturnValue(0),

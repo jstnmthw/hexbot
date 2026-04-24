@@ -471,6 +471,64 @@ describe('chanmod plugin — auto-op', () => {
     }
   });
 
+  it('refuses to auto-op via weak hostmask when services are unavailable', async () => {
+    // Services-free network fallback: hostmask-only auto-op requires the
+    // stored pattern to clear the specificity threshold. `weakOp!*@*` is
+    // trivially spoofable — the grant must be refused even though the
+    // record has +o. See audit 2026-04-24 CRITICAL follow-up.
+    const liveBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(liveBot, '#test');
+    try {
+      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      liveBot.permissions.addUser('weakOp', 'weakOp!*@*', 'o', 'test');
+      liveBot.client.clearMessages();
+
+      liveBot.client.simulateEvent('join', {
+        nick: 'weakOp',
+        ident: 'anything',
+        hostname: 'anywhere.example',
+        channel: '#test',
+      });
+      await tick();
+
+      expect(
+        liveBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('weakOp'),
+        ),
+      ).toBeUndefined();
+    } finally {
+      liveBot.cleanup();
+    }
+  });
+
+  it('allows auto-op via specific hostmask when services are unavailable', async () => {
+    // Counterpart: a specific pattern (high specificity) clears the gate
+    // and auto-op proceeds on a services-free network.
+    const liveBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(liveBot, '#test');
+    try {
+      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      liveBot.permissions.addUser('strongOp', 'strongOp!ident@stable.cloak.example', 'o', 'test');
+      liveBot.client.clearMessages();
+
+      liveBot.client.simulateEvent('join', {
+        nick: 'strongOp',
+        ident: 'ident',
+        hostname: 'stable.cloak.example',
+        channel: '#test',
+      });
+      await tick();
+
+      expect(
+        liveBot.client.messages.find(
+          (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('strongOp'),
+        ),
+      ).toBeDefined();
+    } finally {
+      liveBot.cleanup();
+    }
+  });
+
   it('should deop and dehalfop a user via $a:account when they deidentify', async () => {
     const liveBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(liveBot, '#test');

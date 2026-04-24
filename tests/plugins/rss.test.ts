@@ -193,6 +193,7 @@ function makeMockAPI(db: BotDatabase, config: Record<string, unknown> = {}): Moc
     getChannelKey: () => undefined,
     util: {
       matchWildcard: () => false,
+      patternSpecificity: () => 0,
       createSlidingWindowCounter: () => ({
         check: () => false,
         peek: () => 0,
