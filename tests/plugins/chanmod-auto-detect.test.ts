@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { makeChanmodPluginOverrides } from '../helpers/chanmod-plugin-config';
 import type { MockBot } from '../helpers/mock-bot';
 import { createMockBot } from '../helpers/mock-bot';
 import { addToChannel, giveBotOps, simulateMode, tick } from '../helpers/plugin-test-helpers';
@@ -46,17 +47,15 @@ describe('chanmod — ChanServ auto-detect on join', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: {
-        enabled: true,
-        config: {
-          chanserv_services_type: 'atheme',
-          chanserv_nick: 'ChanServ',
-          chanserv_op_delay_ms: 10,
-          enforce_delay_ms: 5,
-        },
-      },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({
+        chanserv_services_type: 'atheme',
+        chanserv_nick: 'ChanServ',
+        chanserv_op_delay_ms: 10,
+        enforce_delay_ms: 5,
+      }),
+    );
     expect(result.status).toBe('ok');
   });
 
@@ -170,18 +169,16 @@ describe('chanmod — takeover escalation with ChanServ backend', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#takeover');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: {
-        enabled: true,
-        config: {
-          chanserv_services_type: 'atheme',
-          chanserv_nick: 'ChanServ',
-          chanserv_op_delay_ms: 0,
-          enforce_delay_ms: 5,
-          takeover_window_ms: 30000,
-        },
-      },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({
+        chanserv_services_type: 'atheme',
+        chanserv_nick: 'ChanServ',
+        chanserv_op_delay_ms: 0,
+        enforce_delay_ms: 5,
+        takeover_window_ms: 30000,
+      }),
+    );
     expect(result.status).toBe('ok');
   });
 
@@ -230,15 +227,13 @@ describe('chanmod — takeover escalation with ChanServ backend', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      const result = await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            chanserv_op: true, // deprecated key — should not cause error
-            chanserv_nick: 'ChanServ',
-          },
-        },
-      });
+      const result = await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          chanserv_op: true, // deprecated key — should not cause error
+          chanserv_nick: 'ChanServ',
+        }),
+      );
       // Plugin loads successfully despite the deprecated key
       expect(result.status).toBe('ok');
     } finally {

@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { makeChanmodPluginOverrides } from '../helpers/chanmod-plugin-config';
 import type { MockBot } from '../helpers/mock-bot';
 import { createMockBot } from '../helpers/mock-bot';
 import { giveBotOps, simulateMode, tick } from '../helpers/plugin-test-helpers';
@@ -66,18 +67,16 @@ describe('chanmod — kick+ban recovery with Atheme backend', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: {
-        enabled: true,
-        config: {
-          rejoin_on_kick: true,
-          rejoin_delay_ms: 5000,
-          chanserv_services_type: 'atheme',
-          chanserv_nick: 'ChanServ',
-          enforce_delay_ms: 5,
-        },
-      },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({
+        rejoin_on_kick: true,
+        rejoin_delay_ms: 5000,
+        chanserv_services_type: 'atheme',
+        chanserv_nick: 'ChanServ',
+        enforce_delay_ms: 5,
+      }),
+    );
     expect(result.status).toBe('ok');
   });
 
@@ -233,19 +232,17 @@ describe('chanmod — kick+ban recovery with Anope backend', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: {
-        enabled: true,
-        config: {
-          rejoin_on_kick: true,
-          rejoin_delay_ms: 5000,
-          chanserv_services_type: 'anope',
-          chanserv_nick: 'ChanServ',
-          enforce_delay_ms: 5,
-          anope_recover_step_delay_ms: 5,
-        },
-      },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({
+        rejoin_on_kick: true,
+        rejoin_delay_ms: 5000,
+        chanserv_services_type: 'anope',
+        chanserv_nick: 'ChanServ',
+        enforce_delay_ms: 5,
+        anope_recover_step_delay_ms: 5,
+      }),
+    );
     expect(result.status).toBe('ok');
   });
 
@@ -285,17 +282,15 @@ describe('chanmod — Atheme post-RECOVER +i +m cleanup', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: {
-        enabled: true,
-        config: {
-          chanserv_services_type: 'atheme',
-          chanserv_nick: 'ChanServ',
-          enforce_delay_ms: 5,
-          enforce_modes: true,
-        },
-      },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({
+        chanserv_services_type: 'atheme',
+        chanserv_nick: 'ChanServ',
+        enforce_delay_ms: 5,
+        enforce_modes: true,
+      }),
+    );
     expect(result.status).toBe('ok');
   });
 
@@ -432,19 +427,17 @@ describe('chanmod — backup rejoin retry path', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: {
-        enabled: true,
-        config: {
-          rejoin_on_kick: true,
-          rejoin_delay_ms: 5000,
-          chanserv_services_type: 'atheme',
-          chanserv_nick: 'ChanServ',
-          enforce_delay_ms: 5,
-          chanserv_unban_retry_ms: 500,
-        },
-      },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({
+        rejoin_on_kick: true,
+        rejoin_delay_ms: 5000,
+        chanserv_services_type: 'atheme',
+        chanserv_nick: 'ChanServ',
+        enforce_delay_ms: 5,
+        chanserv_unban_retry_ms: 500,
+      }),
+    );
     expect(result.status).toBe('ok');
   });
 
@@ -515,18 +508,16 @@ describe('chanmod — revenge timer race: channel parted before firing', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: {
-        enabled: true,
-        config: {
-          rejoin_on_kick: true,
-          rejoin_delay_ms: 50,
-          revenge_action: 'deop',
-          revenge_delay_ms: 500,
-          enforce_delay_ms: 5,
-        },
-      },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({
+        rejoin_on_kick: true,
+        rejoin_delay_ms: 50,
+        revenge_action: 'deop',
+        revenge_delay_ms: 500,
+        enforce_delay_ms: 5,
+      }),
+    );
     expect(result.status).toBe('ok');
   });
 

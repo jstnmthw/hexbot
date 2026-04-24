@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AthemeBackend } from '../../plugins/chanmod/atheme-backend';
+import { makeChanmodPluginOverrides } from '../helpers/chanmod-plugin-config';
 import type { MockBot } from '../helpers/mock-bot';
 import { createMockBot } from '../helpers/mock-bot';
 import { giveBotOps } from '../helpers/plugin-test-helpers';
@@ -25,7 +26,7 @@ describe('AthemeBackend — command format', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    await bot.pluginLoader.load(PLUGIN_PATH);
+    await bot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
   });
 
   afterAll(() => {

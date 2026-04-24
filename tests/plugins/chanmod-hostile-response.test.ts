@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { makeChanmodPluginOverrides } from '../helpers/chanmod-plugin-config';
 import type { MockBot } from '../helpers/mock-bot';
 import { createMockBot } from '../helpers/mock-bot';
 import { giveBotOps, simulateMode, tick } from '../helpers/plugin-test-helpers';
@@ -59,16 +60,14 @@ describe('chanmod — hostile op response (takeover_punish=deop)', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: {
-        enabled: true,
-        config: {
-          enforce_modes: true,
-          enforce_delay_ms: 5,
-          takeover_window_ms: 30000,
-        },
-      },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({
+        enforce_modes: true,
+        enforce_delay_ms: 5,
+        takeover_window_ms: 30000,
+      }),
+    );
     expect(result.status).toBe('ok');
   });
 

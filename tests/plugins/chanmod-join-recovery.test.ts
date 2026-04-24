@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { makeChanmodPluginOverrides } from '../helpers/chanmod-plugin-config';
 import { type MockBot, createMockBot } from '../helpers/mock-bot';
 import { flush, giveBotOps, tick } from '../helpers/plugin-test-helpers';
 
@@ -37,7 +38,7 @@ describe('chanmod join-error recovery', () => {
   beforeEach(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    await bot.pluginLoader.load(PLUGIN_PATH);
+    await bot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
     await flush();
     // Set chanserv_access so the protection chain knows it can unban/invite
     bot.channelSettings.set('#test', 'chanserv_access', 'founder');
@@ -158,7 +159,7 @@ describe('chanmod join-error recovery', () => {
       (keyedBot.botConfig.irc.channels as unknown[]) = [{ name: '#keyed', key: 'secret123' }];
 
       giveBotOps(keyedBot, '#keyed');
-      await keyedBot.pluginLoader.load(PLUGIN_PATH);
+      await keyedBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       await flush();
       // No ChanServ access — force key-based fallback
       keyedBot.channelSettings.set('#keyed', 'chanserv_access', 'none');
@@ -475,7 +476,7 @@ describe('chanmod join-error recovery', () => {
       const probeBot = createMockBot({ botNick: 'hexbot' });
       (probeBot.botConfig.irc.channels as unknown[]) = ['#probe'];
       giveBotOps(probeBot, '#probe');
-      await probeBot.pluginLoader.load(PLUGIN_PATH);
+      await probeBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       await flush();
       // Do NOT set chanserv_access — it remains at default 'none' (unset)
       probeBot.client.clearMessages();
@@ -515,7 +516,7 @@ describe('chanmod join-error recovery', () => {
       const probeBot = createMockBot({ botNick: 'hexbot' });
       (probeBot.botConfig.irc.channels as unknown[]) = ['#noaccess'];
       giveBotOps(probeBot, '#noaccess');
-      await probeBot.pluginLoader.load(PLUGIN_PATH);
+      await probeBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       await flush();
       probeBot.client.clearMessages();
 

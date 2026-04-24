@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { makeChanmodPluginOverrides } from '../helpers/chanmod-plugin-config';
 import type { MockBot } from '../helpers/mock-bot';
 import { createMockBot } from '../helpers/mock-bot';
 import { addToChannel, giveBotOps, simulateMode, tick } from '../helpers/plugin-test-helpers';
@@ -24,17 +25,15 @@ describe('chanmod — speed optimization: ChanServ OP request delay', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: {
-        enabled: true,
-        config: {
-          chanserv_op_delay_ms: 1000, // 1 second normally
-          enforce_delay_ms: 500,
-          takeover_response_delay_ms: 0,
-          takeover_window_ms: 30000,
-        },
-      },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({
+        chanserv_op_delay_ms: 1000, // 1 second normally
+        enforce_delay_ms: 500,
+        takeover_response_delay_ms: 0,
+        takeover_window_ms: 30000,
+      }),
+    );
     expect(result.status).toBe('ok');
   });
 
@@ -98,16 +97,14 @@ describe('chanmod — speed optimization: recovery action delays', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: {
-        enabled: true,
-        config: {
-          enforce_delay_ms: 500, // normal enforcement delay
-          takeover_response_delay_ms: 0, // zero for recovery
-          takeover_window_ms: 30000,
-        },
-      },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({
+        enforce_delay_ms: 500, // normal enforcement delay
+        takeover_response_delay_ms: 0, // zero for recovery
+        takeover_window_ms: 30000,
+      }),
+    );
     expect(result.status).toBe('ok');
   });
 

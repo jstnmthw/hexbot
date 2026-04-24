@@ -21,8 +21,6 @@ function makeConfigApi(pluginConfig: Record<string, unknown>, logs: string[]): P
       chanmod: { nick_recovery_password: '' },
     },
     log: (msg: string) => logs.push(msg),
-    // readConfig also calls api.warn for the [security] services_host_pattern
-    // unset warning (added 2026-04-24). Tests capture both streams together.
     warn: (msg: string) => logs.push(msg),
     // The rest of PluginAPI is unused by readConfig — cast through unknown.
   } as unknown as PluginAPI;
@@ -139,7 +137,10 @@ describe('chanmod state', () => {
   describe('readConfig() type validation', () => {
     it('warns and falls back when a string config is given a non-string', () => {
       const logs: string[] = [];
-      const api = makeConfigApi({ chanserv_nick: 12345 }, logs);
+      const api = makeConfigApi(
+        { chanserv_nick: 12345, services_host_pattern: 'services.*' },
+        logs,
+      );
       const cfg: ChanmodConfig = readConfig(api);
       // Default for chanserv_nick is "ChanServ" — fallback should win.
       expect(cfg.chanserv_nick).toBe('ChanServ');
@@ -150,7 +151,10 @@ describe('chanmod state', () => {
     it('warns and falls back when a string-array config is not an array of strings', () => {
       const logs: string[] = [];
       // Mixed-type array: must be rejected by the every(string) guard.
-      const api = makeConfigApi({ op_flags: ['n', 42, 'o'] }, logs);
+      const api = makeConfigApi(
+        { op_flags: ['n', 42, 'o'], services_host_pattern: 'services.*' },
+        logs,
+      );
       const cfg: ChanmodConfig = readConfig(api);
       // Default for op_flags is ['n', 'm', 'o'] — fallback should win.
       expect(cfg.op_flags).toEqual(['n', 'm', 'o']);
@@ -158,9 +162,28 @@ describe('chanmod state', () => {
       expect(logs.some((m) => m.includes('expected string[]'))).toBe(true);
     });
 
+    it('throws when services_host_pattern is missing — the CRITICAL ChanServ pin guard is load-bearing', () => {
+      const logs: string[] = [];
+      const api = makeConfigApi({}, logs);
+      expect(() => readConfig(api)).toThrow(/services_host_pattern is required/);
+    });
+
+    it('throws when services_host_pattern is only whitespace', () => {
+      const logs: string[] = [];
+      const api = makeConfigApi({ services_host_pattern: '   ' }, logs);
+      expect(() => readConfig(api)).toThrow(/services_host_pattern is required/);
+    });
+
     it('warns once per offending key, not for valid neighbours', () => {
       const logs: string[] = [];
-      const api = makeConfigApi({ chanserv_nick: { wrong: 'shape' }, op_flags: ['n', 'm'] }, logs);
+      const api = makeConfigApi(
+        {
+          chanserv_nick: { wrong: 'shape' },
+          op_flags: ['n', 'm'],
+          services_host_pattern: 'services.*',
+        },
+        logs,
+      );
       readConfig(api);
       // Only chanserv_nick should warn — op_flags is a valid string array.
       const offending = logs.filter((m) => m.includes('Invalid'));

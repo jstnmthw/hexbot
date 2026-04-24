@@ -11,6 +11,7 @@ import {
 } from '../../plugins/chanmod/chanserv-notice';
 import type { BackendAccess } from '../../plugins/chanmod/protection-backend';
 import type { ChanmodConfig } from '../../plugins/chanmod/state';
+import { makeChanmodConfig } from '../helpers/chanmod-plugin-config';
 
 // ---------------------------------------------------------------------------
 // Minimal stubs
@@ -33,6 +34,19 @@ function createMockApi() {
         getString: () => 'none',
         set: () => {},
       },
+      // chanserv-notice does first-contact services_host_pattern matching
+      // via api.util.matchWildcard. The shared-services hostmask the tests
+      // use (`services.net`, `services.example.net`, etc.) all start with
+      // `services.`, so a simple prefix match suffices for the minimal mock.
+      util: {
+        matchWildcard: (pattern: string, text: string) => {
+          if (pattern === 'services.*') return text.startsWith('services.');
+          // Fallback: treat `*` as match-all, literal otherwise.
+          if (pattern === '*') return true;
+          return pattern === text;
+        },
+        patternSpecificity: () => 0,
+      },
     } as never,
     binds,
     logs,
@@ -54,10 +68,10 @@ function createMockApi() {
 }
 
 function createMockConfig(type: 'atheme' | 'anope' = 'atheme'): ChanmodConfig {
-  return {
+  return makeChanmodConfig({
     chanserv_nick: 'ChanServ',
     chanserv_services_type: type,
-  } as ChanmodConfig;
+  });
 }
 
 function createMockAthemeBackend() {

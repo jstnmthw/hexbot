@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 // ---------------------------------------------------------------------------
 
 import { PARAM_MODES, getParamModes, parseChannelModes } from '../../plugins/chanmod/helpers';
+import { makeChanmodPluginOverrides } from '../helpers/chanmod-plugin-config';
 import { type MockBot, createMockBot } from '../helpers/mock-bot';
 import { createMockPluginAPI } from '../helpers/mock-plugin-api';
 import {
@@ -89,7 +90,7 @@ describe('chanmod plugin — auto-op', () => {
     // their own services state as needed.
     vi.spyOn(bot.services, 'isAvailable').mockReturnValue(true);
     vi.spyOn(bot.services, 'verifyUser').mockResolvedValue({ verified: true, account: 'x' });
-    const result = await bot.pluginLoader.load(PLUGIN_PATH);
+    const result = await bot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
     expect(result.status).toBe('ok');
   });
 
@@ -176,9 +177,10 @@ describe('chanmod plugin — auto-op', () => {
   it('should not auto-op when auto_op is disabled', async () => {
     const disabledBot = createMockBot({ botNick: 'hexbot' });
     try {
-      const result = await disabledBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { auto_op: false } },
-      });
+      const result = await disabledBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ auto_op: false }),
+      );
       expect(result.status).toBe('ok');
 
       disabledBot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
@@ -194,9 +196,10 @@ describe('chanmod plugin — auto-op', () => {
     const halfopBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(halfopBot, '#test');
     try {
-      await halfopBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { halfop_flags: ['v'] } },
-      });
+      await halfopBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ halfop_flags: ['v'] }),
+      );
       halfopBot.permissions.addUser('huser', '*!huser@huser.host', 'v', 'test');
       simulateJoin(halfopBot, 'HUser', 'huser', 'huser.host', '#test');
       await tick();
@@ -213,9 +216,10 @@ describe('chanmod plugin — auto-op', () => {
   it('should not halfop when bot has no +h or +o in channel', async () => {
     const noOpsBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await noOpsBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { halfop_flags: ['v'] } },
-      });
+      await noOpsBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ halfop_flags: ['v'] }),
+      );
       noOpsBot.permissions.addUser('huser', '*!huser@huser.host', 'v', 'test');
       simulateJoin(noOpsBot, 'HUser', 'huser', 'huser.host', '#test');
       await tick();
@@ -228,7 +232,7 @@ describe('chanmod plugin — auto-op', () => {
   it('should not voice when bot has no ops', async () => {
     const noOpsBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await noOpsBot.pluginLoader.load(PLUGIN_PATH);
+      await noOpsBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       noOpsBot.permissions.addUser('vuser', '*!vuser@vuser.host', 'v', 'test');
       simulateJoin(noOpsBot, 'VUser', 'vuser', 'vuser.host', '#test');
       await tick();
@@ -270,7 +274,7 @@ describe('chanmod plugin — auto-op', () => {
     const liveBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(liveBot, '#test');
     try {
-      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      await liveBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       // User joins with no bot-user record yet — should get nothing.
       simulateJoin(liveBot, 'BlueAngel', 'blue', 'blue.host', '#test');
       await tick();
@@ -294,7 +298,7 @@ describe('chanmod plugin — auto-op', () => {
     const liveBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(liveBot, '#test');
     try {
-      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      await liveBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       simulateJoin(liveBot, 'Chief', 'chief', 'chief.host', '#test');
       await tick();
       liveBot.client.clearMessages();
@@ -315,9 +319,10 @@ describe('chanmod plugin — auto-op', () => {
     const liveBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(liveBot, '#test');
     try {
-      await liveBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { halfop_flags: ['v'] } },
-      });
+      await liveBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ halfop_flags: ['v'] }),
+      );
       simulateJoin(liveBot, 'HUser', 'huser', 'huser.host', '#test');
       await tick();
       liveBot.client.clearMessages();
@@ -338,7 +343,7 @@ describe('chanmod plugin — auto-op', () => {
     const liveBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(liveBot, '#test');
     try {
-      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      await liveBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       liveBot.permissions.addUser('upgrade', '*!up@up.host', 'v', 'test');
       simulateJoin(liveBot, 'Upgrade', 'up', 'up.host', '#test');
       await tick();
@@ -362,7 +367,7 @@ describe('chanmod plugin — auto-op', () => {
     const liveBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(liveBot, '#test');
     try {
-      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      await liveBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       liveBot.permissions.addUser('fader', '*!fader@fader.host', 'v', 'test');
       simulateJoin(liveBot, 'Fader', 'fader', 'fader.host', '#test');
       await tick();
@@ -387,7 +392,7 @@ describe('chanmod plugin — auto-op', () => {
     const liveBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(liveBot, '#test');
     try {
-      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      await liveBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       liveBot.permissions.addUser('chief', '*!chief@chief.host', 'o', 'test');
       simulateJoin(liveBot, 'Chief', 'chief', 'chief.host', '#test');
       await tick();
@@ -410,9 +415,10 @@ describe('chanmod plugin — auto-op', () => {
     const liveBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(liveBot, '#test');
     try {
-      await liveBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { halfop_flags: ['v'] } },
-      });
+      await liveBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ halfop_flags: ['v'] }),
+      );
       liveBot.permissions.addUser('hchief', '*!hchief@h.host', 'v', 'test');
       simulateJoin(liveBot, 'HChief', 'hchief', 'h.host', '#test');
       await tick();
@@ -435,7 +441,7 @@ describe('chanmod plugin — auto-op', () => {
     const liveBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(liveBot, '#test');
     try {
-      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      await liveBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       // Permission record is keyed on the services account pattern — the only
       // way to match this user is once they've identified.
       liveBot.permissions.addUser('blueangel', '$a:BlueAngelAcct', 'v', 'test');
@@ -479,7 +485,7 @@ describe('chanmod plugin — auto-op', () => {
     const liveBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(liveBot, '#test');
     try {
-      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      await liveBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       liveBot.permissions.addUser('weakOp', 'weakOp!*@*', 'o', 'test');
       liveBot.client.clearMessages();
 
@@ -507,7 +513,7 @@ describe('chanmod plugin — auto-op', () => {
     const liveBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(liveBot, '#test');
     try {
-      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      await liveBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       liveBot.permissions.addUser('strongOp', 'strongOp!ident@stable.cloak.example', 'o', 'test');
       liveBot.client.clearMessages();
 
@@ -533,9 +539,10 @@ describe('chanmod plugin — auto-op', () => {
     const liveBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(liveBot, '#test');
     try {
-      await liveBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { halfop_flags: ['l'] } },
-      });
+      await liveBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ halfop_flags: ['l'] }),
+      );
       // Two separate users — one +o via $a:, one +h via $a:
       liveBot.permissions.addUser('opacct', '$a:OpAcct', 'o', 'test');
       liveBot.permissions.addUser('hopacct', '$a:HopAcct', 'l', 'test');
@@ -583,7 +590,7 @@ describe('chanmod plugin — auto-op', () => {
     const liveBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(liveBot, '#test');
     try {
-      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      await liveBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       liveBot.permissions.addUser('blueangel', '$a:BlueAngelAcct', 'v', 'test');
 
       // Join already identified — auto-op voices them immediately.
@@ -618,7 +625,7 @@ describe('chanmod plugin — auto-op', () => {
     const errBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(errBot, '#test');
     try {
-      await errBot.pluginLoader.load(PLUGIN_PATH);
+      await errBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       errBot.permissions.addUser('acctuser', '$a:Acct', 'v', 'test');
       errBot.client.simulateEvent('join', {
         nick: 'AcctUser',
@@ -651,9 +658,7 @@ describe('chanmod plugin — auto-op', () => {
     const offBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(offBot, '#test');
     try {
-      await offBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { auto_op: false } },
-      });
+      await offBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides({ auto_op: false }));
       offBot.permissions.addUser('vuser', '*!vuser@vuser.host', 'v', 'test');
       simulateJoin(offBot, 'VUser', 'vuser', 'vuser.host', '#test');
       await tick();
@@ -671,7 +676,7 @@ describe('chanmod plugin — auto-op', () => {
     const ghostBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(ghostBot, '#test');
     try {
-      await ghostBot.pluginLoader.load(PLUGIN_PATH);
+      await ghostBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       // Emit modesReady for a channel the bot was never in — reconciler must
       // gracefully bail instead of crashing on undefined channel state.
       ghostBot.eventBus.emit('channel:modesReady', '#never-joined');
@@ -687,7 +692,7 @@ describe('chanmod plugin — auto-op', () => {
     const skipBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(skipBot, '#test');
     try {
-      await skipBot.pluginLoader.load(PLUGIN_PATH);
+      await skipBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       // Bot is opped but there's no permissions record for the user in channel.
       simulateJoin(skipBot, 'Randal', 'randal', 'randal.host', '#test');
       await tick();
@@ -708,7 +713,7 @@ describe('chanmod plugin — auto-op', () => {
     const errBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(errBot, '#test');
     try {
-      await errBot.pluginLoader.load(PLUGIN_PATH);
+      await errBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       errBot.permissions.addUser('bomb', '*!bomb@bomb.host', 'v', 'test');
       simulateJoin(errBot, 'Bomb', 'bomb', 'bomb.host', '#test');
       await tick();
@@ -738,7 +743,7 @@ describe('chanmod plugin — auto-op', () => {
     const liveBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(liveBot, '#test');
     try {
-      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      await liveBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       // Add user with +v but a hostmask that doesn't match anyone in the channel yet.
       liveBot.permissions.addUser('mover', '*!mover@old.host', 'v', 'test');
       simulateJoin(liveBot, 'Mover', 'mover', 'new.host', '#test');
@@ -763,7 +768,7 @@ describe('chanmod plugin — auto-op', () => {
     const leafBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(leafBot, '#test');
     try {
-      await leafBot.pluginLoader.load(PLUGIN_PATH);
+      await leafBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       // User is already in the channel on the leaf — no permissions record yet.
       simulateJoin(leafBot, 'BlueAngel', 'blue', 'blue.host', '#test');
       await tick();
@@ -788,7 +793,7 @@ describe('chanmod plugin — auto-op', () => {
     const leafBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(leafBot, '#test');
     try {
-      await leafBot.pluginLoader.load(PLUGIN_PATH);
+      await leafBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       simulateJoin(leafBot, 'HubOp', 'hubop', 'hubop.host', '#test');
       await tick();
       leafBot.client.clearMessages();
@@ -809,9 +814,10 @@ describe('chanmod plugin — auto-op', () => {
     const leafBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(leafBot, '#test');
     try {
-      await leafBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { halfop_flags: ['v'] } },
-      });
+      await leafBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ halfop_flags: ['v'] }),
+      );
       simulateJoin(leafBot, 'HubHalf', 'hh', 'hh.host', '#test');
       await tick();
       leafBot.client.clearMessages();
@@ -831,7 +837,7 @@ describe('chanmod plugin — auto-op', () => {
   it('should voice users already in a channel when the bot joins it', async () => {
     const joiningBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await joiningBot.pluginLoader.load(PLUGIN_PATH);
+      await joiningBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
 
       // Seed the user record before anyone joins — mirrors the real case
       // where permissions persist across bot restarts.
@@ -865,7 +871,7 @@ describe('chanmod plugin — auto-op', () => {
   it('should op users already in a channel when the bot joins it', async () => {
     const joiningBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await joiningBot.pluginLoader.load(PLUGIN_PATH);
+      await joiningBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       joiningBot.permissions.addUser('chief', '*!chief@chief.host', 'o', 'test');
       simulateJoin(joiningBot, 'Chief', 'chief', 'chief.host', '#test');
       await tick();
@@ -889,9 +895,10 @@ describe('chanmod plugin — auto-op', () => {
   it('should halfop users already in a channel when the bot joins it', async () => {
     const joiningBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await joiningBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { halfop_flags: ['v'] } },
-      });
+      await joiningBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ halfop_flags: ['v'] }),
+      );
       joiningBot.permissions.addUser('huser', '*!huser@h.host', 'v', 'test');
       simulateJoin(joiningBot, 'HUser', 'huser', 'h.host', '#test');
       await tick();
@@ -916,7 +923,7 @@ describe('chanmod plugin — auto-op', () => {
     const liveBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(liveBot, '#test');
     try {
-      await liveBot.pluginLoader.load(PLUGIN_PATH);
+      await liveBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       simulateJoin(liveBot, 'Stranger', 'stranger', 'stranger.host', '#test');
       await tick();
       liveBot.client.clearMessages();
@@ -937,7 +944,7 @@ describe('chanmod plugin — auto-op', () => {
     const multiBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(multiBot, '#other');
     try {
-      await multiBot.pluginLoader.load(PLUGIN_PATH);
+      await multiBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       multiBot.permissions.addUser('selectivedeop', '*!sd@sd.host', 'nmo', 'test');
       multiBot.permissions.setChannelFlags('selectivedeop', '#test', 'd', 'test');
       simulateJoin(multiBot, 'SelectiveDeop', 'sd', 'sd.host', '#other');
@@ -964,7 +971,7 @@ describe('chanmod plugin — commands', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH);
+    const result = await bot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
     expect(result.status).toBe('ok');
     bot.permissions.addUser('opuser', '*!opuser@op.host', 'o', 'test');
   });
@@ -1164,9 +1171,10 @@ describe('chanmod plugin — mode enforcement', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: { enabled: true, config: { enforce_modes: true, enforce_delay_ms: 5 } },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({ enforce_modes: true, enforce_delay_ms: 5 }),
+    );
     expect(result.status).toBe('ok');
   });
 
@@ -1246,9 +1254,10 @@ describe('chanmod plugin — mode enforcement', () => {
   it('should NOT enforce when enforce_modes is disabled', async () => {
     const disabledBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await disabledBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { enforce_modes: false } },
-      });
+      await disabledBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ enforce_modes: false }),
+      );
 
       disabledBot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
       addToChannel(disabledBot, 'Alice', 'alice', 'alice.host', '#test');
@@ -1270,12 +1279,10 @@ describe('chanmod plugin — mode enforcement', () => {
     const rateLimitBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(rateLimitBot, '#test');
-      await rateLimitBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_modes: true, enforce_delay_ms: 5, auto_op: false },
-        },
-      });
+      await rateLimitBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ enforce_modes: true, enforce_delay_ms: 5, auto_op: false }),
+      );
 
       rateLimitBot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
       addToChannel(rateLimitBot, 'Alice', 'alice', 'alice.host', '#test');
@@ -1365,7 +1372,7 @@ describe('chanmod plugin — mode commands', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH);
+    const result = await bot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
     expect(result.status).toBe('ok');
     bot.permissions.addUser('admin', '*!admin@admin.host', 'o', 'test');
   });
@@ -1575,7 +1582,7 @@ describe('chanmod plugin — kick command', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH);
+    const result = await bot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
     expect(result.status).toBe('ok');
     bot.permissions.addUser('admin', '*!admin@admin.host', 'o', 'test');
   });
@@ -1646,7 +1653,7 @@ describe('chanmod plugin — ban commands', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH);
+    const result = await bot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
     expect(result.status).toBe('ok');
     bot.permissions.addUser('admin', '*!admin@admin.host', 'o', 'test');
   });
@@ -1819,9 +1826,10 @@ describe('chanmod plugin — ban commands', () => {
 describe('chanmod plugin — teardown', () => {
   it('should clean up state on unload (teardown)', async () => {
     const bot = createMockBot({ botNick: 'hexbot' });
-    await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: { enabled: true, config: { enforce_modes: true, enforce_delay_ms: 5 } },
-    });
+    await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({ enforce_modes: true, enforce_delay_ms: 5 }),
+    );
 
     bot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
     addToChannel(bot, 'Alice', 'alice', 'alice.host', '#test');
@@ -1845,7 +1853,7 @@ describe('chanmod plugin — ban mask types', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    await bot.pluginLoader.load(PLUGIN_PATH);
+    await bot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
     bot.permissions.addUser('admin', '*!admin@admin.host', 'o', 'test');
   });
 
@@ -1872,9 +1880,7 @@ describe('chanmod plugin — ban mask types', () => {
     bot.cleanup();
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: { enabled: true, config: { default_ban_type: 1 } },
-    });
+    await bot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides({ default_ban_type: 1 }));
     bot.permissions.addUser('admin', '*!admin@admin.host', 'o', 'test');
     addToChannel(bot, 'Target', 'evil', 'sub.example.net', '#test');
     bot.client.clearMessages();
@@ -1891,9 +1897,7 @@ describe('chanmod plugin — ban mask types', () => {
     bot.cleanup();
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: { enabled: true, config: { default_ban_type: 2 } },
-    });
+    await bot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides({ default_ban_type: 2 }));
     bot.permissions.addUser('admin', '*!admin@admin.host', 'o', 'test');
     addToChannel(bot, 'Target', 'evil', 'sub.example.net', '#test');
     bot.client.clearMessages();
@@ -1911,9 +1915,7 @@ describe('chanmod plugin — ban mask types', () => {
     bot.cleanup();
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: { enabled: true, config: { default_ban_type: 3 } },
-    });
+    await bot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides({ default_ban_type: 3 }));
     bot.permissions.addUser('admin', '*!admin@admin.host', 'o', 'test');
     addToChannel(bot, 'Cloaked', 'cloaked', 'user/foo', '#test');
     bot.client.clearMessages();
@@ -1937,7 +1939,7 @@ describe('chanmod plugin — timed bans', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    await bot.pluginLoader.load(PLUGIN_PATH);
+    await bot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
     bot.permissions.addUser('admin', '*!admin@admin.host', 'o', 'test');
   });
 
@@ -2001,12 +2003,14 @@ describe('chanmod plugin — channel mode enforcement', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: {
-        enabled: true,
-        config: { enforce_channel_modes: '+nt', enforce_modes: true, enforce_delay_ms: 5 },
-      },
-    });
+    await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({
+        enforce_channel_modes: '+nt',
+        enforce_modes: true,
+        enforce_delay_ms: 5,
+      }),
+    );
   });
 
   afterAll(() => {
@@ -2065,18 +2069,16 @@ describe('chanmod plugin — rejoin on kick', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: {
-        enabled: true,
-        config: {
-          rejoin_on_kick: true,
-          rejoin_delay_ms: 10,
-          max_rejoin_attempts: 3,
-          rejoin_attempt_window_ms: 300_000,
-          revenge_on_kick: false,
-        },
-      },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({
+        rejoin_on_kick: true,
+        rejoin_delay_ms: 10,
+        max_rejoin_attempts: 3,
+        rejoin_attempt_window_ms: 300_000,
+        revenge_on_kick: false,
+      }),
+    );
     expect(result.status).toBe('ok');
   });
 
@@ -2137,9 +2139,10 @@ describe('chanmod plugin — rejoin on kick', () => {
   it('does not rejoin when rejoin_on_kick is false', async () => {
     const noRejoinBot = createMockBot({ botNick: 'hexbot' });
     try {
-      const result = await noRejoinBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { rejoin_on_kick: false } },
-      });
+      const result = await noRejoinBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ rejoin_on_kick: false }),
+      );
       expect(result.status).toBe('ok');
       noRejoinBot.client.simulateEvent('kick', {
         nick: 'Kicker',
@@ -2162,21 +2165,19 @@ describe('chanmod plugin — revenge on kick', () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
     addToChannel(bot, 'Kicker', 'kicker', 'kicker.host', '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: {
-        enabled: true,
-        config: {
-          rejoin_on_kick: true,
-          rejoin_delay_ms: 10,
-          revenge_on_kick: true,
-          revenge_action: 'deop',
-          revenge_delay_ms: 10,
-          revenge_exempt_flags: 'nm',
-          max_rejoin_attempts: 3,
-          rejoin_attempt_window_ms: 300_000,
-        },
-      },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({
+        rejoin_on_kick: true,
+        rejoin_delay_ms: 10,
+        revenge_on_kick: true,
+        revenge_action: 'deop',
+        revenge_delay_ms: 10,
+        revenge_exempt_flags: 'nm',
+        max_rejoin_attempts: 3,
+        rejoin_attempt_window_ms: 300_000,
+      }),
+    );
     expect(result.status).toBe('ok');
   });
 
@@ -2215,22 +2216,20 @@ describe('chanmod plugin — revenge on kick', () => {
     try {
       giveBotOps(kickRevengeBot, '#test');
       addToChannel(kickRevengeBot, 'Kicker', 'kicker', 'kicker.host', '#test');
-      const result = await kickRevengeBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            rejoin_on_kick: true,
-            rejoin_delay_ms: 10,
-            revenge_on_kick: true,
-            revenge_action: 'kick',
-            revenge_delay_ms: 10,
-            revenge_exempt_flags: '',
-            max_rejoin_attempts: 3,
-            rejoin_attempt_window_ms: 300_000,
-            revenge_kick_reason: "Don't kick me.",
-          },
-        },
-      });
+      const result = await kickRevengeBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          rejoin_on_kick: true,
+          rejoin_delay_ms: 10,
+          revenge_on_kick: true,
+          revenge_action: 'kick',
+          revenge_delay_ms: 10,
+          revenge_exempt_flags: '',
+          max_rejoin_attempts: 3,
+          rejoin_attempt_window_ms: 300_000,
+          revenge_kick_reason: "Don't kick me.",
+        }),
+      );
       expect(result.status).toBe('ok');
       addToChannel(kickRevengeBot, 'Kicker', 'kicker', 'kicker.host', '#test');
       giveBotOps(kickRevengeBot, '#test');
@@ -2259,23 +2258,21 @@ describe('chanmod plugin — revenge on kick', () => {
     try {
       giveBotOps(kickbanBot, '#test');
       addToChannel(kickbanBot, 'Kicker', 'kicker', 'kicker.host', '#test');
-      await kickbanBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            rejoin_on_kick: true,
-            rejoin_delay_ms: 10,
-            revenge_on_kick: true,
-            revenge_action: 'kickban',
-            revenge_delay_ms: 10,
-            revenge_exempt_flags: '',
-            max_rejoin_attempts: 3,
-            rejoin_attempt_window_ms: 300_000,
-            revenge_kick_reason: "Don't kick me.",
-            default_ban_duration: 60,
-          },
-        },
-      });
+      await kickbanBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          rejoin_on_kick: true,
+          rejoin_delay_ms: 10,
+          revenge_on_kick: true,
+          revenge_action: 'kickban',
+          revenge_delay_ms: 10,
+          revenge_exempt_flags: '',
+          max_rejoin_attempts: 3,
+          rejoin_attempt_window_ms: 300_000,
+          revenge_kick_reason: "Don't kick me.",
+          default_ban_duration: 60,
+        }),
+      );
       addToChannel(kickbanBot, 'Kicker', 'kicker', 'kicker.host', '#test');
       giveBotOps(kickbanBot, '#test');
       kickbanBot.client.simulateEvent('kick', {
@@ -2332,12 +2329,10 @@ describe('chanmod plugin — bitch mode', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: {
-        enabled: true,
-        config: { bitch: true, enforce_delay_ms: 5, op_flags: ['o', 'n', 'm'] },
-      },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({ bitch: true, enforce_delay_ms: 5, op_flags: ['o', 'n', 'm'] }),
+    );
     expect(result.status).toBe('ok');
   });
 
@@ -2427,12 +2422,10 @@ describe('chanmod plugin — bitch mode', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { bitch: true, halfop_flags: ['v'], enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ bitch: true, halfop_flags: ['v'], enforce_delay_ms: 5 }),
+      );
       freshBot.permissions.addUser('trusted', '*!trusted@trusted.host', 'v', 'test');
       addToChannel(freshBot, 'Trusted', 'trusted', 'trusted.host', '#test');
       giveBotOps(freshBot, '#test');
@@ -2463,19 +2456,17 @@ describe('chanmod plugin — punish deop', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: {
-        enabled: true,
-        config: {
-          enforce_modes: true,
-          punish_deop: true,
-          punish_action: 'kick',
-          punish_kick_reason: "Don't deop my friends.",
-          op_flags: ['o', 'n', 'm'],
-          enforce_delay_ms: 5,
-        },
-      },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({
+        enforce_modes: true,
+        punish_deop: true,
+        punish_action: 'kick',
+        punish_kick_reason: "Don't deop my friends.",
+        op_flags: ['o', 'n', 'm'],
+        enforce_delay_ms: 5,
+      }),
+    );
     expect(result.status).toBe('ok');
   });
 
@@ -2543,9 +2534,10 @@ describe('chanmod plugin — enforcebans', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: { enabled: true, config: { enforcebans: true } },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({ enforcebans: true }),
+    );
     expect(result.status).toBe('ok');
   });
 
@@ -2602,12 +2594,10 @@ describe('chanmod plugin — nick recovery', () => {
 
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: {
-        enabled: true,
-        config: { nick_recovery: true },
-      },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({ nick_recovery: true }),
+    );
     expect(result.status).toBe('ok');
   });
 
@@ -2631,9 +2621,10 @@ describe('chanmod plugin — nick recovery', () => {
     // Bot is using hexbot_ (currentNick) but wants to reclaim hexbot (botNick = config nick)
     const freshBot = createMockBot({ botNick: 'hexbot', currentNick: 'hexbot_' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { nick_recovery: true } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ nick_recovery: true }),
+      );
       // Simulate the holder of 'hexbot' quitting — bridge won't filter it (bot is 'hexbot_')
       freshBot.client.simulateEvent('quit', {
         nick: 'hexbot',
@@ -2683,9 +2674,10 @@ describe('chanmod plugin — nick recovery', () => {
   it('no-op when nick_recovery is false', async () => {
     const noRecoveryBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await noRecoveryBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { nick_recovery: false } },
-      });
+      await noRecoveryBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ nick_recovery: false }),
+      );
       noRecoveryBot.client.simulateEvent('nick', {
         nick: 'hexbot',
         ident: 'u',
@@ -2706,15 +2698,13 @@ describe('chanmod plugin — nick recovery', () => {
     // Password stored in bot.json (not plugins.json) per SECURITY.md §6
     ghostBot.botConfig.chanmod = { nick_recovery_password: 's3cr3t' };
     try {
-      await ghostBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            nick_recovery: true,
-            nick_recovery_ghost: true,
-          },
-        },
-      });
+      await ghostBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          nick_recovery: true,
+          nick_recovery_ghost: true,
+        }),
+      );
       ghostBot.client.simulateEvent('nick', {
         nick: 'hexbot',
         ident: 'u',
@@ -2749,12 +2739,14 @@ describe('chanmod plugin — stopnethack mode 1 (isoptest)', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: {
-        enabled: true,
-        config: { stopnethack_mode: 1, split_timeout_ms: 60000, enforce_delay_ms: 10 },
-      },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({
+        stopnethack_mode: 1,
+        split_timeout_ms: 60000,
+        enforce_delay_ms: 10,
+      }),
+    );
     expect(result.status).toBe('ok');
   });
 
@@ -2807,12 +2799,14 @@ describe('chanmod plugin — stopnethack mode 1 (isoptest)', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { stopnethack_mode: 1, split_timeout_ms: 60000, enforce_delay_ms: 10 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          stopnethack_mode: 1,
+          split_timeout_ms: 60000,
+          enforce_delay_ms: 10,
+        }),
+      );
       // Only 2 split quits — below threshold of 3
       for (let i = 0; i < 2; i++) {
         freshBot.client.simulateEvent('quit', {
@@ -2843,12 +2837,14 @@ describe('chanmod plugin — stopnethack mode 2 (wasoptest)', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: {
-        enabled: true,
-        config: { stopnethack_mode: 2, split_timeout_ms: 60000, enforce_delay_ms: 10 },
-      },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({
+        stopnethack_mode: 2,
+        split_timeout_ms: 60000,
+        enforce_delay_ms: 10,
+      }),
+    );
     expect(result.status).toBe('ok');
   });
 
@@ -2921,7 +2917,7 @@ describe('chanmod plugin — ban/unban/kickban edge cases', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    await bot.pluginLoader.load(PLUGIN_PATH);
+    await bot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
     bot.permissions.addUser('admin', '*!admin@admin.host', 'o', 'test');
   });
 
@@ -3173,12 +3169,14 @@ describe('chanmod plugin — channel_modes enforcement on bot join', () => {
   it('applies missing channel modes after modesReady fires on bot join', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_channel_modes: '+n', enforce_modes: true, enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_channel_modes: '+n',
+          enforce_modes: true,
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#newchan');
       freshBot.client.clearMessages();
       // Simulate RPL_CHANNELMODEIS reply (channel has no modes yet)
@@ -3201,9 +3199,10 @@ describe('chanmod plugin — NickServ auto-op verification failure', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       freshBot.pluginLoader.getBotConfig().identity.require_acc_for = ['+o'];
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { notify_on_fail: true } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ notify_on_fail: true }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
       vi.spyOn(freshBot.services, 'isAvailable').mockReturnValue(true);
@@ -3230,9 +3229,10 @@ describe('chanmod plugin — NickServ auto-op verification failure', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       freshBot.pluginLoader.getBotConfig().identity.require_acc_for = ['+o'];
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { notify_on_fail: true } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ notify_on_fail: true }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
       vi.spyOn(freshBot.services, 'isAvailable').mockReturnValue(true);
@@ -3256,9 +3256,10 @@ describe('chanmod plugin — NickServ auto-op verification failure', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       freshBot.pluginLoader.getBotConfig().identity.require_acc_for = ['+o'];
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { notify_on_fail: false } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ notify_on_fail: false }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
       vi.spyOn(freshBot.services, 'isAvailable').mockReturnValue(true);
@@ -3291,9 +3292,10 @@ describe('chanmod plugin — NickServ auto-op verification failure', () => {
     try {
       // require_acc_for lists a different flag; the gate must still fire.
       freshBot.pluginLoader.getBotConfig().identity.require_acc_for = ['+n'];
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { notify_on_fail: false } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ notify_on_fail: false }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
       vi.spyOn(freshBot.services, 'isAvailable').mockReturnValue(true);
@@ -3327,9 +3329,10 @@ describe('chanmod plugin — account-tag auto-op fast path', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       freshBot.pluginLoader.getBotConfig().identity.require_acc_for = ['+o'];
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { notify_on_fail: true } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ notify_on_fail: true }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
       vi.spyOn(freshBot.services, 'isAvailable').mockReturnValue(true);
@@ -3359,9 +3362,10 @@ describe('chanmod plugin — account-tag auto-op fast path', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       freshBot.pluginLoader.getBotConfig().identity.require_acc_for = ['+o'];
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { notify_on_fail: true } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ notify_on_fail: true }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
       vi.spyOn(freshBot.services, 'isAvailable').mockReturnValue(true);
@@ -3391,9 +3395,10 @@ describe('chanmod plugin — account-tag auto-op fast path', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       freshBot.pluginLoader.getBotConfig().identity.require_acc_for = ['+o'];
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { notify_on_fail: true } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ notify_on_fail: true }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
       vi.spyOn(freshBot.services, 'isAvailable').mockReturnValue(true);
@@ -3417,16 +3422,15 @@ describe('chanmod plugin — account-tag auto-op fast path', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       freshBot.pluginLoader.getBotConfig().identity.require_acc_for = ['+h'];
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          // User-permission flag 'v' is mapped to halfop here (halfop_flags
-          // is a user-flag list, and 'h' is not a valid permission flag per
-          // VALID_FLAGS = 'nmovd'). The test proves verifyUser still gates
-          // the +h grant — independent of which user flag drove it.
-          config: { op_flags: [], halfop_flags: ['v'], voice_flags: [], notify_on_fail: true },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          op_flags: [],
+          halfop_flags: ['v'],
+          voice_flags: [],
+          notify_on_fail: true,
+        }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.permissions.addUser('bob', '*!bob@bob.host', 'v', 'test');
       vi.spyOn(freshBot.services, 'isAvailable').mockReturnValue(true);
@@ -3450,12 +3454,15 @@ describe('chanmod plugin — account-tag auto-op fast path', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       freshBot.pluginLoader.getBotConfig().identity.require_acc_for = ['+v'];
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { op_flags: [], halfop_flags: [], voice_flags: ['v'], notify_on_fail: true },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          op_flags: [],
+          halfop_flags: [],
+          voice_flags: ['v'],
+          notify_on_fail: true,
+        }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.permissions.addUser('carol', '*!carol@carol.host', 'v', 'test');
       vi.spyOn(freshBot.services, 'isAvailable').mockReturnValue(true);
@@ -3484,7 +3491,7 @@ describe('chanmod plugin — ban auto-lift timers', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH);
+      await freshBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       const mask = '*!bad@bad.host';
       freshBot.db.set(
         '_bans',
@@ -3514,7 +3521,7 @@ describe('chanmod plugin — ban auto-lift timers', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH);
+      await freshBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
       // Advance past startup timer so it doesn't consume the ban record
       await tick(5001);
       freshBot.client.clearMessages();
@@ -3552,12 +3559,14 @@ describe('chanmod plugin — punishDeop rate limit', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { punish_deop: true, punish_action: 'kick', enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          punish_deop: true,
+          punish_action: 'kick',
+          enforce_delay_ms: 5,
+        }),
+      );
       freshBot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
       addToChannel(freshBot, 'Alice', 'alice', 'alice.host', '#test');
       addToChannel(freshBot, 'Badguy', 'bad', 'bad.host', '#test');
@@ -3585,12 +3594,14 @@ describe('chanmod plugin — punishDeop kickban action', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { punish_deop: true, punish_action: 'kickban', enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          punish_deop: true,
+          punish_action: 'kickban',
+          enforce_delay_ms: 5,
+        }),
+      );
       freshBot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
       addToChannel(freshBot, 'Alice', 'alice', 'alice.host', '#test');
       addToChannel(freshBot, 'Badguy', 'bad', 'bad.host', '#test');
@@ -3621,21 +3632,19 @@ describe('chanmod plugin — revenge on kick kickban', () => {
     try {
       giveBotOps(freshBot, '#test');
       addToChannel(freshBot, 'Kicker', 'kicker', 'kicker.host', '#test');
-      const result = await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            rejoin_on_kick: true,
-            rejoin_delay_ms: 10,
-            revenge_on_kick: true,
-            revenge_action: 'kickban',
-            revenge_delay_ms: 10,
-            revenge_exempt_flags: '',
-            max_rejoin_attempts: 3,
-            rejoin_attempt_window_ms: 300_000,
-          },
-        },
-      });
+      const result = await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          rejoin_on_kick: true,
+          rejoin_delay_ms: 10,
+          revenge_on_kick: true,
+          revenge_action: 'kickban',
+          revenge_delay_ms: 10,
+          revenge_exempt_flags: '',
+          max_rejoin_attempts: 3,
+          rejoin_attempt_window_ms: 300_000,
+        }),
+      );
       expect(result.status).toBe('ok');
       addToChannel(freshBot, 'Kicker', 'kicker', 'kicker.host', '#test');
       giveBotOps(freshBot, '#test');
@@ -3675,21 +3684,19 @@ describe('chanmod plugin — revenge skipped without ops', () => {
     try {
       giveBotOps(freshBot, '#test');
       addToChannel(freshBot, 'Kicker', 'kicker', 'kicker.host', '#test');
-      const result = await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            rejoin_on_kick: true,
-            rejoin_delay_ms: 10,
-            revenge_on_kick: true,
-            revenge_action: 'deop',
-            revenge_delay_ms: 10,
-            revenge_exempt_flags: '',
-            max_rejoin_attempts: 3,
-            rejoin_attempt_window_ms: 300_000,
-          },
-        },
-      });
+      const result = await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          rejoin_on_kick: true,
+          rejoin_delay_ms: 10,
+          revenge_on_kick: true,
+          revenge_action: 'deop',
+          revenge_delay_ms: 10,
+          revenge_exempt_flags: '',
+          max_rejoin_attempts: 3,
+          rejoin_attempt_window_ms: 300_000,
+        }),
+      );
       expect(result.status).toBe('ok');
       addToChannel(freshBot, 'Kicker', 'kicker', 'kicker.host', '#test');
       giveBotOps(freshBot, '#test');
@@ -3721,12 +3728,10 @@ describe('chanmod plugin — cycle on deop', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { cycle_on_deop: true, cycle_delay_ms: 10 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ cycle_on_deop: true, cycle_delay_ms: 10 }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
       // Three bot self-deops are required to reach MAX_ENFORCEMENTS (3)
@@ -3755,12 +3760,14 @@ describe('chanmod plugin — halfop enforcement', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_modes: true, halfop_flags: ['v'], enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_modes: true,
+          halfop_flags: ['v'],
+          enforce_delay_ms: 5,
+        }),
+      );
       freshBot.permissions.addUser('alice', '*!alice@alice.host', 'v', 'test');
       addToChannel(freshBot, 'Alice', 'alice', 'alice.host', '#test');
       giveBotOps(freshBot, '#test');
@@ -3786,18 +3793,16 @@ describe('chanmod plugin — rejoin window expiry reset', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            rejoin_on_kick: true,
-            rejoin_delay_ms: 10,
-            revenge_on_kick: false,
-            max_rejoin_attempts: 1,
-            rejoin_attempt_window_ms: 1000,
-          },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          rejoin_on_kick: true,
+          rejoin_delay_ms: 10,
+          revenge_on_kick: false,
+          max_rejoin_attempts: 1,
+          rejoin_attempt_window_ms: 1000,
+        }),
+      );
 
       let now = 1_000_000_000;
       const dateSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
@@ -3840,12 +3845,14 @@ describe('chanmod plugin — stopnethack split window expiry', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { stopnethack_mode: 1, split_timeout_ms: 1000, enforce_delay_ms: 10 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          stopnethack_mode: 1,
+          split_timeout_ms: 1000,
+          enforce_delay_ms: 10,
+        }),
+      );
 
       let now = 1_000_000_000;
       const dateSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
@@ -3893,9 +3900,10 @@ describe('chanmod plugin — channel_modes skips when bot has no ops at timer fi
   it('does NOT set channel modes if bot has no ops when the timer fires', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { enforce_channel_modes: 'n', enforce_delay_ms: 5 } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ enforce_channel_modes: 'n', enforce_delay_ms: 5 }),
+      );
       // Bot joins the channel but does NOT get +o (no giveBotOps call)
       freshBot.client.simulateEvent('join', {
         nick: 'hexbot',
@@ -3923,12 +3931,14 @@ describe('chanmod plugin — halfop enforcement skips when bot has no halfop abi
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       // Bot has NO ops — don't call giveBotOps
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_modes: true, halfop_flags: ['v'], enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_modes: true,
+          halfop_flags: ['v'],
+          enforce_delay_ms: 5,
+        }),
+      );
       freshBot.permissions.addUser('alice', '*!alice@alice.host', 'v', 'test');
       addToChannel(freshBot, 'Alice', 'alice', 'alice.host', '#test');
       // Ensure bot is in channel but NOT opped
@@ -3958,12 +3968,10 @@ describe('chanmod plugin — voice enforcement skips when bot has no ops', () =>
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       // Bot has NO ops — don't call giveBotOps
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_modes: true, enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ enforce_modes: true, enforce_delay_ms: 5 }),
+      );
       freshBot.permissions.addUser('bob', '*!bob@bob.host', 'v', 'test');
       addToChannel(freshBot, 'Bob', 'bob', 'bob.host', '#test');
       freshBot.client.simulateEvent('join', {
@@ -3993,21 +4001,19 @@ describe('chanmod plugin — revenge skipped when kicker left the channel', () =
     try {
       giveBotOps(freshBot, '#test');
       addToChannel(freshBot, 'Kicker', 'kicker', 'kicker.host', '#test');
-      const result = await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            rejoin_on_kick: true,
-            rejoin_delay_ms: 10,
-            revenge_on_kick: true,
-            revenge_action: 'deop',
-            revenge_delay_ms: 100,
-            revenge_exempt_flags: '',
-            max_rejoin_attempts: 3,
-            rejoin_attempt_window_ms: 300_000,
-          },
-        },
-      });
+      const result = await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          rejoin_on_kick: true,
+          rejoin_delay_ms: 10,
+          revenge_on_kick: true,
+          revenge_action: 'deop',
+          revenge_delay_ms: 100,
+          revenge_exempt_flags: '',
+          max_rejoin_attempts: 3,
+          rejoin_attempt_window_ms: 300_000,
+        }),
+      );
       expect(result.status).toBe('ok');
       addToChannel(freshBot, 'Kicker', 'kicker', 'kicker.host', '#test');
       giveBotOps(freshBot, '#test');
@@ -4063,12 +4069,14 @@ describe('chanmod plugin — stopnethack mode-event guards', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { stopnethack_mode: 1, split_timeout_ms: 60000, enforce_delay_ms: 10 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          stopnethack_mode: 1,
+          split_timeout_ms: 60000,
+          enforce_delay_ms: 10,
+        }),
+      );
       await triggerSplit(freshBot);
       freshBot.permissions.addUser('alice', '*!alice@host', 'v', 'test');
       addToChannel(freshBot, 'alice', 'alice', 'host', '#test');
@@ -4090,12 +4098,14 @@ describe('chanmod plugin — stopnethack mode-event guards', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { stopnethack_mode: 1, split_timeout_ms: 60000, enforce_delay_ms: 10 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          stopnethack_mode: 1,
+          split_timeout_ms: 60000,
+          enforce_delay_ms: 10,
+        }),
+      );
       await triggerSplit(freshBot);
       freshBot.client.clearMessages();
 
@@ -4122,12 +4132,14 @@ describe('chanmod plugin — stopnethack ignores non-split quits', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { stopnethack_mode: 1, split_timeout_ms: 60000, enforce_delay_ms: 10 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          stopnethack_mode: 1,
+          split_timeout_ms: 60000,
+          enforce_delay_ms: 10,
+        }),
+      );
       // Fire non-split quits (normal "Quit: leaving" messages)
       for (let i = 0; i < 5; i++) {
         freshBot.client.simulateEvent('quit', {
@@ -4162,12 +4174,10 @@ describe('chanmod plugin — ChanServ re-op on deop', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { chanserv_nick: 'ChanServ', chanserv_op_delay_ms: 10 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ chanserv_nick: 'ChanServ', chanserv_op_delay_ms: 10 }),
+      );
       freshBot.channelSettings.set('#test', 'chanserv_access', 'op');
       await tick(10);
       addToChannel(freshBot, 'ChanServ', 'ChanServ', 'services.', '#test');
@@ -4189,12 +4199,10 @@ describe('chanmod plugin — ChanServ re-op on deop', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { chanserv_nick: 'ChanServ', chanserv_op_delay_ms: 10 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ chanserv_nick: 'ChanServ', chanserv_op_delay_ms: 10 }),
+      );
       // chanserv_access defaults to 'none' — no re-op
       addToChannel(freshBot, 'ChanServ', 'ChanServ', 'services.', '#test');
       giveBotOps(freshBot, '#test');
@@ -4221,7 +4229,7 @@ describe('chanmod plugin — invite handling', () => {
 
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
-    const result = await bot.pluginLoader.load(PLUGIN_PATH);
+    const result = await bot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
     expect(result.status).toBe('ok');
   });
 
@@ -4380,9 +4388,10 @@ describe('chanmod plugin — channel key enforcement', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { enforce_modes: true, enforce_delay_ms: 5 } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ enforce_modes: true, enforce_delay_ms: 5 }),
+      );
       freshBot.channelSettings.set('#test', 'channel_key', 'secret');
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
@@ -4405,9 +4414,10 @@ describe('chanmod plugin — channel key enforcement', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { enforce_modes: true, enforce_delay_ms: 5 } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ enforce_modes: true, enforce_delay_ms: 5 }),
+      );
       freshBot.channelSettings.set('#test', 'channel_key', 'secret');
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
@@ -4436,9 +4446,10 @@ describe('chanmod plugin — channel limit enforcement', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { enforce_modes: true, enforce_delay_ms: 5 } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ enforce_modes: true, enforce_delay_ms: 5 }),
+      );
       freshBot.channelSettings.set('#test', 'channel_limit', 50);
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
@@ -4461,9 +4472,10 @@ describe('chanmod plugin — channel limit enforcement', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { enforce_modes: true, enforce_delay_ms: 5 } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ enforce_modes: true, enforce_delay_ms: 5 }),
+      );
       freshBot.channelSettings.set('#test', 'channel_limit', 50);
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
@@ -4492,9 +4504,10 @@ describe('chanmod plugin — unauthorized +k removal (no channel_key configured)
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { enforce_modes: true, enforce_delay_ms: 5 } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ enforce_modes: true, enforce_delay_ms: 5 }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -4515,9 +4528,10 @@ describe('chanmod plugin — unauthorized +k removal (no channel_key configured)
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { enforce_modes: false, enforce_delay_ms: 5 } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ enforce_modes: false, enforce_delay_ms: 5 }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -4538,9 +4552,10 @@ describe('chanmod plugin — unauthorized +k removal (no channel_key configured)
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { enforce_modes: true, enforce_delay_ms: 5 } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ enforce_modes: true, enforce_delay_ms: 5 }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -4561,12 +4576,14 @@ describe('chanmod plugin — unauthorized +k removal (no channel_key configured)
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_modes: true, enforce_delay_ms: 5, nodesynch_nicks: ['ChanServ'] },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_modes: true,
+          enforce_delay_ms: 5,
+          nodesynch_nicks: ['ChanServ'],
+        }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -4593,9 +4610,10 @@ describe('chanmod plugin — unauthorized +l removal (no channel_limit configure
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { enforce_modes: true, enforce_delay_ms: 5 } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ enforce_modes: true, enforce_delay_ms: 5 }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -4616,9 +4634,10 @@ describe('chanmod plugin — unauthorized +l removal (no channel_limit configure
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { enforce_modes: false, enforce_delay_ms: 5 } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ enforce_modes: false, enforce_delay_ms: 5 }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -4644,12 +4663,14 @@ describe('chanmod plugin — proactive removal of unauthorized modes on join', (
   it('removes +k on join when channel has a key but no channel_key is configured', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_modes: true, enforce_channel_modes: 'nt', enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_modes: true,
+          enforce_channel_modes: 'nt',
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#keyed');
       freshBot.channelSettings.set('#keyed', 'enforce_modes', true);
       freshBot.client.clearMessages();
@@ -4671,12 +4692,14 @@ describe('chanmod plugin — proactive removal of unauthorized modes on join', (
   it('removes +l on join when channel has a limit but no channel_limit is configured', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_modes: true, enforce_channel_modes: 'nt', enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_modes: true,
+          enforce_channel_modes: 'nt',
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#limited');
       freshBot.channelSettings.set('#limited', 'enforce_modes', true);
       freshBot.client.clearMessages();
@@ -4698,12 +4721,14 @@ describe('chanmod plugin — proactive removal of unauthorized modes on join', (
   it('sets correct key on join when channel has wrong key and channel_key is configured', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_modes: true, enforce_channel_modes: 'nt', enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_modes: true,
+          enforce_channel_modes: 'nt',
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#keyed');
       freshBot.channelSettings.set('#keyed', 'channel_key', 'correctkey');
       freshBot.client.clearMessages();
@@ -4725,12 +4750,14 @@ describe('chanmod plugin — proactive removal of unauthorized modes on join', (
   it('skips redundant +k when channel key already matches configured key', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_modes: true, enforce_channel_modes: 'nt', enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_modes: true,
+          enforce_channel_modes: 'nt',
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#keyed');
       freshBot.channelSettings.set('#keyed', 'channel_key', 'correct');
       freshBot.client.clearMessages();
@@ -4751,12 +4778,14 @@ describe('chanmod plugin — proactive removal of unauthorized modes on join', (
   it('skips redundant +l when channel limit already matches configured limit', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_modes: true, enforce_channel_modes: 'nt', enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_modes: true,
+          enforce_channel_modes: 'nt',
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#limited');
       freshBot.channelSettings.set('#limited', 'channel_limit', 50);
       freshBot.client.clearMessages();
@@ -4777,16 +4806,14 @@ describe('chanmod plugin — proactive removal of unauthorized modes on join', (
   it('removes modes in remove set on join', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            enforce_modes: true,
-            enforce_channel_modes: '+nt-si',
-            enforce_delay_ms: 5,
-          },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_modes: true,
+          enforce_channel_modes: '+nt-si',
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#chan');
       freshBot.channelSettings.set('#chan', 'enforce_modes', true);
       freshBot.client.clearMessages();
@@ -4815,9 +4842,10 @@ describe('chanmod plugin — enforce_modes:false skips -v enforcement', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { enforce_modes: false, enforce_delay_ms: 5 } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ enforce_modes: false, enforce_delay_ms: 5 }),
+      );
       freshBot.permissions.addUser('bob', '*!bob@bob.host', 'v', 'test');
       addToChannel(freshBot, 'Bob', 'bob', 'bob.host', '#test');
       giveBotOps(freshBot, '#test');
@@ -4844,19 +4872,17 @@ describe('chanmod plugin — punish_deop skips when setter is a nodesynch nick',
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            enforce_modes: true,
-            punish_deop: true,
-            punish_action: 'kick',
-            nodesynch_nicks: ['ChanServ'],
-            op_flags: ['o', 'n', 'm'],
-            enforce_delay_ms: 5,
-          },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_modes: true,
+          punish_deop: true,
+          punish_action: 'kick',
+          nodesynch_nicks: ['ChanServ'],
+          op_flags: ['o', 'n', 'm'],
+          enforce_delay_ms: 5,
+        }),
+      );
 
       freshBot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
       addToChannel(freshBot, 'Alice', 'alice', 'alice.host', '#test');
@@ -4888,12 +4914,14 @@ describe('chanmod plugin — stopnethack mode 2 deops when no ops snapshot exist
   it('deops +o grant when channel had no ops at split time (snapshot?.has ?? false path)', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { stopnethack_mode: 2, split_timeout_ms: 60000, enforce_delay_ms: 10 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          stopnethack_mode: 2,
+          split_timeout_ms: 60000,
+          enforce_delay_ms: 10,
+        }),
+      );
 
       // Bot joins channel WITHOUT ops — so snapshotOps finds 0 ops in #test
       // and does NOT add an entry to splitOpsSnapshot
@@ -4947,9 +4975,10 @@ describe('chanmod plugin — immediate mode enforcement on .chanset', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { enforce_modes: true, enforce_delay_ms: 5 } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ enforce_modes: true, enforce_delay_ms: 5 }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -4969,9 +4998,10 @@ describe('chanmod plugin — immediate mode enforcement on .chanset', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { enforce_modes: true, enforce_delay_ms: 5 } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ enforce_modes: true, enforce_delay_ms: 5 }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -4992,9 +5022,10 @@ describe('chanmod plugin — immediate mode enforcement on .chanset', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { enforce_modes: true, enforce_delay_ms: 5 } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ enforce_modes: true, enforce_delay_ms: 5 }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -5014,9 +5045,10 @@ describe('chanmod plugin — immediate mode enforcement on .chanset', () => {
   it('does NOT apply modes when bot has no ops', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: { enabled: true, config: { enforce_modes: true, enforce_delay_ms: 5 } },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ enforce_modes: true, enforce_delay_ms: 5 }),
+      );
       // Bot is in channel but NOT opped
       freshBot.client.simulateEvent('join', {
         nick: 'hexbot',
@@ -5047,12 +5079,14 @@ describe('chanmod plugin — unauthorized mode reversal', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_channel_modes: '+nt-i', enforce_modes: true, enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_channel_modes: '+nt-i',
+          enforce_modes: true,
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -5072,12 +5106,14 @@ describe('chanmod plugin — unauthorized mode reversal', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_channel_modes: '+nt', enforce_modes: true, enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_channel_modes: '+nt',
+          enforce_modes: true,
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -5097,12 +5133,14 @@ describe('chanmod plugin — unauthorized mode reversal', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_channel_modes: '+nt', enforce_modes: true, enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_channel_modes: '+nt',
+          enforce_modes: true,
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#test');
       addToChannel(freshBot, 'Alice', 'alice', 'alice.host', '#test');
       freshBot.client.clearMessages();
@@ -5125,12 +5163,14 @@ describe('chanmod plugin — unauthorized mode reversal', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_channel_modes: '+nt', enforce_modes: false, enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_channel_modes: '+nt',
+          enforce_modes: false,
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -5149,12 +5189,14 @@ describe('chanmod plugin — unauthorized mode reversal', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_channel_modes: '+nt', enforce_modes: true, enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_channel_modes: '+nt',
+          enforce_modes: true,
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -5174,12 +5216,14 @@ describe('chanmod plugin — unauthorized mode reversal', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_channel_modes: '', enforce_modes: true, enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_channel_modes: '',
+          enforce_modes: true,
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -5203,12 +5247,14 @@ describe('chanmod plugin — parameter modes stripped from channel_modes', () =>
   it('warns when channel_modes contains parameter modes (k/l) via syncChannelModes', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_channel_modes: '+ntk', enforce_modes: true, enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_channel_modes: '+ntk',
+          enforce_modes: true,
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -5229,12 +5275,14 @@ describe('chanmod plugin — parameter modes stripped from channel_modes', () =>
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_channel_modes: '+ntk', enforce_modes: true, enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_channel_modes: '+ntk',
+          enforce_modes: true,
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -5265,16 +5313,14 @@ describe('chanmod plugin — +k changed to different value than configured', () 
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            enforce_modes: true,
-            enforce_delay_ms: 5,
-            enforce_channel_key: 'correctkey',
-          },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_modes: true,
+          enforce_delay_ms: 5,
+          enforce_channel_key: 'correctkey',
+        }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -5296,16 +5342,14 @@ describe('chanmod plugin — +k changed to different value than configured', () 
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            enforce_modes: true,
-            enforce_delay_ms: 5,
-            enforce_channel_key: 'mykey',
-          },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_modes: true,
+          enforce_delay_ms: 5,
+          enforce_channel_key: 'mykey',
+        }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -5333,16 +5377,14 @@ describe('chanmod plugin — +l changed to different value than configured', () 
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            enforce_modes: true,
-            enforce_delay_ms: 5,
-            enforce_channel_limit: 25,
-          },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_modes: true,
+          enforce_delay_ms: 5,
+          enforce_channel_limit: 25,
+        }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -5364,16 +5406,14 @@ describe('chanmod plugin — +l changed to different value than configured', () 
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            enforce_modes: true,
-            enforce_delay_ms: 5,
-            enforce_channel_limit: 25,
-          },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_modes: true,
+          enforce_delay_ms: 5,
+          enforce_channel_limit: 25,
+        }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -5401,12 +5441,10 @@ describe('chanmod plugin — cycle_on_deop skipped when channel is +i', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { cycle_on_deop: true, cycle_delay_ms: 10 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ cycle_on_deop: true, cycle_delay_ms: 10 }),
+      );
       giveBotOps(freshBot, '#test');
 
       // Set the channel to invite-only (+i)
@@ -5442,12 +5480,14 @@ describe('chanmod plugin — isSplitQuit rejects non-2-word quit messages', () =
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { stopnethack_mode: 1, split_timeout_ms: 60000, enforce_delay_ms: 10 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          stopnethack_mode: 1,
+          split_timeout_ms: 60000,
+          enforce_delay_ms: 10,
+        }),
+      );
       // Fire quits with a single word (1 part, not 2) — isSplitQuit returns false at line 22
       for (let i = 0; i < 5; i++) {
         freshBot.client.simulateEvent('quit', {
@@ -5477,12 +5517,14 @@ describe('chanmod plugin — isSplitQuit rejects non-2-word quit messages', () =
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { stopnethack_mode: 1, split_timeout_ms: 60000, enforce_delay_ms: 10 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          stopnethack_mode: 1,
+          split_timeout_ms: 60000,
+          enforce_delay_ms: 10,
+        }),
+      );
       // Fire quits with three words — isSplitQuit returns false at line 22
       for (let i = 0; i < 5; i++) {
         freshBot.client.simulateEvent('quit', {
@@ -5516,12 +5558,14 @@ describe('chanmod plugin — snapshotOps handles missing channel gracefully', ()
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       // Load plugin with stopnethack — bot does NOT join #test, so getChannel('#test') = undefined
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { stopnethack_mode: 1, split_timeout_ms: 60000, enforce_delay_ms: 10 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          stopnethack_mode: 1,
+          split_timeout_ms: 60000,
+          enforce_delay_ms: 10,
+        }),
+      );
 
       // Trigger split — snapshotOps iterates channels (['#test']) but getChannel returns
       // undefined because the bot hasn't joined → hits the `if (!ch) continue` branch
@@ -5564,17 +5608,15 @@ describe('chanmod plugin — parseKicker with non-matching kick reason', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            rejoin_on_kick: true,
-            rejoin_delay_ms: 10,
-            revenge_action: 'deop',
-            revenge_delay_ms: 10,
-          },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          rejoin_on_kick: true,
+          rejoin_delay_ms: 10,
+          revenge_action: 'deop',
+          revenge_delay_ms: 10,
+        }),
+      );
       freshBot.channelSettings.set('#test', 'revenge', true);
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
@@ -5728,16 +5770,14 @@ describe('chanmod plugin — additive/subtractive sync on join', () => {
   it('leaves unmentioned modes alone (channel has +ntsz, config "+nt-s")', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            enforce_modes: true,
-            enforce_channel_modes: '+nt-s',
-            enforce_delay_ms: 5,
-          },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_modes: true,
+          enforce_channel_modes: '+nt-s',
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#chan');
       freshBot.channelSettings.set('#chan', 'enforce_modes', true);
       freshBot.client.clearMessages();
@@ -5764,16 +5804,14 @@ describe('chanmod plugin — additive/subtractive sync on join', () => {
   it('sends nothing when no modes to add or remove (+nt already set, -s not present)', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            enforce_modes: true,
-            enforce_channel_modes: '+nt-s',
-            enforce_delay_ms: 5,
-          },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_modes: true,
+          enforce_channel_modes: '+nt-s',
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#chan');
       freshBot.channelSettings.set('#chan', 'enforce_modes', true);
       freshBot.client.clearMessages();
@@ -5792,16 +5830,14 @@ describe('chanmod plugin — additive/subtractive sync on join', () => {
   it('adds missing mode from add set (+n present, +t missing)', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            enforce_modes: true,
-            enforce_channel_modes: '+nt-s',
-            enforce_delay_ms: 5,
-          },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_modes: true,
+          enforce_channel_modes: '+nt-s',
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#chan');
       freshBot.channelSettings.set('#chan', 'enforce_modes', true);
       freshBot.client.clearMessages();
@@ -5820,16 +5856,14 @@ describe('chanmod plugin — additive/subtractive sync on join', () => {
   it('unprefixed channel_modes value is rejected — no enforcement runs', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            enforce_modes: true,
-            enforce_channel_modes: 'nt',
-            enforce_delay_ms: 5,
-          },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_modes: true,
+          enforce_channel_modes: 'nt',
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#chan');
       freshBot.channelSettings.set('#chan', 'enforce_modes', true);
       freshBot.client.clearMessages();
@@ -5850,16 +5884,14 @@ describe('chanmod plugin — additive/subtractive sync on join', () => {
   it('additive-only config "+nt" leaves extra modes alone', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            enforce_modes: true,
-            enforce_channel_modes: '+nt',
-            enforce_delay_ms: 5,
-          },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_modes: true,
+          enforce_channel_modes: '+nt',
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#chan');
       freshBot.channelSettings.set('#chan', 'enforce_modes', true);
       freshBot.client.clearMessages();
@@ -5886,12 +5918,14 @@ describe('chanmod plugin — additive/subtractive reactive enforcement', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_channel_modes: '+nt-s', enforce_modes: true, enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_channel_modes: '+nt-s',
+          enforce_modes: true,
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -5910,12 +5944,14 @@ describe('chanmod plugin — additive/subtractive reactive enforcement', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_channel_modes: '+nt-s', enforce_modes: true, enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_channel_modes: '+nt-s',
+          enforce_modes: true,
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -5934,12 +5970,14 @@ describe('chanmod plugin — additive/subtractive reactive enforcement', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_channel_modes: '+nt-s', enforce_modes: true, enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_channel_modes: '+nt-s',
+          enforce_modes: true,
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -5958,12 +5996,14 @@ describe('chanmod plugin — additive/subtractive reactive enforcement', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_channel_modes: '+nt-s', enforce_modes: true, enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_channel_modes: '+nt-s',
+          enforce_modes: true,
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -5983,12 +6023,14 @@ describe('chanmod plugin — additive/subtractive reactive enforcement', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_channel_modes: '+nt-s', enforce_modes: true, enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_channel_modes: '+nt-s',
+          enforce_modes: true,
+          enforce_delay_ms: 5,
+        }),
+      );
       giveBotOps(freshBot, '#test');
       freshBot.client.clearMessages();
 
@@ -6013,12 +6055,14 @@ describe('chanmod plugin — bot join chanserv_access sync', () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
       giveBotOps(freshBot, '#race');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: { enforce_channel_modes: '+nt', enforce_modes: true, enforce_delay_ms: 5 },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          enforce_channel_modes: '+nt',
+          enforce_modes: true,
+          enforce_delay_ms: 5,
+        }),
+      );
       freshBot.channelSettings.set('#race', 'channel_modes', '+nti');
 
       // Remove the channel from state before the enforcement timer fires
@@ -6040,15 +6084,13 @@ describe('chanmod plugin — bot join chanserv_access sync', () => {
   it('sets backend access and verifies when bot joins a channel with chanserv_access configured', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            chanserv_services_type: 'atheme',
-            chanserv_nick: 'ChanServ',
-          },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          chanserv_services_type: 'atheme',
+          chanserv_nick: 'ChanServ',
+        }),
+      );
 
       // Pre-configure chanserv_access for the channel BEFORE bot joins
       freshBot.channelSettings.set('#opchan', 'chanserv_access', 'op');
@@ -6076,15 +6118,13 @@ describe('chanmod plugin — bot join chanserv_access sync', () => {
   it('always sends FLAGS probe on join even when chanserv_access is none (auto-detect)', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            chanserv_services_type: 'atheme',
-            chanserv_nick: 'ChanServ',
-          },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          chanserv_services_type: 'atheme',
+          chanserv_nick: 'ChanServ',
+        }),
+      );
 
       freshBot.channelSettings.set('#nochan', 'chanserv_access', 'none');
       freshBot.client.clearMessages();
@@ -6115,14 +6155,12 @@ describe('chanmod plugin — chanserv_services_type selects Anope backend', () =
   it('uses Anope backend (ACCESS LIST) when chanserv_services_type is set to anope', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            chanserv_services_type: 'anope',
-          },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({
+          chanserv_services_type: 'anope',
+        }),
+      );
 
       // Set chanserv_access so verifyAccess fires on join
       freshBot.channelSettings.set('#anopechan', 'chanserv_access', 'op');
@@ -6160,15 +6198,10 @@ describe('chanmod plugin — immediate unban on bot ban', () => {
     try {
       giveBotOps(freshBot, '#test');
       addToChannel(freshBot, 'Attacker', 'attacker', 'attacker.host', '#test');
-      await freshBot.pluginLoader.load(PLUGIN_PATH, {
-        chanmod: {
-          enabled: true,
-          config: {
-            chanserv_services_type: 'anope',
-            takeover_detection: true,
-          },
-        },
-      });
+      await freshBot.pluginLoader.load(
+        PLUGIN_PATH,
+        makeChanmodPluginOverrides({ chanserv_services_type: 'anope' }),
+      );
       freshBot.channelSettings.set('#test', 'chanserv_access', 'op');
       freshBot.channelSettings.set('#test', 'takeover_detection', true);
       freshBot.client.clearMessages();

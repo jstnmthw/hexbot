@@ -462,14 +462,13 @@ export function readConfig(api: PluginAPI): ChanmodConfig {
   // services_host_pattern is load-bearing for the ChanServ-impostor
   // guard. No default is provided: the CRITICAL audit (2026-04-24)
   // requires the operator to pin a real services-host suffix (e.g.
-  // `services.*`, `*.libera.chat`, `services.rizon.net`). If absent,
-  // we fall back to the pre-fix trust-on-first-use behaviour but
-  // emit a LOUD warning every time readConfig runs so operators
-  // cannot miss the misconfig. See config/plugins.example.json for
-  // per-network suggestions.
+  // `services.*`, `*.libera.chat`, `services.rizon.net`). We refuse to
+  // load without it — clean-cut over trust-on-first-use, since a silent
+  // degraded posture is exactly the failure mode the audit flagged.
+  // See config/plugins.example.json for per-network suggestions.
   if (!config.services_host_pattern.trim()) {
-    api.warn(
-      '[security] chanmod: services_host_pattern is unset. The ChanServ-impostor guard is reduced to trust-on-first-use by nick — during a services outage, anyone who grabs the ChanServ nick can feed the bot a crafted INFO/FLAGS response that elevates them to founder. Set services_host_pattern in plugins.json chanmod.config (e.g. "services.*", "*.libera.chat", "services.rizon.net"). See config/plugins.example.json. (audit 2026-04-24 CRITICAL ChanServ pin)',
+    throw new Error(
+      'chanmod: services_host_pattern is required. Set it in plugins.json chanmod.config (e.g. "services.*", "*.libera.chat", "services.rizon.net"). The ChanServ-impostor guard depends on this pattern — during a services outage, anyone who grabs the ChanServ nick can feed the bot a crafted INFO/FLAGS response that elevates them to founder. See config/plugins.example.json. (audit 2026-04-24 CRITICAL ChanServ pin)',
     );
   }
 

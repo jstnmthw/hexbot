@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import { AnopeBackend } from '../../plugins/chanmod/anope-backend';
 import { createProbeState } from '../../plugins/chanmod/chanserv-notice';
+import { makeChanmodPluginOverrides } from '../helpers/chanmod-plugin-config';
 import type { MockBot } from '../helpers/mock-bot';
 import { createMockBot } from '../helpers/mock-bot';
 import { giveBotOps, tick } from '../helpers/plugin-test-helpers';
@@ -26,7 +27,7 @@ describe('AnopeBackend — command format', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    await bot.pluginLoader.load(PLUGIN_PATH);
+    await bot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
   });
 
   afterAll(() => {

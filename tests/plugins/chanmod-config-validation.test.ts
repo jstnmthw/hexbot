@@ -14,7 +14,14 @@ import { createMockPluginAPI } from '../helpers/mock-plugin-api';
 describe('readConfig — config validation', () => {
   function makeApi(configOverrides: Record<string, unknown> = {}) {
     const log = vi.fn();
-    const api = createMockPluginAPI({ config: configOverrides, log });
+    // services_host_pattern is required by readConfig (audit 2026-04-24
+    // CRITICAL ChanServ pin). Fill it in so validation tests aren't
+    // blocked on the unrelated hard-fail; tests that specifically exercise
+    // the missing-pattern path live in chanmod-state.test.ts.
+    const api = createMockPluginAPI({
+      config: { services_host_pattern: 'services.*', ...configOverrides },
+      log,
+    });
     return { api, log };
   }
 

@@ -2,6 +2,7 @@
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { makeChanmodPluginOverrides } from '../helpers/chanmod-plugin-config';
 import { type MockBot, createMockBot } from '../helpers/mock-bot';
 import { giveBotOps } from '../helpers/plugin-test-helpers';
 
@@ -20,7 +21,7 @@ describe('chanmod — sticky ban enforcement', () => {
     giveBotOps(bot, '#test');
     // Add a user record with +m so they can manage bans
     bot.permissions.addUser('admin', '*!admin@admin.host', 'm', 'test');
-    const result = await bot.pluginLoader.load(PLUGIN_PATH);
+    const result = await bot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
     expect(result.status).toBe('ok');
   });
 

@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { makeChanmodPluginOverrides } from '../helpers/chanmod-plugin-config';
 import type { MockBot } from '../helpers/mock-bot';
 import { createMockBot } from '../helpers/mock-bot';
 import { addToChannel, giveBotOps, simulateMode, tick } from '../helpers/plugin-test-helpers';
@@ -53,15 +54,13 @@ describe('chanmod — topic recovery', () => {
       { key: 'protect_topic', type: 'flag', default: false, description: 'Topic protection' },
     ]);
 
-    const result = await bot.pluginLoader.load(PLUGIN_PATH, {
-      chanmod: {
-        enabled: true,
-        config: {
-          enforce_delay_ms: 5,
-          takeover_window_ms: 30000,
-        },
-      },
-    });
+    const result = await bot.pluginLoader.load(
+      PLUGIN_PATH,
+      makeChanmodPluginOverrides({
+        enforce_delay_ms: 5,
+        takeover_window_ms: 30000,
+      }),
+    );
     expect(result.status).toBe('ok');
 
     // Advance past irc-bridge's topic startup grace (5s)
