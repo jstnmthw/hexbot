@@ -4,6 +4,7 @@
 // IRC message that should be delivered by one or more bots; this handler
 // decides whether to broadcast, dispatch locally, forward to a single leaf,
 // or drop.
+import type { LoggerLike } from '../../logger';
 import type { LinkFrame } from './types.js';
 
 /** Narrow facade over the hub's state used by {@link handleBsay}. */
@@ -21,23 +22,50 @@ export interface HubBsayContext {
    * `onBsay` callback; may be null before the bot wires it up.
    */
   deliverLocal: ((target: string, message: string) => void) | null;
+  /**
+   * Re-check that `handle` has `flags` on `channel` (null = global).
+   * The hub calls this before fanout so a compromised leaf cannot craft
+   * a raw BSAY under another user's authority. Null means the hub has
+   * not yet wired its permissions adapter — fail closed in that case.
+   */
+  checkFlags: ((handle: string, flags: string, channel: string | null) => boolean) | null;
+  /** Optional logger for `[security]` rejection lines. */
+  logger?: LoggerLike | null;
 }
 
 /**
  * Route a BSAY frame: broadcast, deliver locally, forward to a single
- * leaf, or drop. Mirrors the old `BotLinkHub.handleBsay` exactly.
+ * leaf, or drop. Re-verifies `+m` on the claimed sender handle before any
+ * fanout — a compromised leaf can assemble a raw BSAY frame and bypass
+ * the originating-leaf flag check otherwise (CRITICAL-BSAY, 2026-04-24).
  */
 export function handleBsay(ctx: HubBsayContext, fromBot: string, frame: LinkFrame): void {
   const target = String(frame.target ?? '');
   const message = String(frame.message ?? '');
   const toBot = String(frame.toBot ?? '*');
+  const fromHandle = typeof frame.fromHandle === 'string' ? frame.fromHandle : '';
 
-  // TODO (Phase 3 audit): when BSAY frames gain a `fromHandle` field,
-  // re-verify the sending handle has `+m` here before fanning out.
-  // Today the only check is on the originating leaf; a compromised
-  // leaf can craft a raw BSAY frame and bypass that gate. The fix is
-  // a protocol addition (carry handle, verify on hub) and lives with
-  // the broader botlink HELLO challenge-response migration in §11.
+  if (!fromHandle) {
+    ctx.logger?.warn(
+      `[security] BSAY from "${fromBot}" missing fromHandle — dropping (target=${target})`,
+    );
+    return;
+  }
+
+  // Channel-scoped `+m` when the BSAY target is a channel, global `+m`
+  // when it is a PM nick. startsWith('#') or '&' catches the two common
+  // channel prefixes on the networks we target.
+  const isChannel = target.startsWith('#') || target.startsWith('&');
+  const channel = isChannel ? target : null;
+
+  if (!ctx.checkFlags || !ctx.checkFlags(fromHandle, 'm', channel)) {
+    ctx.logger?.warn(
+      `[security] BSAY from "${fromBot}" rejected: handle="${fromHandle}" lacks +m on ${
+        channel ?? '(global)'
+      } (target=${target})`,
+    );
+    return;
+  }
 
   if (toBot === '*') {
     ctx.broadcast(frame, fromBot);

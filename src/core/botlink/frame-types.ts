@@ -7,6 +7,7 @@
 
 export const FrameType = {
   // Handshake + heartbeat
+  HELLO_CHALLENGE: 'HELLO_CHALLENGE',
   HELLO: 'HELLO',
   WELCOME: 'WELCOME',
   AUTH_OK: 'AUTH_OK',

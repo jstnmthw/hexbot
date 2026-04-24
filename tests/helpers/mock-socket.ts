@@ -4,7 +4,7 @@
 import type { Socket } from 'node:net';
 import { Duplex } from 'node:stream';
 
-import type { LinkFrame } from '../../src/core/botlink';
+import { type LinkFrame, computeHelloHmac, deriveLinkKey } from '../../src/core/botlink';
 
 export interface MockSocketResult {
   /** Typed as Socket for passing to production code that expects net.Socket. */
@@ -62,4 +62,57 @@ export function parseWritten(written: string[]): LinkFrame[] {
     }
   }
   return frames;
+}
+
+/**
+ * All botlink tests use the same per-botnet salt (64 zeros = 32 bytes). Not
+ * secret — a deterministic value keeps the HMAC in fixtures reproducible and
+ * matches what the example configs ship.
+ */
+export const TEST_LINK_SALT = '0000000000000000000000000000000000000000000000000000000000000000';
+
+/** Derive the HMAC key for a test password. Mirrors the production path. */
+export function testLinkKey(password: string, salt = TEST_LINK_SALT): Buffer {
+  return deriveLinkKey(password, salt);
+}
+
+/**
+ * Read the HELLO_CHALLENGE frame the hub wrote after `addConnection`. The
+ * hub emits CHALLENGE synchronously during `handleConnection`, so callers
+ * do not need to `await tick()` before reading the buffer.
+ */
+export function getChallengeNonce(written: string[]): string {
+  for (const frame of parseWritten(written)) {
+    if (frame.type === 'HELLO_CHALLENGE') return String(frame.nonce);
+  }
+  throw new Error('No HELLO_CHALLENGE found in written frames');
+}
+
+/**
+ * Find the first frame of a given type in the written buffer. Tests used to
+ * pin `frames[0]` to the first post-handshake reply, but the hub now writes
+ * HELLO_CHALLENGE before WELCOME / ERROR, so assertions need a lookup
+ * that skips the challenge frame.
+ */
+export function findFrame(written: string[], type: string): LinkFrame | undefined {
+  return parseWritten(written).find((f) => f.type === type);
+}
+
+/**
+ * Compute the HELLO reply for the hub's latest CHALLENGE and push it onto
+ * the duplex so the hub's onFrame handler processes it on the next tick.
+ * Returns the sent frame for assertion convenience.
+ */
+export function answerHelloChallenge(
+  written: string[],
+  duplex: Duplex,
+  linkKey: Buffer,
+  botname: string,
+  extra: Partial<LinkFrame> = {},
+): LinkFrame {
+  const nonceHex = getChallengeNonce(written);
+  const hmac = computeHelloHmac(linkKey, Buffer.from(nonceHex, 'hex'));
+  const frame: LinkFrame = { type: 'HELLO', botname, hmac, version: '1.0', ...extra };
+  pushFrame(duplex, frame);
+  return frame;
 }

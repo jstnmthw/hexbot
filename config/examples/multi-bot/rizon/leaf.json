@@ -36,6 +36,7 @@
     "botname": "rizon-leaf",
     "hub": { "host": "libera-hub.example.net", "port": 5051 },
     "password_env": "HEX_BOTLINK_PASSWORD",
+    "link_salt": "0000000000000000000000000000000000000000000000000000000000000000",
     "reconnect_delay_ms": 5000,
     "reconnect_max_delay_ms": 60000,
     "sync_permissions": true,

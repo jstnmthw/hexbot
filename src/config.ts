@@ -212,6 +212,20 @@ export function validateResolvedSecrets(cfg: BotConfig): void {
     if (!cfg.botlink.password) {
       throw new Error('[config] HEX_BOTLINK_PASSWORD must be set (botlink.enabled is true).');
     }
+    // Per-botnet HMAC salt for the HELLO challenge-response handshake.
+    // Inline hex string in bot.json — generate with `openssl rand -hex 32`.
+    if (!cfg.botlink.link_salt) {
+      throw new Error(
+        '[config] botlink.link_salt must be set (botlink.enabled is true). ' +
+          'Generate a per-botnet salt with `openssl rand -hex 32` and share the same value across every bot in the botnet.',
+      );
+    }
+    if (!/^[0-9a-fA-F]+$/.test(cfg.botlink.link_salt) || cfg.botlink.link_salt.length < 32) {
+      throw new Error(
+        '[config] botlink.link_salt must be ≥ 32 hex characters (16 bytes). ' +
+          'Generate with `openssl rand -hex 32`.',
+      );
+    }
   }
 
   // SOCKS5 proxy password — required when proxy has a username set

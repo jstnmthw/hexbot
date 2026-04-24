@@ -30,6 +30,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Branch `feature/ai-chat-plugin` — expands the ai-chat plugin substantially beyond the one-line mention under 0.3.0. Pending merge into `main`.
 
+### BOTLINK — v2 handshake + fanout hardening
+
+**Breaking.** Closes two CRITICAL findings from the 2026-04-24 security audit (`CRITICAL-BOTLINK-HELLO` and `CRITICAL-BSAY`). Every bot in a botnet must update together and must add `botlink.link_salt` to its `bot.json`; a mismatched salt between hub and leaf produces `AUTH_FAILED` on every connection attempt.
+
+- **HMAC challenge-response HELLO.** The fixed-salt `scrypt` hash in the old HELLO was a replay-able wire token. v2 removes it: the hub sends `HELLO_CHALLENGE { nonce }` on every connection and the leaf replies with `HELLO { hmac }` computed over the nonce using `scrypt(password, link_salt)`. The password itself is never transmitted. `hashPassword` has been deleted — there is no pre-v2 compatibility path.
+- **Per-botnet `link_salt`.** Required inline hex string in `botlink.link_salt` (≥ 32 chars / 16 bytes). Generate with `openssl rand -hex 32` and share the same value across every bot in a botnet. Validated at startup by `validateResolvedSecrets` when `botlink.enabled` is true.
+- **Hub-side `+m` re-check for BSAY fanout.** Every `BSAY` frame now carries a `fromHandle` field. Before fanout the hub re-runs `permissions.checkFlagsByHandle(fromHandle, 'm', channel)` — channel-scoped when the BSAY target is a channel, global for PM targets. A compromised leaf can no longer craft a raw BSAY frame to bypass the originating-leaf `+m` check.
+- **Hub-side session gate for `RELAY_REQUEST`.** The relay router requires a live DCC party session for the requesting handle (`hasRemoteSession`) before registering the relay. Rejections reply `RELAY_END` with reason `"No active DCC party session..."` and log a `[security]` warning.
+- **`listen.host` defaults to `127.0.0.1`.** Binding to any non-loopback, non-RFC1918 address (including `0.0.0.0`, `::`, or a public IP) logs a `[security]` warning at startup. A new helper `isPrivateOrLoopback()` in `src/core/botlink/auth.ts` is exported for other callers.
+- **Per-frame rate buckets on the hub.** New per-leaf 1-second windows: `BSAY` 10/s, `ANNOUNCE` 5/s, `RELAY_INPUT` / `RELAY_OUTPUT` 30/s, `PARTY_JOIN` / `PARTY_PART` 5/s. `BSAY` logs a one-shot `[security]` warning on first drop in a window; the rest silently drop (matches `PARTY_CHAT` precedent).
+- **Leaf CMD inbound cap.** `botlink.leaf_cmd_rate_limit` renamed to `botlink.cmd_inbound_rate` (same default 50/s). The previous name is not recognized.
+
 ### Removed
 
 - **`ollama.allow_private_url` config key and SSRF guard removed** (`plugins/ai-chat/providers/ollama.ts`): the guard validated the operator-configured `base_url` against a private-IP blocklist before connecting to Ollama. Because ai-chat is text-only (no user-supplied image URLs), there is no user-controlled fetch path — the SSRF threat model requires a path from untrusted input to an outbound HTTP request, which doesn't exist here. Operators running a local Ollama daemon no longer need to set `allow_private_url: true`; the key is silently ignored if present in existing configs. The RSS plugin's URL validator (`plugins/rss/url-validator.ts`) remains in place — that guard covers a real surface (operator-supplied feed URLs from IRC).

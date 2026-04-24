@@ -334,9 +334,15 @@ The bot link protocol (`src/core/botlink-protocol.ts`, `src/core/botlink-hub.ts`
 
 ### Authentication
 
-- Passwords are **never sent in plaintext**. Leaves send `scrypt:<hex>` hashes in the `HELLO` frame.
-- The hub compares against a pre-computed expected hash. Failed auth produces `AUTH_FAILED` and the connection is closed.
-- All bots in a botnet share the same password. Use a strong, unique password per botnet.
+Bot link uses an **HMAC challenge-response handshake**:
+
+1. Hub accepts the TCP connection and immediately sends `HELLO_CHALLENGE { nonce }` — a freshly-generated 32-byte random nonce, hex-encoded.
+2. Leaf derives a per-botnet key via `scrypt(password, link_salt)`, HMAC-SHA256s the nonce with that key, and replies with `HELLO { botname, hmac }`.
+3. Hub re-derives the same key from its own config, recomputes the HMAC, and compares with `timingSafeEqual`. A mismatch produces `AUTH_FAILED` and the connection is closed.
+
+The password is **never transmitted**, not even hashed. Each connection uses a fresh nonce, so a captured HELLO frame is useless on a new connection — replay is structurally impossible.
+
+**Per-botnet salt.** `botlink.link_salt` in `bot.json` is a ≥ 32-hex-character (16-byte) value shared by every bot in a botnet. It is not secret on its own, but combined with the password it produces a per-deployment key that a canned wordlist cannot reuse across botnets. Generate with `openssl rand -hex 32`. Bots with mismatched salts cannot authenticate each other — the botnet must upgrade in lockstep.
 
 ### Auth brute-force protection
 
@@ -357,7 +363,8 @@ The hub tracks per-IP auth failures and temporarily bans IPs that exceed the thr
 
 - All string values in incoming frames are sanitized (stripped of `\r`, `\n`, `\0`) via `sanitizeFrame()` before processing.
 - Frame size is capped at 64KB. Oversized frames are protocol errors and cause immediate disconnect.
-- Rate limiting: CMD frames at 10/sec, PARTY_CHAT at 5/sec per leaf. Exceeding limits returns an error or silently drops.
+- Per-frame rate limiting (per leaf, 1-second window): `CMD` 10/s (ERROR reply on overflow); `PARTY_CHAT` 5/s; `PROTECT_*` 20/s; `BSAY` 10/s (one-shot `[security]` warning on first drop); `ANNOUNCE` 5/s; `RELAY_INPUT` / `RELAY_OUTPUT` 30/s; `PARTY_JOIN` / `PARTY_PART` 5/s. All non-CMD overflows are silent drops.
+- **BSAY re-check.** Every BSAY frame carries `fromHandle`. Before fanout the hub re-runs `permissions.checkFlagsByHandle(fromHandle, 'm', channel)` — channel-scoped when the BSAY target is a channel, global when it is a PM nick. Missing `fromHandle` or a handle without `+m` drops the frame with a `[security]` audit line. A compromised leaf cannot assemble a raw BSAY under another user's authority.
 
 ### Relay sessions
 
@@ -365,6 +372,7 @@ When a DCC user runs `.relay <botname>`, their input is proxied to the remote bo
 
 - A relay session inherits the permissions of the user's handle on the **hub's** permission database.
 - If the user is removed from the hub's permissions while relaying, the relay continues until explicitly ended.
+- **Hub-side session gate.** The hub registers a relay only when the originating leaf has a live DCC party session for the handle (`hasRemoteSession`). A compromised leaf cannot otherwise `RELAY_REQUEST` into any handle known to the target bot and execute commands under that handle's identity. Rejection replies with `RELAY_END { reason: "No active DCC party session..." }` and logs a `[security]` warning.
 
 ### Protection frames
 
@@ -372,9 +380,9 @@ When a DCC user runs `.relay <botname>`, their input is proxied to the remote bo
 
 ### Network considerations
 
-- **Bot link connections are unencrypted TCP and the HELLO password hash is replay-able.** The hub auth is a single fixed-salt `scrypt` hash that a passive observer on the link path can capture and replay from any non-banned IP. A future release will move to a challenge-response HMAC handshake; until then, you **must not run the link over a network you do not control**.
-- **Mandatory tunnel.** For any WAN deployment, bot-link traffic must travel inside a WireGuard / OpenVPN / SSH tunnel. Running bot-link over the public internet with no tunnel is an unsupported configuration regardless of password strength.
-- The `listen.host` config should be set to a private IP or `127.0.0.1` when bots are co-located. Do not expose the link port to the public internet without transport encryption.
+- **Bot link connections are unencrypted TCP.** Authentication is replay-resistant (HMAC over a fresh per-connection nonce — see above), but the payload after handshake is not. Command frames, party-line chat, and `BSAY` messages travel in the clear.
+- **Mandatory tunnel for WAN.** For any deployment that crosses untrusted networks, bot-link traffic must travel inside a WireGuard / OpenVPN / SSH tunnel. Running bot-link directly over the public internet is an unsupported configuration regardless of password strength.
+- **`listen.host` defaults to `127.0.0.1`.** The hub binds loopback by default. When the resolved bind address is neither loopback (`127.0.0.0/8`, `::1`) nor RFC1918 (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), hub startup logs a `[security]` warning naming the address and pointing at the tunnel requirement. Operators who intentionally bind `0.0.0.0` must have a tunnel in front.
 
 ## 12. Security checklist for code review
 

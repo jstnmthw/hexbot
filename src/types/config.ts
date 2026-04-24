@@ -201,6 +201,16 @@ export interface BotlinkConfig {
   hub?: { host: string; port: number };
   listen?: { host: string; port: number };
   password: string;
+  /**
+   * Per-botnet salt (hex). Seeds the scrypt-derived HMAC key used for the
+   * HELLO challenge-response handshake. Required when `enabled: true` (both
+   * hub and leaf). Must be ≥ 32 hex characters (16 bytes decoded). Not
+   * secret on its own, but every bot in a botnet must share the same value.
+   * Generate with `openssl rand -hex 32`. Runtime-optional only because
+   * config-level validation enforces presence via validateResolvedSecrets
+   * when `enabled: true`; operators never leave it unset for a live link.
+   */
+  link_salt?: string;
   reconnect_delay_ms?: number;
   reconnect_max_delay_ms?: number;
   max_leaves?: number;
@@ -228,7 +238,7 @@ export interface BotlinkConfig {
    * hub would otherwise run unbounded command execution on every leaf; this
    * caps that blast radius to a reasonable admin-burst rate. Default: 50.
    */
-  leaf_cmd_rate_limit?: number;
+  cmd_inbound_rate?: number;
 }
 
 /** Plugin-specific credentials stored in bot.json (not plugins.json) per SECURITY.md §6. */

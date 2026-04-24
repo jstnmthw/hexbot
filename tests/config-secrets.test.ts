@@ -210,6 +210,8 @@ describe('validateResolvedSecrets', () => {
     expect(() => validateResolvedSecrets(cfg)).not.toThrow();
   });
 
+  const TEST_SALT = '0'.repeat(64);
+
   it('fails when botlink enabled + BOTLINK_PASSWORD unset', () => {
     const cfg = baseConfig();
     cfg.botlink = {
@@ -217,13 +219,14 @@ describe('validateResolvedSecrets', () => {
       role: 'leaf',
       botname: 'test',
       password: '',
+      link_salt: TEST_SALT,
       ping_interval_ms: 30000,
       link_timeout_ms: 90000,
     };
     expect(() => validateResolvedSecrets(cfg)).toThrow(/HEX_BOTLINK_PASSWORD must be set/);
   });
 
-  it('passes when botlink enabled + BOTLINK_PASSWORD set', () => {
+  it('fails when botlink enabled + link_salt unset', () => {
     const cfg = baseConfig();
     cfg.botlink = {
       enabled: true,
@@ -233,10 +236,38 @@ describe('validateResolvedSecrets', () => {
       ping_interval_ms: 30000,
       link_timeout_ms: 90000,
     };
+    expect(() => validateResolvedSecrets(cfg)).toThrow(/link_salt must be set/);
+  });
+
+  it('fails when botlink enabled + link_salt too short', () => {
+    const cfg = baseConfig();
+    cfg.botlink = {
+      enabled: true,
+      role: 'leaf',
+      botname: 'test',
+      password: 'shared-secret',
+      link_salt: 'abc',
+      ping_interval_ms: 30000,
+      link_timeout_ms: 90000,
+    };
+    expect(() => validateResolvedSecrets(cfg)).toThrow(/32 hex characters/);
+  });
+
+  it('passes when botlink enabled + BOTLINK_PASSWORD + link_salt set', () => {
+    const cfg = baseConfig();
+    cfg.botlink = {
+      enabled: true,
+      role: 'leaf',
+      botname: 'test',
+      password: 'shared-secret',
+      link_salt: TEST_SALT,
+      ping_interval_ms: 30000,
+      link_timeout_ms: 90000,
+    };
     expect(() => validateResolvedSecrets(cfg)).not.toThrow();
   });
 
-  it('passes when botlink disabled regardless of password', () => {
+  it('passes when botlink disabled regardless of password/salt', () => {
     const cfg = baseConfig();
     cfg.botlink = {
       enabled: false,

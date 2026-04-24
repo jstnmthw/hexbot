@@ -619,6 +619,15 @@ export function registerBotlinkCommands(deps: BotlinkCommandsDeps): void {
       // IRC colour/format codes from user-controlled strings to keep the audit
       // view readable and prevent formatting bleed into surrounding rows.
       // Matches `.say`/`.msg` which already do the same.
+      // `.bsay` is gated by `+m`, so the dispatcher either resolved the
+      // caller's handle via findByHostmask (pub/msg transports) or the
+      // caller is on a trusted transport (repl/dcc/botlink) that bypasses
+      // the hostmask gate. Fall back to `ctx.nick` in the latter case —
+      // matches the pattern `.bot` uses. The frame carries the handle
+      // across the link so the hub can re-check `+m` on the target
+      // channel before fanning out; a compromised leaf could otherwise
+      // assemble a raw BSAY and bypass the originating-leaf check.
+      const fromHandle = ctx.handle ?? ctx.nick;
       tryAudit(db, ctx, {
         action: 'bsay',
         target,
@@ -630,7 +639,13 @@ export function registerBotlinkCommands(deps: BotlinkCommandsDeps): void {
         else ctx.reply('IRC client not available on this bot.');
       };
 
-      const bsayFrame: LinkFrame = { type: 'BSAY', target, message, toBot: botname };
+      const bsayFrame: LinkFrame = {
+        type: 'BSAY',
+        target,
+        message,
+        toBot: botname,
+        fromHandle,
+      };
 
       if (botname === config.botname) {
         sendLocal();

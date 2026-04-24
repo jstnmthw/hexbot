@@ -4,19 +4,24 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CommandHandler } from '../../../src/command-handler';
 import type { CommandContext } from '../../../src/command-handler';
-import { BotLinkHub, BotLinkLeaf, type LinkFrame, hashPassword } from '../../../src/core/botlink';
+import { BotLinkHub, BotLinkLeaf, type LinkFrame } from '../../../src/core/botlink';
 import { registerBotlinkCommands } from '../../../src/core/commands/botlink-commands';
 import type { BotlinkDCCView } from '../../../src/core/dcc';
 import { BotDatabase } from '../../../src/database';
 import type { BotlinkConfig } from '../../../src/types';
-import { createMockSocket, parseWritten, pushFrame } from '../../helpers/mock-socket';
+import {
+  TEST_LINK_SALT,
+  answerHelloChallenge,
+  createMockSocket,
+  parseWritten,
+  pushFrame,
+  testLinkKey,
+} from '../../helpers/mock-socket';
 
-// scrypt is intentionally slow (~10-50ms per call). The same plaintext
-// `'secret'` is used in every test that exercises a HELLO handshake, so
-// hash it once at module load and reuse the value — this trims the file
-// from ~2.2s to ~1.0s without changing semantics (verification still runs
-// real scrypt on the hash).
-const SECRET_HASH = hashPassword('secret');
+// Derive once at module load — the HMAC key depends only on the shared
+// test password + link salt, so reusing it across tests trims per-test
+// scrypt cost to a single call.
+const SECRET_LINK_KEY = testLinkKey('secret');
 
 // Track hubs so afterEach can close() them — otherwise BotLinkAuthManager's
 // 5-minute sweepTimer leaks across the test run (unref'd so process still exits).
@@ -49,8 +54,9 @@ function hubConfig(): BotlinkConfig {
     enabled: true,
     role: 'hub',
     botname: 'myhub',
-    listen: { host: '0.0.0.0', port: 15051 },
+    listen: { host: '127.0.0.1', port: 15051 },
     password: 'secret',
+    link_salt: TEST_LINK_SALT,
     ping_interval_ms: 600_000,
     link_timeout_ms: 600_000,
   };
@@ -63,6 +69,7 @@ function leafConfig(): BotlinkConfig {
     botname: 'myleaf',
     hub: { host: '127.0.0.1', port: 15051 },
     password: 'secret',
+    link_salt: TEST_LINK_SALT,
     ping_interval_ms: 600_000,
     link_timeout_ms: 600_000,
     reconnect_delay_ms: 600_000,
@@ -83,6 +90,9 @@ async function connectLeaf(
   const leaf = new BotLinkLeaf(cfg ?? leafConfig(), '1.0.0');
   const { socket, written, duplex } = createMockSocket();
   leaf.connectWithSocket(socket);
+  // Leaf blocks on HELLO_CHALLENGE before it will accept WELCOME.
+  pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'thehub' });
+  await tick();
   pushFrame(duplex, { type: 'WELCOME', botname: 'thehub', version: '1.0' });
   await tick();
   return { leaf, socket, written, duplex };
@@ -205,12 +215,7 @@ describe('botlink commands', () => {
       // Simulate a leaf connecting through the hub
       const { socket: leafSocket, written: leafWritten, duplex: leafDuplex } = createMockSocket();
       hub.addConnection(leafSocket);
-      pushFrame(leafDuplex, {
-        type: 'HELLO',
-        botname: 'leaf1',
-        password: SECRET_HASH,
-        version: '1.0',
-      });
+      answerHelloChallenge(leafWritten, leafDuplex, SECRET_LINK_KEY, 'leaf1');
       await tick();
 
       return { hub, handler, leafWritten };
@@ -515,12 +520,7 @@ describe('botlink commands', () => {
       // Connect a leaf so it's a valid target
       const { socket: leafSocket, written: leafWritten, duplex: leafDuplex } = createMockSocket();
       hub.addConnection(leafSocket);
-      pushFrame(leafDuplex, {
-        type: 'HELLO',
-        botname: 'leaf1',
-        password: SECRET_HASH,
-        version: '1',
-      });
+      answerHelloChallenge(leafWritten, leafDuplex, SECRET_LINK_KEY, 'leaf1');
       await tick();
       leafWritten.length = 0;
 
@@ -810,23 +810,13 @@ describe('branch coverage edge cases', () => {
 
   it('.bottree with multiple leaves shows ├─ and └─ prefixes', async () => {
     const hub = makeHub(hubConfig(), '1.0.0');
-    const { socket: s1, duplex: d1 } = createMockSocket();
+    const { socket: s1, written: w1, duplex: d1 } = createMockSocket();
     hub.addConnection(s1);
-    pushFrame(d1, {
-      type: 'HELLO',
-      botname: 'leaf1',
-      password: SECRET_HASH,
-      version: '1',
-    });
+    answerHelloChallenge(w1, d1, SECRET_LINK_KEY, 'leaf1');
     await tick();
-    const { socket: s2, duplex: d2 } = createMockSocket();
+    const { socket: s2, written: w2, duplex: d2 } = createMockSocket();
     hub.addConnection(s2);
-    pushFrame(d2, {
-      type: 'HELLO',
-      botname: 'leaf2',
-      password: SECRET_HASH,
-      version: '1',
-    });
+    answerHelloChallenge(w2, d2, SECRET_LINK_KEY, 'leaf2');
     await tick();
 
     const handler = new CommandHandler();
@@ -841,14 +831,9 @@ describe('branch coverage edge cases', () => {
   it('.whom shows idle time when idle > 0', async () => {
     const hub = makeHub(hubConfig(), '1.0.0');
     // Inject a remote party user with idle time
-    const { socket, duplex } = createMockSocket();
+    const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, {
-      type: 'HELLO',
-      botname: 'leaf1',
-      password: SECRET_HASH,
-      version: '1',
-    });
+    answerHelloChallenge(written, duplex, SECRET_LINK_KEY, 'leaf1');
     await tick();
     pushFrame(duplex, { type: 'PARTY_JOIN', handle: 'idler', nick: 'Idler', fromBot: 'leaf1' });
     await tick();
@@ -967,12 +952,7 @@ describe('.bot command', () => {
     const hub = makeHub(hubConfig(), '1.0.0');
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, {
-      type: 'HELLO',
-      botname: 'leaf1',
-      password: SECRET_HASH,
-      version: '1',
-    });
+    answerHelloChallenge(written, duplex, SECRET_LINK_KEY, 'leaf1');
     await tick();
     written.length = 0;
 
@@ -1123,12 +1103,7 @@ describe('.bsay command', () => {
     const hub = makeHub(hubConfig(), '1.0.0');
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, {
-      type: 'HELLO',
-      botname: 'leaf1',
-      password: SECRET_HASH,
-      version: '1',
-    });
+    answerHelloChallenge(written, duplex, SECRET_LINK_KEY, 'leaf1');
     await tick();
     written.length = 0;
 
@@ -1182,12 +1157,7 @@ describe('.bsay command', () => {
     const hub = makeHub(hubConfig(), '1.0.0');
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, {
-      type: 'HELLO',
-      botname: 'leaf1',
-      password: SECRET_HASH,
-      version: '1',
-    });
+    answerHelloChallenge(written, duplex, SECRET_LINK_KEY, 'leaf1');
     await tick();
     written.length = 0;
 
@@ -1267,12 +1237,7 @@ describe('.bannounce command', () => {
     const hub = makeHub(hubConfig(), '1.0.0');
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, {
-      type: 'HELLO',
-      botname: 'leaf1',
-      password: SECRET_HASH,
-      version: '1',
-    });
+    answerHelloChallenge(written, duplex, SECRET_LINK_KEY, 'leaf1');
     await tick();
     written.length = 0;
 
@@ -1444,14 +1409,9 @@ describe('botlink commands — audit coverage', () => {
   it('.botlink disconnect writes a row on success', async () => {
     const { db, close } = setup();
     const hub = makeHub(hubConfig(), '1.0.0');
-    const { socket, duplex } = createMockSocket();
+    const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, {
-      type: 'HELLO',
-      botname: 'leaf1',
-      password: SECRET_HASH,
-      version: '1',
-    });
+    answerHelloChallenge(written, duplex, SECRET_LINK_KEY, 'leaf1');
     await tick();
     const handler = new CommandHandler();
     registerBotlinkCommands({ handler, hub, leaf: null, config: hubConfig(), db });

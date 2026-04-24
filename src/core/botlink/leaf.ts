@@ -10,7 +10,7 @@ import type { BotlinkConfig } from '../../types';
 import { executeCmdFrame } from './cmd-exec.js';
 import { Heartbeat } from './heartbeat';
 import { PendingRequestMap } from './pending';
-import { BotLinkProtocol, hashPassword } from './protocol';
+import { BotLinkProtocol, computeHelloHmac, deriveLinkKey } from './protocol';
 import { RateCounter } from './rate-counter.js';
 import type {
   CommandRelay,
@@ -58,9 +58,15 @@ export class BotLinkLeaf {
    * otherwise get unbounded command execution on every leaf — a CPU-level
    * blast radius far beyond what any single hub operation should incur.
    * Default 50/s matches the audit's suggested ceiling; operators that run
-   * batched admin scripts can raise it via `botlink.leaf_cmd_rate_limit`.
+   * batched admin scripts can raise it via `botlink.cmd_inbound_rate`.
    */
-  private cmdRateLimit: RateCounter;
+  private cmdInboundRate: RateCounter;
+  /**
+   * Cached HMAC key derived from (password, link_salt). Computed once at
+   * construct; zeroed on disconnect/reconnect so a future key-rotation
+   * story is straightforward. Never logged.
+   */
+  private linkKey: Buffer | null;
 
   /** Fired when handshake completes. */
   onConnected: ((hubBotname: string) => void) | null = null;
@@ -84,8 +90,12 @@ export class BotLinkLeaf {
     this.reconnectDelay = this.reconnectDelayMs;
     this.pingIntervalMs = config.ping_interval_ms ?? 30_000;
     this.linkTimeoutMs = config.link_timeout_ms ?? 90_000;
-    const cmdLimit = Math.max(1, config.leaf_cmd_rate_limit ?? 50);
-    this.cmdRateLimit = new RateCounter(cmdLimit, 1_000);
+    const cmdLimit = Math.max(1, config.cmd_inbound_rate ?? 50);
+    this.cmdInboundRate = new RateCounter(cmdLimit, 1_000);
+    // `config.link_salt` and `config.password` are validated upstream in
+    // validateResolvedSecrets; the non-null assertion reflects that
+    // contract. A bad config would throw at startup, not here.
+    this.linkKey = deriveLinkKey(config.password, config.link_salt!);
   }
 
   /** Connect to the hub via TCP. */
@@ -253,6 +263,10 @@ export class BotLinkLeaf {
       this.protocol.close();
       this.protocol = null;
     }
+    // Zero the cached key — Node's GC is not zeroing, but dropping the
+    // reference ties key lifetime to the current connection lifecycle
+    // and keeps a future key-rotation story straightforward.
+    this.linkKey = null;
   }
 
   /** Force a reconnect to the hub. */
@@ -266,6 +280,10 @@ export class BotLinkLeaf {
       this.protocol.close();
       this.protocol = null;
     }
+    // Re-derive the link key — the previous one was zeroed on
+    // disconnect, and reconnect() is the canonical path to reset
+    // any post-v2 key-rotation state.
+    this.linkKey = deriveLinkKey(this.config.password, this.config.link_salt!);
     this.reconnectDelay = this.reconnectDelayMs;
     this.connect();
   }
@@ -285,19 +303,10 @@ export class BotLinkLeaf {
   private initProtocol(socket: Socket): void {
     this.protocol = new BotLinkProtocol(socket, this.logger);
 
-    // Send HELLO — password hash, NEVER plaintext
-    this.protocol.send({
-      type: 'HELLO',
-      botname: this.config.botname,
-      password: hashPassword(this.config.password),
-      version: this.version,
-    });
-
-    // Handshake deadline — if no WELCOME/ERROR arrives within this
-    // window, tear down the half-open socket and reconnect. Without
-    // this, a hub that crashes between accepting the TCP connection
-    // and sending WELCOME leaves the leaf waiting for the kernel TCP
-    // timeout (~2.5 min). See stability audit 2026-04-14.
+    // Handshake deadline — covers "no CHALLENGE", "no WELCOME", and the
+    // hub-crashes-mid-handshake cases. Without this, a hub that dies
+    // between accept() and HELLO_CHALLENGE leaves the leaf waiting for
+    // the kernel TCP timeout (~2.5 min). See stability audit 2026-04-14.
     const handshakeTimeoutMs = 15_000;
     let handshakeTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
       handshakeTimer = null;
@@ -317,9 +326,49 @@ export class BotLinkLeaf {
       }
     };
 
-    // Handshake phase — wait for WELCOME or ERROR
+    // Handshake phase — HELLO_CHALLENGE must arrive before WELCOME.
+    // `challengeAnswered` guards against a duplicate CHALLENGE from a
+    // malicious or buggy hub: first one wins, second is a PROTOCOL error.
+    let challengeAnswered = false;
+
     this.protocol.onFrame = (frame) => {
+      if (frame.type === 'HELLO_CHALLENGE') {
+        if (challengeAnswered) {
+          this.logger?.warn('Received second HELLO_CHALLENGE — closing');
+          this.protocol?.send({ type: 'ERROR', code: 'PROTOCOL', message: 'Duplicate CHALLENGE' });
+          this.protocol?.close();
+          return;
+        }
+        const nonceHex = typeof frame.nonce === 'string' ? frame.nonce : '';
+        if (!/^[0-9a-fA-F]+$/.test(nonceHex) || nonceHex.length === 0) {
+          this.logger?.warn('Malformed HELLO_CHALLENGE nonce — closing');
+          this.protocol?.close();
+          return;
+        }
+        const nonce = Buffer.from(nonceHex, 'hex');
+        if (!this.linkKey) {
+          // Should not happen — linkKey is set in the constructor and only
+          // zeroed in disconnect()/reconnect(). Fail closed.
+          this.logger?.error('linkKey missing when responding to CHALLENGE');
+          this.protocol?.close();
+          return;
+        }
+        const hmac = computeHelloHmac(this.linkKey, nonce);
+        challengeAnswered = true;
+        this.protocol?.send({
+          type: 'HELLO',
+          botname: this.config.botname,
+          hmac,
+          version: this.version,
+        });
+        return;
+      }
       if (frame.type === 'WELCOME') {
+        if (!challengeAnswered) {
+          this.logger?.warn('WELCOME before CHALLENGE — closing');
+          this.protocol?.close();
+          return;
+        }
         clearHandshakeTimer();
         this.hubBotname = String(frame.botname ?? '');
         this.connected = true;
@@ -344,6 +393,14 @@ export class BotLinkLeaf {
         // Don't auto-reconnect on auth failure
         if (frame.code === 'AUTH_FAILED') return;
         this.scheduleReconnect();
+      } else {
+        this.logger?.warn(`Unexpected frame type "${frame.type}" during handshake — closing`);
+        this.protocol?.send({
+          type: 'ERROR',
+          code: 'PROTOCOL',
+          message: `Unexpected ${frame.type} during handshake`,
+        });
+        this.protocol?.close();
       }
     };
 
@@ -413,7 +470,7 @@ export class BotLinkLeaf {
     // `cmdHandler` and `cmdPermissions` are wired together by `setCommandRelay`,
     // so checking both here keeps the non-null narrowing local and explicit.
     if (frame.type === 'CMD' && this.cmdHandler && this.cmdPermissions) {
-      if (!this.cmdRateLimit.check()) {
+      if (!this.cmdInboundRate.check()) {
         // Reply with an empty CMD_RESULT so the hub's pending handler
         // resolves rather than timing out. Log a warning so a compromised
         // or misbehaving hub surfaces in the leaf log.

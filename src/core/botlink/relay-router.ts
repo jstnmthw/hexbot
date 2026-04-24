@@ -222,6 +222,23 @@ export class BotLinkRelayRouter {
         });
         return;
       }
+      // Hub-side gate: only register a relay when the originating leaf has a
+      // live DCC party session for `handle`. A compromised leaf can
+      // otherwise craft RELAY_REQUEST for any handle the target bot knows
+      // and execute commands under that handle's identity. Mirrors the
+      // same hasRemoteSession gate the CMD relay applies at
+      // hub-cmd-relay.ts:62-71 — see docs/plans/botlink-handshake-v2.md §6.
+      if (!this.hasRemoteSession(handle, fromBot)) {
+        this.deps.logger?.warn(
+          `[security] RELAY_REQUEST from "${fromBot}" for handle "${handle}" rejected: no active DCC party session`,
+        );
+        this.sendToBot(fromBot, {
+          type: 'RELAY_END',
+          handle,
+          reason: `No active DCC party session for "${handle}" on ${fromBot}`,
+        });
+        return;
+      }
       this.activeRelays.set(handle, { originBot: fromBot, targetBot, createdAt: Date.now() });
       this.deps.send(targetBot, frame);
       return;

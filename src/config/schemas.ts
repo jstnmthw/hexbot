@@ -125,6 +125,15 @@ const BotlinkConfigOnDiskSchema = z.strictObject({
   hub: BotlinkEndpointSchema.optional(),
   listen: BotlinkEndpointSchema.optional(),
   password_env: z.string().optional(),
+  // Per-botnet HMAC salt — hex string, ≥ 32 chars (16 bytes decoded).
+  // Optional at schema level so the schema still loads when `botlink` is
+  // disabled with only `enabled: false` present; required at runtime when
+  // `botlink.enabled === true` (enforced in validateResolvedSecrets).
+  link_salt: z
+    .string()
+    .min(32, 'link_salt must be at least 32 hex chars (16 bytes)')
+    .regex(/^[0-9a-fA-F]+$/, 'link_salt must be hex characters only')
+    .optional(),
   reconnect_delay_ms: z.number().optional(),
   reconnect_max_delay_ms: z.number().optional(),
   max_leaves: z.number().optional(),
@@ -139,6 +148,7 @@ const BotlinkConfigOnDiskSchema = z.strictObject({
   auth_ip_whitelist: z.array(z.string()).optional(),
   handshake_timeout_ms: z.number().optional(),
   max_pending_handshakes: z.number().optional(),
+  cmd_inbound_rate: z.number().optional(),
 });
 
 const ChanmodBotConfigOnDiskSchema = z.strictObject({

@@ -2,10 +2,17 @@
 // Separate file to avoid test contamination from botlink.test.ts timer interactions.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { BotLinkHub, hashPassword, isWhitelisted } from '../../src/core/botlink';
+import { BotLinkHub, isWhitelisted } from '../../src/core/botlink';
 import { BotEventBus } from '../../src/event-bus';
 import type { BotlinkConfig } from '../../src/types';
-import { createMockSocket, parseWritten, pushFrame } from '../helpers/mock-socket';
+import {
+  TEST_LINK_SALT,
+  answerHelloChallenge,
+  createMockSocket,
+  findFrame,
+  pushFrame,
+  testLinkKey,
+} from '../helpers/mock-socket';
 
 // Track hubs so afterEach can close() them — otherwise BotLinkAuthManager's
 // 5-minute sweepTimer leaks across the test run (unref'd so process still exits).
@@ -32,15 +39,16 @@ async function fakeTick(): Promise<void> {
 }
 
 const TEST_PASSWORD = 'test-secret-password';
-const TEST_HASH = hashPassword(TEST_PASSWORD);
+const TEST_LINK_KEY = testLinkKey(TEST_PASSWORD);
 
 function hubConfig(overrides?: Partial<BotlinkConfig>): BotlinkConfig {
   return {
     enabled: true,
     role: 'hub',
     botname: 'hub',
-    listen: { host: '0.0.0.0', port: 15051 },
+    listen: { host: '127.0.0.1', port: 15051 },
     password: TEST_PASSWORD,
+    link_salt: TEST_LINK_SALT,
     ping_interval_ms: 60_000,
     link_timeout_ms: 120_000,
     ...overrides,
@@ -56,10 +64,11 @@ function createMockSocketWithIP(ip: string) {
 async function sendBadAuth(hub: BotLinkHub, ip: string, tick = realTick) {
   const { socket, written, duplex } = createMockSocketWithIP(ip);
   hub.addConnection(socket);
+  // Any 64-hex string that doesn't match the real HMAC will fail auth.
   pushFrame(duplex, {
     type: 'HELLO',
     botname: 'scanner',
-    password: 'scrypt:wrong',
+    hmac: 'f'.repeat(64),
     version: '1.0',
   });
   await tick();
@@ -69,7 +78,7 @@ async function sendBadAuth(hub: BotLinkHub, ip: string, tick = realTick) {
 async function sendGoodAuth(hub: BotLinkHub, ip: string, botname: string, tick = realTick) {
   const { socket, written, duplex } = createMockSocketWithIP(ip);
   hub.addConnection(socket);
-  pushFrame(duplex, { type: 'HELLO', botname, password: TEST_HASH, version: '1.0' });
+  answerHelloChallenge(written, duplex, TEST_LINK_KEY, botname);
   await tick();
   return { socket, written, duplex };
 }
@@ -133,8 +142,7 @@ describe('auth brute-force protection', () => {
 
     // 5th triggers ban, but this connection still gets AUTH_FAILED
     const { written } = await sendBadAuth(hub, ip);
-    const frames = parseWritten(written);
-    expect(frames[0]).toMatchObject({ type: 'ERROR', code: 'AUTH_FAILED' });
+    expect(findFrame(written, 'ERROR')).toMatchObject({ type: 'ERROR', code: 'AUTH_FAILED' });
   });
 
   it('bans after max_auth_failures and immediately drops next connection', async () => {
@@ -171,8 +179,7 @@ describe('auth brute-force protection', () => {
 
     // Allowed now
     const { written } = await sendGoodAuth(hub, ip, 'leaf-after-ban', fakeTick);
-    const frames = parseWritten(written);
-    expect(frames[0]).toMatchObject({ type: 'WELCOME' });
+    expect(findFrame(written, 'WELCOME')).toBeDefined();
   });
 
   it('escalates ban duration: doubles each time, caps at 24h', async () => {
@@ -229,8 +236,7 @@ describe('auth brute-force protection', () => {
     }
 
     const { written } = await sendGoodAuth(hub, ip, 'trusted-leaf');
-    const frames = parseWritten(written);
-    expect(frames[0]).toMatchObject({ type: 'WELCOME' });
+    expect(findFrame(written, 'WELCOME')).toBeDefined();
   });
 
   it('emits auth:ban event with correct data', async () => {
@@ -281,8 +287,7 @@ describe('auth brute-force protection', () => {
 
     // Not banned (only 2 in current window)
     const { written } = await sendGoodAuth(hub, ip, 'leaf-window', fakeTick);
-    const frames = parseWritten(written);
-    expect(frames[0]).toMatchObject({ type: 'WELCOME' });
+    expect(findFrame(written, 'WELCOME')).toBeDefined();
   });
 
   it('enforces per-IP pending handshake limit', async () => {
@@ -312,8 +317,7 @@ describe('auth brute-force protection', () => {
 
     await vi.advanceTimersByTimeAsync(2001);
 
-    const frames = parseWritten(written);
-    expect(frames[0]).toMatchObject({ type: 'ERROR', code: 'TIMEOUT' });
+    expect(findFrame(written, 'ERROR')).toMatchObject({ type: 'ERROR', code: 'TIMEOUT' });
   });
 
   it('sweeps stale non-escalated tracker entries', async () => {
@@ -326,14 +330,14 @@ describe('auth brute-force protection', () => {
 
     // Sweep runs on next connection
     const { written } = await sendGoodAuth(hub, '10.99.1.2', 'leaf-sweep', fakeTick);
-    expect(parseWritten(written)[0]).toMatchObject({ type: 'WELCOME' });
+    expect(findFrame(written, 'WELCOME')).toBeDefined();
 
     // Stale entry swept — failures start fresh
     await sendBadAuth(hub, '10.99.1.1', fakeTick);
     await sendBadAuth(hub, '10.99.1.1', fakeTick);
     // 2 < 3 — not banned
     const { written: w2 } = await sendGoodAuth(hub, '10.99.1.1', 'leaf-sweep2', fakeTick);
-    expect(parseWritten(w2)[0]).toMatchObject({ type: 'WELCOME' });
+    expect(findFrame(w2, 'WELCOME')).toBeDefined();
   });
 
   it('includes IP in auth failure log', async () => {
@@ -416,8 +420,7 @@ describe('auth brute-force protection', () => {
     vi.advanceTimersByTime(1001);
 
     const { written } = await sendGoodAuth(hub, ip, 'leaf-after-sweep', fakeTick);
-    const frames = parseWritten(written);
-    expect(frames[0]).toMatchObject({ type: 'WELCOME' });
+    expect(findFrame(written, 'WELCOME')).toBeDefined();
   });
 
   it('promotes touched authTracker entries to most-recently-used (LRU)', async () => {

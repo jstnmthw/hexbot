@@ -2,6 +2,7 @@
 // Accepts leaf connections, manages state sync, command relay, party line,
 // relay routing, and heartbeat. Auth + IP ban management live in botlink-auth.ts.
 // See docs/plans/bot-linking.md.
+import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:net';
 import type { Server as NetServer, Socket } from 'node:net';
 
@@ -10,7 +11,7 @@ import type { BotEventBus, BotEvents } from '../../event-bus';
 import type { LoggerLike } from '../../logger';
 import type { BotlinkConfig } from '../../types';
 import type { Permissions } from '../permissions';
-import { type AuthBanEntry, BotLinkAuthManager } from './auth';
+import { type AuthBanEntry, BotLinkAuthManager, isPrivateOrLoopback } from './auth';
 import { Heartbeat } from './heartbeat';
 import { type HubFrameDispatchContext, dispatchSteadyStateFrame } from './hub-frame-dispatch.js';
 import { PendingRequestMap } from './pending';
@@ -35,6 +36,22 @@ interface LeafConnection {
   cmdRate: RateCounter;
   partyRate: RateCounter;
   protectRate: RateCounter;
+  // Steady-state per-frame rate buckets — see Phase 4 of
+  // docs/plans/botlink-handshake-v2.md. Budgets chosen to match chat-
+  // class (5/s), command-class (10/s), and relay-class (30/s) posture.
+  bsayRate: RateCounter;
+  announceRate: RateCounter;
+  relayInputRate: RateCounter;
+  relayOutputRate: RateCounter;
+  partyJoinRate: RateCounter;
+  partyPartRate: RateCounter;
+  /**
+   * Once-per-connection log latch for BSAY drops — we warn on the first
+   * overflow in a given burst and then fall silent until the rate
+   * window resets. Keeps a flood from spamming the audit log while
+   * still surfacing the fact that the leaf hit the ceiling.
+   */
+  bsayDropLogged: boolean;
   lastMessageAt: number;
   /**
    * Heartbeat driver — owns the PING interval, sequence counter, and
@@ -130,13 +147,24 @@ export class BotLinkHub {
   /** Start listening for leaf connections. Uses config values when port/host not specified. */
   listen(
     port = this.config.listen?.port ?? 0,
-    host = this.config.listen?.host ?? '0.0.0.0',
+    host = this.config.listen?.host ?? '127.0.0.1',
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       this.server = createServer((socket) => this.handleConnection(socket));
       this.server.on('error', reject);
       this.server.listen(port, host, () => {
         this.logger?.info(`Listening on ${host}:${port}`);
+        // Loud warning when the hub is bound to a publicly-reachable
+        // interface. `isPrivateOrLoopback` covers 127.0.0.0/8, ::1,
+        // and the three RFC1918 ranges; anything else — including
+        // `0.0.0.0` and `::` — triggers the warning because the HELLO
+        // handshake is authenticated but not encrypted, and operators
+        // must front the port with a tunnel (WireGuard / SSH / etc).
+        if (!isPrivateOrLoopback(host)) {
+          this.logger?.warn(
+            `[security] botlink listening on non-loopback, non-RFC1918 address ${host}:${port} — front it with a tunnel (WireGuard / SSH) or bind to 127.0.0.1`,
+          );
+        }
         resolve();
       });
     });
@@ -437,10 +465,21 @@ export class BotLinkHub {
    * tear-down paths (timeout, protocol error, remote close) feed through a
    * single `finish()` closure so the timer clear and the `releasePending`
    * call live in one place instead of being sprinkled across three closures.
+   *
+   * Flow: hub sends HELLO_CHALLENGE { nonce } immediately; leaf replies
+   * with HELLO { hmac } computed over the nonce with the shared link key.
+   * The nonce lives in this closure — no cache, no cross-connection
+   * state — so a captured HELLO cannot be replayed against a fresh
+   * connection, whose nonce differs.
    */
   private beginHandshake(protocol: BotLinkProtocol, ip: string, whitelisted: boolean): void {
     // Handshake timeout — configurable, default 10s (was 30s)
     const timeoutMs = this.config.handshake_timeout_ms ?? 10_000;
+
+    // Per-connection nonce — fresh random bytes, used once, discarded on
+    // finish. Emitted hex on the wire so the leaf can read it without
+    // binary escaping; verification HMACs over the raw bytes.
+    const nonce = randomBytes(32);
 
     // Single-source-of-truth for handshake cleanup. `finish('ok')` is called
     // when HELLO arrives and the leaf is accepted; the other reasons are
@@ -466,6 +505,14 @@ export class BotLinkHub {
       finish('timeout');
     }, timeoutMs);
 
+    // Emit the challenge BEFORE wiring onFrame so a malicious leaf can't
+    // ship a pre-emptive HELLO before we've decided on a nonce.
+    protocol.send({
+      type: 'HELLO_CHALLENGE',
+      nonce: nonce.toString('hex'),
+      hubBotname: this.config.botname,
+    });
+
     protocol.onFrame = (frame) => {
       /* v8 ignore next -- after HELLO is processed, onFrame is immediately replaced; second frame can't reach here */
       if (done) return;
@@ -486,7 +533,7 @@ export class BotLinkHub {
       // rejection propagates. See stability audit 2026-04-14.
       finish('ok');
       try {
-        this.acceptHandshake(protocol, frame, ip, whitelisted);
+        this.acceptHandshake(protocol, frame, ip, whitelisted, nonce);
       } finally {
         this.auth.releasePending(ip, whitelisted);
       }
@@ -506,14 +553,38 @@ export class BotLinkHub {
     frame: LinkFrame,
     ip: string,
     whitelisted: boolean,
+    nonce: Buffer,
   ): void {
     const botname = String(frame.botname ?? '');
-    const password = String(frame.password ?? '');
 
-    // Auth check — password field is NEVER logged
-    if (!this.auth.verifyPassword(password)) {
+    // Reject pre-v2 leaves that still ship a `password` field. Loud
+    // PROTOCOL error so an operator who forgot to upgrade one side of
+    // the botnet sees the mismatch immediately instead of an opaque
+    // AUTH_FAILED. No failure count — this is a misconfiguration, not
+    // a brute-force attempt.
+    if ('password' in frame) {
+      this.logger?.warn(
+        `Pre-v2 HELLO from "${botname || ip}" (contains "password" field) — upgrade required`,
+      );
+      protocol.send({
+        type: 'ERROR',
+        code: 'PROTOCOL',
+        message: 'HELLO v2 required: update this bot to the matching botlink version',
+      });
+      protocol.close();
+      return;
+    }
+
+    if (typeof frame.hmac !== 'string' || frame.hmac.length === 0) {
+      protocol.send({ type: 'ERROR', code: 'PROTOCOL', message: 'HELLO missing hmac' });
+      protocol.close();
+      return;
+    }
+
+    // Auth check — hmac is never logged.
+    if (!this.auth.verifyHelloHmac(nonce, frame.hmac)) {
       this.logger?.warn(`Auth failed for "${botname}" from ${ip}`);
-      protocol.send({ type: 'ERROR', code: 'AUTH_FAILED', message: 'Bad password' });
+      protocol.send({ type: 'ERROR', code: 'AUTH_FAILED', message: 'Bad HMAC' });
       protocol.close();
       this.auth.noteFailure(ip, whitelisted);
       return;
@@ -564,6 +635,13 @@ export class BotLinkHub {
       cmdRate: new RateCounter(10, 1_000),
       partyRate: new RateCounter(5, 1_000),
       protectRate: new RateCounter(20, 1_000),
+      bsayRate: new RateCounter(10, 1_000),
+      announceRate: new RateCounter(5, 1_000),
+      relayInputRate: new RateCounter(30, 1_000),
+      relayOutputRate: new RateCounter(30, 1_000),
+      partyJoinRate: new RateCounter(5, 1_000),
+      partyPartRate: new RateCounter(5, 1_000),
+      bsayDropLogged: false,
       lastMessageAt: Date.now(),
       heartbeat: null,
     };
@@ -614,6 +692,15 @@ export class BotLinkHub {
    * `cmdHandler` / callback state without reaching into hub internals.
    */
   private frameDispatchContext(): HubFrameDispatchContext {
+    // `checkFlags` delegates to the wired permissions adapter when
+    // available; if `cmdPermissions` is null (pre-wire during startup),
+    // return null so hub-bsay-router fails closed on BSAY fanout rather
+    // than silently bypassing the +m re-check.
+    const perms = this.cmdPermissions;
+    const checkFlags = perms
+      ? (handle: string, flags: string, channel: string | null): boolean =>
+          perms.checkFlagsByHandle(flags, handle, channel)
+      : null;
     return {
       botname: this.config.botname,
       routes: this.routes,
@@ -625,6 +712,8 @@ export class BotLinkHub {
       hasLeaf: (bot) => this.leaves.has(bot),
       onLeafFrame: this.onLeafFrame,
       onBsay: this.onBsay,
+      checkFlags,
+      logger: this.logger,
     };
   }
 
@@ -645,6 +734,19 @@ export class BotLinkHub {
         cmdRate: conn.cmdRate,
         partyRate: conn.partyRate,
         protectRate: conn.protectRate,
+        bsayRate: conn.bsayRate,
+        announceRate: conn.announceRate,
+        relayInputRate: conn.relayInputRate,
+        relayOutputRate: conn.relayOutputRate,
+        partyJoinRate: conn.partyJoinRate,
+        partyPartRate: conn.partyPartRate,
+        noteBsayDrop: () => {
+          if (conn.bsayDropLogged) return;
+          conn.bsayDropLogged = true;
+          this.logger?.warn(
+            `[security] BSAY rate-limit exceeded from "${conn.botname}" — dropping until next window`,
+          );
+        },
       },
       frame,
     );

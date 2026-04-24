@@ -6,7 +6,7 @@ import { BotDatabase } from '../../src/database';
 import { BotEventBus } from '../../src/event-bus';
 import { createLogger } from '../../src/logger';
 import type { BotlinkConfig } from '../../src/types';
-import { createMockSocket } from '../helpers/mock-socket';
+import { TEST_LINK_SALT, createMockSocket } from '../helpers/mock-socket';
 
 function makeConfig(overrides: Partial<BotlinkConfig> = {}): BotlinkConfig {
   return {
@@ -14,6 +14,7 @@ function makeConfig(overrides: Partial<BotlinkConfig> = {}): BotlinkConfig {
     role: 'hub',
     botname: 'testhub',
     password: 'secret',
+    link_salt: TEST_LINK_SALT,
     ping_interval_ms: 30_000,
     link_timeout_ms: 60_000,
     max_auth_failures: 3,

@@ -37,6 +37,15 @@ export interface LeafLike {
   cmdRate: RateCounter;
   partyRate: RateCounter;
   protectRate: RateCounter;
+  bsayRate: RateCounter;
+  announceRate: RateCounter;
+  relayInputRate: RateCounter;
+  relayOutputRate: RateCounter;
+  partyJoinRate: RateCounter;
+  partyPartRate: RateCounter;
+  /** Called on first BSAY drop in a window — latched by the hub so a
+   *  flood produces one warning line instead of N. */
+  noteBsayDrop: () => void;
 }
 
 /**
@@ -66,6 +75,14 @@ export interface HubFrameDispatchContext {
   onLeafFrame: ((botname: string, frame: LinkFrame) => void) | null;
   /** Local BSAY sink (null if no consumer wired it up). */
   onBsay: ((target: string, message: string) => void) | null;
+  /**
+   * Re-check that `handle` has `flags` on `channel` (null = global) — used
+   * by BSAY fanout to validate the claimed sender handle after it arrives
+   * across the link. Null until the hub wires its permissions adapter.
+   */
+  checkFlags: ((handle: string, flags: string, channel: string | null) => boolean) | null;
+  /** Optional logger plumbed through from the hub for `[security]` lines. */
+  logger: import('../../logger').LoggerLike | null;
 }
 
 /**
@@ -123,6 +140,8 @@ const handleBsayFrame: FrameHandler = (ctx, leaf, frame) => {
       broadcast: ctx.broadcast,
       hasLeaf: ctx.hasLeaf,
       deliverLocal: ctx.onBsay,
+      checkFlags: ctx.checkFlags,
+      logger: ctx.logger,
     },
     leaf.botname,
     frame,
@@ -191,7 +210,9 @@ export function dispatchSteadyStateFrame(
     return;
   }
 
-  // Rate limiting — three gates, each matches one semantic class.
+  // Rate limiting — per-frame gates. CMD is the only gate that talks
+  // back (pending-reply semantics); everything else silently drops to
+  // avoid leaking the ceiling to a misbehaving or compromised leaf.
   if (frame.type === FrameType.CMD && !leaf.cmdRate.check()) {
     leaf.send({
       type: FrameType.ERROR,
@@ -205,6 +226,25 @@ export function dispatchSteadyStateFrame(
   }
   if (frame.type.startsWith('PROTECT_') && frame.type !== FrameType.PROTECT_ACK) {
     if (!leaf.protectRate.check()) return; // Silently drop
+  }
+  if (frame.type === FrameType.BSAY && !leaf.bsayRate.check()) {
+    leaf.noteBsayDrop();
+    return;
+  }
+  if (frame.type === FrameType.ANNOUNCE && !leaf.announceRate.check()) {
+    return;
+  }
+  if (frame.type === FrameType.RELAY_INPUT && !leaf.relayInputRate.check()) {
+    return;
+  }
+  if (frame.type === FrameType.RELAY_OUTPUT && !leaf.relayOutputRate.check()) {
+    return;
+  }
+  if (frame.type === FrameType.PARTY_JOIN && !leaf.partyJoinRate.check()) {
+    return;
+  }
+  if (frame.type === FrameType.PARTY_PART && !leaf.partyPartRate.check()) {
+    return;
   }
 
   // Fan-out to other leaves (unless hub-only).

@@ -18,9 +18,10 @@ Star topology. The hub is the central authority. Leaves connect to the hub over 
 
 ## Prerequisites
 
-- All bots in the network must be running HexBot.
-- The hub bot must have a reachable IP and open port for leaf connections.
+- All bots in the network must be running HexBot. The handshake is a lockstep protocol — every bot in the botnet must run the same major version.
+- The hub bot must have a reachable IP and open port for leaf connections. The port defaults to loopback; see the `listen.host` row below.
 - All bots share the same link password via their `password_env` environment variable (configure a strong, unique passphrase).
+- All bots share the same `link_salt` — a hex string ≥ 32 chars (16 bytes). Generate with `openssl rand -hex 32` on the hub and paste the identical value into every leaf's `bot.json`. Not secret on its own, but mismatched values make hub and leaf unable to authenticate each other.
 - DCC CHAT is recommended but not required (the console and `.relay` command require DCC sessions).
 
 ---
@@ -35,10 +36,11 @@ In the hub bot's `config/bot.json`:
   "role": "hub",
   "botname": "hub-east",
   "listen": {
-    "host": "0.0.0.0",
+    "host": "127.0.0.1",
     "port": 5051
   },
   "password_env": "HEX_BOTLINK_PASSWORD",
+  "link_salt": "0000000000000000000000000000000000000000000000000000000000000000",
   "max_leaves": 10,
   "sync_permissions": true,
   "sync_channel_state": true,
@@ -54,25 +56,26 @@ In the hub bot's `config/bot.json`:
 }
 ```
 
-| Field                    | Description                                                                            |
-| ------------------------ | -------------------------------------------------------------------------------------- |
-| `role`                   | Must be `"hub"`                                                                        |
-| `botname`                | Unique name for this bot in the network                                                |
-| `listen.host`            | Bind address. Use `0.0.0.0` for all interfaces or a specific IP                        |
-| `listen.port`            | TCP port for leaf connections                                                          |
-| `password_env`           | Env var holding the shared secret. Never sent in plaintext (scrypt-hashed on the wire) |
-| `max_leaves`             | Maximum simultaneous leaf connections (default 10)                                     |
-| `sync_permissions`       | Push permission database to leaves on connect                                          |
-| `sync_channel_state`     | Push channel user lists and modes to leaves                                            |
-| `sync_bans`              | Push shared ban/exempt lists to leaves                                                 |
-| `ping_interval_ms`       | How often the hub pings leaves (default 30s)                                           |
-| `link_timeout_ms`        | Disconnect leaves that don't respond within this window (default 90s)                  |
-| `max_auth_failures`      | Auth failures per IP before temporary ban (default 5)                                  |
-| `auth_window_ms`         | Sliding window for counting failures (default 60s)                                     |
-| `auth_ban_duration_ms`   | Initial ban duration; doubles on each re-ban, capped at 24h (default 5min)             |
-| `auth_ip_whitelist`      | CIDR strings whose IPs bypass auth rate limiting (default `[]`)                        |
-| `handshake_timeout_ms`   | Time to wait for HELLO before closing (default 10s)                                    |
-| `max_pending_handshakes` | Max concurrent unauthenticated connections per IP (default 3)                          |
+| Field                    | Description                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `role`                   | Must be `"hub"`                                                                                                                                                                                                                                                                                                                                           |
+| `botname`                | Unique name for this bot in the network                                                                                                                                                                                                                                                                                                                   |
+| `listen.host`            | Bind address. Defaults to `127.0.0.1` — the hub logs a `[security]` warning when bound to anything that is neither loopback nor RFC1918 (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`). Operators who bind `0.0.0.0` must front the port with a tunnel (WireGuard / SSH) — the handshake is authenticated but post-handshake frames are cleartext TCP. |
+| `listen.port`            | TCP port for leaf connections                                                                                                                                                                                                                                                                                                                             |
+| `password_env`           | Env var holding the shared secret. Never transmitted on the wire — the leaf HMACs over a per-connection nonce.                                                                                                                                                                                                                                            |
+| `link_salt`              | **Required** when botlink is enabled. Hex string ≥ 32 chars (16 bytes). Every bot in the botnet shares the same value. Generate with `openssl rand -hex 32`.                                                                                                                                                                                              |
+| `max_leaves`             | Maximum simultaneous leaf connections (default 10)                                                                                                                                                                                                                                                                                                        |
+| `sync_permissions`       | Push permission database to leaves on connect                                                                                                                                                                                                                                                                                                             |
+| `sync_channel_state`     | Push channel user lists and modes to leaves                                                                                                                                                                                                                                                                                                               |
+| `sync_bans`              | Push shared ban/exempt lists to leaves                                                                                                                                                                                                                                                                                                                    |
+| `ping_interval_ms`       | How often the hub pings leaves (default 30s)                                                                                                                                                                                                                                                                                                              |
+| `link_timeout_ms`        | Disconnect leaves that don't respond within this window (default 90s)                                                                                                                                                                                                                                                                                     |
+| `max_auth_failures`      | Auth failures per IP before temporary ban (default 5)                                                                                                                                                                                                                                                                                                     |
+| `auth_window_ms`         | Sliding window for counting failures (default 60s)                                                                                                                                                                                                                                                                                                        |
+| `auth_ban_duration_ms`   | Initial ban duration; doubles on each re-ban, capped at 24h (default 5min)                                                                                                                                                                                                                                                                                |
+| `auth_ip_whitelist`      | CIDR strings whose IPs bypass auth rate limiting (default `[]`)                                                                                                                                                                                                                                                                                           |
+| `handshake_timeout_ms`   | Time to wait for HELLO before closing (default 10s)                                                                                                                                                                                                                                                                                                       |
+| `max_pending_handshakes` | Max concurrent unauthenticated connections per IP (default 3)                                                                                                                                                                                                                                                                                             |
 
 ---
 
@@ -90,22 +93,26 @@ In each leaf bot's `config/bot.json`:
     "port": 5051
   },
   "password_env": "HEX_BOTLINK_PASSWORD",
+  "link_salt": "0000000000000000000000000000000000000000000000000000000000000000",
   "reconnect_delay_ms": 5000,
   "reconnect_max_delay_ms": 60000,
   "ping_interval_ms": 30000,
-  "link_timeout_ms": 90000
+  "link_timeout_ms": 90000,
+  "cmd_inbound_rate": 50
 }
 ```
 
-| Field                    | Description                                                       |
-| ------------------------ | ----------------------------------------------------------------- |
-| `role`                   | Must be `"leaf"`                                                  |
-| `botname`                | Unique name for this leaf (must differ from hub and other leaves) |
-| `hub.host`               | Hub bot's IP address or hostname                                  |
-| `hub.port`               | Hub bot's link port                                               |
-| `password_env`           | Env var holding the shared secret. Must match the hub's password  |
-| `reconnect_delay_ms`     | Initial delay before reconnecting after disconnect (default 5s)   |
-| `reconnect_max_delay_ms` | Maximum reconnect delay with exponential backoff (default 60s)    |
+| Field                    | Description                                                                                                                                         |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `role`                   | Must be `"leaf"`                                                                                                                                    |
+| `botname`                | Unique name for this leaf (must differ from hub and other leaves)                                                                                   |
+| `hub.host`               | Hub bot's IP address or hostname                                                                                                                    |
+| `hub.port`               | Hub bot's link port                                                                                                                                 |
+| `password_env`           | Env var holding the shared secret. Must match the hub's password                                                                                    |
+| `link_salt`              | **Required.** Hex string ≥ 32 chars. Must match the hub's value bit-for-bit — a mismatch produces `AUTH_FAILED` on every connection attempt.        |
+| `reconnect_delay_ms`     | Initial delay before reconnecting after disconnect (default 5s)                                                                                     |
+| `reconnect_max_delay_ms` | Maximum reconnect delay with exponential backoff (default 60s)                                                                                      |
+| `cmd_inbound_rate`       | Soft ceiling on hub→leaf CMD frames per second (default 50). Defence-in-depth against a compromised hub — not a replacement for the hub-side gates. |
 
 Leaves auto-connect on startup and auto-reconnect on disconnect (with exponential backoff). Authentication failures (`AUTH_FAILED`) do not trigger reconnect.
 
@@ -247,12 +254,14 @@ Commands with `relayToHub: true` in their registration options are automatically
 
 ## Security
 
-- Passwords are scrypt-hashed before transmission. Plaintext is never sent over the wire.
-- Link connections are **unencrypted TCP**. For WAN deployments, use a VPN, SSH tunnel, or WireGuard.
-- Do not expose the link port to the public internet without transport encryption.
+- Authentication is an HMAC challenge-response handshake. The hub sends `HELLO_CHALLENGE { nonce }`, the leaf replies with `HELLO { hmac }` computed over the nonce using `scrypt(password, link_salt)`. The password is never transmitted; a captured HELLO cannot be replayed on a fresh connection.
+- Link connections are **unencrypted TCP**. Handshake is replay-resistant, but post-handshake frames (commands, party-line chat, BSAY) travel in the clear. For WAN deployments, use a VPN, SSH tunnel, or WireGuard.
+- `listen.host` defaults to `127.0.0.1`. Binding anywhere else that isn't RFC1918 produces a `[security]` warning on hub startup.
+- Every BSAY frame carries `fromHandle`. The hub re-checks `+m` on the target channel via `permissions.checkFlagsByHandle` before fanout — a compromised leaf cannot craft a raw BSAY under another user's authority.
+- `RELAY_REQUEST` is gated on a live DCC party session for the requesting handle. A compromised leaf cannot relay into arbitrary target-bot handles.
 - The hub is the single source of truth. A compromised hub compromises the entire botnet.
 
-See `docs/SECURITY.md` section 9 for the full security model.
+See `docs/SECURITY.md` section 11 for the full security model.
 
 ---
 

@@ -3,26 +3,34 @@ import { describe, expect, it } from 'vitest';
 
 import { CommandHandler } from '../../src/command-handler';
 import type { CommandContext } from '../../src/command-handler';
-import { BotLinkHub, BotLinkLeaf, hashPassword } from '../../src/core/botlink';
+import { BotLinkHub, BotLinkLeaf } from '../../src/core/botlink';
 import { Permissions } from '../../src/core/permissions';
 import { BotEventBus } from '../../src/event-bus';
 import type { BotlinkConfig } from '../../src/types';
-import { createMockSocket, parseWritten, pushFrame } from '../helpers/mock-socket';
+import {
+  TEST_LINK_SALT,
+  answerHelloChallenge,
+  createMockSocket,
+  parseWritten,
+  pushFrame,
+  testLinkKey,
+} from '../helpers/mock-socket';
 
 async function tick(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
 const PASSWORD = 'relay-test-secret';
-const HASH = hashPassword(PASSWORD);
+const TEST_LINK_KEY = testLinkKey(PASSWORD);
 
 function hubConfig(): BotlinkConfig {
   return {
     enabled: true,
     role: 'hub',
     botname: 'hub',
-    listen: { host: '0.0.0.0', port: 15051 },
+    listen: { host: '127.0.0.1', port: 15051 },
     password: PASSWORD,
+    link_salt: TEST_LINK_SALT,
     ping_interval_ms: 600_000,
     link_timeout_ms: 600_000,
   };
@@ -35,6 +43,7 @@ function leafConfig(): BotlinkConfig {
     botname: 'leaf1',
     hub: { host: '127.0.0.1', port: 15051 },
     password: PASSWORD,
+    link_salt: TEST_LINK_SALT,
     reconnect_delay_ms: 100,
     reconnect_max_delay_ms: 1000,
     ping_interval_ms: 600_000,
@@ -104,11 +113,21 @@ async function setupLinkedPair(): Promise<{
   // Connect via mock sockets
   const { socket: hubSock, written: hubWritten, duplex: hubDuplex } = createMockSocket();
   hub.addConnection(hubSock);
-  pushFrame(hubDuplex, { type: 'HELLO', botname: 'leaf1', password: HASH, version: '1.0' });
+  // Hub has already written HELLO_CHALLENGE synchronously; leaf answers.
+  answerHelloChallenge(hubWritten, hubDuplex, TEST_LINK_KEY, 'leaf1');
   await tick();
 
   const { socket: leafSock, written: leafWritten, duplex: leafDuplex } = createMockSocket();
   leaf.connectWithSocket(leafSock);
+  // Leaf waits for HELLO_CHALLENGE from hub before it will send HELLO.
+  // The mock doesn't validate the HMAC on the leaf's write — we just need
+  // a syntactically valid nonce so leaf.ts computes and sends HELLO.
+  pushFrame(leafDuplex, {
+    type: 'HELLO_CHALLENGE',
+    nonce: 'a'.repeat(64),
+    hubBotname: 'hub',
+  });
+  await tick();
   pushFrame(leafDuplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
   await tick();
 

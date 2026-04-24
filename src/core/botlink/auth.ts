@@ -6,8 +6,6 @@
 // LRU / CIDR / DB storage lives in `./auth-store`. This file stays
 // focused on "should this IP be allowed through, and what do we do
 // after the handshake result is known?". See 2026-04-19 quality audit.
-import { timingSafeEqual } from 'node:crypto';
-
 import type { BotDatabase } from '../../database';
 import type { BotEventBus } from '../../event-bus';
 import type { LoggerLike } from '../../logger';
@@ -17,7 +15,7 @@ import { applyBanCountDecay, escalateBan, rollFailureWindowIfExpired } from './a
 import type { AuthTracker } from './auth-escalation';
 import { type AuthBanEntry, BotLinkAuthStore, type LinkBan } from './auth-store';
 import type { LRUMap } from './lru-map';
-import { hashPassword } from './protocol';
+import { deriveLinkKey, verifyHelloHmac } from './protocol';
 
 // Re-export the storage-shape types so external consumers keep importing
 // them from `./auth` (the module's public surface hasn't changed).
@@ -63,6 +61,42 @@ export function isValidIP(input: string): boolean {
   return !Number.isNaN(ipv4ToNum(base)) && Number.isInteger(prefix) && prefix >= 0 && prefix <= 32;
 }
 
+/**
+ * True when `host` is safe to bind without a tunnel in front — loopback
+ * (IPv4 127.0.0.0/8 or IPv6 `::1`) or RFC1918 private space. Any other
+ * address, including `0.0.0.0`, `::`, or a public IP, is considered
+ * public and triggers the [security] bind warning at hub startup.
+ *
+ * IPv6 is handled conservatively: only `::1` is treated as loopback.
+ * Every other IPv6 literal (including `::` and `::ffff:...` mapped
+ * forms) goes through the warning path. Mapped IPv4 addresses are
+ * normalized first so `::ffff:10.0.0.5` still qualifies as RFC1918.
+ */
+export function isPrivateOrLoopback(host: string): boolean {
+  const normalized = normalizeIP(host);
+  if (normalized === '::1') return true;
+  // If the string still contains ':' after normalizeIP, it's a non-mapped
+  // IPv6 address. Only ::1 is safe; everything else warns.
+  if (normalized.includes(':')) return false;
+  const num = ipv4ToNum(normalized);
+  if (Number.isNaN(num)) return false;
+  // `&` with a mask whose high bit is set yields a signed-int result in JS;
+  // normalize back to unsigned via `>>> 0` before comparing with the
+  // (unsigned) base literal. Without this, 172.x and 192.x would silently
+  // fail to match their /12 and /16 ranges.
+  const top8 = (num & 0xff000000) >>> 0;
+  // 127.0.0.0/8 — loopback. `0.0.0.0` is NOT loopback; binding to it
+  // means "every interface", so it must warn.
+  if (top8 === 0x7f000000) return true;
+  // 10.0.0.0/8
+  if (top8 === 0x0a000000) return true;
+  // 172.16.0.0/12
+  if ((num & 0xfff00000) >>> 0 === 0xac100000) return true;
+  // 192.168.0.0/16
+  if ((num & 0xffff0000) >>> 0 === 0xc0a80000) return true;
+  return false;
+}
+
 /** Check whether an IP matches any CIDR in the whitelist. IPv4 only (IPv6 CIDRs are ignored). */
 export function isWhitelisted(ip: string, cidrs: string[]): boolean {
   const normalizedIP = normalizeIP(ip);
@@ -97,15 +131,16 @@ export type AdmissionResult =
   | { allowed: false; reason: 'banned' | 'cidr-banned' | 'pending-limit' | 'unknown-ip' };
 
 /**
- * Owns authentication state for the bot-link hub: password hash, per-IP
- * failure tracker with exponential ban backoff, pending-handshake counting,
- * manual CIDR bans, and the persisted link-ban store.
+ * Owns authentication state for the bot-link hub: per-botnet HMAC key,
+ * per-IP failure tracker with exponential ban backoff, pending-handshake
+ * counting, manual CIDR bans, and the persisted link-ban store.
  *
  * The hub holds a single instance and asks it three questions on each
  * incoming connection:
  *
  *   1. `admit(ip)` — is this IP allowed to start a handshake?
- *   2. `verifyPassword(sent)` — does the HELLO password match?
+ *   2. `verifyHelloHmac(nonce, sentHex)` — does the HELLO HMAC match the
+ *      challenge nonce we sent this connection?
  *   3. On success, `noteSuccess(ip)`; on failure, `noteFailure(ip)`.
  *
  * Everything else (manual bans, sweeps, listing) is admin-facing.
@@ -115,7 +150,7 @@ export class BotLinkAuthManager {
   private readonly logger: LoggerLike | null;
   private readonly eventBus: BotEventBus | null;
   private readonly db: BotDatabase | null;
-  private readonly expectedHash: string;
+  private readonly linkKey: Buffer;
   private readonly store: BotLinkAuthStore;
   private readonly pendingHandshakes: Map<string, number> = new Map();
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -148,7 +183,11 @@ export class BotLinkAuthManager {
     this.logger = logger;
     this.eventBus = eventBus;
     this.db = db;
-    this.expectedHash = hashPassword(config.password);
+    // `config.password` and `config.link_salt` are validated in
+    // validateResolvedSecrets before the hub is constructed. The
+    // non-null assertion reflects that contract — failing here would
+    // mean a config-loading bug upstream, not a user-facing error.
+    this.linkKey = deriveLinkKey(config.password, config.link_salt!);
     this.store = new BotLinkAuthStore(db, logger);
 
     this.sweepTimer = setInterval(() => this.sweepStaleTrackers(), 300_000);
@@ -216,20 +255,17 @@ export class BotLinkAuthManager {
   }
 
   // -------------------------------------------------------------------------
-  // Password verification
+  // HELLO HMAC verification
   // -------------------------------------------------------------------------
 
   /**
-   * Compare the HELLO password against the expected hash. Length check
-   * first — `timingSafeEqual` throws on mismatched buffer lengths, and the
-   * caller is an attacker-controlled wire frame so unequal-length inputs
-   * must be handled without leaking length information via an exception.
+   * Verify a received HELLO HMAC against the per-connection nonce. Returns
+   * false on any length or value mismatch — the helper is length-checked
+   * before `timingSafeEqual` to keep attacker-controlled input from
+   * triggering an exception on the hot path.
    */
-  verifyPassword(sent: string): boolean {
-    const sentBuf = Buffer.from(sent, 'utf8');
-    const expectedBuf = Buffer.from(this.expectedHash, 'utf8');
-    if (sentBuf.length !== expectedBuf.length) return false;
-    return timingSafeEqual(sentBuf, expectedBuf);
+  verifyHelloHmac(nonce: Buffer, sentHex: string): boolean {
+    return verifyHelloHmac(this.linkKey, nonce, sentHex);
   }
 
   // -------------------------------------------------------------------------

@@ -41,36 +41,36 @@ to leaves beyond the current WELCOME. Those remain follow-ups.
 
 ## Phase 0 — Read-first (do this before coding)
 
-- [ ] Read `/home/justin/Projects/hexbot/src/core/botlink/protocol.ts` — current
+- [x] Read `/home/justin/Projects/hexbot/src/core/botlink/protocol.ts` — current
       `hashPassword` at lines 112-117, HUB_ONLY_FRAMES at 28-42, KNOWN_FRAME_TYPES
       at 51-101 (two new frame types — `HELLO_CHALLENGE` and `HELLO_RESPONSE`? —
       decision deferred to Open Questions).
-- [ ] Read `/home/justin/Projects/hexbot/src/core/botlink/hub.ts` —
+- [x] Read `/home/justin/Projects/hexbot/src/core/botlink/hub.ts` —
       `listen()` default at lines 131-134, `beginHandshake` at 441-497,
       `acceptHandshake` at 504-605, rate-counter construction at 560-569.
-- [ ] Read `/home/justin/Projects/hexbot/src/core/botlink/leaf.ts` —
+- [x] Read `/home/justin/Projects/hexbot/src/core/botlink/leaf.ts` —
       `initProtocol` HELLO send at lines 273-282, steady state at 366-411.
-- [ ] Read `/home/justin/Projects/hexbot/src/core/botlink/hub-frame-dispatch.ts`
+- [x] Read `/home/justin/Projects/hexbot/src/core/botlink/hub-frame-dispatch.ts`
       — existing rate gates at 195-208, registry at 162-170.
-- [ ] Read `/home/justin/Projects/hexbot/src/core/botlink/hub-bsay-router.ts`
+- [x] Read `/home/justin/Projects/hexbot/src/core/botlink/hub-bsay-router.ts`
       — TODO and full handler at 30-50.
-- [ ] Read `/home/justin/Projects/hexbot/src/core/botlink/relay-router.ts` —
+- [x] Read `/home/justin/Projects/hexbot/src/core/botlink/relay-router.ts` —
       `routeRelayFrame` RELAY_REQUEST branch at 211-228, `hasRemoteSession`
       at 207-209.
-- [ ] Read `/home/justin/Projects/hexbot/src/core/botlink/relay-handler.ts`
+- [x] Read `/home/justin/Projects/hexbot/src/core/botlink/relay-handler.ts`
       — RELAY_REQUEST handler at 76-100 (target-side, no gate today).
-- [ ] Read `/home/justin/Projects/hexbot/src/core/botlink/hub-cmd-relay.ts`
+- [x] Read `/home/justin/Projects/hexbot/src/core/botlink/hub-cmd-relay.ts`
       — mirror pattern for gating: the remote-session re-check at lines 62-71
       is the template the new RELAY_REQUEST gate should match.
-- [ ] Read `/home/justin/Projects/hexbot/src/core/botlink/auth.ts` —
+- [x] Read `/home/justin/Projects/hexbot/src/core/botlink/auth.ts` —
       `verifyPassword` at 222-233 (will be replaced by `verifyHmac`),
       `expectedHash` field at 118 and 151 (fed by the deleted helper).
-- [ ] Read `/home/justin/Projects/hexbot/docs/SECURITY.md` §11 (lines 323-376)
+- [x] Read `/home/justin/Projects/hexbot/docs/SECURITY.md` §11 (lines 323-376)
       — replay-able language at 373 must be removed, not paraphrased.
-- [ ] Read `/home/justin/Projects/hexbot/DESIGN.md` lines 83-104 — the file-
+- [x] Read `/home/justin/Projects/hexbot/DESIGN.md` lines 83-104 — the file-
       inventory block references the old botlink module names (still accurate
       for the files we touch).
-- [ ] Grep check (expected set): `grep -n "hashPassword" src/core/botlink/`
+- [x] Grep check (expected set): `grep -n "hashPassword" src/core/botlink/`
       should return only `protocol.ts:114`, `leaf.ts:13`, `leaf.ts:280`,
       `index.ts:15`, and `auth.ts:20`, `auth.ts:151`. If anything else shows
       up, treat it as a Phase 2 blocker.
@@ -83,31 +83,31 @@ Adds a required `link_salt` field to `BotlinkConfig`, adds schema validation,
 plumbs it into example configs, and switches `listen.host` default to
 `127.0.0.1`. No behaviour yet — just the knob.
 
-- [ ] Add `link_salt: string` (runtime) to `BotlinkConfig` in
+- [x] Add `link_salt: string` (runtime) to `BotlinkConfig` in
       `/home/justin/Projects/hexbot/src/types/config.ts` at line 186-215.
       Required when `enabled: true` and `role: 'hub'`; required when
       `enabled: true` and `role: 'leaf'` too (leaves need it to derive K).
-- [ ] Add `link_salt: z.string().min(16)` to `BotlinkConfigOnDiskSchema` in
+- [x] Add `link_salt: z.string().min(16)` to `BotlinkConfigOnDiskSchema` in
       `/home/justin/Projects/hexbot/src/config/schemas.ts` at lines 121-142.
       Inline salt is acceptable (it is non-secret by itself, only meaningful
       combined with the password) — no `_env` variant needed.
-- [ ] Extend `validateResolvedSecrets` in
+- [x] Extend `validateResolvedSecrets` in
       `/home/justin/Projects/hexbot/src/config.ts` at lines 210-215: reject
       startup when `botlink.enabled && !botlink.link_salt`. Error message must
       name the field and point at the hub's logged salt-generation line (see
       Phase 2 first-boot generation task).
-- [ ] Update `/home/justin/Projects/hexbot/config/bot.example.json` at lines
+- [x] Update `/home/justin/Projects/hexbot/config/bot.example.json` at lines
       59-85: add a placeholder `"link_salt": "REPLACE_WITH_64_HEX_CHARS"`
       comment-free entry and flip `listen.host` at line 68 from `0.0.0.0` to
       `127.0.0.1`.
-- [ ] Update `/home/justin/Projects/hexbot/config/examples/multi-bot/libera/hub.json`
+- [x] Update `/home/justin/Projects/hexbot/config/examples/multi-bot/libera/hub.json`
       at line 37: change `"listen": { "host": "0.0.0.0", "port": 5051 }` to
       `"127.0.0.1"` and add `"link_salt": "..."` (same 64-hex placeholder).
-- [ ] Update `/home/justin/Projects/hexbot/config/examples/multi-bot/rizon/leaf.json`
+- [x] Update `/home/justin/Projects/hexbot/config/examples/multi-bot/rizon/leaf.json`
       at lines 33-46: add `"link_salt": "..."` matching the hub's example
       placeholder (the two example files must line up so the copy-paste reader
       sees the salt is shared).
-- [ ] Grep `grep -rn "listen.*0.0.0.0" docs/ config/` — expect zero hits after
+- [x] Grep `grep -rn "listen.*0.0.0.0" docs/ config/` — expect zero hits after
       this phase (docs update happens in Phase 9).
 
 ---
@@ -139,80 +139,80 @@ Key points:
 
 ### 2a — `src/core/botlink/protocol.ts`
 
-- [ ] Delete the `hashPassword` export (lines 112-117). Remove the
+- [x] Delete the `hashPassword` export (lines 112-117). Remove the
       `scryptSync` import at line 7 if no other code in this file uses it
       after deletion (it's used only by `hashPassword` today).
-- [ ] Add two exported helpers: - `deriveLinkKey(password: string, linkSaltHex: string): Buffer` —
+- [x] Add two exported helpers: - `deriveLinkKey(password: string, linkSaltHex: string): Buffer` —
       runs `scryptSync(password, Buffer.from(linkSaltHex, 'hex'), 32)`.
       Validates salt hex is ≥ 16 bytes decoded; throws otherwise. - `computeHelloHmac(key: Buffer, nonce: Buffer): string` — returns
       hex string; uses `createHmac('sha256', key).update(nonce).digest('hex')`. - `verifyHelloHmac(key: Buffer, nonce: Buffer, sentHex: string): boolean`
       — computes expected hex, compares via `timingSafeEqual` after length
       check. Mirror the exact pattern in `auth.ts:228-233`.
-- [ ] Add `'HELLO_CHALLENGE'` to `KNOWN_FRAME_TYPES` at lines 51-101. Do NOT
+- [x] Add `'HELLO_CHALLENGE'` to `KNOWN_FRAME_TYPES` at lines 51-101. Do NOT
       add it to `HUB_ONLY_FRAMES` — the leaf needs to receive it. (The frame
       naturally only flows hub→leaf so fanout isn't at risk regardless.)
-- [ ] Update the file-level JSDoc header at lines 1-5 to name the new helpers
+- [x] Update the file-level JSDoc header at lines 1-5 to name the new helpers
       in place of `hashPassword`.
 
 ### 2b — `src/core/botlink/auth.ts`
 
-- [ ] Remove the `hashPassword` import at line 20.
-- [ ] Replace the `expectedHash` field (line 118) with `linkKey: Buffer` and
+- [x] Remove the `hashPassword` import at line 20.
+- [x] Replace the `expectedHash` field (line 118) with `linkKey: Buffer` and
       compute it in the constructor at line 151 via `deriveLinkKey(password,
-  config.link_salt)`. Zero the old `expectedHash` reference.
-- [ ] Replace `verifyPassword(sent: string)` at lines 222-233 with
+config.link_salt)`. Zero the old `expectedHash` reference.
+- [x] Replace `verifyPassword(sent: string)` at lines 222-233 with
       `verifyHelloHmac(nonce: Buffer, sentHex: string): boolean` that
       delegates to the protocol helper. The method MUST continue to be the
       single place failures are computed so `noteFailure` bookkeeping is
       intact.
-- [ ] Audit the docstring at lines 104-111 — renumber so the "three questions"
+- [x] Audit the docstring at lines 104-111 — renumber so the "three questions"
       list reflects the new verifyHelloHmac signature and mentions the nonce.
 
 ### 2c — `src/core/botlink/hub.ts`
 
-- [ ] In `beginHandshake` at lines 441-497, generate a per-connection nonce
+- [x] In `beginHandshake` at lines 441-497, generate a per-connection nonce
       with `randomBytes(32)`, send `HELLO_CHALLENGE { nonce: nonce.toString('hex'),
-  hubBotname: this.config.botname }` immediately after `protocol` is
+hubBotname: this.config.botname }` immediately after `protocol` is
       installed (before the `protocol.onFrame = …` block). The closure captures
       the `nonce` Buffer so `acceptHandshake` can see it.
-- [ ] Pass the captured `nonce: Buffer` through to `acceptHandshake` as a new
+- [x] Pass the captured `nonce: Buffer` through to `acceptHandshake` as a new
       parameter (update the call at line 489 and the method signature at 504-
       509).
-- [ ] In `acceptHandshake`, replace the `verifyPassword(password)` call at
+- [x] In `acceptHandshake`, replace the `verifyPassword(password)` call at
       line 514 with `this.auth.verifyHelloHmac(nonce, String(frame.hmac ?? ''))`.
       The `password` field is removed from the HELLO shape — reject the frame
       (`PROTOCOL` error) if it contains any `password` key at all.
-- [ ] Tighten the "missing botname" check at line 522 to also reject a missing
+- [x] Tighten the "missing botname" check at line 522 to also reject a missing
       or non-string `hmac` field before the verify call (pattern-match
       `acceptHandshake` to always fail closed on malformed frames).
 
 ### 2d — `src/core/botlink/leaf.ts`
 
-- [ ] Remove the `hashPassword` import at line 13.
-- [ ] Replace the unconditional HELLO send at lines 277-282: the leaf must
+- [x] Remove the `hashPassword` import at line 13.
+- [x] Replace the unconditional HELLO send at lines 277-282: the leaf must
       instead wait for `HELLO_CHALLENGE` from the hub, derive K once via
       `deriveLinkKey(this.config.password, this.config.link_salt)` (cache on
       the instance — compute on construct and reuse, never log), compute
       `computeHelloHmac(K, Buffer.from(frame.nonce, 'hex'))`, and reply with
       `{ type: 'HELLO', botname, hmac, version }`.
-- [ ] Add an early-frame branch in the handshake `protocol.onFrame` at lines
+- [x] Add an early-frame branch in the handshake `protocol.onFrame` at lines
       309-336: `HELLO_CHALLENGE` must be the first frame. Any other type before
       challenge arrives → close with `PROTOCOL` and reconnect.
-- [ ] Extend the 15s `handshakeTimeoutMs` comment at lines 289-295 so a future
+- [x] Extend the 15s `handshakeTimeoutMs` comment at lines 289-295 so a future
       reader sees the timeout now covers "no CHALLENGE" as well as "no
       WELCOME".
-- [ ] Zero-out the derived key on `disconnect()` / `reconnect()` (lines 229-259)
+- [x] Zero-out the derived key on `disconnect()` / `reconnect()` (lines 229-259)
       — not security-critical in Node (GC is not zeroing), but it keeps the
       cached key tied to the current botlink lifecycle and makes a future
       key-rotation story easier.
 
 ### 2e — exports and call sites
 
-- [ ] Update `/home/justin/Projects/hexbot/src/core/botlink/index.ts` line 15:
+- [x] Update `/home/justin/Projects/hexbot/src/core/botlink/index.ts` line 15:
       remove the `hashPassword` re-export. Add `deriveLinkKey`,
       `computeHelloHmac`, `verifyHelloHmac` if they need to be visible to
       tests; otherwise leave protocol-private.
-- [ ] Update test fixtures that construct `HELLO` frames by hand to use the
+- [x] Update test fixtures that construct `HELLO` frames by hand to use the
       new shape. Files that currently reference `hashPassword` and must be
       rewritten: - `tests/core/botlink-auth.test.ts:5,35` - `tests/core/botlink-relay.test.ts:6,17` - `tests/core/botlink.test.ts:13,31,62-77` (the whole
       `describe('hashPassword', …)` block deletes; new equivalent lands in
@@ -227,35 +227,35 @@ Closes CRITICAL-BSAY. `fromHandle` rides on every BSAY frame; the hub re-runs
 where `channel` is the BSAY `target` when it starts with `#`/`&` and null
 otherwise (PM target — global `+m` applies).
 
-- [ ] Extend `LinkFrame` typing in `/home/justin/Projects/hexbot/src/core/botlink/types.ts`
+- [x] Extend `LinkFrame` typing in `/home/justin/Projects/hexbot/src/core/botlink/types.ts`
       so the BSAY shape declares `fromHandle: string` (or add it to a
       dedicated `BsayFrame` extraction — match whichever pattern
       `types.ts` already uses for other frames that carry handles).
-- [ ] In `/home/justin/Projects/hexbot/src/core/commands/botlink-commands.ts`
+- [x] In `/home/justin/Projects/hexbot/src/core/commands/botlink-commands.ts`
       at line 628, the `.bsay` admin command must include the caller's handle
       on the outgoing frame. Look up `ctx`'s handle via `permissions.findByHostmask`
       (same pattern used at `leaf.ts:175`) and set it on the frame. Refuse to
       send the frame if we cannot resolve a handle — fail loud.
-- [ ] In `/home/justin/Projects/hexbot/src/core/botlink/hub-bsay-router.ts`
+- [x] In `/home/justin/Projects/hexbot/src/core/botlink/hub-bsay-router.ts`
       lines 30-50: - Remove the TODO at lines 35-40. - Extend `HubBsayContext` with a `checkFlags(handle: string, flags: string,
-    channel: string | null) => boolean` callback. The hub wires this to
+channel: string | null) => boolean` callback. The hub wires this to
       `this.cmdPermissions.checkFlagsByHandle` (see `permissions.ts:421`). - Add a `fromHandle = String(frame.fromHandle ?? '')` at the top of
       `handleBsay`. If it is empty, drop the frame with an audit log line
       (`[security] BSAY from leaf missing fromHandle — dropping`). - Re-check `+m`: compute `channel = target.startsWith('#') ||
-    target.startsWith('&') ? target : null`; if
+target.startsWith('&') ? target : null`; if
       `!ctx.checkFlags(fromHandle, 'm', channel)`, drop + audit-log the
       rejection. Include `fromBot`, `fromHandle`, `target` in the log.
-- [ ] In `/home/justin/Projects/hexbot/src/core/botlink/hub.ts`
+- [x] In `/home/justin/Projects/hexbot/src/core/botlink/hub.ts`
       `frameDispatchContext()` at lines 616-629: pass the new `checkFlags`
       callback down. The hub wires it to `this.cmdPermissions` (null-check —
       if `cmdPermissions` is null, BSAY must fail closed, which is the safe
       direction for pre-wiring early startup).
-- [ ] Leaf-side BSAY construction: the steady-state frame dispatcher itself
+- [x] Leaf-side BSAY construction: the steady-state frame dispatcher itself
       doesn't originate BSAY — today only the `.bsay` command emits it, and
       that path lands on the hub via the admin leaf. No change to
       `leaf.ts`'s steady state, but audit the file for `type: 'BSAY'` to
       confirm — expected hit count: 0.
-- [ ] Identity stamping: the hub already overwrites `fromBot` for every leaf
+- [x] Identity stamping: the hub already overwrites `fromBot` for every leaf
       frame at `hub.ts:638`. Extend that block to also overwrite `fromHandle`?
       NO — that would break the admin-provided handle. Instead, validate at
       frame receipt that if a `fromHandle` is present, it matches a user on
@@ -284,23 +284,23 @@ Budgets track existing posture: chat-class is 5/s, command-class is 10/s,
 relay-class is bursty-but-not-flood (30/s is well above the fastest
 human-typist stream and well below denial-of-service territory).
 
-- [ ] Add `bsayRate`, `announceRate`, `relayInputRate`, `relayOutputRate`,
+- [x] Add `bsayRate`, `announceRate`, `relayInputRate`, `relayOutputRate`,
       `partyJoinRate`, `partyPartRate` to `LeafConnection` in
       `/home/justin/Projects/hexbot/src/core/botlink/hub.ts` at lines 31-46.
-- [ ] Construct them inside `acceptHandshake` at lines 560-569 (next to the
+- [x] Construct them inside `acceptHandshake` at lines 560-569 (next to the
       existing `cmdRate`/`partyRate`/`protectRate` lines).
-- [ ] Extend `LeafLike` in
+- [x] Extend `LeafLike` in
       `/home/justin/Projects/hexbot/src/core/botlink/hub-frame-dispatch.ts`
       lines 34-40 with the six new fields.
-- [ ] Thread them through `dispatchSteadyStateFrame` arguments at
+- [x] Thread them through `dispatchSteadyStateFrame` arguments at
       `hub.ts:640-650`.
-- [ ] Add gate branches in `dispatchSteadyStateFrame` at
+- [x] Add gate branches in `dispatchSteadyStateFrame` at
       `hub-frame-dispatch.ts:195-208`, matching the existing style: - `BSAY` → silent drop + `ctx.logger?.warn` (we don't have a logger on
       context today; if that's a 30-line refactor, gate via a counter on
       the leaf object and log once per N drops — pick whichever is less
       invasive at build time). - `ANNOUNCE`, `RELAY_INPUT`, `RELAY_OUTPUT`, `PARTY_JOIN`, `PARTY_PART`
       → silent drop (matches `PARTY_CHAT` precedent).
-- [ ] Update any tests that pump BSAY/ANNOUNCE/etc at > budget without
+- [x] Update any tests that pump BSAY/ANNOUNCE/etc at > budget without
       expecting to be throttled — expected hits via
       `grep -rn "ANNOUNCE\|BSAY" tests/core/botlink*` should be short.
 
@@ -308,9 +308,9 @@ human-typist stream and well below denial-of-service territory).
 
 ## Phase 5 — `listen.host` default + non-loopback warning
 
-- [ ] In `/home/justin/Projects/hexbot/src/core/botlink/hub.ts` at lines 131-134,
+- [x] In `/home/justin/Projects/hexbot/src/core/botlink/hub.ts` at lines 131-134,
       change the default from `'0.0.0.0'` to `'127.0.0.1'`.
-- [ ] Immediately after the successful `listen()` callback at line 138-141,
+- [x] Immediately after the successful `listen()` callback at line 138-141,
       check the resolved `host`. If it is neither loopback (`127.0.0.0/8`,
       `::1`) nor RFC1918 (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`),
       emit a logger.warn line prefixed `[security]` naming the bound address
@@ -318,8 +318,8 @@ human-typist stream and well below denial-of-service territory).
       `isWhitelisted()` from `auth.ts:67-88` by passing the RFC1918 CIDR list,
       or write a small `isPrivateOrLoopback(host)` helper in `auth.ts`
       (whichever keeps the warning logic out of `hub.ts`).
-- [ ] Example config updates are covered in Phase 1.
-- [ ] Add a note in the new-or-updated `docs/BOTLINK.md` (Phase 9) that
+- [x] Example config updates are covered in Phase 1.
+- [x] Add a note in the new-or-updated `docs/BOTLINK.md` (Phase 9) that
       operators explicitly choosing to bind `0.0.0.0` must have a tunnel in
       front; don't muddy the warning itself with config advice.
 
@@ -337,18 +337,18 @@ Mirror the pattern at `hub-cmd-relay.ts:62-71` — require an active remote
 party-line session for `handle@fromBot` before the hub will register the
 relay.
 
-- [ ] In `/home/justin/Projects/hexbot/src/core/botlink/relay-router.ts` at
+- [x] In `/home/justin/Projects/hexbot/src/core/botlink/relay-router.ts` at
       lines 211-228, before calling `this.activeRelays.set(...)` and
       forwarding: require `this.hasRemoteSession(handle, fromBot)`. If
       missing, reply with
       `RELAY_END { handle, reason: 'No active DCC party session for handle on fromBot' }`
       and return. Audit-log the rejection at `warn` level with `fromBot`,
       `handle`, `targetBot`.
-- [ ] Confirm `relay-handler.ts:76-100` does not independently create relays;
+- [x] Confirm `relay-handler.ts:76-100` does not independently create relays;
       it only responds to requests routed through `relay-router.ts`. No code
       change needed there, but add a one-line comment pointing at the
       router-side gate so a future reader knows where the auth lives.
-- [ ] Re-review `registerHubRelay` at `relay-router.ts:117-123` — that path is
+- [x] Re-review `registerHubRelay` at `relay-router.ts:117-123` — that path is
       triggered by the local `.relay` command and does NOT need the remote-
       session gate (the gate exists precisely to reject frames from compromised
       leaves; a local command run via `+m` is already gated by the command
@@ -364,18 +364,18 @@ cap on the _inbound_ direction — what the leaf is willing to execute in a
 second — so a bug in the hub cannot accidentally flood a leaf with CMD
 frames and exhaust command-handler queues.
 
-- [ ] Add `cmd_inbound_rate?: number` to `BotlinkConfig` in
+- [x] Add `cmd_inbound_rate?: number` to `BotlinkConfig` in
       `/home/justin/Projects/hexbot/src/types/config.ts` (default 50/s when
       unset). Corresponding zod entry in
       `/home/justin/Projects/hexbot/src/config/schemas.ts`.
-- [ ] In `/home/justin/Projects/hexbot/src/core/botlink/leaf.ts` at the
+- [x] In `/home/justin/Projects/hexbot/src/core/botlink/leaf.ts` at the
       `private` fields block (~35-53), add `private cmdInboundRate: RateCounter`.
       Construct in the constructor around lines 62-77 with
       `new RateCounter(config.cmd_inbound_rate ?? 50, 1_000)`.
-- [ ] In `onSteadyState` at lines 366-411, add a gate in the `CMD` branch at
+- [x] In `onSteadyState` at lines 366-411, add a gate in the `CMD` branch at
       line 403: `if (!this.cmdInboundRate.check()) { this.logger?.warn(...);
-  this.send({ type: 'ERROR', code: 'RATE_LIMITED', ... }); return; }`.
-- [ ] Document the new field in `docs/BOTLINK.md` (Phase 9).
+this.send({ type: 'ERROR', code: 'RATE_LIMITED', ... }); return; }`.
+- [x] Document the new field in `docs/BOTLINK.md` (Phase 9).
 
 ---
 
@@ -387,69 +387,69 @@ corresponding fix. Use the existing `botlink*.test.ts` patterns (socket
 
 ### 8a — HELLO v2 tests (new file or extend `botlink.test.ts`)
 
-- [ ] Happy path — leaf receives CHALLENGE, returns valid HMAC, gets WELCOME.
-- [ ] Replay rejection — capture a valid HELLO from run A, replay it in a
+- [x] Happy path — leaf receives CHALLENGE, returns valid HMAC, gets WELCOME.
+- [x] Replay rejection — capture a valid HELLO from run A, replay it in a
       fresh connection (which got a different nonce), expect `AUTH_FAILED`
       and the connection to be closed + counted against `noteFailure`.
-- [ ] Nonce uniqueness — spin up 100 back-to-back handshakes, collect the
+- [x] Nonce uniqueness — spin up 100 back-to-back handshakes, collect the
       server-emitted CHALLENGE nonces, assert all 100 distinct. This guards
       against an accidental `Math.random` regression.
-- [ ] Wrong salt — hub and leaf configured with different `link_salt` must
+- [x] Wrong salt — hub and leaf configured with different `link_salt` must
       fail auth even with the same password. Confirms the salt is actually
       in the HMAC keystream.
-- [ ] Missing `hmac` field on HELLO — expect `PROTOCOL` error, no auth attempt
+- [x] Missing `hmac` field on HELLO — expect `PROTOCOL` error, no auth attempt
       counted.
-- [ ] Pre-v2 leaf (sends `password` instead of `hmac`) → `PROTOCOL` error,
+- [x] Pre-v2 leaf (sends `password` instead of `hmac`) → `PROTOCOL` error,
       connection closed.
-- [ ] No crash on malformed nonce hex from a malicious hub (leaf-side) —
+- [x] No crash on malformed nonce hex from a malicious hub (leaf-side) —
       `Buffer.from('zzz', 'hex')` must not throw uncaught; reconnect path
       fires.
 
 ### 8b — BSAY re-check
 
-- [ ] Leaf sends BSAY `fromHandle=eve, channel=#ops` where `eve` has no
+- [x] Leaf sends BSAY `fromHandle=eve, channel=#ops` where `eve` has no
       flags on the hub → frame is dropped, NOT broadcast.
-- [ ] Leaf sends BSAY `fromHandle=admin, channel=#ops` where admin has `+m`
+- [x] Leaf sends BSAY `fromHandle=admin, channel=#ops` where admin has `+m`
       on hub → broadcast + local delivery both fire.
-- [ ] Leaf sends BSAY with empty `fromHandle` → dropped, audit-log fired.
-- [ ] PM-target BSAY (`target=someNick`) uses the handle's global `+m` flag.
+- [x] Leaf sends BSAY with empty `fromHandle` → dropped, audit-log fired.
+- [x] PM-target BSAY (`target=someNick`) uses the handle's global `+m` flag.
 
 ### 8c — Per-frame rate limits
 
-- [ ] BSAY floods at 20/s → only 10 broadcast, rest dropped.
-- [ ] ANNOUNCE floods at 20/s → only 5 delivered.
-- [ ] RELAY_INPUT floods at 60/s → only 30 routed to target.
-- [ ] PARTY_JOIN floods at 20/s → only 5 tracked in `remotePartyUsers`.
-- [ ] Existing `cmdRate` test still passes unchanged (regression guard).
+- [x] BSAY floods at 20/s → only 10 broadcast, rest dropped.
+- [x] ANNOUNCE floods at 20/s → only 5 delivered.
+- [x] RELAY_INPUT floods at 60/s → only 30 routed to target.
+- [x] PARTY_JOIN floods at 20/s → only 5 tracked in `remotePartyUsers`.
+- [x] Existing `cmdRate` test still passes unchanged (regression guard).
 
 ### 8d — RELAY_REQUEST hub gate
 
-- [ ] Leaf A sends `RELAY_REQUEST handle=eve toBot=leafB` without any prior
+- [x] Leaf A sends `RELAY_REQUEST handle=eve toBot=leafB` without any prior
       `PARTY_JOIN` for `eve` → hub replies `RELAY_END reason='No active DCC
-  party session…'`, never forwards to leaf B.
-- [ ] Same request AFTER a `PARTY_JOIN handle=eve` from leaf A → forwarded
+party session…'`, never forwards to leaf B.
+- [x] Same request AFTER a `PARTY_JOIN handle=eve` from leaf A → forwarded
       normally, relay registered.
 
 ### 8e — Hub listen warning
 
-- [ ] `listen('1.2.3.4', 5051)` logs a `[security]` warning.
-- [ ] `listen('127.0.0.1', 5051)` does NOT warn.
-- [ ] `listen('10.0.0.5', 5051)` does NOT warn (RFC1918 carve-out).
+- [x] `listen('1.2.3.4', 5051)` logs a `[security]` warning.
+- [x] `listen('127.0.0.1', 5051)` does NOT warn.
+- [x] `listen('10.0.0.5', 5051)` does NOT warn (RFC1918 carve-out).
 
 ### 8f — Cleanup
 
-- [ ] Delete `describe('hashPassword', …)` at `tests/core/botlink.test.ts:62-77`
+- [x] Delete `describe('hashPassword', …)` at `tests/core/botlink.test.ts:62-77`
       — the symbol no longer exists. Replace with a `describe('deriveLinkKey +
-  computeHelloHmac round-trip', …)` block covering: same
+computeHelloHmac round-trip', …)` block covering: same
       password+salt+nonce → same HMAC; different nonce → different HMAC.
-- [ ] `grep -rn "hashPassword" tests/core/botlink*` after Phase 2e +
+- [x] `grep -rn "hashPassword" tests/core/botlink*` after Phase 2e +
       Phase 8 → zero hits.
 
 ---
 
 ## Phase 9 — Docs
 
-- [ ] Update `/home/justin/Projects/hexbot/docs/SECURITY.md` §11: - Replace the "Authentication" block (lines 333-337) with the
+- [x] Update `/home/justin/Projects/hexbot/docs/SECURITY.md` §11: - Replace the "Authentication" block (lines 333-337) with the
       challenge-response flow, naming the per-botnet salt and the fact the
       password is never transmitted (not even hashed). - Delete or rewrite the "Network considerations" bullet at line 373
       that says HELLO is replay-able — the whole phrase is false after
@@ -457,63 +457,57 @@ corresponding fix. Use the existing `botlink*.test.ts` patterns (socket
       default and the non-loopback warning. - Add a bullet under "Frame validation" that lists the six new per-
       frame rate buckets and their budgets (match the table in Phase 4). - Add a bullet under "Relay sessions" noting the hub now gates
       `RELAY_REQUEST` on a live DCC party session for the handle.
-- [ ] Update `/home/justin/Projects/hexbot/docs/BOTLINK.md`: - Add `link_salt` to the hub setup table (line 57-75) and the leaf
+- [x] Update `/home/justin/Projects/hexbot/docs/BOTLINK.md`: - Add `link_salt` to the hub setup table (line 57-75) and the leaf
       table (line 100+). - Change the `listen.host` row to show `127.0.0.1` as the default and
       add the warning note. - Document the new frame types (`HELLO_CHALLENGE`) in the "Protocol"
       section if one exists; otherwise add a short one. - Document the optional `cmd_inbound_rate` leaf setting.
-- [ ] Update `/home/justin/Projects/hexbot/DESIGN.md` lines 83-90 only if the
+- [x] Update `/home/justin/Projects/hexbot/DESIGN.md` lines 83-90 only if the
       module inventory list mentions `hashPassword` or the old HELLO shape
       — expected: no change, the inventory is file-level, not function-level.
-- [ ] CHANGELOG entry under a BOTLINK section naming both CRITICAL audit IDs
+- [x] CHANGELOG entry under a BOTLINK section naming both CRITICAL audit IDs
       (CRITICAL-BOTLINK-HELLO, CRITICAL-BSAY) and summarising the breaking
       change: "every bot in a botnet must update together; add `link_salt` to
       your `botlink` config".
 
 ---
 
-## Open questions
+## Decisions (locked 2026-04-25)
 
-1. **Where should the per-botnet salt live?**
-   - (a) Inline in `config/bot.json` under `botlink.link_salt` (proposed
-     here). Pro: simple, mirrors password_env pattern, non-secret alone.
-     Con: operators must remember to copy it to every leaf.
-   - (b) Stored in the hub DB on first boot, exposed via a `.botlink salt`
-     admin command so operators paste it into leaves. Pro: auto-generated.
-     Con: adds a DB migration and a first-boot UX we haven't validated.
-   - (c) Derived from `scrypt(password, 'hexbot-botlink-salt-v2')` — defeats
-     the point (back to a well-known salt). Reject.
-   - **Default chosen for this plan: (a). Revisit before Phase 1 lands if you
-     want (b).**
+All six prior open questions were resolved in favour of the plan's
+recommended defaults. No phase rework required — the body of the plan
+above already reflects these choices. Recorded here so a future reader
+can see what was actively chosen vs. implicit.
 
-2. **Should `link_salt` have a `_env` variant?**
-   - The salt is not a secret on its own; inline is fine. Skipping `_env`
-     keeps the config schema smaller. Flag: confirm before Phase 1.
+1. **Per-botnet salt location — inline `botlink.link_salt` in `bot.json`.**
+   Simple, mirrors the `password_env` pattern, non-secret on its own.
+   Operators copy it to every leaf. Rejected: hub-DB auto-generation (adds
+   migration + unvalidated first-boot UX); `scrypt(password, fixed)`
+   derivation (reintroduces a well-known salt, defeats the purpose).
 
-3. **New frame type name: `HELLO_CHALLENGE` or repurpose `HELLO` bidirectionally?**
-   - (a) Add `HELLO_CHALLENGE` as a distinct hub→leaf frame (cleaner, proposed
-     above, one more entry in `KNOWN_FRAME_TYPES`).
-   - (b) Reuse `HELLO` as the single frame name, with the hub's copy carrying
-     `nonce` and no `botname`, and the leaf's copy carrying `botname`+`hmac`.
-     Pro: one frame type. Con: the two shapes diverge enough that a single
-     validator gets messy.
-   - **Default chosen: (a).**
+2. **No `link_salt_env` variant.** Salt alone is not sensitive, so the
+   schema stays smaller. If an operator later wants env parity, that is a
+   post-v2 follow-up, not a Phase 1 change.
 
-4. **RELAY_REQUEST gate: what if `hasRemoteSession` is false because the
-   leaf hasn't yet fanned out its `PARTY_JOIN`?**
-   - Order-of-events concern. Expected flow: DCC user joins party →
-     `PARTY_JOIN` frame to hub → hub tracks in `remotePartyUsers` →
-     user types `.relay` → `RELAY_REQUEST`. The join _must_ precede the
-     relay request; if it doesn't, that's a leaf bug. **Gate rejects
-     per-plan, but confirm the DCC → party → relay ordering in
-     `src/core/dcc.ts` before Phase 6 lands.**
+3. **Frame name: `HELLO_CHALLENGE` as a distinct hub→leaf frame.** One
+   extra `KNOWN_FRAME_TYPES` entry, but each frame keeps a single shape
+   and the validator stays straightforward. Reusing `HELLO`
+   bidirectionally was rejected — the two shapes diverge too far.
 
-5. **Non-loopback warning — warn on `::` too?**
-   - Current auth.ts CIDR helpers are IPv4-only. If the operator binds an
-     IPv6 wildcard (`::`), the warning helper should either treat it as
-     non-loopback and warn, or we explicitly skip IPv6 (noisy). Proposed:
-     warn on any IPv6 that isn't `::1`. **Confirm before Phase 5.**
+4. **RELAY_REQUEST gate fails closed on missing session.** No
+   pending-join buffering or TTL bookkeeping in the router. Expected flow
+   guarantees `PARTY_JOIN` precedes `RELAY_REQUEST`; if a leaf ever
+   inverts that ordering, that is a leaf bug and should surface. Still
+   confirm the DCC → party → relay ordering in `src/core/dcc.ts` before
+   Phase 6 lands (see Phase 6 task list).
 
-6. **Leaf-side CMD cap default — 50/s or tighter?**
-   - The hub sends bursts on `.bot` + multi-line help expansions. 50/s is
-     comfortably above that. 25/s or 100/s are plausible alternatives.
-     **50/s chosen, configurable; tune after deployment feedback.**
+5. **Non-loopback warning covers IPv6: warn on any IPv6 except `::1`.**
+   Matches the IPv4 posture. A small IPv6 helper lands alongside the
+   existing IPv4 CIDR checks in `auth.ts` (or the new
+   `isPrivateOrLoopback` helper). Binding `::` or any global IPv6 without
+   a tunnel produces the same `[security]` warning as a global IPv4
+   bind.
+
+6. **Leaf-side CMD cap default: 50/s, configurable via
+   `cmd_inbound_rate`.** Comfortably above `.bot` + multi-line help
+   expansions; well below flood territory. Tune after deployment
+   feedback if real traffic reveals a tighter or looser sweet spot.

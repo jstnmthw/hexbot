@@ -10,13 +10,23 @@ import {
   MAX_FRAME_SIZE,
   RateCounter,
   type SocketFactory,
-  hashPassword,
+  computeHelloHmac,
+  deriveLinkKey,
   sanitizeFrame,
+  verifyHelloHmac,
 } from '../../src/core/botlink';
 import { Permissions } from '../../src/core/permissions';
 import { BotEventBus } from '../../src/event-bus';
 import type { BotlinkConfig } from '../../src/types';
-import { createMockSocket, parseWritten, pushFrame } from '../helpers/mock-socket';
+import {
+  TEST_LINK_SALT,
+  answerHelloChallenge,
+  createMockSocket,
+  findFrame,
+  parseWritten,
+  pushFrame,
+  testLinkKey,
+} from '../helpers/mock-socket';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -28,15 +38,16 @@ async function tick(): Promise<void> {
 }
 
 const TEST_PASSWORD = 'test-secret-password';
-const TEST_HASH = hashPassword(TEST_PASSWORD);
+const TEST_LINK_KEY = testLinkKey(TEST_PASSWORD);
 
 function hubConfig(overrides?: Partial<BotlinkConfig>): BotlinkConfig {
   return {
     enabled: true,
     role: 'hub',
     botname: 'hub',
-    listen: { host: '0.0.0.0', port: 15051 },
+    listen: { host: '127.0.0.1', port: 15051 },
     password: TEST_PASSWORD,
+    link_salt: TEST_LINK_SALT,
     ping_interval_ms: 60_000, // Long interval to avoid timer noise in tests
     link_timeout_ms: 120_000,
     ...overrides,
@@ -50,6 +61,7 @@ function leafConfig(overrides?: Partial<BotlinkConfig>): BotlinkConfig {
     botname: 'leaf1',
     hub: { host: '127.0.0.1', port: 15051 },
     password: TEST_PASSWORD,
+    link_salt: TEST_LINK_SALT,
     reconnect_delay_ms: 100,
     reconnect_max_delay_ms: 1000,
     ping_interval_ms: 60_000,
@@ -59,21 +71,54 @@ function leafConfig(overrides?: Partial<BotlinkConfig>): BotlinkConfig {
 }
 
 // ---------------------------------------------------------------------------
-// hashPassword
+// HELLO challenge-response helpers: deriveLinkKey / computeHelloHmac /
+// verifyHelloHmac round-trips
 // ---------------------------------------------------------------------------
 
-describe('hashPassword', () => {
-  it('returns scrypt: prefixed hex digest', () => {
-    const hash = hashPassword('hello');
-    expect(hash).toMatch(/^scrypt:[a-f0-9]{64}$/);
+describe('deriveLinkKey + computeHelloHmac round-trip', () => {
+  const salt = TEST_LINK_SALT;
+
+  it('returns 32-byte key and HMAC is deterministic for same inputs', () => {
+    const key = deriveLinkKey('hello', salt);
+    expect(key).toHaveLength(32);
+    const nonce = Buffer.from('a'.repeat(64), 'hex');
+    expect(computeHelloHmac(key, nonce)).toBe(computeHelloHmac(key, nonce));
   });
 
-  it('produces consistent output', () => {
-    expect(hashPassword('test')).toBe(hashPassword('test'));
+  it('different nonce produces different HMAC', () => {
+    const key = deriveLinkKey('test', salt);
+    const a = computeHelloHmac(key, Buffer.from('aa'.repeat(32), 'hex'));
+    const b = computeHelloHmac(key, Buffer.from('bb'.repeat(32), 'hex'));
+    expect(a).not.toBe(b);
   });
 
-  it('produces different output for different inputs', () => {
-    expect(hashPassword('a')).not.toBe(hashPassword('b'));
+  it('different password produces different HMAC for same nonce', () => {
+    const nonce = Buffer.from('c'.repeat(64), 'hex');
+    const a = computeHelloHmac(deriveLinkKey('alpha', salt), nonce);
+    const b = computeHelloHmac(deriveLinkKey('beta', salt), nonce);
+    expect(a).not.toBe(b);
+  });
+
+  it('different salt produces different HMAC for same password + nonce', () => {
+    const nonce = Buffer.from('d'.repeat(64), 'hex');
+    const saltA = '00'.repeat(32);
+    const saltB = 'ff'.repeat(32);
+    const a = computeHelloHmac(deriveLinkKey('shared', saltA), nonce);
+    const b = computeHelloHmac(deriveLinkKey('shared', saltB), nonce);
+    expect(a).not.toBe(b);
+  });
+
+  it('verifyHelloHmac accepts matching HMAC and rejects a tampered one', () => {
+    const key = deriveLinkKey('roundtrip', salt);
+    const nonce = Buffer.from('e'.repeat(64), 'hex');
+    const good = computeHelloHmac(key, nonce);
+    expect(verifyHelloHmac(key, nonce, good)).toBe(true);
+    expect(verifyHelloHmac(key, nonce, good.replace(/.$/, '0'))).toBe(false);
+  });
+
+  it('deriveLinkKey rejects short or non-hex salts', () => {
+    expect(() => deriveLinkKey('pw', 'short')).toThrow(/hex/);
+    expect(() => deriveLinkKey('pw', 'zz'.repeat(32))).toThrow(/hex/);
   });
 });
 
@@ -169,7 +214,7 @@ describe('RateCounter', () => {
 
 describe('BotLinkProtocol', () => {
   it('receives and parses a JSON frame', async () => {
-    const { socket, duplex } = createMockSocket();
+    const { socket, written: _written, duplex } = createMockSocket();
     const protocol = new BotLinkProtocol(socket, null);
     const received: LinkFrame[] = [];
     protocol.onFrame = (frame) => received.push(frame);
@@ -193,7 +238,7 @@ describe('BotLinkProtocol', () => {
   });
 
   it('round-trips a frame', async () => {
-    const { socket, duplex } = createMockSocket();
+    const { socket, written: _written, duplex } = createMockSocket();
     const protocol = new BotLinkProtocol(socket, null);
     const received: LinkFrame[] = [];
     protocol.onFrame = (frame) => received.push(frame);
@@ -206,7 +251,7 @@ describe('BotLinkProtocol', () => {
   });
 
   it('sanitizes string fields in incoming frames', async () => {
-    const { socket, duplex } = createMockSocket();
+    const { socket, written: _written, duplex } = createMockSocket();
     const protocol = new BotLinkProtocol(socket, null);
     const received: LinkFrame[] = [];
     protocol.onFrame = (frame) => received.push(frame);
@@ -249,7 +294,7 @@ describe('BotLinkProtocol', () => {
   });
 
   it('ignores frames with no type field', async () => {
-    const { socket, duplex } = createMockSocket();
+    const { socket, written: _written, duplex } = createMockSocket();
     const protocol = new BotLinkProtocol(socket, null);
     const received: LinkFrame[] = [];
     protocol.onFrame = (frame) => received.push(frame);
@@ -261,7 +306,7 @@ describe('BotLinkProtocol', () => {
   });
 
   it('ignores malformed JSON', async () => {
-    const { socket, duplex } = createMockSocket();
+    const { socket, written: _written, duplex } = createMockSocket();
     const protocol = new BotLinkProtocol(socket, null);
     const received: LinkFrame[] = [];
     protocol.onFrame = (frame) => received.push(frame);
@@ -282,7 +327,7 @@ describe('BotLinkProtocol', () => {
   });
 
   it('fires onClose when socket closes', async () => {
-    const { socket, duplex } = createMockSocket();
+    const { socket, written: _written, duplex } = createMockSocket();
     const protocol = new BotLinkProtocol(socket, null);
     let closed = false;
     protocol.onClose = () => {
@@ -326,18 +371,13 @@ describe('BotLinkHub', () => {
       const { socket, written, duplex } = createMockSocket();
       hub.addConnection(socket);
 
-      pushFrame(duplex, {
-        type: 'HELLO',
-        botname: 'leaf1',
-        password: TEST_HASH,
-        version: '1.0.0',
-      });
+      answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
       await tick();
 
       const frames = parseWritten(written);
       const types = frames.map((f) => f.type);
-      expect(types).toEqual(['WELCOME', 'SYNC_START', 'SYNC_END']);
-      expect(frames[0].botname).toBe('hub');
+      expect(types).toEqual(['HELLO_CHALLENGE', 'WELCOME', 'SYNC_START', 'SYNC_END']);
+      expect(findFrame(written, 'WELCOME')?.botname).toBe('hub');
       expect(hub.getLeaves()).toEqual(['leaf1']);
     });
 
@@ -346,15 +386,35 @@ describe('BotLinkHub', () => {
       const connected: string[] = [];
       hub.onLeafConnected = (name) => connected.push(name);
 
-      const { socket, duplex } = createMockSocket();
+      const { socket, written, duplex } = createMockSocket();
       hub.addConnection(socket);
-      pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1.0' });
+      answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
       await tick();
 
       expect(connected).toEqual(['leaf1']);
     });
 
-    it('rejects wrong password with AUTH_FAILED', async () => {
+    it('rejects wrong HMAC with AUTH_FAILED', async () => {
+      const hub = new BotLinkHub(hubConfig(), '1.0.0');
+      const { socket, written, duplex } = createMockSocket();
+      hub.addConnection(socket);
+
+      // Any 64-hex string that isn't the real HMAC for the issued nonce
+      // is rejected. We don't look at the CHALLENGE — we just send a
+      // syntactically valid HELLO with a wrong hmac.
+      pushFrame(duplex, {
+        type: 'HELLO',
+        botname: 'leaf1',
+        hmac: 'f'.repeat(64),
+        version: '1.0',
+      });
+      await tick();
+
+      expect(findFrame(written, 'ERROR')).toMatchObject({ type: 'ERROR', code: 'AUTH_FAILED' });
+      expect(hub.getLeaves()).toEqual([]);
+    });
+
+    it('rejects pre-v2 HELLO that still carries `password`', async () => {
       const hub = new BotLinkHub(hubConfig(), '1.0.0');
       const { socket, written, duplex } = createMockSocket();
       hub.addConnection(socket);
@@ -362,50 +422,57 @@ describe('BotLinkHub', () => {
       pushFrame(duplex, {
         type: 'HELLO',
         botname: 'leaf1',
-        password: 'sha256:wrong',
+        password: 'scrypt:deadbeef',
         version: '1.0',
       });
       await tick();
 
-      const frames = parseWritten(written);
-      expect(frames[0]).toMatchObject({ type: 'ERROR', code: 'AUTH_FAILED' });
-      expect(hub.getLeaves()).toEqual([]);
+      expect(findFrame(written, 'ERROR')).toMatchObject({ type: 'ERROR', code: 'PROTOCOL' });
+    });
+
+    it('rejects HELLO missing hmac with PROTOCOL', async () => {
+      const hub = new BotLinkHub(hubConfig(), '1.0.0');
+      const { socket, written, duplex } = createMockSocket();
+      hub.addConnection(socket);
+
+      pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', version: '1.0' });
+      await tick();
+
+      expect(findFrame(written, 'ERROR')).toMatchObject({ type: 'ERROR', code: 'PROTOCOL' });
     });
 
     it('rejects duplicate botname', async () => {
       const hub = new BotLinkHub(hubConfig(), '1.0.0');
 
       // Connect first leaf
-      const { socket: socket1, duplex: duplex1 } = createMockSocket();
+      const { socket: socket1, written: written1, duplex: duplex1 } = createMockSocket();
       hub.addConnection(socket1);
-      pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1.0' });
+      answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
       await tick();
 
       // Try to connect with same botname
       const { socket: socket2, written: written2, duplex: duplex2 } = createMockSocket();
       hub.addConnection(socket2);
-      pushFrame(duplex2, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1.0' });
+      answerHelloChallenge(written2, duplex2, TEST_LINK_KEY, 'leaf1');
       await tick();
 
-      const frames = parseWritten(written2);
-      expect(frames[0]).toMatchObject({ type: 'ERROR', code: 'DUPLICATE' });
+      expect(findFrame(written2, 'ERROR')).toMatchObject({ type: 'ERROR', code: 'DUPLICATE' });
     });
 
     it('rejects when hub is at max capacity', async () => {
       const hub = new BotLinkHub(hubConfig({ max_leaves: 1 }), '1.0.0');
 
-      const { socket: socket1, duplex: duplex1 } = createMockSocket();
+      const { socket: socket1, written: written1, duplex: duplex1 } = createMockSocket();
       hub.addConnection(socket1);
-      pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1.0' });
+      answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
       await tick();
 
       const { socket: socket2, written: written2, duplex: duplex2 } = createMockSocket();
       hub.addConnection(socket2);
-      pushFrame(duplex2, { type: 'HELLO', botname: 'leaf2', password: TEST_HASH, version: '1.0' });
+      answerHelloChallenge(written2, duplex2, TEST_LINK_KEY, 'leaf2');
       await tick();
 
-      const frames = parseWritten(written2);
-      expect(frames[0]).toMatchObject({ type: 'ERROR', code: 'FULL' });
+      expect(findFrame(written2, 'ERROR')).toMatchObject({ type: 'ERROR', code: 'FULL' });
     });
 
     it('rejects missing botname', async () => {
@@ -413,11 +480,10 @@ describe('BotLinkHub', () => {
       const { socket, written, duplex } = createMockSocket();
       hub.addConnection(socket);
 
-      pushFrame(duplex, { type: 'HELLO', botname: '', password: TEST_HASH, version: '1.0' });
+      answerHelloChallenge(written, duplex, TEST_LINK_KEY, '');
       await tick();
 
-      const frames = parseWritten(written);
-      expect(frames[0]).toMatchObject({ type: 'ERROR', code: 'INVALID' });
+      expect(findFrame(written, 'ERROR')).toMatchObject({ type: 'ERROR', code: 'INVALID' });
     });
 
     it('rejects non-HELLO as first frame', async () => {
@@ -428,8 +494,7 @@ describe('BotLinkHub', () => {
       pushFrame(duplex, { type: 'PING', seq: 1 });
       await tick();
 
-      const frames = parseWritten(written);
-      expect(frames[0]).toMatchObject({ type: 'ERROR', code: 'PROTOCOL' });
+      expect(findFrame(written, 'ERROR')).toMatchObject({ type: 'ERROR', code: 'PROTOCOL' });
     });
 
     it('times out if HELLO not received within 30s', async () => {
@@ -441,8 +506,7 @@ describe('BotLinkHub', () => {
 
         await vi.advanceTimersByTimeAsync(30_001);
 
-        const frames = parseWritten(written);
-        expect(frames[0]).toMatchObject({ type: 'ERROR', code: 'TIMEOUT' });
+        expect(findFrame(written, 'ERROR')).toMatchObject({ type: 'ERROR', code: 'TIMEOUT' });
       } finally {
         vi.useRealTimers();
       }
@@ -454,14 +518,14 @@ describe('BotLinkHub', () => {
       // Connect leaf1
       const { socket: socket1, written: written1, duplex: duplex1 } = createMockSocket();
       hub.addConnection(socket1);
-      pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1.0' });
+      answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
       await tick();
       written1.length = 0; // Clear initial frames
 
       // Connect leaf2
-      const { socket: socket2, duplex: duplex2 } = createMockSocket();
+      const { socket: socket2, written: written2, duplex: duplex2 } = createMockSocket();
       hub.addConnection(socket2);
-      pushFrame(duplex2, { type: 'HELLO', botname: 'leaf2', password: TEST_HASH, version: '1.0' });
+      answerHelloChallenge(written2, duplex2, TEST_LINK_KEY, 'leaf2');
       await tick();
 
       // leaf1 should have received BOTJOIN for leaf2
@@ -477,12 +541,12 @@ describe('BotLinkHub', () => {
 
       const { socket, written, duplex } = createMockSocket();
       hub.addConnection(socket);
-      pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1.0' });
+      answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
       await tick();
 
       const frames = parseWritten(written);
       const types = frames.map((f) => f.type);
-      expect(types).toEqual(['WELCOME', 'SYNC_START', 'ADDUSER', 'SYNC_END']);
+      expect(types).toEqual(['HELLO_CHALLENGE', 'WELCOME', 'SYNC_START', 'ADDUSER', 'SYNC_END']);
     });
   });
 
@@ -513,15 +577,15 @@ describe('BotLinkHub', () => {
       duplex3 = m3.duplex;
 
       hub.addConnection(m1.socket);
-      pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+      answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
       await tick();
 
       hub.addConnection(m2.socket);
-      pushFrame(duplex2, { type: 'HELLO', botname: 'leaf2', password: TEST_HASH, version: '1' });
+      answerHelloChallenge(written2, duplex2, TEST_LINK_KEY, 'leaf2');
       await tick();
 
       hub.addConnection(m3.socket);
-      pushFrame(duplex3, { type: 'HELLO', botname: 'leaf3', password: TEST_HASH, version: '1' });
+      answerHelloChallenge(written3, duplex3, TEST_LINK_KEY, 'leaf3');
       await tick();
 
       // Clear handshake frames
@@ -655,10 +719,10 @@ describe('BotLinkHub', () => {
       };
 
       hub.addConnection(socket1);
-      pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+      answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
       await tick();
       hub.addConnection(socket2);
-      pushFrame(duplex2, { type: 'HELLO', botname: 'leaf2', password: TEST_HASH, version: '1' });
+      answerHelloChallenge(written2, duplex2, TEST_LINK_KEY, 'leaf2');
       await tick();
       written1.length = 0;
       written2.length = 0;
@@ -700,7 +764,7 @@ describe('BotLinkHub', () => {
       const hub = new BotLinkHub(hubConfig(), '1.0.0');
       const { socket, written, duplex } = createMockSocket();
       hub.addConnection(socket);
-      pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+      answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
       await tick();
       written.length = 0;
 
@@ -728,7 +792,7 @@ describe('BotLinkHub', () => {
       const hub = new BotLinkHub(hubConfig(), '1.0.0');
       const { socket, written, duplex } = createMockSocket();
       hub.addConnection(socket);
-      pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+      answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
       await tick();
       written.length = 0;
 
@@ -757,9 +821,9 @@ describe('BotLinkHub', () => {
 
     it('rate-limits PROTECT_* frames at 20/sec', async () => {
       const hub = new BotLinkHub(hubConfig(), '1.0.0');
-      const { socket, duplex } = createMockSocket();
+      const { socket, written, duplex } = createMockSocket();
       hub.addConnection(socket);
-      pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+      answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
       await tick();
 
       const received: LinkFrame[] = [];
@@ -785,9 +849,9 @@ describe('BotLinkHub', () => {
   describe('identity enforcement', () => {
     it('hub overwrites fromBot with authenticated botname', async () => {
       const hub = new BotLinkHub(hubConfig(), '1.0.0');
-      const { socket, duplex } = createMockSocket();
+      const { socket, written, duplex } = createMockSocket();
       hub.addConnection(socket);
-      pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+      answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
       await tick();
 
       const received: LinkFrame[] = [];
@@ -812,9 +876,9 @@ describe('BotLinkHub', () => {
 
     it('frames without fromBot are passed through unchanged', async () => {
       const hub = new BotLinkHub(hubConfig(), '1.0.0');
-      const { socket, duplex } = createMockSocket();
+      const { socket, written, duplex } = createMockSocket();
       hub.addConnection(socket);
-      pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+      answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
       await tick();
 
       const received: LinkFrame[] = [];
@@ -843,11 +907,11 @@ describe('BotLinkHub', () => {
       const { socket: socket2, written: written2, duplex: duplex2 } = createMockSocket();
 
       hub.addConnection(socket1);
-      pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+      answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
       await tick();
 
       hub.addConnection(socket2);
-      pushFrame(duplex2, { type: 'HELLO', botname: 'leaf2', password: TEST_HASH, version: '1' });
+      answerHelloChallenge(written2, duplex2, TEST_LINK_KEY, 'leaf2');
       await tick();
 
       written1.length = 0;
@@ -875,9 +939,9 @@ describe('BotLinkHub', () => {
       const hub = new BotLinkHub(hubConfig(), '1.0.0');
       expect(hub.getLeafInfo('leaf1')).toBeNull();
 
-      const { socket, duplex } = createMockSocket();
+      const { socket, written, duplex } = createMockSocket();
       hub.addConnection(socket);
-      pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+      answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
       await tick();
 
       const info = hub.getLeafInfo('leaf1');
@@ -892,7 +956,7 @@ describe('BotLinkHub', () => {
       const hub = new BotLinkHub(hubConfig(), '1.0.0');
       const { socket, written, duplex } = createMockSocket();
       hub.addConnection(socket);
-      pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+      answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
       await tick();
       written.length = 0;
 
@@ -908,9 +972,9 @@ describe('BotLinkHub', () => {
       const disconnected: Array<{ name: string; reason: string }> = [];
       hub.onLeafDisconnected = (name, reason) => disconnected.push({ name, reason });
 
-      const { socket, duplex } = createMockSocket();
+      const { socket, written, duplex } = createMockSocket();
       hub.addConnection(socket);
-      pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+      answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
       await tick();
 
       duplex.destroy();
@@ -932,7 +996,7 @@ describe('BotLinkHub', () => {
       const hub = new BotLinkHub(hubConfig(), '1.0.0');
       const { socket, written, duplex } = createMockSocket();
       hub.addConnection(socket);
-      pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+      answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
       await tick();
       written.length = 0;
 
@@ -955,9 +1019,9 @@ describe('BotLinkHub', () => {
         const disconnected: string[] = [];
         hub.onLeafDisconnected = (name) => disconnected.push(name);
 
-        const { socket, duplex } = createMockSocket();
+        const { socket, written, duplex } = createMockSocket();
         hub.addConnection(socket);
-        pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+        answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
         await vi.advanceTimersByTimeAsync(0);
 
         // Advance past link_timeout_ms without any messages from leaf
@@ -978,7 +1042,7 @@ describe('BotLinkHub', () => {
 
 describe('BotLinkLeaf', () => {
   describe('handshake', () => {
-    it('sends HELLO and transitions to connected on WELCOME', async () => {
+    it('responds to HELLO_CHALLENGE with an HMAC HELLO and transitions on WELCOME', async () => {
       const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
       const { socket, written, duplex } = createMockSocket();
       let connectedHub = '';
@@ -989,13 +1053,23 @@ describe('BotLinkLeaf', () => {
       leaf.connectWithSocket(socket);
       await tick();
 
-      // Check HELLO was sent
+      // Leaf should not send HELLO until it receives a CHALLENGE.
+      expect(parseWritten(written)).toEqual([]);
+
+      // Push a CHALLENGE and assert the leaf responds with a valid HMAC.
+      const nonceHex = 'ab'.repeat(32);
+      pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: nonceHex, hubBotname: 'hub' });
+      await tick();
+
       const sent = parseWritten(written);
       expect(sent[0]).toMatchObject({ type: 'HELLO', botname: 'leaf1' });
-      expect(sent[0].password).toBe(TEST_HASH); // Hash, not plaintext
+      expect(typeof sent[0].hmac).toBe('string');
+      const expectedHmac = computeHelloHmac(TEST_LINK_KEY, Buffer.from(nonceHex, 'hex'));
+      expect(sent[0].hmac).toBe(expectedHmac);
+      expect(sent[0].password).toBeUndefined();
 
-      // Simulate hub WELCOME
-      pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0.0' });
+      // Simulate hub WELCOME (CHALLENGE already delivered above).
+      pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
       await tick();
 
       expect(leaf.isConnected).toBe(true);
@@ -1007,7 +1081,7 @@ describe('BotLinkLeaf', () => {
       vi.useFakeTimers();
       try {
         const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
-        const { socket, duplex } = createMockSocket();
+        const { socket, written: _written, duplex } = createMockSocket();
 
         leaf.connectWithSocket(socket);
         await vi.advanceTimersByTimeAsync(0);
@@ -1027,11 +1101,12 @@ describe('BotLinkLeaf', () => {
 
     it('forwards steady-state frames via onFrame', async () => {
       const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
-      const { socket, duplex } = createMockSocket();
+      const { socket, written: _written, duplex } = createMockSocket();
       const received: LinkFrame[] = [];
       leaf.onFrame = (frame) => received.push(frame);
 
       leaf.connectWithSocket(socket);
+      pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
       pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
       await tick();
 
@@ -1050,6 +1125,7 @@ describe('BotLinkLeaf', () => {
       const { socket, written, duplex } = createMockSocket();
 
       leaf.connectWithSocket(socket);
+      pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
       pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
       await tick();
       written.length = 0;
@@ -1063,11 +1139,12 @@ describe('BotLinkLeaf', () => {
 
     it('does not forward PING/PONG to onFrame', async () => {
       const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
-      const { socket, duplex } = createMockSocket();
+      const { socket, written: _written, duplex } = createMockSocket();
       const received: LinkFrame[] = [];
       leaf.onFrame = (frame) => received.push(frame);
 
       leaf.connectWithSocket(socket);
+      pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
       pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
       await tick();
 
@@ -1089,6 +1166,7 @@ describe('BotLinkLeaf', () => {
       const { socket, written, duplex } = createMockSocket();
 
       leaf.connectWithSocket(socket);
+      pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
       pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
       await tick();
       written.length = 0;
@@ -1111,6 +1189,7 @@ describe('BotLinkLeaf', () => {
       const { socket, written, duplex } = createMockSocket();
 
       leaf.connectWithSocket(socket);
+      pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
       pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
       await tick();
       written.length = 0;
@@ -1151,9 +1230,10 @@ describe('BotLinkLeaf', () => {
       vi.useFakeTimers();
       try {
         const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
-        const { socket, duplex } = createMockSocket();
+        const { socket, written: _written, duplex } = createMockSocket();
 
         leaf.connectWithSocket(socket);
+        pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
         pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
         await vi.advanceTimersByTimeAsync(0);
 
@@ -1171,13 +1251,14 @@ describe('BotLinkLeaf', () => {
 
     it('fires onDisconnected when connection is lost unexpectedly', async () => {
       const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
-      const { socket, duplex } = createMockSocket();
+      const { socket, written: _written, duplex } = createMockSocket();
       let disconnectReason = '';
       leaf.onDisconnected = (reason) => {
         disconnectReason = reason;
       };
 
       leaf.connectWithSocket(socket);
+      pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
       pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
       await tick();
 
@@ -1191,9 +1272,10 @@ describe('BotLinkLeaf', () => {
       vi.useFakeTimers();
       try {
         const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
-        const { socket, duplex } = createMockSocket();
+        const { socket, written: _written, duplex } = createMockSocket();
 
         leaf.connectWithSocket(socket);
+        pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
         pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
         await vi.advanceTimersByTimeAsync(0);
         expect(leaf.isConnected).toBe(true);
@@ -1217,13 +1299,14 @@ describe('BotLinkLeaf', () => {
 
     it('does NOT fire onDisconnected on explicit disconnect', async () => {
       const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
-      const { socket, duplex } = createMockSocket();
+      const { socket, written: _written, duplex } = createMockSocket();
       let disconnectFired = false;
       leaf.onDisconnected = () => {
         disconnectFired = true;
       };
 
       leaf.connectWithSocket(socket);
+      pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
       pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
       await tick();
 
@@ -1261,6 +1344,11 @@ describe('BotLinkLeaf', () => {
         // First connection
         leaf.connect();
         await vi.advanceTimersByTimeAsync(1);
+        pushFrame(mocks[0].duplex, {
+          type: 'HELLO_CHALLENGE',
+          nonce: 'a'.repeat(64),
+          hubBotname: 'hub',
+        });
         pushFrame(mocks[0].duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
         await vi.advanceTimersByTimeAsync(0);
         expect(leaf.isConnected).toBe(true);
@@ -1275,6 +1363,11 @@ describe('BotLinkLeaf', () => {
         expect(mocks).toHaveLength(2);
 
         // Second connection succeeds
+        pushFrame(mocks[1].duplex, {
+          type: 'HELLO_CHALLENGE',
+          nonce: 'a'.repeat(64),
+          hubBotname: 'hub',
+        });
         pushFrame(mocks[1].duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
         await vi.advanceTimersByTimeAsync(0);
         expect(leaf.isConnected).toBe(true);
@@ -1300,6 +1393,11 @@ describe('BotLinkLeaf', () => {
 
         leaf.connect();
         await vi.advanceTimersByTimeAsync(1);
+        pushFrame(mocks[0].duplex, {
+          type: 'HELLO_CHALLENGE',
+          nonce: 'a'.repeat(64),
+          hubBotname: 'hub',
+        });
         pushFrame(mocks[0].duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
         await vi.advanceTimersByTimeAsync(0);
         expect(leaf.isConnected).toBe(true);
@@ -1308,6 +1406,12 @@ describe('BotLinkLeaf', () => {
         leaf.reconnect();
         await vi.advanceTimersByTimeAsync(1);
         expect(mocks).toHaveLength(2);
+
+        pushFrame(mocks[1].duplex, {
+          type: 'HELLO_CHALLENGE',
+          nonce: 'a'.repeat(64),
+          hubBotname: 'hub',
+        });
 
         pushFrame(mocks[1].duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
         await vi.advanceTimersByTimeAsync(0);
@@ -1325,7 +1429,7 @@ describe('BotLinkLeaf', () => {
   // -------------------------------------------------------------------------
 
   describe('connect() via socketFactory', () => {
-    it('sends HELLO after TCP connect event fires', async () => {
+    it('installs protocol after TCP connect and waits for HELLO_CHALLENGE', async () => {
       vi.useFakeTimers();
       try {
         const mocks: Array<import('../helpers/mock-socket').MockSocketResult> = [];
@@ -1341,9 +1445,22 @@ describe('BotLinkLeaf', () => {
         await vi.advanceTimersByTimeAsync(1);
 
         expect(mocks).toHaveLength(1);
+        // No HELLO written until the hub (mock) delivers a CHALLENGE.
+        expect(parseWritten(mocks[0].written)).toEqual([]);
+
+        // Push CHALLENGE and verify the leaf replies with a valid HMAC.
+        const nonceHex = 'cd'.repeat(32);
+        pushFrame(mocks[0].duplex, {
+          type: 'HELLO_CHALLENGE',
+          nonce: nonceHex,
+          hubBotname: 'hub',
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
         const sent = parseWritten(mocks[0].written);
         expect(sent[0]).toMatchObject({ type: 'HELLO', botname: 'leaf1' });
-        expect(sent[0].password).toBe(TEST_HASH);
+        expect(sent[0].hmac).toBe(computeHelloHmac(TEST_LINK_KEY, Buffer.from(nonceHex, 'hex')));
+        expect(sent[0].password).toBeUndefined();
 
         leaf.disconnect();
       } finally {
@@ -1365,6 +1482,11 @@ describe('BotLinkLeaf', () => {
         const leaf = new BotLinkLeaf(leafConfig(), '1.0.0', null, factory);
         leaf.connect();
         await vi.advanceTimersByTimeAsync(1);
+        pushFrame(mocks[0].duplex, {
+          type: 'HELLO_CHALLENGE',
+          nonce: 'a'.repeat(64),
+          hubBotname: 'hub',
+        });
         pushFrame(mocks[0].duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
         await vi.advanceTimersByTimeAsync(0);
         expect(leaf.isConnected).toBe(true);
@@ -1437,6 +1559,11 @@ describe('BotLinkLeaf', () => {
         expect(mocks).toHaveLength(2);
 
         // Second socket succeeds
+        pushFrame(mocks[1].duplex, {
+          type: 'HELLO_CHALLENGE',
+          nonce: 'a'.repeat(64),
+          hubBotname: 'hub',
+        });
         pushFrame(mocks[1].duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
         await vi.advanceTimersByTimeAsync(0);
         expect(leaf.isConnected).toBe(true);
@@ -1458,6 +1585,7 @@ describe('BotLinkLeaf', () => {
       const { socket, written, duplex } = createMockSocket();
 
       leaf.connectWithSocket(socket);
+      pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
       pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
       await tick();
       written.length = 0;
@@ -1487,9 +1615,10 @@ describe('BotLinkLeaf', () => {
       vi.useFakeTimers();
       try {
         const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
-        const { socket, duplex } = createMockSocket();
+        const { socket, written: _written, duplex } = createMockSocket();
 
         leaf.connectWithSocket(socket);
+        pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
         pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
         await vi.advanceTimersByTimeAsync(0);
 
@@ -1527,6 +1656,7 @@ describe('BotLinkLeaf', () => {
         const { socket, written, duplex } = createMockSocket();
 
         leaf.connectWithSocket(socket);
+        pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
         pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
         await vi.advanceTimersByTimeAsync(0);
         written.length = 0;
@@ -1581,7 +1711,7 @@ describe('BotLinkHub setCommandRelay', () => {
 
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1.0' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
     written.length = 0;
 
@@ -1692,12 +1822,12 @@ describe('BotLinkHub setCommandRelay', () => {
 
     const { socket: socket1, written: written1, duplex: duplex1 } = createMockSocket();
     hub.addConnection(socket1);
-    pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
     await tick();
 
     const { socket: socket2, written: written2, duplex: duplex2 } = createMockSocket();
     hub.addConnection(socket2);
-    pushFrame(duplex2, { type: 'HELLO', botname: 'leaf2', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written2, duplex2, TEST_LINK_KEY, 'leaf2');
     await tick();
 
     written1.length = 0;
@@ -1739,7 +1869,7 @@ describe('BotLinkHub handleCmdRelay edge cases', () => {
 
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
     // Register admin's party line session (required for CMD session verification)
     pushFrame(duplex, { type: 'PARTY_JOIN', handle: 'admin', fromBot: 'leaf1' });
@@ -1784,7 +1914,7 @@ describe('BotLinkHub handleCmdRelay edge cases', () => {
 
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
     pushFrame(duplex, { type: 'PARTY_JOIN', handle: 'admin', fromBot: 'leaf1' });
     await tick();
@@ -1829,7 +1959,7 @@ describe('BotLinkHub handleCmdRelay edge cases', () => {
 
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
     pushFrame(duplex, { type: 'PARTY_JOIN', handle: 'admin', fromBot: 'leaf1' });
     await tick();
@@ -1879,13 +2009,13 @@ describe('BotLinkHub CMD routing between leaves', () => {
     // Connect leaf1
     const { socket: s1, written: w1, duplex: d1 } = createMockSocket();
     hub.addConnection(s1);
-    pushFrame(d1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(w1, d1, TEST_LINK_KEY, 'leaf1');
     await tick();
 
     // Connect leaf2
     const { socket: s2, written: w2, duplex: d2 } = createMockSocket();
     hub.addConnection(s2);
-    pushFrame(d2, { type: 'HELLO', botname: 'leaf2', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(w2, d2, TEST_LINK_KEY, 'leaf2');
     await tick();
 
     w1.length = 0;
@@ -1943,9 +2073,9 @@ describe('BotLinkHub CMD relay timeout', () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
     hub.setCommandRelay(handler, perms, eventBus);
 
-    const { socket, written: _written, duplex } = createMockSocket();
+    const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await vi.advanceTimersByTimeAsync(0);
 
     const promise = hub.sendCommandToBot('leaf1', 'slow', '', 'admin', null);
@@ -1968,9 +2098,9 @@ describe('BotLinkHub remote party user cleanup', () => {
   it('removes remote party users when leaf is admin-disconnected', async () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
 
-    const { socket, written: _written, duplex } = createMockSocket();
+    const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
 
     // Simulate a PARTY_JOIN from leaf1
@@ -2008,11 +2138,17 @@ describe('BotLinkHub relay routing', () => {
     duplex2 = m2.duplex;
 
     hub.addConnection(m1.socket);
-    pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
     await tick();
 
     hub.addConnection(m2.socket);
-    pushFrame(duplex2, { type: 'HELLO', botname: 'leaf2', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written2, duplex2, TEST_LINK_KEY, 'leaf2');
+    await tick();
+
+    // RELAY_REQUEST is gated on a live DCC party session; fake one by
+    // pumping a PARTY_JOIN for 'admin' from leaf1 so subsequent
+    // RELAY_REQUESTs pass the hasRemoteSession check.
+    pushFrame(duplex1, { type: 'PARTY_JOIN', handle: 'admin', fromBot: 'leaf1' });
     await tick();
 
     written1.length = 0;
@@ -2301,8 +2437,8 @@ describe('BotLinkHub leaf disconnect map cleanup', () => {
     const { socket: socket2, written: written2, duplex: duplex2 } = createMockSocket();
     hub.addConnection(socket1);
     hub.addConnection(socket2);
-    pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
-    pushFrame(duplex2, { type: 'HELLO', botname: 'leaf2', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
+    answerHelloChallenge(written2, duplex2, TEST_LINK_KEY, 'leaf2');
     await tick();
     written1.length = 0;
     written2.length = 0;
@@ -2342,12 +2478,12 @@ describe('BotLinkHub leaf disconnect map cleanup', () => {
 
     const { socket: socket1, written: written1, duplex: duplex1 } = createMockSocket();
     hub.addConnection(socket1);
-    pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
     await tick();
 
     const { socket: socket2, written: written2, duplex: duplex2 } = createMockSocket();
     hub.addConnection(socket2);
-    pushFrame(duplex2, { type: 'HELLO', botname: 'leaf2', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written2, duplex2, TEST_LINK_KEY, 'leaf2');
     await tick();
 
     written1.length = 0;
@@ -2391,12 +2527,12 @@ describe('BotLinkHub PROTECT_ACK routing', () => {
 
     const { socket: socket1, written: written1, duplex: duplex1 } = createMockSocket();
     hub.addConnection(socket1);
-    pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
     await tick();
 
     const { socket: socket2, written: written2, duplex: duplex2 } = createMockSocket();
     hub.addConnection(socket2);
-    pushFrame(duplex2, { type: 'HELLO', botname: 'leaf2', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written2, duplex2, TEST_LINK_KEY, 'leaf2');
     await tick();
 
     written1.length = 0;
@@ -2445,7 +2581,7 @@ describe('BotLinkHub PROTECT_ACK routing', () => {
 
     const { socket: socket1, written: written1, duplex: duplex1 } = createMockSocket();
     hub.addConnection(socket1);
-    pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
     await tick();
     written1.length = 0;
 
@@ -2479,7 +2615,7 @@ describe('BotLinkHub handlePartyWhom', () => {
 
     const { socket: socket1, written: written1, duplex: duplex1 } = createMockSocket();
     hub.addConnection(socket1);
-    pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
     await tick();
     written1.length = 0;
 
@@ -2514,7 +2650,7 @@ describe('BotLinkHub handlePartyWhom', () => {
 
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
     written.length = 0;
 
@@ -2533,9 +2669,9 @@ describe('BotLinkHub handlePartyWhom', () => {
   it('cleans up remote party users on leaf disconnect', async () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
 
-    const { socket: socket1, written: _written1, duplex: duplex1 } = createMockSocket();
+    const { socket: socket1, written: written1, duplex: duplex1 } = createMockSocket();
     hub.addConnection(socket1);
-    pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
     await tick();
 
     // Inject remote party user from leaf1
@@ -2550,7 +2686,7 @@ describe('BotLinkHub handlePartyWhom', () => {
     // Connect leaf2 to query whom after leaf1 disconnects
     const { socket: socket2, written: written2, duplex: duplex2 } = createMockSocket();
     hub.addConnection(socket2);
-    pushFrame(duplex2, { type: 'HELLO', botname: 'leaf2', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written2, duplex2, TEST_LINK_KEY, 'leaf2');
     await tick();
 
     // Disconnect leaf1
@@ -2635,9 +2771,9 @@ describe('BotLinkHub steady-state edge cases', () => {
     const received: LinkFrame[] = [];
     hub.onLeafFrame = (_b, f) => received.push(f);
 
-    const { socket, written: _written, duplex } = createMockSocket();
+    const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
 
     pushFrame(duplex, { type: 'PONG', seq: 99 });
@@ -2649,9 +2785,9 @@ describe('BotLinkHub steady-state edge cases', () => {
 
   it('tracks PARTY_PART to remove remote users', async () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
-    const { socket, written: _written, duplex } = createMockSocket();
+    const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
 
     pushFrame(duplex, { type: 'PARTY_JOIN', handle: 'user1', nick: 'U', fromBot: 'leaf1' });
@@ -2684,6 +2820,7 @@ describe('BotLinkLeaf heartbeat', () => {
       };
 
       leaf.connectWithSocket(socket);
+      pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
       pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
       await vi.advanceTimersByTimeAsync(0);
       written.length = 0;
@@ -2712,6 +2849,7 @@ describe('BotLinkLeaf relayCommand timeout', () => {
       const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
       const { socket, written: _written, duplex } = createMockSocket();
       leaf.connectWithSocket(socket);
+      pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
       pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
       await vi.advanceTimersByTimeAsync(0);
 
@@ -2756,6 +2894,11 @@ describe('BotLinkLeaf disconnect cleanup', () => {
       const leaf = new BotLinkLeaf(leafConfig({ reconnect_delay_ms: 100 }), '1.0.0', null, factory);
       leaf.connect();
       await vi.advanceTimersByTimeAsync(1);
+      pushFrame(mocks[0].duplex, {
+        type: 'HELLO_CHALLENGE',
+        nonce: 'a'.repeat(64),
+        hubBotname: 'hub',
+      });
       pushFrame(mocks[0].duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
       await vi.advanceTimersByTimeAsync(0);
 
@@ -2784,6 +2927,11 @@ describe('BotLinkLeaf disconnect cleanup', () => {
       const leaf = new BotLinkLeaf(leafConfig({ reconnect_delay_ms: 50 }), '1.0.0', null, factory);
       leaf.connect();
       await vi.advanceTimersByTimeAsync(1);
+      pushFrame(mocks[0].duplex, {
+        type: 'HELLO_CHALLENGE',
+        nonce: 'a'.repeat(64),
+        hubBotname: 'hub',
+      });
       pushFrame(mocks[0].duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
       await vi.advanceTimersByTimeAsync(0);
 
@@ -2842,7 +2990,8 @@ describe('BotLinkLeaf setCommandRelay guards', () => {
     const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
     const { socket, written: _written, duplex } = createMockSocket();
     leaf.connectWithSocket(socket);
-    pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
+    pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
+    pushFrame(duplex, { type: 'WELCOME', botname: '    ', version: '1.0' });
     await tick();
     leaf.setCommandRelay(handler, perms);
 
@@ -2872,7 +3021,8 @@ describe('BotLinkLeaf setCommandRelay guards', () => {
     const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
     const { socket, written: _written, duplex } = createMockSocket();
     leaf.connectWithSocket(socket);
-    pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
+    pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
+    pushFrame(duplex, { type: 'WELCOME', botname: '    ', version: '1.0' });
     await tick();
     leaf.setCommandRelay(handler, perms);
 
@@ -2911,7 +3061,7 @@ describe('frame field fallback branches', () => {
 
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
     written.length = 0;
 
@@ -2928,9 +3078,9 @@ describe('frame field fallback branches', () => {
 
   it('PARTY_JOIN with missing nick/fromBot fields uses defaults', async () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
-    const { socket, written: _written, duplex } = createMockSocket();
+    const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
 
     pushFrame(duplex, { type: 'PARTY_JOIN', handle: 'user1' });
@@ -2945,9 +3095,9 @@ describe('frame field fallback branches', () => {
 
   it('PARTY_JOIN with all fields undefined uses empty-string defaults', async () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
-    const { socket, written: _written, duplex } = createMockSocket();
+    const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
 
     // handle, nick, fromBot all undefined — exercises every ?? fallback
@@ -2966,7 +3116,7 @@ describe('frame field fallback branches', () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
     written.length = 0;
 
@@ -2984,6 +3134,7 @@ describe('frame field fallback branches', () => {
       role: 'leaf',
       botname: 'test',
       password: 'p',
+      link_salt: TEST_LINK_SALT,
       hub: { host: '127.0.0.1', port: 15051 },
       ping_interval_ms: 30_000,
       link_timeout_ms: 90_000,
@@ -2997,6 +3148,12 @@ describe('frame field fallback branches', () => {
     const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
     const { socket, written: _written, duplex } = createMockSocket();
     leaf.connectWithSocket(socket);
+    // Answer a CHALLENGE so the leaf is past the handshake gate that
+    // requires CHALLENGE before WELCOME; the ensuing WELCOME with no
+    // botname should still promote the leaf to connected with an empty
+    // hubName fallback.
+    pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
+    await tick();
     pushFrame(duplex, { type: 'WELCOME' });
     await tick();
 
@@ -3009,7 +3166,8 @@ describe('frame field fallback branches', () => {
     const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
     const { socket, written, duplex } = createMockSocket();
     leaf.connectWithSocket(socket);
-    pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
+    pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
+    pushFrame(duplex, { type: 'WELCOME', botname: '    ', version: '1.0' });
     await tick();
 
     const perms = new Permissions();
@@ -3048,7 +3206,8 @@ describe('frame field fallback branches', () => {
     const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
     const { socket, written, duplex } = createMockSocket();
     leaf.connectWithSocket(socket);
-    pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
+    pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
+    pushFrame(duplex, { type: 'WELCOME', botname: '    ', version: '1.0' });
     await tick();
 
     const perms = new Permissions();
@@ -3087,7 +3246,8 @@ describe('frame field fallback branches', () => {
     const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
     const { socket, written, duplex } = createMockSocket();
     leaf.connectWithSocket(socket);
-    pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
+    pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
+    pushFrame(duplex, { type: 'WELCOME', botname: '    ', version: '1.0' });
     await tick();
 
     const promise = leaf.requestWhom();
@@ -3102,18 +3262,16 @@ describe('frame field fallback branches', () => {
     leaf.disconnect();
   });
 
-  it('HELLO with missing botname/password fields exercises ?? coercions', async () => {
+  it('HELLO with missing botname/hmac fields rejected with PROTOCOL', async () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
 
-    // Send HELLO without botname and password fields — ?? coerces to ''
+    // Send HELLO with no botname and no hmac — hub rejects on missing hmac.
     pushFrame(duplex, { type: 'HELLO' });
     await tick();
 
-    // Should reject: password hash won't match
-    const frames = parseWritten(written);
-    expect(frames[0].type).toBe('ERROR');
+    expect(findFrame(written, 'ERROR')).toMatchObject({ type: 'ERROR', code: 'PROTOCOL' });
     hub.close();
   });
 
@@ -3121,7 +3279,7 @@ describe('frame field fallback branches', () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
     written.length = 0;
 
@@ -3140,7 +3298,8 @@ describe('frame field fallback branches', () => {
     const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
     const { socket, written: _written, duplex } = createMockSocket();
     leaf.connectWithSocket(socket);
-    pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
+    pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
+    pushFrame(duplex, { type: 'WELCOME', botname: '    ', version: '1.0' });
     await tick();
 
     const frames: LinkFrame[] = [];
@@ -3160,7 +3319,8 @@ describe('frame field fallback branches', () => {
     const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
     const { socket, written: _written, duplex } = createMockSocket();
     leaf.connectWithSocket(socket);
-    pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
+    pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
+    pushFrame(duplex, { type: 'WELCOME', botname: '    ', version: '1.0' });
     await tick();
 
     const perms = new Permissions();
@@ -3190,12 +3350,12 @@ describe('frame field fallback branches', () => {
 
   it('hub handleConnection: second frame during handshake is ignored', async () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
-    const { socket, written: _written, duplex } = createMockSocket();
+    const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
 
     // Send valid HELLO then immediately another frame
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
 
     // Should only connect once
@@ -3207,7 +3367,8 @@ describe('frame field fallback branches', () => {
     const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
     const { socket, written: _written, duplex } = createMockSocket();
     leaf.connectWithSocket(socket);
-    pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
+    pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
+    pushFrame(duplex, { type: 'WELCOME', botname: '    ', version: '1.0' });
     await tick();
 
     const frames: LinkFrame[] = [];
@@ -3227,7 +3388,8 @@ describe('frame field fallback branches', () => {
     const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
     const { socket, written: _written, duplex } = createMockSocket();
     leaf.connectWithSocket(socket);
-    pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
+    pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
+    pushFrame(duplex, { type: 'WELCOME', botname: '    ', version: '1.0' });
     await tick();
 
     const frames: LinkFrame[] = [];
@@ -3245,7 +3407,8 @@ describe('frame field fallback branches', () => {
     const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
     const { socket, written: _written, duplex } = createMockSocket();
     leaf.connectWithSocket(socket);
-    pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
+    pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
+    pushFrame(duplex, { type: 'WELCOME', botname: '    ', version: '1.0' });
     await tick();
 
     const frames: LinkFrame[] = [];
@@ -3293,7 +3456,8 @@ describe('frame field fallback branches', () => {
     expect(leaf.isConnected).toBe(false);
 
     // Now send WELCOME — should still work
-    pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
+    pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
+    pushFrame(duplex, { type: 'WELCOME', botname: '    ', version: '1.0' });
     await tick();
 
     expect(leaf.isConnected).toBe(true);
@@ -3302,9 +3466,9 @@ describe('frame field fallback branches', () => {
 
   it('hub onSteadyState returns early when conn is null (race)', async () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
-    const { socket, written: _written, duplex } = createMockSocket();
+    const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
 
     // Disconnect the leaf, then try to send a frame (race condition)
@@ -3333,7 +3497,7 @@ describe('BotLinkHub setCommandRelay event handler guards', () => {
 
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
     written.length = 0;
 
@@ -3355,7 +3519,7 @@ describe('BotLinkHub setCommandRelay event handler guards', () => {
 
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
     written.length = 0;
 
@@ -3376,7 +3540,7 @@ describe('BotLinkHub setCommandRelay event handler guards', () => {
 
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
     written.length = 0;
 
@@ -3397,7 +3561,7 @@ describe('BotLinkHub setCommandRelay event handler guards', () => {
 
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
     written.length = 0;
 
@@ -3419,7 +3583,7 @@ describe('BotLinkHub relay routing with no active relay', () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
     const { socket: socket1, written: written1, duplex: duplex1 } = createMockSocket();
     hub.addConnection(socket1);
-    pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
     await tick();
     written1.length = 0;
 
@@ -3435,7 +3599,7 @@ describe('BotLinkHub relay routing with no active relay', () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
     const { socket: socket1, written: written1, duplex: duplex1 } = createMockSocket();
     hub.addConnection(socket1);
-    pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
     await tick();
     written1.length = 0;
 
@@ -3451,7 +3615,7 @@ describe('BotLinkHub relay routing with no active relay', () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
     const { socket: socket1, written: written1, duplex: duplex1 } = createMockSocket();
     hub.addConnection(socket1);
-    pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
     await tick();
     written1.length = 0;
 
@@ -3467,7 +3631,7 @@ describe('BotLinkHub relay routing with no active relay', () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
     const { socket: socket1, written: written1, duplex: duplex1 } = createMockSocket();
     hub.addConnection(socket1);
-    pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
     await tick();
     written1.length = 0;
 
@@ -3487,14 +3651,14 @@ describe('BotLinkHub onLeafClose remote user cleanup', () => {
   it('only removes party users from the disconnected leaf', async () => {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
 
-    const { socket: socket1, written: _written1, duplex: duplex1 } = createMockSocket();
+    const { socket: socket1, written: written1, duplex: duplex1 } = createMockSocket();
     hub.addConnection(socket1);
-    pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
     await tick();
 
-    const { socket: socket2, written: _written2, duplex: duplex2 } = createMockSocket();
+    const { socket: socket2, written: written2, duplex: duplex2 } = createMockSocket();
     hub.addConnection(socket2);
-    pushFrame(duplex2, { type: 'HELLO', botname: 'leaf2', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written2, duplex2, TEST_LINK_KEY, 'leaf2');
     await tick();
 
     // Add party users from both leaves
@@ -3539,8 +3703,8 @@ describe('BotLinkHub CMD toBot routing', () => {
     const { socket: socket2, written: written2, duplex: duplex2 } = createMockSocket();
     hub.addConnection(socket1);
     hub.addConnection(socket2);
-    pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
-    pushFrame(duplex2, { type: 'HELLO', botname: 'leaf2', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
+    answerHelloChallenge(written2, duplex2, TEST_LINK_KEY, 'leaf2');
     await tick();
     written1.length = 0;
     written2.length = 0;
@@ -3579,7 +3743,7 @@ describe('BotLinkHub CMD toBot routing', () => {
 
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
     written.length = 0;
 
@@ -3614,7 +3778,7 @@ describe('BotLinkHub CMD toBot routing', () => {
 
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
     written.length = 0;
 
@@ -3650,8 +3814,28 @@ describe('BotLinkHub CMD toBot routing', () => {
 // ---------------------------------------------------------------------------
 
 describe('BotLinkHub BSAY routing', () => {
-  it('routes BSAY to specific leaf', async () => {
+  /**
+   * Set up a hub with a permissions adapter that grants `admin` the `+m`
+   * flag globally and on every channel. The BSAY router re-checks `+m`
+   * against the frame's fromHandle via this adapter; without it, every
+   * BSAY drops with "[security] BSAY rejected".
+   */
+  function setupHubWithPerms(): {
+    hub: BotLinkHub;
+    handler: CommandHandler;
+    perms: Permissions;
+  } {
     const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const eventBus = new BotEventBus();
+    const perms = new Permissions(null, null, eventBus);
+    perms.addUser('admin', '*!admin@host.com', 'nm');
+    const handler = new CommandHandler(perms);
+    hub.setCommandRelay(handler, perms, eventBus);
+    return { hub, handler, perms };
+  }
+
+  it('routes BSAY to specific leaf', async () => {
+    const { hub } = setupHubWithPerms();
     const bsayCalls: [string, string][] = [];
     hub.onBsay = (target, msg) => bsayCalls.push([target, msg]);
 
@@ -3659,14 +3843,20 @@ describe('BotLinkHub BSAY routing', () => {
     const { socket: socket2, written: written2, duplex: duplex2 } = createMockSocket();
     hub.addConnection(socket1);
     hub.addConnection(socket2);
-    pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
-    pushFrame(duplex2, { type: 'HELLO', botname: 'leaf2', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
+    answerHelloChallenge(written2, duplex2, TEST_LINK_KEY, 'leaf2');
     await tick();
     written1.length = 0;
     written2.length = 0;
 
-    // leaf1 sends BSAY targeting leaf2
-    pushFrame(duplex1, { type: 'BSAY', target: '#chan', message: 'hello', toBot: 'leaf2' });
+    // leaf1 sends BSAY targeting leaf2 with a valid fromHandle
+    pushFrame(duplex1, {
+      type: 'BSAY',
+      target: '#chan',
+      message: 'hello',
+      toBot: 'leaf2',
+      fromHandle: 'admin',
+    });
     await tick();
 
     // leaf2 should receive it
@@ -3679,7 +3869,7 @@ describe('BotLinkHub BSAY routing', () => {
   });
 
   it('broadcasts BSAY with toBot=* and delivers locally', async () => {
-    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const { hub } = setupHubWithPerms();
     const bsayCalls: [string, string][] = [];
     hub.onBsay = (target, msg) => bsayCalls.push([target, msg]);
 
@@ -3687,14 +3877,20 @@ describe('BotLinkHub BSAY routing', () => {
     const { socket: socket2, written: written2, duplex: duplex2 } = createMockSocket();
     hub.addConnection(socket1);
     hub.addConnection(socket2);
-    pushFrame(duplex1, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
-    pushFrame(duplex2, { type: 'HELLO', botname: 'leaf2', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written1, duplex1, TEST_LINK_KEY, 'leaf1');
+    answerHelloChallenge(written2, duplex2, TEST_LINK_KEY, 'leaf2');
     await tick();
     written1.length = 0;
     written2.length = 0;
 
-    // leaf1 sends BSAY targeting all
-    pushFrame(duplex1, { type: 'BSAY', target: '#chan', message: 'hi', toBot: '*' });
+    // leaf1 sends BSAY targeting all with a valid fromHandle
+    pushFrame(duplex1, {
+      type: 'BSAY',
+      target: '#chan',
+      message: 'hi',
+      toBot: '*',
+      fromHandle: 'admin',
+    });
     await tick();
 
     // leaf2 should receive it (not leaf1 — exclude sender)
@@ -3709,20 +3905,75 @@ describe('BotLinkHub BSAY routing', () => {
   });
 
   it('delivers BSAY targeting hub locally', async () => {
-    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const { hub } = setupHubWithPerms();
     const bsayCalls: [string, string][] = [];
     hub.onBsay = (target, msg) => bsayCalls.push([target, msg]);
 
     const { socket, written, duplex } = createMockSocket();
     hub.addConnection(socket);
-    pushFrame(duplex, { type: 'HELLO', botname: 'leaf1', password: TEST_HASH, version: '1' });
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
     await tick();
     written.length = 0;
 
-    pushFrame(duplex, { type: 'BSAY', target: '#test', message: 'msg', toBot: 'hub' });
+    pushFrame(duplex, {
+      type: 'BSAY',
+      target: '#test',
+      message: 'msg',
+      toBot: 'hub',
+      fromHandle: 'admin',
+    });
     await tick();
 
     expect(bsayCalls).toEqual([['#test', 'msg']]);
+    hub.close();
+  });
+
+  it('drops BSAY from leaf when fromHandle lacks +m', async () => {
+    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const eventBus = new BotEventBus();
+    const perms = new Permissions(null, null, eventBus);
+    // `eve` exists but has no flags — BSAY hub gate must reject.
+    perms.addUser('eve', '*!eve@host.com', '');
+    const handler = new CommandHandler(perms);
+    hub.setCommandRelay(handler, perms, eventBus);
+
+    const bsayCalls: [string, string][] = [];
+    hub.onBsay = (target, msg) => bsayCalls.push([target, msg]);
+
+    const { socket, written, duplex } = createMockSocket();
+    hub.addConnection(socket);
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
+    await tick();
+    written.length = 0;
+
+    pushFrame(duplex, {
+      type: 'BSAY',
+      target: '#ops',
+      message: 'spoof',
+      toBot: '*',
+      fromHandle: 'eve',
+    });
+    await tick();
+
+    expect(bsayCalls).toEqual([]);
+    hub.close();
+  });
+
+  it('drops BSAY with missing fromHandle', async () => {
+    const { hub } = setupHubWithPerms();
+    const bsayCalls: [string, string][] = [];
+    hub.onBsay = (target, msg) => bsayCalls.push([target, msg]);
+
+    const { socket, written, duplex } = createMockSocket();
+    hub.addConnection(socket);
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
+    await tick();
+    written.length = 0;
+
+    pushFrame(duplex, { type: 'BSAY', target: '#ops', message: 'no-handle', toBot: '*' });
+    await tick();
+
+    expect(bsayCalls).toEqual([]);
     hub.close();
   });
 });
@@ -3813,7 +4064,8 @@ describe('BotLinkLeaf incoming CMD execution', () => {
     leaf.connectWithSocket(socket);
 
     // Complete handshake
-    pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1' });
+    pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
+    pushFrame(duplex, { type: 'WELCOME', botname: '    ', version: '1.0' });
     await tick();
     written.length = 0;
 
@@ -3856,7 +4108,8 @@ describe('BotLinkLeaf incoming CMD execution', () => {
 
     const { socket, written, duplex } = createMockSocket();
     leaf.connectWithSocket(socket);
-    pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1' });
+    pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
+    pushFrame(duplex, { type: 'WELCOME', botname: '    ', version: '1.0' });
     await tick();
     written.length = 0;
 
@@ -3878,5 +4131,426 @@ describe('BotLinkLeaf incoming CMD execution', () => {
     expect((result!.output as string[])[0]).toMatch(/Permission denied/);
 
     leaf.disconnect();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 8 — HELLO v2 security tests (handshake-v2.md §8a)
+// ---------------------------------------------------------------------------
+
+describe('HELLO v2 — replay + nonce guarantees', () => {
+  it('rejects a replayed HELLO (captured HMAC from a prior nonce)', async () => {
+    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+
+    // Connection A — capture its HELLO.
+    const a = createMockSocket();
+    hub.addConnection(a.socket);
+    const replayedHello = answerHelloChallenge(a.written, a.duplex, TEST_LINK_KEY, 'leafA');
+    await tick();
+    expect(findFrame(a.written, 'WELCOME')).toBeDefined();
+
+    // Connection B — gets a fresh nonce. Replaying A's HELLO must fail.
+    const b = createMockSocket();
+    hub.addConnection(b.socket);
+    pushFrame(b.duplex, replayedHello);
+    await tick();
+
+    expect(findFrame(b.written, 'ERROR')).toMatchObject({
+      type: 'ERROR',
+      code: 'AUTH_FAILED',
+    });
+    hub.close();
+  });
+
+  it('emits a distinct nonce on every CHALLENGE', async () => {
+    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const nonces = new Set<string>();
+    const N = 100;
+    for (let i = 0; i < N; i++) {
+      const { socket, written } = createMockSocket();
+      hub.addConnection(socket);
+      const nonce = findFrame(written, 'HELLO_CHALLENGE')?.nonce;
+      if (typeof nonce === 'string') nonces.add(nonce);
+      socket.destroy();
+    }
+    expect(nonces.size).toBe(N);
+    hub.close();
+  });
+
+  it('hub + leaf configured with different link_salt cannot auth', async () => {
+    const hub = new BotLinkHub(hubConfig({ link_salt: 'aa'.repeat(32) }), '1.0.0');
+    const { socket, written, duplex } = createMockSocket();
+    hub.addConnection(socket);
+
+    // Use a link key derived from a DIFFERENT salt — same password,
+    // different per-botnet value. Resulting HMAC should not match.
+    const otherKey = testLinkKey(TEST_PASSWORD, 'bb'.repeat(32));
+    answerHelloChallenge(written, duplex, otherKey, 'leafX');
+    await tick();
+
+    expect(findFrame(written, 'ERROR')).toMatchObject({
+      type: 'ERROR',
+      code: 'AUTH_FAILED',
+    });
+    hub.close();
+  });
+
+  it('leaf reconnects cleanly when hub sends a malformed nonce hex', async () => {
+    const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
+    const { socket, duplex } = createMockSocket();
+    leaf.connectWithSocket(socket);
+    pushFrame(duplex, {
+      type: 'HELLO_CHALLENGE',
+      nonce: 'zzz', // not hex
+      hubBotname: 'evil-hub',
+    });
+    await tick();
+    // Leaf should have closed the socket without throwing; connected is false.
+    expect(leaf.isConnected).toBe(false);
+    leaf.disconnect();
+  });
+
+  it('leaf replies PROTOCOL on unexpected handshake frame and does not connect', async () => {
+    const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
+    const { socket, written, duplex } = createMockSocket();
+    leaf.connectWithSocket(socket);
+    pushFrame(duplex, { type: 'PING', seq: 1 });
+    await tick();
+    const sent = parseWritten(written);
+    expect(sent.find((f) => f.type === 'ERROR')).toMatchObject({
+      type: 'ERROR',
+      code: 'PROTOCOL',
+    });
+    expect(leaf.isConnected).toBe(false);
+    leaf.disconnect();
+  });
+
+  it('leaf refuses WELCOME that arrives before CHALLENGE', async () => {
+    const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
+    const { socket, duplex } = createMockSocket();
+    leaf.connectWithSocket(socket);
+    pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
+    await tick();
+    expect(leaf.isConnected).toBe(false);
+    leaf.disconnect();
+  });
+
+  it('leaf rejects a second HELLO_CHALLENGE after answering the first', async () => {
+    const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
+    const { socket, written, duplex } = createMockSocket();
+    leaf.connectWithSocket(socket);
+    pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
+    await tick();
+    pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'b'.repeat(64), hubBotname: 'hub' });
+    await tick();
+    expect(parseWritten(written).some((f) => f.type === 'ERROR' && f.code === 'PROTOCOL')).toBe(
+      true,
+    );
+    leaf.disconnect();
+  });
+
+  it('leaf disconnect() clears the cached linkKey and blocks later CHALLENGE response', async () => {
+    const leaf = new BotLinkLeaf(leafConfig(), '1.0.0');
+    const { socket, written, duplex } = createMockSocket();
+    leaf.connectWithSocket(socket);
+    leaf.disconnect();
+    // Construction auto-derives linkKey; disconnect zeroes it. A fresh
+    // socket with a brand-new protocol shouldn't be able to answer a
+    // CHALLENGE against the disconnected leaf.
+    const fresh = createMockSocket();
+    leaf.connectWithSocket(fresh.socket);
+    pushFrame(fresh.duplex, {
+      type: 'HELLO_CHALLENGE',
+      nonce: 'a'.repeat(64),
+      hubBotname: 'hub',
+    });
+    await tick();
+    // Leaf has no linkKey after disconnect — CHALLENGE must fail closed.
+    expect(parseWritten(fresh.written).some((f) => f.type === 'HELLO')).toBe(false);
+    expect(leaf.isConnected).toBe(false);
+    // silence unused var warning
+    void written;
+    void duplex;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 8 — leaf cmd_inbound_rate gate (handshake-v2.md §7)
+// ---------------------------------------------------------------------------
+
+describe('leaf cmd_inbound_rate gate', () => {
+  it('returns RATE_LIMITED CMD_RESULT once the window is exhausted', async () => {
+    const leaf = new BotLinkLeaf(leafConfig({ cmd_inbound_rate: 2 }), '1.0.0');
+    const { socket, written, duplex } = createMockSocket();
+    leaf.connectWithSocket(socket);
+    pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
+    await tick();
+    pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
+    await tick();
+    const perms = new Permissions();
+    perms.addUser('admin', '*!admin@host', 'n');
+    const handler = new CommandHandler(perms);
+    handler.registerCommand(
+      'ping',
+      { flags: '-', description: '', usage: '', category: '' },
+      (_a, c) => c.reply('pong'),
+    );
+    leaf.setCommandRelay(handler, perms);
+    written.length = 0;
+
+    for (let i = 0; i < 5; i++) {
+      pushFrame(duplex, {
+        type: 'CMD',
+        command: 'ping',
+        args: '',
+        fromHandle: 'admin',
+        fromBot: 'hub',
+        channel: null,
+        ref: `r${i}`,
+      });
+    }
+    await tick();
+    await tick();
+
+    const results = parseWritten(written).filter((f) => f.type === 'CMD_RESULT');
+    const rateLimited = results.filter(
+      (r) => Array.isArray(r.output) && r.output[0] === 'Rate limit exceeded',
+    );
+    expect(rateLimited.length).toBeGreaterThan(0);
+    leaf.disconnect();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 8 — BSAY PM-target re-check (handshake-v2.md §8b)
+// ---------------------------------------------------------------------------
+
+describe('BSAY re-check — PM target uses global +m', () => {
+  it('admin with global +m can BSAY a PM target', async () => {
+    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const eventBus = new BotEventBus();
+    const perms = new Permissions(null, null, eventBus);
+    perms.addUser('admin', '*!admin@host.com', 'nm');
+    const handler = new CommandHandler(perms);
+    hub.setCommandRelay(handler, perms, eventBus);
+
+    const bsayCalls: [string, string][] = [];
+    hub.onBsay = (target, msg) => bsayCalls.push([target, msg]);
+
+    const { socket, written, duplex } = createMockSocket();
+    hub.addConnection(socket);
+    answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
+    await tick();
+
+    pushFrame(duplex, {
+      type: 'BSAY',
+      target: 'someNick',
+      message: 'pm hi',
+      toBot: 'hub',
+      fromHandle: 'admin',
+    });
+    await tick();
+    expect(bsayCalls).toEqual([['someNick', 'pm hi']]);
+    hub.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 8 — Per-frame rate buckets (handshake-v2.md §8c)
+// ---------------------------------------------------------------------------
+
+describe('Per-frame rate buckets', () => {
+  function countForwarded(written: string[], type: string): number {
+    return parseWritten(written).filter((f) => f.type === type).length;
+  }
+
+  async function setupPair(): Promise<{
+    hub: BotLinkHub;
+    d1: Duplex;
+    w1: string[];
+    w2: string[];
+  }> {
+    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const eventBus = new BotEventBus();
+    const perms = new Permissions(null, null, eventBus);
+    perms.addUser('admin', '*!admin@host.com', 'nm');
+    const handler = new CommandHandler(perms);
+    hub.setCommandRelay(handler, perms, eventBus);
+    const a = createMockSocket();
+    const b = createMockSocket();
+    hub.addConnection(a.socket);
+    answerHelloChallenge(a.written, a.duplex, TEST_LINK_KEY, 'leaf1');
+    await tick();
+    hub.addConnection(b.socket);
+    answerHelloChallenge(b.written, b.duplex, TEST_LINK_KEY, 'leaf2');
+    await tick();
+    a.written.length = 0;
+    b.written.length = 0;
+    return { hub, d1: a.duplex, w1: a.written, w2: b.written };
+  }
+
+  it('BSAY flood caps fanout at 10 per second', async () => {
+    const { hub, d1, w2 } = await setupPair();
+    for (let i = 0; i < 20; i++) {
+      pushFrame(d1, {
+        type: 'BSAY',
+        target: '#chan',
+        message: `m${i}`,
+        toBot: 'leaf2',
+        fromHandle: 'admin',
+      });
+    }
+    await tick();
+    expect(countForwarded(w2, 'BSAY')).toBe(10);
+    hub.close();
+  });
+
+  it('ANNOUNCE flood caps at 5 per second', async () => {
+    const { hub, d1, w2 } = await setupPair();
+    for (let i = 0; i < 20; i++) {
+      pushFrame(d1, { type: 'ANNOUNCE', message: `a${i}`, fromBot: 'leaf1' });
+    }
+    await tick();
+    expect(countForwarded(w2, 'ANNOUNCE')).toBe(5);
+    hub.close();
+  });
+
+  it('PARTY_JOIN flood caps at 5 tracked per second', async () => {
+    const { hub, d1 } = await setupPair();
+    for (let i = 0; i < 20; i++) {
+      pushFrame(d1, { type: 'PARTY_JOIN', handle: `user${i}`, nick: `n${i}`, fromBot: 'leaf1' });
+    }
+    await tick();
+    expect(hub.getRemotePartyUsers().length).toBe(5);
+    hub.close();
+  });
+
+  it('RELAY_INPUT flood caps routed frames at 30 per second', async () => {
+    const { hub, d1, w2 } = await setupPair();
+    // Seed a party join + an active relay so RELAY_INPUT can route.
+    pushFrame(d1, { type: 'PARTY_JOIN', handle: 'admin', fromBot: 'leaf1' });
+    pushFrame(d1, { type: 'RELAY_REQUEST', handle: 'admin', toBot: 'leaf2' });
+    await tick();
+    w2.length = 0;
+
+    for (let i = 0; i < 60; i++) {
+      pushFrame(d1, { type: 'RELAY_INPUT', handle: 'admin', line: `l${i}` });
+    }
+    await tick();
+    expect(countForwarded(w2, 'RELAY_INPUT')).toBe(30);
+    hub.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 8 — RELAY_REQUEST hub gate (handshake-v2.md §8d)
+// ---------------------------------------------------------------------------
+
+describe('RELAY_REQUEST hub-side gate', () => {
+  it('rejects RELAY_REQUEST when no PARTY_JOIN preceded it', async () => {
+    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const a = createMockSocket();
+    const b = createMockSocket();
+    hub.addConnection(a.socket);
+    answerHelloChallenge(a.written, a.duplex, TEST_LINK_KEY, 'leaf1');
+    await tick();
+    hub.addConnection(b.socket);
+    answerHelloChallenge(b.written, b.duplex, TEST_LINK_KEY, 'leaf2');
+    await tick();
+    a.written.length = 0;
+    b.written.length = 0;
+
+    pushFrame(a.duplex, { type: 'RELAY_REQUEST', handle: 'eve', toBot: 'leaf2' });
+    await tick();
+
+    const end = findFrame(a.written, 'RELAY_END');
+    expect(end).toMatchObject({ type: 'RELAY_END', handle: 'eve' });
+    expect(String(end!.reason)).toMatch(/No active DCC party session/);
+    // leaf2 never saw the REQUEST.
+    expect(parseWritten(b.written).some((f) => f.type === 'RELAY_REQUEST')).toBe(false);
+    hub.close();
+  });
+
+  it('forwards RELAY_REQUEST when PARTY_JOIN already occurred', async () => {
+    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const a = createMockSocket();
+    const b = createMockSocket();
+    hub.addConnection(a.socket);
+    answerHelloChallenge(a.written, a.duplex, TEST_LINK_KEY, 'leaf1');
+    await tick();
+    hub.addConnection(b.socket);
+    answerHelloChallenge(b.written, b.duplex, TEST_LINK_KEY, 'leaf2');
+    await tick();
+
+    pushFrame(a.duplex, { type: 'PARTY_JOIN', handle: 'eve', fromBot: 'leaf1' });
+    await tick();
+    a.written.length = 0;
+    b.written.length = 0;
+
+    pushFrame(a.duplex, { type: 'RELAY_REQUEST', handle: 'eve', toBot: 'leaf2' });
+    await tick();
+
+    expect(parseWritten(b.written).some((f) => f.type === 'RELAY_REQUEST')).toBe(true);
+    hub.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 8 — Non-loopback listen warning (handshake-v2.md §8e)
+// ---------------------------------------------------------------------------
+
+describe('hub listen() non-loopback warning', () => {
+  function mockLogger(warns: string[]): {
+    child: () => {
+      info: () => void;
+      warn: (msg: string) => void;
+      debug: () => void;
+      error: () => void;
+    };
+  } {
+    return {
+      child: () => ({
+        info: () => {},
+        warn: (msg: string) => warns.push(msg),
+        debug: () => {},
+        error: () => {},
+      }),
+    };
+  }
+
+  it('warns [security] when bound to 0.0.0.0 (non-loopback, non-RFC1918)', async () => {
+    const warns: string[] = [];
+    const hub = new BotLinkHub(hubConfig(), '1.0.0', mockLogger(warns) as never);
+    // 0.0.0.0 binds to every interface — available on the test host
+    // unlike a truly public IP, and still non-loopback so the warning
+    // path fires.
+    await hub.listen(0, '0.0.0.0');
+    expect(warns.some((w) => w.startsWith('[security]') && w.includes('0.0.0.0'))).toBe(true);
+    hub.close();
+  });
+
+  it('does NOT warn when bound to 127.0.0.1', async () => {
+    const warns: string[] = [];
+    const hub = new BotLinkHub(hubConfig(), '1.0.0', mockLogger(warns) as never);
+    await hub.listen(0, '127.0.0.1');
+    expect(warns.some((w) => w.startsWith('[security]'))).toBe(false);
+    hub.close();
+  });
+
+  it('does NOT warn when bound to RFC1918 (10.0.0.0/8)', async () => {
+    const warns: string[] = [];
+    const hub = new BotLinkHub(hubConfig(), '1.0.0', mockLogger(warns) as never);
+    await hub.listen(0, '127.0.0.1'); // Bind loopback to succeed; assert directly on helper
+    expect(warns.some((w) => w.startsWith('[security]'))).toBe(false);
+    hub.close();
+    // Separate assertion via the pure helper so we don't actually bind to 10.x.
+    const { isPrivateOrLoopback } = await import('../../src/core/botlink');
+    expect(isPrivateOrLoopback('10.0.0.5')).toBe(true);
+    expect(isPrivateOrLoopback('172.16.5.1')).toBe(true);
+    expect(isPrivateOrLoopback('192.168.100.10')).toBe(true);
+    expect(isPrivateOrLoopback('::1')).toBe(true);
+    expect(isPrivateOrLoopback('0.0.0.0')).toBe(false);
+    expect(isPrivateOrLoopback('::')).toBe(false);
+    expect(isPrivateOrLoopback('2001:db8::1')).toBe(false);
   });
 });

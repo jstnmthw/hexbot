@@ -6,14 +6,17 @@
 // import graph and makes internal renames cheap.
 
 export { BotLinkHub, isValidIP, isWhitelisted } from './hub';
+export { isPrivateOrLoopback } from './auth';
 export type { AuthBanEntry, LinkBan } from './hub';
 export { BotLinkLeaf } from './leaf';
 export {
   BotLinkProtocol,
   HUB_ONLY_FRAMES,
   MAX_FRAME_SIZE,
-  hashPassword,
+  computeHelloHmac,
+  deriveLinkKey,
   sanitizeFrame,
+  verifyHelloHmac,
 } from './protocol';
 export { executeCmdFrame } from './cmd-exec.js';
 export { RateCounter } from './rate-counter.js';

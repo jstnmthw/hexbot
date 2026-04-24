@@ -65,10 +65,11 @@
       "port": 5051
     },
     "listen": {
-      "host": "0.0.0.0",
+      "host": "127.0.0.1",
       "port": 5051
     },
     "password_env": "HEX_BOTLINK_PASSWORD",
+    "link_salt": "0000000000000000000000000000000000000000000000000000000000000000",
     "reconnect_delay_ms": 5000,
     "reconnect_max_delay_ms": 60000,
     "max_leaves": 10,
@@ -82,7 +83,8 @@
     "auth_ban_duration_ms": 300000,
     "auth_ip_whitelist": [],
     "handshake_timeout_ms": 10000,
-    "max_pending_handshakes": 3
+    "max_pending_handshakes": 3,
+    "cmd_inbound_rate": 50
   },
   "chanmod": {
     "nick_recovery_password_env": "HEX_CHANMOD_RECOVERY_PASSWORD"

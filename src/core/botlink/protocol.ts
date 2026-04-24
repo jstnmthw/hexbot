@@ -1,10 +1,12 @@
 // HexBot — Bot Link Protocol Layer
-// Frame serialization, socket wrapper, and authentication helpers.
+// Frame serialization, socket wrapper, and HMAC handshake helpers.
 // Shared by both BotLinkHub and BotLinkLeaf.
 //
 // Type declarations live in `./types.ts`. Rate limiting lives in
 // `./rate-counter.ts`. Command-execution glue lives in `./cmd-exec.ts`.
-import { scryptSync } from 'node:crypto';
+// HELLO challenge-response helpers: deriveLinkKey, computeHelloHmac,
+// verifyHelloHmac — see `docs/plans/botlink-handshake-v2.md`.
+import { createHmac, scryptSync, timingSafeEqual } from 'node:crypto';
 import type { Socket } from 'node:net';
 import { createInterface as createReadline } from 'node:readline';
 
@@ -50,6 +52,7 @@ export const HUB_ONLY_FRAMES = new Set([
  */
 export const KNOWN_FRAME_TYPES = new Set([
   // Handshake + heartbeat
+  'HELLO_CHALLENGE',
   'HELLO',
   'WELCOME',
   'AUTH_OK',
@@ -106,14 +109,52 @@ export function isKnownFrameType(type: unknown): type is string {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Handshake helpers — HMAC challenge-response
 // ---------------------------------------------------------------------------
+//
+// The hub sends HELLO_CHALLENGE { nonce } on every accepted connection. The
+// leaf HMAC-signs the nonce with a key derived from (password, link_salt)
+// and replies with HELLO { hmac }. The hub re-derives the same key from its
+// own config and verifies. A captured HELLO is useless on a fresh
+// connection because the nonce differs.
+//
+// `link_salt` is a per-botnet hex string; it is not secret by itself, but
+// combined with the password it produces a per-deployment key that a
+// canned wordlist cannot reuse across botnets.
 
-/** Hash a password for link authentication. Never send plaintext over the wire.
- *  Uses scrypt (memory-hard KDF) to resist brute-force attacks on intercepted hashes. */
-export function hashPassword(password: string): string {
-  const key = scryptSync(password, 'hexbot-botlink-v1', 32);
-  return 'scrypt:' + key.toString('hex');
+/**
+ * Derive the per-botnet HMAC key from the shared password + per-botnet salt.
+ * The same function runs on both hub and leaf — both must see identical
+ * `password` and `linkSaltHex` to produce a matching key.
+ *
+ * @param password plaintext shared secret (from config)
+ * @param linkSaltHex hex string ≥ 32 characters (≥ 16 bytes decoded)
+ * @returns 32-byte HMAC key
+ */
+export function deriveLinkKey(password: string, linkSaltHex: string): Buffer {
+  if (!/^[0-9a-fA-F]+$/.test(linkSaltHex) || linkSaltHex.length < 32) {
+    throw new Error('link_salt must be a hex string of at least 32 characters (16 bytes)');
+  }
+  const saltBytes = Buffer.from(linkSaltHex, 'hex');
+  return scryptSync(password, saltBytes, 32);
+}
+
+/** Compute HMAC-SHA256(key, nonce) and return the hex digest. */
+export function computeHelloHmac(key: Buffer, nonce: Buffer): string {
+  return createHmac('sha256', key).update(nonce).digest('hex');
+}
+
+/**
+ * Verify a received HELLO HMAC against the expected value for this nonce.
+ * Length-checked first — `timingSafeEqual` throws on mismatched buffer
+ * lengths and this input is attacker-controlled wire data.
+ */
+export function verifyHelloHmac(key: Buffer, nonce: Buffer, sentHex: string): boolean {
+  const expectedHex = computeHelloHmac(key, nonce);
+  const sentBuf = Buffer.from(sentHex, 'utf8');
+  const expectedBuf = Buffer.from(expectedHex, 'utf8');
+  if (sentBuf.length !== expectedBuf.length) return false;
+  return timingSafeEqual(sentBuf, expectedBuf);
 }
 
 /**
