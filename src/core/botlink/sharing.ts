@@ -1,5 +1,6 @@
 // HexBot — Channel-specific sharing for bot-link
 // Tracks shared ban/exempt lists and produces/applies sync frames.
+import type { LoggerLike } from '../../logger.js';
 import type { LinkFrame } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -47,6 +48,11 @@ const MAX_MASKS_PER_CHANNEL = 256;
 /** Per-channel mask list (bans or exempts). */
 class MaskList {
   private entries: Map<string, BanEntry[]> = new Map();
+  private readonly logger: LoggerLike | null;
+
+  constructor(logger: LoggerLike | null = null) {
+    this.logger = logger;
+  }
 
   get(channel: string): BanEntry[] {
     return this.entries.get(channel.toLowerCase()) ?? [];
@@ -58,8 +64,8 @@ class MaskList {
     const list = this.entries.get(lower)!;
     if (list.some((b) => b.mask === mask)) return;
     if (list.length >= MAX_MASKS_PER_CHANNEL) {
-      console.warn(
-        `[botlink-sharing] dropping mask for ${lower}: channel list at cap (${MAX_MASKS_PER_CHANNEL})`,
+      this.logger?.warn(
+        `dropping mask for ${lower}: channel list at cap (${MAX_MASKS_PER_CHANNEL})`,
       );
       return;
     }
@@ -80,8 +86,8 @@ class MaskList {
   sync(channel: string, entries: BanEntry[]): void {
     const lower = channel.toLowerCase();
     if (entries.length > MAX_MASKS_PER_CHANNEL) {
-      console.warn(
-        `[botlink-sharing] truncating sync for ${lower}: ${entries.length} masks exceeds cap (${MAX_MASKS_PER_CHANNEL})`,
+      this.logger?.warn(
+        `truncating sync for ${lower}: ${entries.length} masks exceeds cap (${MAX_MASKS_PER_CHANNEL})`,
       );
       this.entries.set(lower, entries.slice(0, MAX_MASKS_PER_CHANNEL));
       return;
@@ -99,8 +105,14 @@ class MaskList {
 // ---------------------------------------------------------------------------
 
 export class SharedBanList {
-  private bans = new MaskList();
-  private exempts = new MaskList();
+  private bans: MaskList;
+  private exempts: MaskList;
+
+  constructor(logger: LoggerLike | null = null) {
+    const child = logger?.child('botlink-sharing') ?? null;
+    this.bans = new MaskList(child);
+    this.exempts = new MaskList(child);
+  }
 
   getBans(channel: string): BanEntry[] {
     return this.bans.get(channel);

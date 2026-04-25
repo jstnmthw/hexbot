@@ -281,6 +281,7 @@ export function createPluginApi(
       deps.userIdentifiedListeners,
       deps.userDeidentifiedListeners,
       deps.botIdentifiedListeners,
+      pluginLogger,
     ),
     permissions: createPluginPermissionsApi(deps.permissions),
     services: createPluginServicesApi(deps.services),
@@ -647,6 +648,7 @@ function createPluginChannelStateApi(
   userIdentifiedListeners: Map<string, Array<(nick: string, account: string) => void>>,
   userDeidentifiedListeners: Map<string, Array<(nick: string, previousAccount: string) => void>>,
   botIdentifiedListeners: Map<string, Array<() => void>>,
+  pluginLogger: LoggerLike | null,
 ): Pick<
   PluginAPI,
   | 'getChannel'
@@ -687,11 +689,11 @@ function createPluginChannelStateApi(
   // Without this, one plugin's throw from a mode-ready callback would
   // propagate through EventEmitter and abort `emit()` for every sibling
   // subscriber. See stability audit 2026-04-14.
-  const safeInvoke = (ev: string, plugin: string, fn: () => void): void => {
+  const safeInvoke = (ev: string, fn: () => void): void => {
     try {
       fn();
     } catch (err) {
-      console.error(`[plugin:${plugin}] ${ev} listener threw:`, err);
+      pluginLogger?.error(`${ev} listener threw:`, err);
     }
   };
 
@@ -699,7 +701,7 @@ function createPluginChannelStateApi(
     onModesReady(callback: (channel: string) => void): void {
       if (modesReadyByCallback.has(callback)) return; // idempotent
       const wrappedListener = (channel: string): void => {
-        safeInvoke('channel:modesReady', pluginId, () => callback(channel));
+        safeInvoke('channel:modesReady', () => callback(channel));
       };
       eventBus.on('channel:modesReady', wrappedListener);
       modesReadyByCallback.set(callback, wrappedListener);
@@ -724,7 +726,7 @@ function createPluginChannelStateApi(
       // events carry different tail params (global flags, hostmask, ...);
       // we only surface `handle` (arg 0) and discard the rest.
       const wrappedListener = (handle: string, ..._rest: unknown[]): void => {
-        safeInvoke('permissions-changed', pluginId, () => callback(handle));
+        safeInvoke('permissions-changed', () => callback(handle));
       };
       for (const ev of PERMISSIONS_CHANGE_EVENTS) {
         eventBus.on(ev, wrappedListener);
@@ -750,7 +752,7 @@ function createPluginChannelStateApi(
     onUserIdentified(callback: (nick: string, account: string) => void): void {
       if (userIdentifiedByCallback.has(callback)) return; // idempotent
       const wrappedListener = (nick: string, account: string): void => {
-        safeInvoke('user:identified', pluginId, () => callback(nick, account));
+        safeInvoke('user:identified', () => callback(nick, account));
       };
       eventBus.on('user:identified', wrappedListener);
       userIdentifiedByCallback.set(callback, wrappedListener);
@@ -772,7 +774,7 @@ function createPluginChannelStateApi(
     onUserDeidentified(callback: (nick: string, previousAccount: string) => void): void {
       if (userDeidentifiedByCallback.has(callback)) return; // idempotent
       const wrappedListener = (nick: string, previousAccount: string): void => {
-        safeInvoke('user:deidentified', pluginId, () => callback(nick, previousAccount));
+        safeInvoke('user:deidentified', () => callback(nick, previousAccount));
       };
       eventBus.on('user:deidentified', wrappedListener);
       userDeidentifiedByCallback.set(callback, wrappedListener);
@@ -794,7 +796,7 @@ function createPluginChannelStateApi(
     onBotIdentified(callback: () => void): void {
       if (botIdentifiedByCallback.has(callback)) return; // idempotent
       const wrappedListener = (): void => {
-        safeInvoke('bot:identified', pluginId, callback);
+        safeInvoke('bot:identified', callback);
       };
       eventBus.on('bot:identified', wrappedListener);
       botIdentifiedByCallback.set(callback, wrappedListener);

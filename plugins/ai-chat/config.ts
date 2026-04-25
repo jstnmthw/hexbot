@@ -4,7 +4,7 @@
 // (pure, load-time-only) shape and parsing of the plugin's config blob.
 // Everything here is self-contained: no module-scope state, no IRC/DB
 // dependencies beyond the `warn(msg)` callback the plugin API supplies.
-import type { AIProviderConfig } from './providers/types';
+import type { AIProviderConfig, ProviderLogger } from './providers/types';
 import type { TriggerConfig } from './triggers';
 
 /**
@@ -541,11 +541,13 @@ function asStringArr(v: unknown, dflt: string[]): string[] {
 export function buildProviderConfig(
   cfg: AiChatConfig,
   warn: (msg: string) => void,
+  logger?: ProviderLogger,
 ): AIProviderConfig | null {
   const base = {
     model: cfg.model,
     maxOutputTokens: cfg.maxOutputTokens,
     temperature: cfg.temperature,
+    logger,
   };
   switch (cfg.provider) {
     case 'gemini': {

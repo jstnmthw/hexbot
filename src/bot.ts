@@ -965,8 +965,8 @@ export class Bot {
     const cfg = this.config.irc;
 
     if (cfg.tls && cfg.tls_verify === false) {
-      console.warn(
-        '[bot] WARNING: tls_verify is false — TLS certificate validation is DISABLED. ' +
+      this.botLogger.warn(
+        'WARNING: tls_verify is false — TLS certificate validation is DISABLED. ' +
           'This connection is vulnerable to MITM attacks.',
       );
     }

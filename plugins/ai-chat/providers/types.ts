@@ -2,6 +2,18 @@
 // Defines the shape every LLM provider (Gemini, Claude, OpenAI, Ollama, …) must implement.
 // The plugin only talks to providers through this interface.
 
+/**
+ * Minimal logger surface providers use for structured warnings/errors.
+ * Mirrors the subset of `LoggerLike` we actually need here so the providers
+ * package stays free of cross-package imports.
+ */
+export interface ProviderLogger {
+  debug(...args: unknown[]): void;
+  info(...args: unknown[]): void;
+  warn(...args: unknown[]): void;
+  error(...args: unknown[]): void;
+}
+
 /** A single message exchanged with the AI model. */
 export interface AIMessage {
   role: 'user' | 'assistant' | 'system';
@@ -72,6 +84,13 @@ export interface AIProviderConfig {
    * Ollama pick.
    */
   numCtx?: number;
+  /**
+   * Optional logger. When set, providers route operator-visible warnings
+   * (model not pulled, context window pressure, etc.) through it so they
+   * land in every configured sink (DCC console, file, etc.) instead of
+   * bypassing them via direct `console.*`.
+   */
+  logger?: ProviderLogger;
 }
 
 /**

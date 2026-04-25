@@ -190,7 +190,7 @@ export function registerConnectionEvents(
   let lastCloseReason: string | null = null;
   let registrationTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const listeners = new ListenerGroup(client);
+  const listeners = new ListenerGroup(client, logger);
 
   // Channels that have failed JOIN with a permanent-error numeric
   // (+i/+b/+k/+r). The presence-check timer consults this map so it

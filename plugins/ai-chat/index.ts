@@ -368,7 +368,12 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
     if (provider) api.log(`Using injected provider: ${provider.name}`);
   } else {
     provider = null;
-    const providerConfig = buildProviderConfig(cfg, (msg) => api.warn(msg));
+    const providerConfig = buildProviderConfig(cfg, (msg) => api.warn(msg), {
+      debug: (...args) => api.debug(...args),
+      info: (...args) => api.log(...args),
+      warn: (...args) => api.warn(...args),
+      error: (...args) => api.error(...args),
+    });
     if (providerConfig) {
       try {
         provider = await createResilientProvider(cfg.provider, providerConfig);

@@ -115,21 +115,29 @@ describe('ListenerGroup.removeAll: per-entry error containment', () => {
     expect(group.size).toBe(0);
   });
 
-  it('logs the failing event name through console.error', () => {
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  it('logs the failing event name through the injected logger', () => {
+    const error = vi.fn();
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error,
+      child: () => logger,
+      setLevel: () => {},
+      getLevel: () => 'info' as const,
+    };
     const target = {
       on: () => {},
       removeListener: () => {
         throw new Error('off-rejected');
       },
     };
-    const group = new ListenerGroup(target);
+    const group = new ListenerGroup(target, logger);
     group.on('disconnect', () => {});
     group.removeAll();
-    expect(errSpy).toHaveBeenCalledWith(
+    expect(error).toHaveBeenCalledWith(
       expect.stringContaining('removeListener(disconnect) threw'),
       expect.any(Error),
     );
-    errSpy.mockRestore();
   });
 });

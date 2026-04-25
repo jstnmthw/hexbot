@@ -5,6 +5,7 @@
 // and must remove exactly those on shutdown/reload — a bare `removeAllListeners`
 // would wipe every other subscriber on the same event. ListenerGroup makes
 // the leak-safe pattern the default.
+import type { LoggerLike } from '../logger';
 
 /**
  * Minimal emitter shape — matches Node's `EventEmitter` as well as
@@ -23,14 +24,16 @@ type Listener = (...args: unknown[]) => void;
 export class ListenerGroup {
   private target: ListenerTarget;
   private entries: Array<{ event: string; fn: Listener }> = [];
+  private readonly logger: LoggerLike | null;
 
-  constructor(target: ListenerTarget) {
+  constructor(target: ListenerTarget, logger: LoggerLike | null = null) {
     if (typeof target.removeListener !== 'function' && typeof target.off !== 'function') {
       throw new TypeError(
         '[listener-group] target exposes neither removeListener nor off — refusing to attach listeners that cannot be removed',
       );
     }
     this.target = target;
+    this.logger = logger;
   }
 
   /** Attach a listener and record it for later removal. */
@@ -55,7 +58,7 @@ export class ListenerGroup {
           this.target.off(event, fn);
         }
       } catch (err) {
-        console.error(`[listener-group] removeListener(${event}) threw:`, err);
+        this.logger?.error(`removeListener(${event}) threw:`, err);
       }
     }
     this.entries.length = 0;

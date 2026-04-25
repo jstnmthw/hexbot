@@ -89,7 +89,7 @@ describe('OllamaProvider.initialize', () => {
   });
 
   it('warns but does not throw when the model is absent from /api/tags', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.fn();
     fetchMock.mockResolvedValueOnce(jsonResponse({ models: [{ name: 'other-model' }] }));
     const provider = new OllamaProvider();
     await provider.initialize({
@@ -97,9 +97,9 @@ describe('OllamaProvider.initialize', () => {
       model: 'llama3',
       maxOutputTokens: 64,
       temperature: 0.6,
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
     });
     expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
   });
 
   it('maps daemon unreachable to network error', async () => {

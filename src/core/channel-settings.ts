@@ -52,8 +52,8 @@ export class ChannelSettings {
     for (const def of defs) {
       const existing = this.defs.get(def.key);
       if (existing && existing.pluginId !== pluginId) {
-        (this.logger ?? console).warn(
-          `[channel-settings] Key collision: "${def.key}" already registered by "${existing.pluginId}" — skipping "${pluginId}"`,
+        this.logger?.warn(
+          `Key collision: "${def.key}" already registered by "${existing.pluginId}" — skipping "${pluginId}"`,
         );
         continue;
       }
@@ -124,7 +124,7 @@ export class ChannelSettings {
    */
   set(channel: string, key: string, value: ChannelSettingValue, actor?: ModActor): void {
     if (!this.defs.has(key)) {
-      console.warn(`[channel-settings] Unknown key "${key}" — cannot set`);
+      this.logger?.warn(`Unknown key "${key}" — cannot set`);
       return;
     }
     this.db.set(NAMESPACE, this.makeKey(channel, key), String(value));
@@ -242,7 +242,7 @@ export class ChannelSettings {
         try {
           cb(channel, key, value);
         } catch (err) {
-          console.error(`[channel-settings] onChange callback error for key "${key}":`, err);
+          this.logger?.error(`onChange callback error for key "${key}":`, err);
         }
       }
     }

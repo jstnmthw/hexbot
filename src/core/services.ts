@@ -156,7 +156,7 @@ export class Services {
     this.logger = deps.logger?.child('services') ?? null;
     this.db = deps.db ?? null;
     this.botNick = deps.botNick ?? '';
-    this.listeners = new ListenerGroup(deps.client);
+    this.listeners = new ListenerGroup(deps.client, this.logger);
     this.servicesHostPattern = (deps.servicesConfig.services_host_pattern ?? '').trim();
 
     // Capture listener refs for removal in detach() — arrow functions lose

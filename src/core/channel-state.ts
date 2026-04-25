@@ -85,7 +85,7 @@ export class ChannelState {
     this.client = client;
     this.eventBus = eventBus;
     this.logger = logger?.child('channel-state') ?? null;
-    this.listeners = new ListenerGroup(client);
+    this.listeners = new ListenerGroup(client, this.logger);
     if (initialState?.channels) this.channels = new Map(initialState.channels);
     if (initialState?.networkAccounts) {
       this.networkAccounts = new Map(initialState.networkAccounts);

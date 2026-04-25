@@ -7,6 +7,7 @@ import {
   type AIProviderConfig,
   AIProviderError,
   type AIResponse,
+  type ProviderLogger,
   type SamplingOptions,
 } from './types';
 
@@ -48,6 +49,7 @@ export class OllamaProvider implements AIProvider {
   private keepAlive: string | undefined;
   private numCtx = 0;
   private stopSequences: string[] = [];
+  private logger: ProviderLogger | null = null;
   /**
    * Every {@link fetchJson} call registers its AbortController here for the
    * duration of the request so {@link abort} can cancel a torn-down-plugin's
@@ -77,6 +79,7 @@ export class OllamaProvider implements AIProvider {
     this.keepAlive = config.keepAlive;
     this.numCtx = config.numCtx ?? 0;
     this.stopSequences = config.stop ?? [];
+    this.logger = config.logger ?? null;
 
     // Startup ping: fail fast if the daemon is unreachable, but only warn if
     // the configured model isn't pulled yet — operator may pull it after boot.
@@ -90,8 +93,8 @@ export class OllamaProvider implements AIProvider {
         .map((m) => m.name ?? m.model ?? '')
         .filter((n) => n.length > 0);
       if (known.length > 0 && !known.includes(this.modelName)) {
-        console.warn(
-          `[ollama] model "${this.modelName}" is not in /api/tags ` +
+        this.logger?.warn(
+          `model "${this.modelName}" is not in /api/tags ` +
             `(available: ${known.join(', ')}). The first completion will fail ` +
             `with 404 until the model is pulled.`,
         );
@@ -162,8 +165,8 @@ export class OllamaProvider implements AIProvider {
     // pinned num_ctx, the next turn will likely truncate — operators need
     // this in the log without correlating stats by hand.
     if (this.numCtx > 0 && res.prompt_eval_count && res.prompt_eval_count > this.numCtx * 0.9) {
-      console.warn(
-        `[ollama] prompt_eval_count=${res.prompt_eval_count} exceeds 90% of ` +
+      this.logger?.warn(
+        `prompt_eval_count=${res.prompt_eval_count} exceeds 90% of ` +
           `num_ctx=${this.numCtx} — reduce context.max_messages or raise ollama.num_ctx.`,
       );
     }

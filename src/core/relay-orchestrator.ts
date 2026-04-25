@@ -141,7 +141,7 @@ export class RelayOrchestrator {
           description: 'Sync ban/exempt lists with linked bots',
         },
       ]);
-      this._sharedBanList = new SharedBanList();
+      this._sharedBanList = new SharedBanList(this.deps.logger);
       const isShared = (ch: string) => this.deps.channelSettings.get(ch, 'shared') === true;
 
       if (botlinkConfig.role === 'hub') {
