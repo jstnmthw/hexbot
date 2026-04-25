@@ -24,11 +24,14 @@ export function setupInvite(
   api.bind('invite', '+n|+m|+o', '*', (ctx) => {
     const { channel } = ctx;
 
-    // Defence-in-depth shape check on the invited channel. The bridge
+    // Defense-in-depth shape check on the invited channel. The bridge
     // sanitizer strips `\r\n\0`, but an invite to a value that doesn't
     // parse as a channel (missing `#`/`&`, embedded whitespace, empty)
     // has no legitimate use case and we should refuse rather than pass
-    // it through to `api.join`. See audit 2026-04-24 WARNING.
+    // it through to `api.join`.
+    // Regex: `#` or `&` prefix (RFC 2811 channel chars) + at least one
+    // non-whitespace char. Stricter than the IRC spec but matches what
+    // every modern network actually allows.
     if (!/^[#&]\S+$/.test(channel)) {
       api.warn(
         `INVITE rejected: invalid channel shape "${api.stripFormatting(channel)}" from ${api.stripFormatting(ctx.nick)}`,

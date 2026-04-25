@@ -14,7 +14,7 @@ import type { ChanmodConfig } from './state';
  * threshold here uses the same scoring model operators already see
  * reported for weak user hostmasks. Inlined because
  * `patternSpecificity` lives on the core side of the plugin boundary
- * and is type-only for plugins; see audit 2026-04-24 WARNING.
+ * and is type-only for plugins.
  */
 function banMaskSpecificity(pattern: string): number {
   let literal = 0;
@@ -95,9 +95,9 @@ export function registerBanCommands(api: PluginAPI, config: ChanmodConfig): void
     // Parse flags: `-t <minutes>` for explicit duration, `--force` to
     // override the overbroad-mask specificity guard. Keep everything
     // else in `positional` — the target (nick or mask) is the first
-    // positional. The old "last-positional-as-duration" shape is gone
-    // (audit 2026-04-24 WARNING). Bare numeric tail triggers a helpful
-    // hint, not silent duration parse.
+    // positional. Bare numeric tail triggers a helpful hint rather than
+    // silently being interpreted as a duration (the old shape was
+    // ambiguous when masks ended in digits).
     let force = false;
     let explicitDurationMinutes: number | null = null;
     const positional: string[] = [];
@@ -125,9 +125,10 @@ export function registerBanCommands(api: PluginAPI, config: ChanmodConfig): void
       return;
     }
 
-    // Bare-numeric tail without -t: historically this meant "duration".
-    // Audit flagged the ambiguity — warn and refuse instead of silently
-    // interpreting. Operators who want a duration must pass `-t`.
+    // Bare-numeric tail without -t: historically this meant "duration",
+    // but the shape collides with bans that legitimately end in digits.
+    // Warn and refuse instead of silently interpreting. Operators who
+    // want a duration must pass `-t`.
     const trailing = positional[positional.length - 1];
     if (explicitDurationMinutes === null && positional.length > 1 && /^\d+$/.test(trailing)) {
       ctx.reply(
@@ -147,6 +148,8 @@ export function registerBanCommands(api: PluginAPI, config: ChanmodConfig): void
       // each segment non-empty (wildcards allowed). A garbage string like
       // `!@` would otherwise hit `mode +b` and let an attacker poison the
       // ban list with unenforceable entries.
+      // Regex: optional nick (no `!@` or whitespace) + `!` + optional ident
+      // (no `@` or whitespace) + `@` + non-empty host (no whitespace).
       if (!/^[^\s!@]*![^\s@]*@\S+$/.test(target)) {
         ctx.reply('Invalid ban mask. Expected nick!ident@host.');
         return;
@@ -238,6 +241,11 @@ export function registerBanCommands(api: PluginAPI, config: ChanmodConfig): void
       );
       return;
     }
+    // Try all three ban-mask types when unbanning by nick — the original
+    // ban could have been set with any of them. Filter out nulls
+    // (`buildBanMask` returns null for malformed hostmasks). Match
+    // priority is "stored mask wins", with a fallthrough that issues
+    // `-b` for every candidate when no record matches (operator best-effort).
     const candidates = [1, 2, 3]
       .map((t) => buildBanMask(hostmask, t))
       .filter((m): m is string => m !== null);
@@ -251,6 +259,11 @@ export function registerBanCommands(api: PluginAPI, config: ChanmodConfig): void
         `${api.stripFormatting(ctx.nick)} unbanned ${api.stripFormatting(arg)} (${match}) in ${channel}`,
       );
     } else {
+      // No stored record matched any candidate type — best-effort: try `-b`
+      // for every candidate. The server silently ignores `-b` for masks that
+      // aren't in the channel ban list, so over-issuing is harmless and
+      // covers the case where the original ban was set out-of-band by an
+      // operator who didn't go through the bot.
       for (const m of candidates) {
         api.mode(channel, '-b', m);
       }

@@ -1056,7 +1056,7 @@ describe('runSessionPipeline success', () => {
     await runSessionPipeline(api, cfg, deps, ctx, 'go', 'hexbot', 'irc.test');
     // Send dropped.
     expect(ctx.reply).not.toHaveBeenCalled();
-    // But session bookkeeping ran (this is the current observed behaviour).
+    // But session bookkeeping ran (this is the current observed behavior).
     expect(sessionManager.addMessage).toHaveBeenCalledTimes(2);
   });
 });

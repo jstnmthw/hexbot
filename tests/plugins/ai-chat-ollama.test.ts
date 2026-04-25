@@ -374,7 +374,7 @@ describe('mapOllamaError', () => {
   });
 
   it('tags 401 OllamaHttpError as "other" (no retry on auth-style failures)', () => {
-    const mapped = mapOllamaError(new OllamaHttpError(401, 'unauthorised'));
+    const mapped = mapOllamaError(new OllamaHttpError(401, 'unauthorized'));
     expect(mapped.kind).toBe('other');
   });
 

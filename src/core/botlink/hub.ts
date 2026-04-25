@@ -1,7 +1,7 @@
 // HexBot — Bot Link Hub Server
 // Accepts leaf connections, manages state sync, command relay, party line,
 // relay routing, and heartbeat. Auth + IP ban management live in botlink-auth.ts.
-// See docs/plans/bot-linking.md.
+// See docs/BOTLINK.md for the operator-facing protocol overview.
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:net';
 import type { Server as NetServer, Socket } from 'node:net';
@@ -36,9 +36,10 @@ interface LeafConnection {
   cmdRate: RateCounter;
   partyRate: RateCounter;
   protectRate: RateCounter;
-  // Steady-state per-frame rate buckets — see Phase 4 of
-  // docs/plans/botlink-handshake-v2.md. Budgets chosen to match chat-
-  // class (5/s), command-class (10/s), and relay-class (30/s) posture.
+  // Steady-state per-frame rate buckets — budgets chosen to match
+  // chat-class (5/s), command-class (10/s), and relay-class (30/s)
+  // posture so a compromised leaf cannot saturate any single fanout
+  // path. The actual numeric arguments are passed in acceptHandshake().
   bsayRate: RateCounter;
   announceRate: RateCounter;
   relayInputRate: RateCounter;
@@ -306,6 +307,9 @@ export class BotLinkHub {
     channel: string | null,
   ): Promise<string[]> {
     if (!this.leaves.has(botname)) return [`Bot "${botname}" is not connected.`];
+    // The `hubcmd:` prefix distinguishes hub-originated CMDs (waiting on
+    // pendingCmds here) from leaf-originated CMDs the hub re-routes via
+    // `routes.trackCmdRoute()` — both share the ref namespace on the wire.
     const ref = `hubcmd:${++this.cmdRefCounter}`;
     this.send(botname, {
       type: 'CMD',
@@ -318,6 +322,10 @@ export class BotLinkHub {
       toBot: botname,
     });
 
+    // 10s — the same ceiling DCC operators see for any single command they
+    // run via `.bot`. Long enough to cover a network blip + a slow command
+    // executing on the remote leaf, short enough that an unresponsive leaf
+    // doesn't pin the IRC user's session forever.
     const CMD_TIMEOUT_MS = 10_000;
     return this.pendingCmds.create(ref, CMD_TIMEOUT_MS, ['Command relay timed out.']);
   }

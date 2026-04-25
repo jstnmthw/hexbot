@@ -33,7 +33,9 @@ export interface PasswordCommandDeps {
  *   `.chpass <newpass>`          — rotate your own password
  *
  * The command never relays to a hub: passwords are per-bot secrets. The
- * `relayToHub` flag is intentionally omitted so a leaf's `.chpass` stays local.
+ * `relayToHub` flag is intentionally omitted so a leaf's `.chpass` stays
+ * local — relaying would put the plaintext on the inter-bot link and
+ * reduce every leaf's password store to "as secure as the link cipher".
  * The mod_log row is written by {@link Permissions.setPasswordHash} so every
  * password rotation — regardless of caller — lands in the audit trail.
  */
@@ -111,7 +113,7 @@ export function registerPasswordCommands(deps: PasswordCommandDeps): void {
           failure(ctx, 'denied: non-owner cross-handle rotation', targetHandle);
           return;
         }
-        /* v8 ignore start -- defence in depth: isSelfRotation is only set when caller.handle === targetHandle upstream, so this branch is unreachable from resolveCallerAndTarget */
+        /* v8 ignore start -- defense in depth: isSelfRotation is only set when caller.handle === targetHandle upstream, so this branch is unreachable from resolveCallerAndTarget */
         if (isSelfRotation && caller.handle !== targetHandle) {
           ctx.reply('chpass: permission denied.');
           failure(ctx, 'denied: self-rotation handle mismatch', targetHandle);
@@ -236,12 +238,15 @@ function resolveCallerAndTarget(
   };
 }
 
-/** Best-effort resolution of a CommandContext's caller handle. */
+/**
+ * Best-effort resolution of a CommandContext's caller handle. Returns the
+ * caller's user-record handle for `dcc` callers (the only path that has
+ * both a hostmask and a path through the permissions store), and `null`
+ * for every other transport. REPL callers must pass an explicit `<handle>`
+ * because the REPL has no hostmask to match against; `irc` is hard-rejected
+ * upstream so it never reaches this helper.
+ */
 function resolveCallerHandle(ctx: CommandContext, permissions: Permissions): string | null {
-  // REPL has no hostmask — we cannot resolve an implicit caller, so
-  // self-rotation from the REPL is rejected and the user must pass an
-  // explicit handle argument. `irc` is hard-rejected upstream. That leaves
-  // `dcc` as the only path that can self-resolve a handle.
   if (ctx.source !== 'dcc') return null;
   const fullHostmask = `${ctx.nick}!${ctx.ident ?? ''}@${ctx.hostname ?? ''}`;
   const caller = permissions.findByHostmask(fullHostmask);

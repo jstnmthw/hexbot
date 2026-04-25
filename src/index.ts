@@ -28,7 +28,10 @@ function touchHealthcheck(): void {
     const now = new Date();
     utimesSync(HEALTHCHECK_FILE, now, now);
   } catch {
-    // Best-effort — /tmp may be read-only in exotic containers
+    // Best-effort — /tmp may be read-only in exotic containers (read-only
+    // rootfs setups, --tmpfs mounted with `noexec,ro`). A failure here just
+    // means the healthcheck won't see a heartbeat; the bot itself keeps
+    // running, and an external supervisor can decide what to do.
   }
 }
 
@@ -36,7 +39,8 @@ function removeHealthcheck(): void {
   try {
     unlinkSync(HEALTHCHECK_FILE);
   } catch {
-    // File may not exist
+    // File may not exist (never created — see touchHealthcheck above).
+    // Idempotent on shutdown; nothing else to do.
   }
 }
 
@@ -62,6 +66,8 @@ const useRepl = args.includes('--repl');
 
 // Accept both `--config PATH` and `--config=PATH` forms — docker-compose arrays
 // commonly use the equals form, while shell invocations prefer the space form.
+// First match wins; later occurrences are ignored. No validation here — the
+// path is opened by `loadConfig()` and surfaces a clean error there.
 function parseConfigArg(argv: string[]): string | undefined {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -214,6 +220,10 @@ process.on('unhandledRejection', (reason) => {
 // Start
 // ---------------------------------------------------------------------------
 
+// Top-level await would be cleaner but ESM top-level await requires Node 20
+// and a tsconfig `module: "node20"` — for now keep the .catch() so a startup
+// rejection produces a clean exit-1 instead of a default unhandled-rejection
+// kill that confuses operators staring at the supervisor logs.
 main().catch((err) => {
   console.error('[bot] Fatal error during startup:', err);
   process.exit(1);

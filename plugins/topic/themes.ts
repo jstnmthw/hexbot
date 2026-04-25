@@ -5,7 +5,7 @@
 // Color reference:
 //  0=white  1=black   2=navy   3=green   4=red     5=maroon
 //  6=purple 7=orange  8=yellow 9=ltgreen 10=teal  11=cyan
-// 12=blue  13=pink   14=grey  15=ltgrey  16=default
+// 12=blue  13=pink   14=gray  15=ltgray  16=default
 
 const C = '\x03'; // IRC color control character
 
@@ -52,7 +52,7 @@ export const themes: Record<string, string> = {
   ember: `${C}4\`%${C}5,4%,${C}4,4 ${C}5,4\`%${C}4,5%,${C}5,5 ${C}1,5\`%${C}5,1%,${C}0,1 $text ${C}5,1\`%${C}1,5%,${C}5,5 ${C}4,5\`%${C}5,4%,${C}4,4 ${C}5,4\`%${C}${C}4%,`,
 
   // --------------------------------------------------------------------------
-  // Whisper — soft grey with ( ) decorators
+  // Whisper — soft gray with ( ) decorators
   // --------------------------------------------------------------------------
   whisper: `${C}0,15(${C}14,15)${C}15,14(${C}1,14)${C}14,1(${C}1,1) ${C}8 $text ${C}1,1 (${C}14,1)${C}1,14(${C}15,14)${C}14,15(${C}0,15)`,
 
@@ -142,7 +142,7 @@ export const themes: Record<string, string> = {
   grove: `\x02${C}1,3<${C}9>${C}3,9<${C}0>\x0f${C}1,9 $text \x02${C}0,9<${C}3>${C}9,3<${C}1>`,
 
   // --------------------------------------------------------------------------
-  // Sterling — grey/white gradient with ¦| decorators (bold accent)
+  // Sterling — gray/white gradient with ¦| decorators (bold accent)
   // --------------------------------------------------------------------------
   sterling: `${C}15,0¦|${C}0,15¦|${C}14,15¦|${C}15,14¦|${C}1,14¦|${C}14,1¦|${C}9,1\x02${C}4 \x02${C}15$text ${C}14,1|¦${C}1,14|¦${C}15,14|¦${C}14,15|¦${C}0,15|¦${C}15,0|¦`,
 

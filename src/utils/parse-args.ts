@@ -10,6 +10,9 @@
 // caller's responsibility — sanitize/format as appropriate for the command.
 import { sanitize } from './sanitize';
 
+/** Defensive upper bound on a single parsed args string — IRC line limit is ~450 bytes so anything larger is either a plugin bug or a malicious input. */
+const MAX_ARGS_LENGTH = 8192;
+
 /**
  * Split `args` into at most `n` space/tab-separated tokens. The final token
  * keeps any remaining text verbatim — including embedded `\r` / `\n`, which
@@ -24,9 +27,6 @@ import { sanitize } from './sanitize';
  *   splitN('#chan', 2)              // ['#chan']
  *   splitN('', 2)                   // []
  */
-/** Defensive upper bound on a single parsed args string — IRC line limit is ~450 bytes so anything larger is either a plugin bug or a malicious input. */
-const MAX_ARGS_LENGTH = 8192;
-
 export function splitN(args: string, n: number): string[] {
   if (args.length > MAX_ARGS_LENGTH) return [];
   // Strip only leading/trailing spaces and tabs — keep embedded control chars.
@@ -70,7 +70,7 @@ export function splitN(args: string, n: number): string[] {
  * nick); the message is everything after the first whitespace, trimmed.
  *
  * The returned `target` is already sanitized (CR/LF/NUL/Unicode line
- * separators stripped) — defence in depth so callers that skip
+ * separators stripped) — defense in depth so callers that skip
  * `isValidCommandTarget` can't smuggle control characters into the IRC
  * transport via the target field. If the token contained any line-separator
  * characters, we return `null` rather than silently cleaning and forwarding

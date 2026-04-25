@@ -103,7 +103,7 @@ export async function verifyPassword(
   // `actual.length` and `expected.length` always agree — but timingSafeEqual
   // throws on mismatched lengths, and a future refactor that weakens the
   // format check would leak timing via exception-vs-boolean. The guard keeps
-  // the two defences independent.
+  // the two defenses independent.
   if (actual.length !== expected.length) return { ok: false, reason: 'mismatch' };
   return timingSafeEqual(actual, expected) ? { ok: true } : { ok: false, reason: 'mismatch' };
 }

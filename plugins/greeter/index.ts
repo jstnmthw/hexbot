@@ -60,6 +60,15 @@ export function meetsMinFlag(
   return false;
 }
 
+/**
+ * Plugin entry point. Wires up the JOIN handler that emits greetings,
+ * registers the `!greet` user-facing command, and registers the per-channel
+ * `greet_msg` setting through `api.channelSettings`.
+ *
+ * State scoped inside this function (the massjoin rate-limit map) is
+ * intentional: it keeps each plugin reload's closure isolated so the GC
+ * can collect the previous module's state once the loader drops it.
+ */
 export function init(api: PluginAPI): void {
   api.registerHelp([
     {
@@ -96,7 +105,7 @@ export function init(api: PluginAPI): void {
   // message queue will rate-limit, but still looks like spam in
   // the channel. Above `MASSJOIN_THRESHOLD` joins within
   // `MASSJOIN_WINDOW_MS`, greetings are suppressed until the rate
-  // falls below the threshold. See stability audit 2026-04-14.
+  // falls below the threshold.
   const MASSJOIN_WINDOW_MS = 10_000;
   const MASSJOIN_THRESHOLD = 5;
   const MASSJOIN_COOLDOWN_MS = 30_000;
@@ -143,6 +152,8 @@ export function init(api: PluginAPI): void {
 
   // --- Join handler ---
   api.bind('join', '-', '*', (ctx) => {
+    // Don't greet ourselves when the bot rejoins (e.g. after a kick or a
+    // reconnect): the bot's own JOIN fires this handler too.
     if (api.isBotNick(ctx.nick)) return;
 
     const { channel } = ctx;
@@ -245,6 +256,9 @@ export function init(api: PluginAPI): void {
   });
 }
 
-export function teardown(): void {
-  // Binds are auto-removed by the plugin loader
-}
+/**
+ * Plugin teardown. Binds, help entries, and channel-setting registrations
+ * are reaped by the loader; the per-init `joinRates` map is dropped with
+ * the module's closure graph.
+ */
+export function teardown(): void {}

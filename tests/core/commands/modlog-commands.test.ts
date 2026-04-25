@@ -33,6 +33,12 @@ function makeCtx(overrides: Partial<CommandContext> = {}): CtxWithReply {
   return Object.assign(ctx as CtxWithReply, { reply, replies });
 }
 
+/**
+ * Wire the four collaborators `.modlog` needs (db, event bus, permissions,
+ * command handler) into a single fixture. The event bus must be attached to
+ * the db before the modlog command registers its `.audit-tail` listener,
+ * otherwise live mod_log writes won't reach the tail subscriber.
+ */
 function setup() {
   const db = new BotDatabase(':memory:');
   db.open();
@@ -44,6 +50,13 @@ function setup() {
   return { handler, db, perms, eventBus };
 }
 
+/**
+ * Insert `count` mod_log rows with sensible kick-style defaults. Each row
+ * gets a unique `target` (`user0`, `user1`, ...) so pagination tests can
+ * assert on per-row identity. Pass `base` overrides to vary the `action`,
+ * `channel`, etc. — but note `target`/`reason` are overwritten last by the
+ * spread so callers can't pin them.
+ */
 function seed(
   db: BotDatabase,
   count: number,

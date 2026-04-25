@@ -133,7 +133,7 @@ export class MoodEngine {
     const elapsed = now - this.lastUpdate;
     // Skip sub-second updates: per-message bursts would otherwise generate
     // floating-point noise (`elapsed/3.6e6` underflows the rates) without
-    // changing observable behaviour.
+    // changing observable behavior.
     if (elapsed < 1_000) return;
     this.lastUpdate = now;
 
@@ -159,7 +159,9 @@ export class MoodEngine {
     // Patience recharges over time
     this.mood.patience = clamp(this.mood.patience + RATES.patienceRechargePerHour * hours);
 
-    // Humor drifts randomly
+    // Humor drifts randomly. (Math.random() - 0.5) * 2 → [-1, 1], scaled by
+    // the hourly amplitude × elapsed hours. Math.random() is fine here:
+    // mood is non-security-relevant flavor, never a security primitive.
     const drift = (Math.random() - 0.5) * 2 * RATES.humorDriftPerHour * hours;
     this.mood.humor = clamp(this.mood.humor + drift);
   }

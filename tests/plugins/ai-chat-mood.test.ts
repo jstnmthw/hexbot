@@ -136,7 +136,7 @@ describe('MoodEngine', () => {
   });
 
   describe('initialMood seed', () => {
-    it('honours a partial initialMood, falling back to defaults for the rest', () => {
+    it('honors a partial initialMood, falling back to defaults for the rest', () => {
       const engine = new MoodEngine(() => 1_000_000, { energy: 0.1, humor: 0.9 });
       const mood = engine.getMood();
       expect(mood.energy).toBe(0.1);

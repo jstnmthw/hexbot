@@ -270,7 +270,7 @@ export interface DCCManagerDeps {
    * banner as the "since" anchor when a handle has no prior login row
    * (first-ever auth, or retention-swept). Reuses {@link Bot.startedAt}
    * in production; a lambda is used so the manager can be constructed
-   * before the bot's own `startedAt` is finalised.
+   * before the bot's own `startedAt` is finalized.
    */
   getBootTs?: () => number;
   /**
@@ -518,7 +518,7 @@ export class DCCSession implements DCCSessionEntry {
    * **Test-only.** Production always goes through {@link start}, which sends
    * the prompt and waits for a verified password. Existing tests that are
    * *not* about the prompt itself use this entry point to stay focused on
-   * the behaviour under test (relay, command routing, idle timer, …).
+   * the behavior under test (relay, command routing, idle timer, …).
    * Prompt-specific tests invoke `start()` directly.
    */
   startActiveForTesting(version: string, botNick: string): void {
@@ -944,6 +944,13 @@ export class DCCSession implements DCCSessionEntry {
 // DCCManager
 // ---------------------------------------------------------------------------
 
+/**
+ * Time we'll hold a TCP listener open waiting for the user's DCC client to
+ * dial back after we've sent the passive DCC reply CTCP. 30s mirrors the
+ * password-prompt timeout in protocol.ts and is well above any realistic
+ * connect latency — the limiting factor for legitimate users is how long
+ * they take to acknowledge the file/chat dialog in their client.
+ */
 const PENDING_TIMEOUT_MS = 30_000;
 const PLUGIN_ID = 'core:dcc';
 
@@ -1379,7 +1386,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   private async onDccCtcp(ctx: HandlerContext): Promise<void> {
     const { nick } = ctx;
     // Strip IRC formatting before debug-logging the CTCP args. The bridge
-    // already removes `\r\n\0`, but bold / colour / reverse codes survive
+    // already removes `\r\n\0`, but bold / color / reverse codes survive
     // and can repaint the operator's terminal when the log is tailed.
     this.logger?.debug(`DCC CTCP from ${nick}: args="${stripFormatting(ctx.args)}"`);
     const parsed = parseDccChatPayload(ctx.args);

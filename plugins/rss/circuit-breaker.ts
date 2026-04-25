@@ -9,9 +9,19 @@
 // 2026-04-14.
 import type { PluginAPI } from '../../src/types';
 
+/** Consecutive failures before the breaker opens. 5 absorbs short outages
+ *  (DNS blip, single 500, brief connection refusal) without locking out a
+ *  feed that's about to recover, while still tripping fast on a feed
+ *  that's genuinely broken. */
 const CIRCUIT_BREAK_THRESHOLD = 5;
-const CIRCUIT_BREAK_BASE_MS = 60_000; // 1 min initial wait after threshold
-const CIRCUIT_BREAK_MAX_MS = 3_600_000; // 1 h cap
+/** Initial backoff once the breaker opens. 1 min is short enough that an
+ *  operator-resolved outage clears quickly and long enough that a hard-down
+ *  feed isn't retried tens of times per hour. */
+const CIRCUIT_BREAK_BASE_MS = 60_000;
+/** Backoff ceiling. After ~6 doublings (60s, 2m, 4m, 8m, 16m, 32m) we cap
+ *  here — past 1h the noise reduction is moot and we may as well keep
+ *  retrying hourly until the feed recovers or an operator removes it. */
+const CIRCUIT_BREAK_MAX_MS = 3_600_000;
 
 /**
  * Per-feed circuit breaker state, collected in one class so teardown
@@ -37,6 +47,9 @@ export class CircuitBreaker {
     const count = (this.failureCount.get(feedId) ?? 0) + 1;
     this.failureCount.set(feedId, count);
     if (count >= CIRCUIT_BREAK_THRESHOLD) {
+      // Exponential backoff doubling per failure past the threshold,
+      // capped at CIRCUIT_BREAK_MAX_MS. `over` starts at 0 on the first
+      // breaking failure so the very first backoff is exactly BASE_MS.
       const over = count - CIRCUIT_BREAK_THRESHOLD;
       const delay = Math.min(CIRCUIT_BREAK_BASE_MS * 2 ** over, CIRCUIT_BREAK_MAX_MS);
       this.backoffUntil.set(feedId, Date.now() + delay);

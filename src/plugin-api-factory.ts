@@ -139,7 +139,7 @@ const SUB_API_KEYS = new Set([
 /**
  * Build the scoped `PluginAPI` a plugin's `init(api)` receives. Returns a
  * handle containing the frozen api and a `dispose()` hook so plugin-loader
- * can neutralise the api post-teardown. See {@link PluginApiHandle}.
+ * can neutralize the api post-teardown. See {@link PluginApiHandle}.
  *
  * @param deps           All external state the API needs to call back into.
  * @param pluginId       Stable plugin identifier (used for logging + DB namespacing).
@@ -348,6 +348,11 @@ export function createPluginApi(
  * used for the sub-API namespaces (`api.db`, `api.permissions`, etc.) so
  * their methods are guarded too. Anything else (primitive, data object)
  * is copied through unchanged.
+ *
+ * Recursion is deliberately one level deep: the recursive call passes
+ * `null` for `recurseInto` so we never try to descend further than the
+ * documented sub-API surface (which would risk clobbering nested data
+ * objects like `botConfig.irc`).
  */
 function wrapApiMethods(
   obj: Record<string, unknown>,
@@ -918,6 +923,10 @@ function createPluginHelpApi(
 function createPluginUtilApi(getCasemapping: () => Casemapping): PluginUtil {
   return Object.freeze({
     matchWildcard(pattern: string, text: string, opts?: { caseInsensitive?: boolean }): boolean {
+      // Default to case-insensitive matching here even though the underlying
+      // `wildcardMatch` defaults to case-sensitive — almost every plugin use
+      // case (matching nicks, channels, hostmasks) wants IRC-aware folding,
+      // and forcing every caller to opt in was a footgun in early prototypes.
       const caseInsensitive = opts?.caseInsensitive ?? true;
       return wildcardMatch(pattern, text, caseInsensitive, getCasemapping());
     },

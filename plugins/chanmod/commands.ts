@@ -20,7 +20,7 @@ interface ModeCommandOptions {
    * Apply the mode to `target` in `channel`. `actor` attributes the
    * resulting mod_log row to the triggering user via
    * `api.auditActor(ctx)` — required so chanmod rows are not written
-   * with `by = NULL`. See audit 2026-04-24 W.
+   * with `by = NULL`.
    */
   execute: (api: PluginAPI, channel: string, target: string, actor: PluginModActor) => void;
   /**

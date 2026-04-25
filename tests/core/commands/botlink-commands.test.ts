@@ -76,6 +76,12 @@ function leafConfig(): BotlinkConfig {
   };
 }
 
+/**
+ * Yield once via `setImmediate` so the botlink state machine can drain
+ * pending microtasks (frame parser, HMAC verify, fanout) between scripted
+ * pushes. Without this, assertions can race ahead of the side effect they
+ * are checking.
+ */
 async function tick(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
 }

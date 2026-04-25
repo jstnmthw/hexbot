@@ -83,6 +83,9 @@ export function registerPluginCommands(deps: PluginCommandsDeps): void {
       }
       if (!validatePluginName(ctx, name)) return;
 
+      // pluginPath is `<pluginDir>/<name>/dist/index.js`. The SAFE_NAME_RE
+      // gate above guarantees `name` is alphanumeric / `-` / `_` only, so
+      // path traversal sequences (`../`) cannot escape `pluginDir`.
       const pluginPath = `${pluginDir}/${name}/dist/index.js`;
       const result = await pluginLoader.load(pluginPath);
 

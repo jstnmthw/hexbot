@@ -3,8 +3,14 @@ import { vi } from 'vitest';
 import type { PluginAPI } from '../../src/types';
 
 /**
- * Create a mock PluginAPI with sensible defaults for all members.
- * Override only the properties your test cares about.
+ * Create a mock PluginAPI with sensible defaults for every member of the
+ * plugin-facing surface in `src/types.ts`. Mutating methods are vi.fn()
+ * stubs (assertable), read methods return inert defaults
+ * (`undefined` / `null` / empty arrays / `false`). `ircLower`,
+ * `buildHostmask`, and `isBotNick` use real implementations because the
+ * tests almost always need their actual behavior. Pass `overrides` to
+ * tweak any field; common pattern is to override `db.get` so a test can
+ * seed plugin state without standing up a real `BotDatabase`.
  */
 export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginAPI {
   const noop = vi.fn();

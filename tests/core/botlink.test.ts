@@ -4135,7 +4135,7 @@ describe('BotLinkLeaf incoming CMD execution', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase 8 — HELLO v2 security tests (handshake-v2.md §8a)
+// HELLO v2 security tests — replay + nonce guarantees on the HMAC handshake
 // ---------------------------------------------------------------------------
 
 describe('HELLO v2 — replay + nonce guarantees', () => {
@@ -4275,7 +4275,8 @@ describe('HELLO v2 — replay + nonce guarantees', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase 8 — leaf cmd_inbound_rate gate (handshake-v2.md §7)
+// Leaf-side inbound CMD rate-limit — protects each leaf from a malicious or
+// runaway hub flooding command frames at it.
 // ---------------------------------------------------------------------------
 
 describe('leaf cmd_inbound_rate gate', () => {
@@ -4322,7 +4323,9 @@ describe('leaf cmd_inbound_rate gate', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase 8 — BSAY PM-target re-check (handshake-v2.md §8b)
+// BSAY re-permission-check at delivery time — channel BSAY uses channel
+// flags, but a PM target falls back to the global +m flag because there is
+// no channel context to evaluate against.
 // ---------------------------------------------------------------------------
 
 describe('BSAY re-check — PM target uses global +m', () => {
@@ -4356,7 +4359,8 @@ describe('BSAY re-check — PM target uses global +m', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase 8 — Per-frame rate buckets (handshake-v2.md §8c)
+// Per-frame-type rate buckets — separate token buckets for SAY, NOTICE,
+// MODE etc. so that a flood of one type can't starve the others.
 // ---------------------------------------------------------------------------
 
 describe('Per-frame rate buckets', () => {
@@ -4443,7 +4447,8 @@ describe('Per-frame rate buckets', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase 8 — RELAY_REQUEST hub gate (handshake-v2.md §8d)
+// RELAY_REQUEST hub-side gate — a leaf cannot ask the hub to forward relay
+// frames into a party it never joined; PARTY_JOIN must precede RELAY_REQUEST.
 // ---------------------------------------------------------------------------
 
 describe('RELAY_REQUEST hub-side gate', () => {
@@ -4496,7 +4501,9 @@ describe('RELAY_REQUEST hub-side gate', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase 8 — Non-loopback listen warning (handshake-v2.md §8e)
+// Non-loopback listen warning — botlink expects a loopback bind by default;
+// listening on a public address (or 0.0.0.0) without the explicit override
+// must surface a WARNING-level log so an operator notices.
 // ---------------------------------------------------------------------------
 
 describe('hub listen() non-loopback warning', () => {

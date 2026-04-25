@@ -85,11 +85,19 @@ export class BotLinkLeaf {
     this.version = version;
     this.logger = logger?.child('botlink:leaf') ?? null;
     this.socketFactory = socketFactory ?? ((p, h) => connect(p, h));
+    // Reconnect cadence: 5s base + exponential doubling with jitter,
+    // capped at 60s. Long enough for a brief hub blip to pass without
+    // hammering, short enough that recovery from a real outage is sub-
+    // minute. Heartbeat is 30s with a 90s link-loss threshold, matching
+    // the hub side.
     this.reconnectDelayMs = config.reconnect_delay_ms ?? 5_000;
     this.reconnectMaxDelayMs = config.reconnect_max_delay_ms ?? 60_000;
     this.reconnectDelay = this.reconnectDelayMs;
     this.pingIntervalMs = config.ping_interval_ms ?? 30_000;
     this.linkTimeoutMs = config.link_timeout_ms ?? 90_000;
+    // `Math.max(1, …)` ensures a misconfigured zero or negative rate
+    // doesn't permanently block CMDs — at least one per second always
+    // gets through, so a typo can't lock the leaf out of admin commands.
     const cmdLimit = Math.max(1, config.cmd_inbound_rate ?? 50);
     this.cmdInboundRate = new RateCounter(cmdLimit, 1_000);
     // `config.link_salt` and `config.password` are validated upstream in
@@ -163,6 +171,11 @@ export class BotLinkLeaf {
   /**
    * Send a protection request and wait for an ACK from any peer.
    * Returns true if a peer successfully acted, false on timeout or failure.
+   *
+   * @param timeoutMs Defaults to 5s — protection actions (op/deop/kick) are
+   *   inherently latency-sensitive (the attacker is mid-event); waiting longer
+   *   than this means the takeover already happened. Callers can raise it for
+   *   non-urgent flows like UNBAN.
    */
   async sendProtect(
     protectType: string,
@@ -222,6 +235,9 @@ export class BotLinkLeaf {
       ...(toBot ? { toBot } : {}),
     });
 
+    // 10s — same ceiling as hub-originated `.bot` CMDs (see hub.ts).
+    // Covers a slow remote handler without leaving the IRC user's command
+    // hanging when the hub or the target leaf is wedged.
     const CMD_TIMEOUT_MS = 10_000;
     const output = await this.pendingCmds.create(ref, CMD_TIMEOUT_MS, ['Command relay timed out.']);
 
@@ -237,6 +253,9 @@ export class BotLinkLeaf {
     const ref = String(++this.cmdRefCounter);
     this.send({ type: 'PARTY_WHOM', ref });
 
+    // 10s — generous enough for the hub to enumerate every leaf's local
+    // party-line set and merge them, but bounded so `.online` always
+    // returns within an interactive timeframe.
     const WHOM_TIMEOUT_MS = 10_000;
     return this.pendingWhom.create(ref, WHOM_TIMEOUT_MS, []);
   }

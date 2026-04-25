@@ -2,7 +2,7 @@
 // Extracted from src/database.ts to keep BotDatabase focused on the KV store.
 // BotDatabase owns an instance of this class and delegates its mod_log public
 // API to it; no caller needs to change because the BotDatabase signatures are
-// preserved. See docs/audits/ for the split rationale.
+// preserved.
 import { SqliteError } from 'better-sqlite3';
 import type { Database as DatabaseType, Statement } from 'better-sqlite3';
 
@@ -84,6 +84,13 @@ export type ModLogSource = 'repl' | 'irc' | 'dcc' | 'botlink' | 'plugin' | 'conf
 
 export type ModLogOutcome = 'success' | 'failure';
 
+/**
+ * The set of sources accepted on `logModAction` writes. Mirrors
+ * {@link ModLogSource} minus `'unknown'` — that label is reserved for
+ * historical rows migrated from the pre-Phase-1 schema and must never
+ * appear on a new write. Validated explicitly so a typo at a call site
+ * surfaces as a thrown error rather than a silent invalid row.
+ */
 const WRITE_SOURCES: ReadonlySet<ModLogSource> = new Set([
   'repl',
   'irc',
@@ -94,6 +101,18 @@ const WRITE_SOURCES: ReadonlySet<ModLogSource> = new Set([
   'system',
 ]);
 
+/**
+ * Validate the discriminator fields on a {@link LogModActionOptions} payload
+ * before insert. Enforces three invariants used by audit review:
+ *
+ *   1. `source` is one of the seven write-time labels.
+ *   2. `plugin` is set iff `source === 'plugin'` — so plugins can't pose as
+ *      `'system'` and core sites can't claim to be plugins.
+ *   3. `outcome` is one of the two well-defined labels (no rogue values).
+ *
+ * Throws on any violation rather than logging-and-continuing — a silent
+ * bypass would corrupt the audit trail's discriminator semantics.
+ */
 function validateModActionOptions(
   source: ModLogSource,
   plugin: string | null | undefined,

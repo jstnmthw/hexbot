@@ -6,8 +6,7 @@
 // the full nick!ident@host from channel-state plus any known services
 // account, NOT a nick-only lookup. A nick-only lookup is spoofable — an
 // attacker could adopt an op's nick from a different host and become
-// immune to DEOP/KICK (or, worse, be auto-opped). See the §7 finding in
-// docs/audits/irc-logic-2026-04-11.md.
+// immune to DEOP/KICK (or, worse, be auto-opped).
 import type { Casemapping } from '../../utils/wildcard';
 import { ircLower } from '../../utils/wildcard';
 import type { ChannelState } from '../channel-state';
@@ -81,7 +80,7 @@ export function handleProtectFrame(
   switch (frame.type) {
     case 'PROTECT_OP': {
       if (!hasOps) return undefined;
-      // Only op users the local permissions DB recognises by FULL hostmask
+      // Only op users the local permissions DB recognizes by FULL hostmask
       // (or account pattern). A nick-only check would let an imposter who
       // took an op's nick become opped remotely via a compromised leaf.
       if (!isRecognized()) {
@@ -117,7 +116,7 @@ export function handleProtectFrame(
     }
     case 'PROTECT_INVITE': {
       if (!hasOps) return undefined;
-      // Only invite nicks the local permissions DB recognises by FULL
+      // Only invite nicks the local permissions DB recognizes by FULL
       // hostmask (or account pattern). A nick-only path would let a
       // compromised leaf invite arbitrary nicks — including attackers —
       // into an invite-only channel.

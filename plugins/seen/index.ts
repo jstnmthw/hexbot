@@ -13,7 +13,7 @@ const DEFAULT_MAX_AGE_DAYS = 90;
  * nicks in a few minutes, common during botnet events) would otherwise
  * inflate the plugin's namespace before the 90-day age-based cleanup
  * caught up. When the sweep finds more than this, oldest records by
- * `time` are evicted first. See audit 2026-04-19.
+ * `time` are evicted first.
  */
 const DEFAULT_MAX_ENTRIES = 10_000;
 
@@ -25,6 +25,11 @@ interface SeenRecord {
   time: number;
 }
 
+/**
+ * Runtime shape guard for KV-stored `SeenRecord` JSON. Any record failing
+ * this check is treated as corrupt and dropped during the sweep, so the
+ * predicate is the canonical answer to "is this stored value usable?".
+ */
 function isSeenRecord(value: unknown): value is SeenRecord {
   /* v8 ignore next -- defensive: JSON.parse returns object for stored records */
   if (typeof value !== 'object' || value === null) return false;
@@ -37,6 +42,12 @@ function isSeenRecord(value: unknown): value is SeenRecord {
   );
 }
 
+/**
+ * Plugin entry point. Registers a `pubm` (stackable) handler that records
+ * every public message into the plugin's KV namespace, a `pub` handler for
+ * `!seen <nick>` queries, and an hourly `time` bind that prunes stale and
+ * over-cap records.
+ */
 export function init(api: PluginAPI): void {
   api.registerHelp([
     {
@@ -68,7 +79,7 @@ export function init(api: PluginAPI): void {
     // verbatim would (a) clobber the user's real last-spoken line and
     // (b) leak the target nick into the stored record. Conservative strip
     // on the bare `!seen ` prefix — the plugin's own trigger is fixed, so
-    // no config lookup is needed. See audit 2026-04-24.
+    // no config lookup is needed.
     if (/^!seen(\s|$)/i.test(ctx.text)) return;
 
     // Code-point-aware 200-char slice: `.substring` / `.slice` on UTF-16
@@ -103,7 +114,7 @@ export function init(api: PluginAPI): void {
     if (!raw) {
       // Strip formatting before echoing — otherwise an attacker can query
       // `!seen <IRC-formatting-bytes>` and the client renders the reply as
-      // if the bot emitted extra content. See audit 2026-04-19.
+      // if the bot emitted extra content.
       ctx.reply(`I haven't seen ${api.stripFormatting(targetNick)}.`);
       return;
     }
@@ -136,14 +147,14 @@ export function init(api: PluginAPI): void {
     }
     /* v8 ignore stop */
 
-    // Cross-channel sighting oracle defence: only reveal a record if the
+    // Cross-channel sighting oracle defense: only reveal a record if the
     // querier currently shares the stored channel with the bot. Otherwise
     // the bot becomes a covert membership probe — any user could query
     // `!seen <nick>` and learn the target has been active in a private
     // channel they're not invited to. The reply collapses to "never seen
     // by you" (same wording as the truly-not-seen case) so the querier
     // can't distinguish "no record" from "record in a channel you can't
-    // see". See audit 2026-04-24.
+    // see".
     const storedChannel = record.channel;
     const storedChannelState = api.getChannel(storedChannel);
     const querierInStoredChannel =
@@ -172,14 +183,22 @@ export function init(api: PluginAPI): void {
   });
 }
 
-export function teardown(): void {
-  // No cleanup needed
-}
+/**
+ * Plugin teardown. Binds and the hourly sweep are reaped by the loader;
+ * the SQLite KV rows persist across reloads by design (the whole point of
+ * the plugin), so there is nothing to clear.
+ */
+export function teardown(): void {}
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Drop every `seen:` KV entry older than `maxAgeMs` (and any entry whose
+ * stored JSON no longer matches {@link isSeenRecord}). Run on a timer and
+ * also at the start of each `!seen` query so a stale answer is impossible.
+ */
 function cleanupStale(api: PluginAPI, maxAgeMs: number): void {
   const now = Date.now();
   const entries = api.db.list('seen:');
@@ -204,7 +223,7 @@ function cleanupStale(api: PluginAPI, maxAgeMs: number): void {
  * After the age-based sweep, evict oldest records by `time` until the
  * namespace is below `maxEntries`. Guards against nick-rotation attacks
  * that would otherwise inflate the namespace across the 90-day window
- * before `cleanupStale` could catch up. See audit 2026-04-19.
+ * before `cleanupStale` could catch up.
  */
 function enforceEntryCap(api: PluginAPI, maxEntries: number): void {
   const entries = api.db.list('seen:');
@@ -228,6 +247,12 @@ function enforceEntryCap(api: PluginAPI, maxEntries: number): void {
   for (let i = 0; i < excess; i++) api.db.del(parsed[i].key);
 }
 
+/**
+ * Render a millisecond duration as a coarse human-readable "X ago" string
+ * (`12s ago`, `5m ago`, `3h 14m ago`, `2d 6h ago`). The same coarse format
+ * is used at every age, so the reader doesn't need to know how recent the
+ * record is to interpret the reply.
+ */
 function formatRelativeTime(ms: number): string {
   const seconds = Math.floor(ms / 1000);
   if (seconds < 60) return `${seconds}s ago`;

@@ -180,6 +180,10 @@ export class CommandHandler {
       return;
     }
 
+    // Order matters: permission check FIRST, relay hook SECOND, local handler
+    // THIRD. Reordering would either let the hub side double-check a command
+    // we already denied locally (wasted relay frame, confusing audit trail)
+    // or let an unprivileged user trigger a hub round-trip purely to be denied.
     if (!this.checkCommandPermissions(entry, commandName, args, ctx)) return;
 
     if (await this.runPreExecuteHook(entry, args, ctx)) return;

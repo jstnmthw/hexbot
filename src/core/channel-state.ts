@@ -69,7 +69,7 @@ export class ChannelState {
    * @param initialState Optional seed for the internal channel and
    *   network-account maps. Keys must already match whatever casemapping the
    *   caller plans to use (pass the seed *after* any `setCasemapping` call
-   *   that would otherwise change lookup behaviour). Lets tests start from
+   *   that would otherwise change lookup behavior). Lets tests start from
    *   a known "channel has 10 users, 3 accounts" state without replaying
    *   join/account events.
    */
@@ -97,6 +97,12 @@ export class ChannelState {
     this.botNick = nick;
   }
 
+  /**
+   * Update the case-folding rule for nick/channel keys. Called by Bot when
+   * ISUPPORT 005 announces a CASEMAPPING. Existing entries are not re-keyed —
+   * a casemapping change mid-session is rare and any stale records refresh
+   * naturally on the next NAMES.
+   */
   setCasemapping(cm: Casemapping): void {
     this.casemapping = cm;
   }
@@ -526,6 +532,12 @@ export class ChannelState {
     }
   }
 
+  /**
+   * RPL_WHOREPLY (352) batch from irc-framework: `WHO #chan` returns one
+   * row per visible user with full ident/host. We use the result to backfill
+   * NAMES entries that came in without ident/host (older networks pre-`UHNAMES`
+   * cap), and to keep hostmasks in sync after a chghost we missed.
+   */
   private onWholist(event: Record<string, unknown>): void {
     if (!isObjectArray(event.users)) return;
     const users = event.users;
@@ -623,7 +635,6 @@ export class ChannelState {
     // spurious reconciles. An account switch (A→B) is treated as logout
     // then login and emits both events in order — this matches the rare
     // but real case on services that support re-identification mid-session.
-    // See docs/services-identify-before-join.md.
     if (previous === accountName) return;
     if (previous !== null) {
       this.eventBus.emit('user:deidentified', nick, previous);
@@ -642,7 +653,7 @@ export class ChannelState {
   private onAway(event: Record<string, unknown>, isAway: boolean): void {
     const nick = String(event.nick ?? '');
     if (!nick) return;
-    // Sanitise the away reason even though the bridge runs on PRIVMSG-style
+    // Sanitize the away reason even though the bridge runs on PRIVMSG-style
     // events — AWAY notifications come through a different irc-framework
     // path and don't all hit the bridge's `sanitizeField`. A reason carrying
     // `\r\n` would otherwise surface verbatim wherever a plugin renders it.
@@ -664,8 +675,8 @@ export class ChannelState {
   /** IRCv3 chghost: fires when a user's displayed ident/hostname changes. */
   private onUserUpdated(event: Record<string, unknown>): void {
     const nick = String(event.nick ?? '');
-    // Sanitise chghost payloads — irc-framework delivers them via a
-    // dedicated event that skips the bridge's PRIVMSG sanitise pass. A
+    // Sanitize chghost payloads — irc-framework delivers them via a
+    // dedicated event that skips the bridge's PRIVMSG sanitize pass. A
     // malformed server (or a proxied event from a link compromise) could
     // ship `\r\n` in the new ident/hostname string and smuggle extra
     // lines through any plugin that echoes the field.

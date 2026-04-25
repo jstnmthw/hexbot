@@ -329,6 +329,14 @@ export class Logger implements LoggerLike {
     }
   }
 
+  /**
+   * Format the current time as `HH:MM:SS`. Date-less by design — log lines
+   * are scanned line-by-line during incident response, and the date is
+   * already available from the surrounding journalctl/file-rotation
+   * envelope. Including it again would just consume column width. Sinks
+   * that need a full timestamp should read `record.timestamp` (the raw
+   * `Date`) instead of parsing this string.
+   */
   private formatTime(): string {
     const now = new Date();
     const h = String(now.getHours()).padStart(2, '0');

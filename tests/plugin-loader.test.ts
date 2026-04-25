@@ -36,6 +36,11 @@ function makeTempDir(): string {
   return dir;
 }
 
+/**
+ * Write a plugin's compiled `index.js` under `<dir>/<name>/dist/`. Returns
+ * the absolute file path so callers can pass it to `loader.load()`. The
+ * `dist/` layout matches what `inferPluginName` looks for.
+ */
 function writePlugin(dir: string, name: string, code: string): string {
   const distDir = join(dir, name, 'dist');
   mkdirSync(distDir, { recursive: true });
@@ -44,12 +49,14 @@ function writePlugin(dir: string, name: string, code: string): string {
   return filePath;
 }
 
+/** Write a plugin's `config.json` defaults file at `<dir>/<name>/config.json`. */
 function writePluginConfig(dir: string, name: string, config: Record<string, unknown>): void {
   const pluginDir = join(dir, name);
   mkdirSync(pluginDir, { recursive: true });
   writeFileSync(join(pluginDir, 'config.json'), JSON.stringify(config), 'utf-8');
 }
 
+/** Write a top-level `plugins.json` at `<dir>/plugins.json` and return its path. */
 function writePluginsJson(dir: string, config: Record<string, unknown>): string {
   const path = join(dir, 'plugins.json');
   writeFileSync(path, JSON.stringify(config), 'utf-8');

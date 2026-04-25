@@ -37,7 +37,7 @@
 //
 // - **CASEMAPPING** — the canonical case-folding rule. Already applied via
 //   the `setCasemapping` pipeline; we surface it here so consumers can log
-//   a warning when the server advertises something we don't recognise
+//   a warning when the server advertises something we don't recognize
 //   (`rfc7613` etc.) instead of silently falling back to `rfc1459`.
 //
 // Fallback defaults match RFC 1459/2812 so a ChannelState / IRCCommands

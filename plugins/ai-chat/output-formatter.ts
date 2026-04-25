@@ -1,7 +1,8 @@
 // Transforms LLM text into IRC-safe, properly-split messages.
 // Strips markdown, normalizes whitespace, splits at sentence/word boundaries,
 // truncates to a maximum number of lines, and detects ChanServ fantasy command
-// prefixes (see docs/audits/security-ai-injection-threat-2026-04-16.md).
+// prefixes — a prompt-injected response emitting `.deop admin` would otherwise
+// be parsed by IRC services and executed against the bot's ACL.
 
 /**
  * Characters that, when they appear at position 0 of a channel PRIVMSG, can be
@@ -13,10 +14,9 @@
  * slash-style fantasy (`/`), and non-standard triggers used by various networks
  * (`~`, `@`, `%`, `$`, `&`, `+`).
  *
- * NOTE: The previous defence (prepending a space) was found to be ineffective
+ * NOTE: The previous defense (prepending a space) was found to be ineffective
  * against Atheme's `strtok(msg, " ")` parser, which skips leading spaces.
  * The fix is to drop the entire response if any line matches.
- * See docs/audits/security-ai-injection-threat-2026-04-16.md.
  */
 const FANTASY_PREFIXES = /^[.!/~@%$&+]/;
 
@@ -131,6 +131,9 @@ function collapseWhitespace(line: string): string {
  */
 function joinSoftWraps(text: string): string {
   // Standard continuation: line ends with letter/digit/comma/apostrophe/hyphen.
+  // The apostrophe class includes both straight `'` (handled by \p{L} via NFKC?
+  // — no, kept explicit) and the curly `’` (U+2019) that LLMs emit by default;
+  // omitting the curly form would leave "they’re\nhappy" as two IRC lines.
   let out = text.replace(/([\p{L}\p{N},’’-])[ \t]*\n(?!\s*[-*.!/~@%$&+]|\s*\d+\.)/gu, '$1 ');
   // Ellipsis continuation: "...\n" followed by a lowercase letter is a
   // mid-thought soft-wrap, not a sentence break. The negative lookahead
@@ -227,7 +230,11 @@ function splitLongLine(line: string, maxByteLen: number): string[] {
   return out;
 }
 
-/** Return the index of the last full regex match in `text`, or -1. */
+/**
+ * Return the index of the last full regex match in `text`, or -1. Caller is
+ * expected to pass a `/g` regex; we reset `lastIndex` to 0 first so callers
+ * don't have to manage state when reusing one regex across calls.
+ */
 function findLastMatch(text: string, re: RegExp): number {
   let idx = -1;
   let m: RegExpExecArray | null;
@@ -241,17 +248,6 @@ function findLastMatch(text: string, re: RegExp): number {
   return idx;
 }
 
-/**
- * Convert raw LLM output into an array of IRC-safe lines.
- *
- * @param text           — raw LLM response
- * @param maxLines       — maximum number of PRIVMSG lines to emit
- * @param maxLineLength  — max UTF-8 bytes per line. The IRC server hard-limits
- *   PRIVMSG lines to 512 bytes total (including `:nick!user@host PRIVMSG #ch :`
- *   prefix); 440 leaves a comfortable safety margin. Measuring in bytes rather
- *   than JS code units matters for emoji and CJK content, where one visible
- *   character is 3–4 UTF-8 bytes.
- */
 /** Character style overrides applied after formatResponse(). */
 export interface CharacterStyleOptions {
   casing: 'normal' | 'lowercase' | 'uppercase';
@@ -328,6 +324,20 @@ export function detectPromptEcho(output: string, system: string, threshold: numb
 /** Optional hook invoked when the entire response is dropped due to a fantasy-prefix line. */
 export type FantasyDropHook = (info: { index: number; line: string }) => void;
 
+/**
+ * Convert raw LLM output into an array of IRC-safe lines.
+ *
+ * @param text           — raw LLM response
+ * @param maxLines       — maximum number of PRIVMSG lines to emit
+ * @param maxLineLength  — max UTF-8 bytes per line. The IRC server hard-limits
+ *   PRIVMSG lines to 512 bytes total (including `:nick!user@host PRIVMSG #ch :`
+ *   prefix); 440 leaves a comfortable safety margin. Measuring in bytes rather
+ *   than JS code units matters for emoji and CJK content, where one visible
+ *   character is 3–4 UTF-8 bytes.
+ * @param onDropFantasy  — invoked when the whole response is dropped because a
+ *   line starts with a fantasy-command prefix; receives the offending line and
+ *   its index so the caller can log a redacted preview.
+ */
 export function formatResponse(
   text: string,
   maxLines: number,

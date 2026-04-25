@@ -27,7 +27,7 @@ const AUTO_OP_WEAK_HOSTMASK_THRESHOLD = 100;
  * are forced by the plugin-api factory's `resolveActor` either way — we
  * set them here for readability. Keeps `mod_log.by` meaningful instead
  * of NULL for the swath of chanmod rows that do not originate from a
- * bound command handler. See audit 2026-04-24.
+ * bound command handler.
  */
 const AUTO_OP_ACTOR: PluginModActor = Object.freeze({
   by: 'auto-op',
@@ -64,10 +64,10 @@ function computeDesiredMode(allFlags: string, config: ChanmodConfig): DesiredMod
  * (a) an IRCv3 account-tag that resolves to a non-empty account, OR
  * (b) a completed NickServ `verifyUser` that returned `verified:true`.
  *
- * This closes the race the audit flagged: the join bind uses flag `-`,
+ * This closes the verification-gate bypass: the join bind uses flag `-`,
  * which bypasses the dispatcher's verification gate, so an operator who
  * does not include `+o` in `require_acc_for` was previously opping a
- * nick-squatter on hostmask alone. See audit 2026-04-24 CRITICAL.
+ * nick-squatter on hostmask alone.
  *
  * When `knownAccount` is a non-empty string, it came from IRCv3
  * extended-join / account-tag / account-notify — authoritative and
@@ -108,8 +108,7 @@ async function grantMode(
   //   because the mask alone is trivially spoofable. Strong masks
   //   (`nick!ident@stable.cloak.example`) clear.
   //
-  // See audit 2026-04-24 CRITICAL + follow-up, and SECURITY.md §3.1 for
-  // the specificity tiers.
+  // See SECURITY.md §3.1 for the specificity tiers.
 
   // ---- Stage A: identification ----
   const accountTagMatched =
@@ -162,7 +161,7 @@ async function grantMode(
     }
   }
   // Services unavailable + no `$a:` match: skip Stage A entirely. Stage B
-  // is the only defence.
+  // is the only defense.
 
   // ---- Stage B: authorisation (unless already satisfied via $a:) ----
   if (!accountTagMatched) {
@@ -269,12 +268,12 @@ async function reconcileUserInChannel(
 }
 
 /**
- * Audit-defence-in-depth: log a loud `[security]` warning if auto-op is
+ * Audit-defense-in-depth: log a loud `[security]` warning if auto-op is
  * enabled (globally or per-channel via chanset) but `require_acc_for`
  * does not include the grant flags. The hard gate inside `grantMode()`
  * neutralises the attack — this warning exists so operators SEE the
  * misconfig and fix the config layer too, instead of silently relying
- * on the in-code gate. See audit 2026-04-24 CRITICAL.
+ * on the in-code gate.
  */
 function warnAutoOpMisconfig(api: PluginAPI, config: ChanmodConfig): void {
   // Auto-op is a per-channel setting; treat it as "enabled" for warning
@@ -301,11 +300,19 @@ function warnAutoOpMisconfig(api: PluginAPI, config: ChanmodConfig): void {
     `[security] auto-op is enabled but require_acc_for is missing ${missing.join(', ')}. ` +
       `The grantMode() hard gate still requires NickServ verification for prefix-mode grants, ` +
       `but operators should add these flags to identity.require_acc_for in bot.json for ` +
-      `defence in depth (the dispatcher gate blocks unverified ops from ever reaching the ` +
+      `defense in depth (the dispatcher gate blocks unverified ops from ever reaching the ` +
       `handler; the grantMode gate is the second layer). See docs/SECURITY.md §3.2.`,
   );
 }
 
+/**
+ * Register auto-op binds and reconciler hooks. Returns a no-op teardown:
+ * the binds and `api.on*` listeners registered here are reaped by the
+ * plugin loader. The `chain`/`probeState` parameters are wired to the
+ * bot-self-join branch (which seeds backend access from the chanset and
+ * kicks off a verification probe); on networks with no ChanServ access
+ * they're harmless to pass.
+ */
 export function setupAutoOp(
   api: PluginAPI,
   config: ChanmodConfig,
@@ -350,7 +357,10 @@ export function setupAutoOp(
       const accessExplicit = api.channelSettings.isSet(channel, 'chanserv_access');
       if (takeoverOn && !accessExplicit) {
         const channelKey = api.ircLower(channel);
-        // Check after 5s — by then the probe should have completed or timed out
+        // 5s — half the 10s probe timeout (PROBE_TIMEOUT_MS in chanserv-notice.ts)
+        // plus a buffer. Long enough that a fast services response has been
+        // applied; short enough that the warning is visible while the operator
+        // is still looking at the join.
         _state.cycles.schedule(5000, () => {
           const access = chain?.getAccess(channel) ?? 'none';
           if (access === 'none' && !_state.takeoverWarnedChannels.has(channelKey)) {
@@ -380,8 +390,7 @@ export function setupAutoOp(
     // Wrap grantMode: a NickServ outage (verifyUser rejection, ACC timeout)
     // must not leak out of this join handler as an unhandled rejection —
     // the dispatcher catches it, but then every other join on the same
-    // tick loses its auto-op. Fail quietly per-user instead. See stability
-    // audit 2026-04-14.
+    // tick loses its auto-op. Fail quietly per-user instead.
     try {
       await grantMode(api, config, channel, nick, desired, ctx.account, user, fullHostmask);
     } catch (err) {
@@ -404,7 +413,9 @@ export function setupAutoOp(
   // against the *current* identification (the channel-state account map is
   // already updated by the time these events fire) so a deidentifying
   // `$a:accountname`-only user naturally loses their auto-granted prefix
-  // modes. See docs/services-identify-before-join.md.
+  // modes. NickServ identifies before the bot joins channels, otherwise the
+  // hostmask alone is unverified and Stage B's specificity floor is the
+  // only gate.
   api.onUserIdentified((nick) => {
     reconcileNickInAllChannels(api, config, nick).catch((err) => {
       api.error(`onUserIdentified reconciler failed for ${nick}:`, err);

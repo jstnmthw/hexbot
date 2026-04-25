@@ -329,7 +329,11 @@ export class RelayOrchestrator {
       const nick = String(e.nick ?? '');
       const target = String(e.target ?? '');
       const message = String(e.message ?? '');
+      // Only mirror PMs — channel notices are part of the public channel
+      // stream, not a service-reply, and would flood relay consoles.
       if (/^[#&]/.test(target)) return;
+      // Suppress NickServ verification chatter so the relay user isn't
+      // shown the bot's own internal ACC/STATUS round-trips.
       if (this.deps.services.isNickServVerificationReply(nick, message)) return;
       forward(`-${sanitize(nick)}- ${sanitize(message)}`);
     };
@@ -338,6 +342,7 @@ export class RelayOrchestrator {
       const nick = String(e.nick ?? '');
       const target = String(e.target ?? '');
       const message = String(e.message ?? '');
+      // Only PMs — public channel traffic isn't part of the relay session.
       if (/^[#&]/.test(target)) return;
       forward(`<${sanitize(nick)}> ${sanitize(message)}`);
     };

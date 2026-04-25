@@ -41,8 +41,7 @@
 //   how many distinct targets a single PRIVMSG line may carry. Hexbot
 //   sends one target per line so the cap is advisory for us; we expose
 //   `setTargmax` / `getTargmax` for plugins and future multi-target work
-//   but do not split/merge here. See `docs/audits/irc-logic-2026-04-11.md`
-//   §10 for context.
+//   but do not split/merge here.
 import type { LoggerLike } from '../logger';
 
 // ---------------------------------------------------------------------------
@@ -134,7 +133,7 @@ export class MessageQueue {
     this.refill();
 
     // Fast path: nothing pending anywhere and we have budget — send inline.
-    // This preserves the hot-path behaviour of the old single-queue version
+    // This preserves the hot-path behavior of the old single-queue version
     // while still paying cost against the shared bucket.
     if (this.totalPending === 0 && this.budgetMs >= this.costMs) {
       this.budgetMs -= this.costMs;
@@ -151,7 +150,7 @@ export class MessageQueue {
 
     // Per-target cap — reject when one target has already accumulated too
     // much. Matches the global-cap policy (drop the newest; keep queued
-    // FIFO intact) so behaviour is consistent regardless of which limit
+    // FIFO intact) so behavior is consistent regardless of which limit
     // trips first.
     const key = target || UNTARGETED;
     const existing = this.subQueues.get(key);

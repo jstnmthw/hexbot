@@ -79,14 +79,11 @@ const CTCP_MAX_RESPONSES = 3;
 // - `batch`: surfaced as `event.batch`. Relevant for netsplit QUIT
 //   bundles and chathistory replay. Hexbot treats every event as
 //   independent, which produces extra noise during a netsplit but is
-//   correct behaviourally. Revisit if we add a relay/log plugin that
+//   correct behaviorally. Revisit if we add a relay/log plugin that
 //   needs batch boundaries.
 // - `echo-message`: irc-framework gates this behind `enable_echomessage`.
 //   Leaving it off means our own PRIVMSGs don't come back — plugins
 //   wanting reply confirmation must track sends client-side.
-//
-// See docs/audits/irc-logic-2026-04-11.md §A.2 for the full capability
-// survey that motivated this set of tradeoffs.
 
 // ---------------------------------------------------------------------------
 // IRCBridge
@@ -206,7 +203,6 @@ export class IRCBridge {
    *
    * Keyed by the persistent portion of the identity (`ident@host`) so an
    * attacker can't dodge the limit by rotating nicks between CTCP floods.
-   * See §11 of `docs/audits/irc-logic-2026-04-11.md`.
    */
   private ctcpAllowed(senderKey: string): boolean {
     return !this.ctcpRateLimiter.check(senderKey, CTCP_WINDOW_MS, CTCP_MAX_RESPONSES);
@@ -676,6 +672,10 @@ export class IRCBridge {
       if (queue) queue.enqueue(target, fn);
       else fn();
     };
+    // reply/replyPrivate sanitize plugin-supplied output a second time even
+    // though the inbound `fields.*` values were already scrubbed by
+    // sanitizeField — `msg` here originates from a handler, not from the
+    // ingress event, so it has its own untrusted-input boundary.
     return {
       ...fields,
       reply: (msg: string) => {

@@ -33,7 +33,11 @@ export class BotREPL {
   /** Print a line above the prompt without disrupting the input line. */
   private print(line: string): void {
     if (this.rl) {
-      // Clear the current prompt line, print the message, then redisplay the prompt
+      // `\r` returns the cursor to column 0; `\x1b[K` (CSI EL 0) erases from
+      // there to end of line. Together they wipe the current prompt + any
+      // partially-typed input so the new line lands cleanly above. We only
+      // re-prompt when not mid-handleLine — `busy` suppresses redisplay
+      // until the command's reply burst finishes.
       process.stdout.write('\r\x1b[K');
       console.log(line);
       if (!this.busy) this.rl.prompt(true);

@@ -427,7 +427,7 @@ export class PluginLoader {
           err,
         );
         // Hard stop the unload: do NOT call cleanupPluginResources, do
-        // NOT delete from the loaded map. The previous behaviour deleted
+        // NOT delete from the loaded map. The previous behavior deleted
         // regardless, which papered over the problem and caused the
         // next reload to double-register listeners against ghost state.
         throw err;
@@ -687,7 +687,7 @@ export class PluginLoader {
 
     // Resolve any `<field>_env` references from process.env so plugins see
     // fully-resolved config values and never touch process.env directly.
-    // See docs/plans/config-secrets-env.md and docs/PLUGIN_API.md.
+    // See docs/PLUGIN_API.md for the contract.
     return resolveSecrets({ ...defaults, ...overrides }, this.logger);
   }
 
@@ -728,7 +728,15 @@ export class PluginLoader {
     return (await import(fileUrl)) as Record<string, unknown>;
   }
 
-  /** Infer a plugin name from its file path. */
+  /**
+   * Infer a plugin name from its file path. Used only when we need a name
+   * for an error message before the module's own `name` export is
+   * trustworthy (or fails validation entirely).
+   *
+   * Hard-coded `'/'` separator: plugin paths are always normalized to forward
+   * slashes by `resolve()` on POSIX and by Node on Win32 too, so splitting
+   * on `'/'` is portable here even though `path.sep` is `'\\'` on Windows.
+   */
   private inferPluginName(filePath: string): string {
     // Path is plugins/<name>/dist/index.js — name is two levels above the file
     const parts = filePath.split('/');
@@ -736,7 +744,9 @@ export class PluginLoader {
     if (indexIdx > 1) {
       return parts[indexIdx - 2];
     }
-    // Fallback: filename without extension
+    // Fallback: filename without extension. Reached only for unusual layouts
+    // (single-file plugin paths, tests with synthetic paths) — production
+    // discovery always lands in the `index.js` branch above.
     const last = parts[parts.length - 1];
     return last.replace(/\.(ts|js)$/, '');
   }

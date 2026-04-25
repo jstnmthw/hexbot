@@ -102,7 +102,7 @@ export function renderChannelProfile(
 /**
  * Strip a leading `nick:` (or `<nick>` / `[nick]`) speaker prefix from a
  * bot-reply line before it's persisted to context. Small models occasionally
- * slip a fabricated speaker prefix past the stop-sequence defence — storing
+ * slip a fabricated speaker prefix past the stop-sequence defense — storing
  * it as an assistant turn would then read as a template to repeat, so this
  * normalises the stored form. Matches only IRC-valid nick characters so we
  * don't eat words followed by a colon ("hey: look at this").
@@ -132,6 +132,13 @@ function buildSamplingOptions(character: Character): SamplingOptions | undefined
 /** Recency window for the rolled-reply boost — 15 minutes. */
 const RECENT_BOT_INTERACTION_MS = 15 * 60_000;
 
+/**
+ * True when `nick` has interacted with the bot at least once and the most
+ * recent bot exchange landed inside {@link RECENT_BOT_INTERACTION_MS}. Used
+ * by the rolled-reply policy to amplify random-chance replies for users the
+ * bot has been talking with — recency reads as "still in the same thread"
+ * even when formal engagement has lapsed.
+ */
 export function hasRecentBotInteraction(tracker: SocialTracker | null, nick: string): boolean {
   if (!tracker) return false;
   const stats = tracker.getUserInteraction(nick);
@@ -223,7 +230,9 @@ export async function runPipeline(
   const maxOutputTokens = character.generation?.maxOutputTokens ?? cfg.maxOutputTokens;
   const sampling = buildSamplingOptions(character);
 
-  // Apply mood verbosity multiplier to maxLines
+  // Apply mood verbosity multiplier to maxLines. Floor at 1 — a low-energy
+  // mood with maxLines=1 would otherwise round to 0 and silently swallow the
+  // whole reply.
   const moodMultiplier = moodEngine?.getVerbosityMultiplier() ?? 1;
   const effectiveMaxLines = Math.max(1, Math.round(cfg.output.maxLines * moodMultiplier));
 
@@ -476,7 +485,7 @@ export async function runSessionPipeline(
   // Apply the same `safeSpeakerName` filter as the chat path before
   // surfacing the session's `[nick]` tag into the prompt. A nick carrying
   // punctuation could otherwise be interpreted by some models as role
-  // metadata; keep session transcripts consistent with the header sanitiser.
+  // metadata; keep session transcripts consistent with the header sanitizer.
   const safeNick = safeSpeakerName(ctx.nick) || 'user';
   const userMsg: AIMessage = {
     role: 'user',

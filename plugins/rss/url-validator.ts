@@ -8,8 +8,7 @@
 // services.
 //
 // Classification is delegated to `ipaddr.js` instead of hand-rolled prefix
-// regexes. The earlier audit (docs/audits/rss-2026-04-14.md) documented two
-// bypass classes in the old classifier:
+// regexes. Two bypass classes existed in the old hand-rolled classifier:
 //   1. IPv4-mapped IPv6 in hex form (`::ffff:7f00:1`) walked past the
 //      dotted-only regex and was treated as public.
 //   2. Several notation edge cases (`::ffff:0:7f00:1`, `::127.0.0.1`) had
@@ -95,6 +94,9 @@ export async function validateFeedUrl(
   if (!hostname) throw new Error('URL has no hostname');
 
   const resolvedAddresses: ResolvedAddress[] = [];
+  // IP literals skip DNS — there's nothing to resolve and no rebinding window
+  // to worry about. Bare hostnames go through `dns.lookup` so we can run the
+  // public-address check on every address the resolver returned.
   const literalFamily = net.isIP(hostname);
   if (literalFamily === 4 || literalFamily === 6) {
     resolvedAddresses.push({ address: hostname, family: literalFamily });
@@ -109,6 +111,9 @@ export async function validateFeedUrl(
       records = await Promise.race([
         dns.lookup(hostname, { all: true }),
         new Promise<never>((_, reject) =>
+          // .unref() so this timer doesn't keep the event loop alive past
+          // teardown — the racing dns.lookup will resolve or reject on its
+          // own schedule even if we never observe its outcome.
           setTimeout(
             () => reject(new Error(`DNS lookup timed out after ${DNS_TIMEOUT_MS}ms`)),
             DNS_TIMEOUT_MS,
@@ -122,6 +127,8 @@ export async function validateFeedUrl(
       });
     }
     for (const r of records) {
+      // Defensive — Node always returns 4 or 6 for `dns.lookup` results,
+      // but the LookupAddress.family type is `number` so we narrow here.
       if (r.family !== 4 && r.family !== 6) continue;
       resolvedAddresses.push({ address: r.address, family: r.family });
     }
@@ -160,6 +167,10 @@ export function isPublicAddress(ip: string): boolean {
   } catch {
     return false;
   }
+  // IPv4-mapped IPv6 (::ffff:a.b.c.d) reports its IPv6 range as `ipv4Mapped`,
+  // which is non-unicast and would falsely reject a perfectly valid public
+  // IPv4 dressed up as IPv6. Unwrap to the underlying IPv4 first so the
+  // unicast check applies to the real address.
   if (addr.kind() === 'ipv6') {
     const v6 = addr as ipaddr.IPv6;
     if (v6.isIPv4MappedAddress()) {

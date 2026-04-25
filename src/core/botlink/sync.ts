@@ -58,7 +58,10 @@ export class ChannelStateSyncer {
             ident: String(u.ident ?? ''),
             hostname: String(u.hostname ?? ''),
             modes: Array.isArray(u.modes)
-              ? u.modes.filter((m): m is string => typeof m === 'string' && /^[a-zA-Z]$/.test(m))
+              ? // Single ASCII letter only — IRC user-prefix modes are
+                // letter-only per RFC 2812 §3.2.3, so anything else is
+                // either a peer protocol bug or a hostile injection.
+                u.modes.filter((m): m is string => typeof m === 'string' && /^[a-zA-Z]$/.test(m))
               : [],
           }))
         : [],

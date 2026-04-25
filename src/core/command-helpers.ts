@@ -72,7 +72,7 @@ export function parseBanArgs(
 /**
  * Validate a single-token `<#channel>` argument. Returns the trimmed
  * channel on success or `null` if the arg is missing or doesn't match
- * the defence-in-depth shape from SECURITY.md §2.2. Used by `.join`,
+ * the defense-in-depth shape from SECURITY.md §2.2. Used by `.join`,
  * `.part`, `.invite`, and anywhere else a channel is the sole required
  * argument.
  *

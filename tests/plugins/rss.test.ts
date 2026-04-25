@@ -442,7 +442,7 @@ describe('rss plugin — stripHtmlTags', () => {
   });
 
   it('decodes entities before stripping so escaped tags are treated as tags', () => {
-    // Audit 2026-04-24 asked for decode-first behaviour so publishers
+    // Audit 2026-04-24 asked for decode-first behavior so publishers
     // can't smuggle `<script>` through as `&lt;script&gt;` and surface
     // the bracket sequence raw on the wire. The decoded content is then
     // tag-stripped just like literal HTML. (Informational only — no
@@ -599,7 +599,7 @@ describe('rss plugin — integration', () => {
     expect(db.list('rss', 'rss:seen:testfeed:').length).toBe(3);
 
     // Simulate a plugin reload: teardown, then init again with an extra
-    // item the feed published between boots. The previous behaviour was
+    // item the feed published between boots. The previous behavior was
     // to re-run silent seed on every init, which would mark `between`
     // seen without announcing it — the regression this test pins.
     teardown();

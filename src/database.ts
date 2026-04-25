@@ -212,7 +212,7 @@ export class BotDatabase {
    * sets both env vars automatically, so tests pass without changes.
    *
    * @throws if the database has not been opened or the current process is
-   *         not running under a recognised test harness.
+   *         not running under a recognized test harness.
    */
   rawHandleForTests(): DatabaseType {
     if (process.env.NODE_ENV !== 'test' && process.env.VITEST !== 'true') {

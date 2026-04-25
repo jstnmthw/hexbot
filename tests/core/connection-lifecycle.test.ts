@@ -308,7 +308,7 @@ describe('registerConnectionEvents', () => {
     it('refuses first-contact STS ingestion when tls_verify is disabled', () => {
       const onSTSDirective = vi.fn();
       // stsStore.get() returns null → first-contact path. tls_verify=false
-      // triggers the new defence-in-depth refusal.
+      // triggers the new defense-in-depth refusal.
       const stsStore = { get: () => null };
       const cfg = {
         ...MINIMAL_BOT_CONFIG,

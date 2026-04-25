@@ -189,6 +189,10 @@ export class Services {
     };
   }
 
+  /**
+   * Apply the network's CASEMAPPING. Drives the lowercase-nick keys used in
+   * the pending-verify map and `account-notify` self-detection.
+   */
   setCasemapping(cm: Casemapping): void {
     this.casemapping = cm;
   }
@@ -260,12 +264,12 @@ export class Services {
    * Verify a user's identity via NickServ ACC/STATUS.
    *
    * Concurrent callers asking about the same nick share a single
-   * in-flight promise — the old behaviour cancelled the existing
+   * in-flight promise — the old behavior canceled the existing
    * pending verification and started a fresh one on every duplicate,
    * restarting the timeout and piling up abandoned promises under
    * dispatch pressure. See stability audit 2026-04-14.
    *
-   * Fail-closed behaviour: on timeout the promise resolves
+   * Fail-closed behavior: on timeout the promise resolves
    * `{verified:false, account:null}` and {@link servicesTimeoutCount}
    * is incremented so `.status` can report services degradation.
    *
@@ -305,7 +309,7 @@ export class Services {
     const lowerNick = ircLower(nick, this.casemapping);
 
     // Dedupe: return the existing in-flight promise rather than
-    // cancelling it. Every concurrent caller for the same nick waits
+    // canceling it. Every concurrent caller for the same nick waits
     // on the same ACC/STATUS round-trip and sees the same result.
     const existing = this.pending.get(lowerNick);
     if (existing) {
@@ -375,7 +379,7 @@ export class Services {
 
       // `abort()` is the single cancellation idiom for every teardown path
       // (detach, resolveVerification success). Clearing the timer here
-      // ensures a cancelled verify never fires the timeout-audit above.
+      // ensures a canceled verify never fires the timeout-audit above.
       controller.signal.addEventListener(
         'abort',
         () => {

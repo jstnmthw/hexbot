@@ -81,7 +81,7 @@ export function makeChanmodConfig(overrides: Partial<ChanmodConfig> = {}): Chanm
     bitch: false,
     punish_deop: false,
     punish_action: 'kick',
-    punish_kick_reason: 'unauthorised deop',
+    punish_kick_reason: 'unauthorized deop',
     enforcebans: false,
     nick_recovery: false,
     nick_recovery_ghost: false,

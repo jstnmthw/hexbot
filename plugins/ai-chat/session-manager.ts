@@ -167,6 +167,12 @@ export class SessionManager {
   }
 }
 
+/**
+ * Compose the (userKey, channel) → session lookup key. Pipe is the separator
+ * because IRC nicks and channel names cannot contain it; `*` stands in for
+ * the null channel (PM) so a sessionless PM doesn't collide with a sessionful
+ * channel of the same name.
+ */
 function sessionKey(userKey: string, channel: string | null): string {
   return `${userKey.toLowerCase()}|${channel?.toLowerCase() ?? '*'}`;
 }

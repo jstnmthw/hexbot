@@ -12,11 +12,10 @@
 //    directive and the config tries to use plaintext, we either upgrade
 //    (when a port is known) or abort startup.
 //
-// Audit reference: docs/audits/irc-logic-2026-04-11.md §5 / §9 — without
-// STS, an attacker who downgrades the connection (e.g. via a MitM DNS
-// hijack or a "captive-portal" intercept) sees every SASL PLAIN
+// Without STS, an attacker who downgrades the connection (e.g. via a MitM
+// DNS hijack or a "captive-portal" intercept) sees every SASL PLAIN
 // credential, every message, and every op action in cleartext. The
-// Phase 1 SASL PLAIN guard is the first line of defence; STS closes
+// SASL PLAIN guard at startup is the first line of defense; STS closes
 // the second.
 import type { BotDatabase } from '../database';
 

@@ -21,7 +21,10 @@ import { RateLimitTracker } from './rate-limit-tracker';
  * existing entries live under one fold while new lookups use another,
  * effectively resetting the counter. Pinning to `rfc1459` (the historical
  * default) keeps keys stable for the entire plugin lifetime regardless of
- * what the server later advertises. See audit 2026-04-19.
+ * what the server later advertises.
+ *
+ * The four bracket/tilde substitutions implement the rfc1459 (vs ascii)
+ * fold: `[]\^` are the uppercase forms of `{}|~`.
  */
 function stableKeyLower(s: string): string {
   let out = '';
@@ -45,6 +48,11 @@ export const description =
 // Types
 // ---------------------------------------------------------------------------
 
+/**
+ * Plugin-internal config shape after defaults are applied. Each event class
+ * carries both the user-facing seconds value (for log/notice text) and the
+ * pre-multiplied milliseconds value (for arithmetic on `Date.now()`).
+ */
 interface FloodConfig {
   msgThreshold: number;
   msgWindowSecs: number;
@@ -60,11 +68,14 @@ interface FloodConfig {
   nickWindowMs: number;
   banDurationMinutes: number;
   ignoreOps: boolean;
+  /** Escalation ladder; see {@link EnforcementConfig.actions}. */
   actions: string[];
   offenceWindowMs: number;
+  /** Distinct-flooder threshold for channel-wide lockdown; 0 disables. */
   lockCount: number;
   lockWindowMs: number;
   lockDurationMs: number;
+  /** Default channel mode for lockdown (`R` or `i`); per-channel override via channelSettings. */
   defaultLockMode: string;
 }
 
@@ -123,7 +134,7 @@ function botHasOps(channel: string): boolean {
  *  `account` is the IRCv3 account tag (or null for "server says not
  *  identified") from the triggering event — threading it through means users
  *  whose only permission record is a `$a:<account>` pattern are still
- *  recognised as privileged and skip the flood kick.
+ *  recognized as privileged and skip the flood kick.
  */
 function isPrivileged(
   nick: string,
@@ -144,13 +155,14 @@ function isPrivileged(
 // Bind handlers (module-level so init() stays thin)
 // ---------------------------------------------------------------------------
 
+/** Pubmsg flood handler — keys per (hostmask, channel) so the same user
+ *  flooding two channels produces two separate escalation ladders. */
 async function handleMsgFlood(ctx: ChannelHandlerContext): Promise<void> {
   const { channel } = ctx;
   if (api.isBotNick(ctx.nick)) return;
   if (isPrivileged(ctx.nick, channel, undefined, ctx.account)) return;
   // Key by hostmask, not nick: otherwise a nick-rotation botnet mints a
-  // fresh tracker entry per nick change and escapes escalation. See audit
-  // finding C2 (2026-04-14).
+  // fresh tracker entry per nick change and escapes escalation.
   const hostmask = api.buildHostmask(ctx);
   const key = `msg:${stableKeyLower(hostmask)}@${stableKeyLower(channel)}`;
   if (!rateLimits.check('msg', key)) return;
@@ -165,6 +177,9 @@ async function handleMsgFlood(ctx: ChannelHandlerContext): Promise<void> {
   );
 }
 
+/** Join-flood handler. Also feeds the channel-wide lockdown counter so a
+ *  multi-user join wave can trigger `+R`/`+i` even when no individual user
+ *  has been kicked yet. */
 function handleJoinFlood(ctx: JoinContext): void {
   const { channel } = ctx;
   if (api.isBotNick(ctx.nick)) return;
@@ -190,6 +205,8 @@ function handleJoinFlood(ctx: JoinContext): void {
   );
 }
 
+/** Part-flood handler. Like {@link handleJoinFlood}, contributes to the
+ *  lockdown counter so leave-spam waves can trigger `+R`/`+i`. */
 function handlePartFlood(ctx: PartContext): void {
   const { channel } = ctx;
   if (api.isBotNick(ctx.nick)) return;
@@ -213,6 +230,8 @@ function handlePartFlood(ctx: PartContext): void {
   );
 }
 
+/** Nick-change flood handler. Tracked network-wide rather than per-channel —
+ *  the user's permission record doesn't vary by channel. */
 function handleNickFlood(ctx: NickContext): void {
   const { ident, hostname } = ctx;
   if (!ident && !hostname) return; // Incomplete hostmask data — skip
@@ -238,8 +257,8 @@ function handleNickFlood(ctx: NickContext): void {
   // Record the offence once (keyed on the user's persistent hostmask) so
   // the escalation ladder advances on the event, not per-channel. Then
   // apply the same action to every channel where the bot has ops — prior
-  // behaviour broke after the first hit and left the spammer unopposed
-  // elsewhere. See audit 2026-04-19.
+  // behavior broke after the first hit and left the spammer unopposed
+  // elsewhere.
   //
   // Three-state: `undefined` = not resolved yet (skip if no ops anywhere),
   // `null` = same-burst dedup swallowed the hit (skip apply in every
@@ -250,7 +269,6 @@ function handleNickFlood(ctx: NickContext): void {
   // channels — `.join #other`, INVITE rejoin, botlink-pushed joins — get
   // enforcement too. Before this fix a spammer could pick a channel the
   // bot had joined at runtime and escape nick-flood enforcement entirely.
-  // See audit 2026-04-24.
   let action: string | null | undefined;
   for (const channel of api.getJoinedChannels()) {
     if (!botHasOps(channel)) continue;
@@ -325,7 +343,6 @@ export function init(pluginApi: PluginAPI): void {
   // Capture `api` into a closure here rather than reading the module-level
   // `api` binding inside the error handler — a retained closure from a
   // prior load would otherwise fall through to the old (now-disposed) api.
-  // See audit finding W-FL5 (2026-04-14).
   const capturedApi = api;
   const logFloodError = (err: unknown): void => {
     capturedApi.error('Flood action error:', err);
@@ -352,13 +369,17 @@ export function init(pluginApi: PluginAPI): void {
   api.bind('nick', '-', '*', handleNickFlood);
   // Drop lockdown state when the bot itself leaves a channel, otherwise
   // the scheduled unlock timer fires against a channel we're not in and
-  // the entry lingers until then. See audit finding W-FL2 (2026-04-14).
+  // the entry lingers until then.
   api.bind('part', '-', '*', (ctx) => {
     if (api.isBotNick(ctx.nick)) lockdown.dropChannel(ctx.channel);
   });
   api.bind('kick', '-', '*', (ctx) => {
     if (api.isBotNick(ctx.nick)) lockdown.dropChannel(ctx.channel);
   });
+  // Periodic sweep — pruning rate-limit and offence state inline on every
+  // event would be cheaper per-call but would walk the maps every message;
+  // a 60s tick lets a sustained-but-modest flood drift through cleanly
+  // while still bounding worst-case memory.
   api.bind('time', '-', '60', () => {
     enforcement.liftExpiredBans();
     rateLimits.sweep();
@@ -375,12 +396,11 @@ export async function teardown(): Promise<void> {
   // Drain any in-flight enforcement promises before nulling state so a
   // late-resolving ban/kick can't touch the disposed api. Bounded by
   // `enforcement.apply()`'s fire-and-forget surface; usually empty.
-  // See audit finding W-FL5 (2026-04-14).
   await enforcement.drainPending();
   // Lift any tempbans that have already expired — otherwise the 60s
-  // time-bind we just cancelled was the only thing that would have
+  // time-bind we just canceled was the only thing that would have
   // unbanned them, and the bans become effectively permanent until the
-  // plugin is reloaded. See stability audit 2026-04-14.
+  // plugin is reloaded.
   try {
     enforcement.liftExpiredBans();
   } catch (err) {

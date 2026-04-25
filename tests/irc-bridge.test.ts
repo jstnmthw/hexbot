@@ -254,7 +254,7 @@ describe('IRCBridge', () => {
 
     // Bot-nick tracking on inbound `nick` events is covered observably by
     // the dedicated `describe('setBotNick')` block below — it asserts that
-    // a subsequent nick change for the new bot nick is recognised.
+    // a subsequent nick change for the new bot nick is recognized.
   });
 
   describe('mode events', () => {
@@ -850,7 +850,7 @@ describe('IRCBridge', () => {
       expect(handler).toHaveBeenCalledTimes(3);
 
       // 4th request from a different nick but the same ident@host must
-      // still be blocked — the old code keyed on nick, so this sneaked
+      // still be blocked — the old code keyed on nick, so this snuck
       // past the limit.
       handler.mockClear();
       client.simulateEvent('ctcp request', {
@@ -1318,6 +1318,10 @@ describe('IRCBridge', () => {
     let topicDispatcher: EventDispatcher;
 
     beforeEach(() => {
+      // Fake only setTimeout/clearTimeout — leaving setImmediate/queueMicrotask
+      // real lets `await Promise.resolve()` flush microtasks normally while
+      // still letting `vi.advanceTimersByTime()` skip past the topic startup
+      // grace window.
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       topicClient = new MockIRCClient();
       topicDispatcher = new EventDispatcher();

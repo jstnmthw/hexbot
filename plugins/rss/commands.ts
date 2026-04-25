@@ -13,13 +13,24 @@ import { announceItems } from './feed-formatter';
 import { type FeedConfig, deleteRuntimeFeed, isRuntimeFeed, saveRuntimeFeed } from './feed-store';
 import { validateFeedUrl } from './url-validator';
 
-/** Runtime config surface the command handlers need. Mirrors RssPluginConfig in index.ts. */
+/**
+ * Runtime config surface the command handlers need. Mirrors the operator-facing
+ * subset of `RssPluginConfig` in index.ts so commands.ts doesn't need to know
+ * about the full plugin config shape (keeps the test surface narrow). Field
+ * names use snake_case to match the JSON config keys.
+ */
 export interface RssCommandsConfig {
+  /** Days a seen-fingerprint is kept before `cleanupSeen` ages it out. */
   dedup_window_days: number;
+  /** Hard cap on rendered title length; overflow is replaced with a horizontal ellipsis. */
   max_title_length: number;
+  /** Per-feed HTTP inactivity timeout in milliseconds. */
   request_timeout_ms: number;
+  /** Maximum new items announced per poll — guards against backlog dumps. */
   max_per_poll: number;
+  /** Hard cap on response body size; oversized feeds are aborted on the wire. */
   max_feed_bytes: number;
+  /** Permit `http://` feed URLs. Default false (https-only). */
   allow_http: boolean;
 }
 
@@ -55,6 +66,7 @@ function errorMessage(err: unknown): string {
   return raw.replace(/[\x00-\x1F\x7F]/g, '');
 }
 
+/** Project the operator-facing config into the {@link FetchFeedOpts} shape the fetcher consumes. */
 function fetchOptsFor(cfg: RssCommandsConfig, signal?: AbortSignal): FetchFeedOpts {
   return {
     timeoutMs: cfg.request_timeout_ms,
@@ -84,6 +96,7 @@ export function logCmd(
   else api.debug(msg);
 }
 
+/** `!rss list` — list every active feed (config + runtime) with channels and interval. */
 export function handleList(deps: RssCommandsDeps, ctx: ChannelHandlerContext): void {
   const { api, activeFeeds } = deps;
   if (activeFeeds.size === 0) {
@@ -99,7 +112,7 @@ export function handleList(deps: RssCommandsDeps, ctx: ChannelHandlerContext): v
     // Strip IRC formatting from the URL before echoing. `new URL()`
     // tolerates some control-byte characters in the path/fragment
     // components, so a feed URL added via `.load` or an older migration
-    // could contain bold/colour bytes that would reshape this line when
+    // could contain bold/color bytes that would reshape this line when
     // rendered in the operator's client. See audit 2026-04-24.
     api.notice(
       ctx.nick,
@@ -191,6 +204,12 @@ export function parseAddArgs(args: string[], defaultChannel: string): AddArgsRes
   return { ok: true, id, url, channel, interval };
 }
 
+/**
+ * `!rss add <id> <url> [#channel] [interval]` — persist a new runtime feed,
+ * SSRF-validate the URL, then post the newest item as an instant-feedback
+ * preview. The feed is persisted regardless of whether the seed fetch
+ * succeeds — the next scheduled poll will retry.
+ */
 export async function handleAdd(
   deps: RssCommandsDeps,
   ctx: ChannelHandlerContext,
@@ -274,6 +293,12 @@ export async function handleAdd(
   }
 }
 
+/**
+ * `!rss remove <id>` — drop a runtime-added feed and its circuit-breaker
+ * state. Refuses to remove config-defined feeds (those must be edited in
+ * plugins.json) so a `+m` operator can't silently disable a feed the
+ * operator explicitly configured at startup.
+ */
 export function handleRemove(
   deps: RssCommandsDeps,
   ctx: ChannelHandlerContext,
@@ -309,6 +334,12 @@ export function handleRemove(
   api.audit.log('rss-feed-remove', { channel: ctx.channel, target: id });
 }
 
+/**
+ * `!rss check [id]` — manually poll one feed (or all feeds when no id is
+ * given) and announce any new items. Errors for individual feeds are
+ * reported to the invoker via NOTICE without aborting the rest of the
+ * batch.
+ */
 export async function handleCheck(
   deps: RssCommandsDeps,
   ctx: ChannelHandlerContext,

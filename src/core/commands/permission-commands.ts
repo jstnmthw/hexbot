@@ -89,7 +89,10 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
       // Last-owner guard: if the target is `+n` and they are the only `+n`
       // user on the bot, refuse the deletion. Losing the last owner leaves
       // the bot with no one able to run owner-only commands and requires
-      // manual DB surgery to recover.
+      // manual DB surgery to recover. The check counts owners across all
+      // users — there is no protection against an owner removing themselves
+      // when other owners exist; that is intentional so an owner-cycle
+      // (rotate, then drop the old key) stays a single command.
       const target = permissions.getUser(handle);
       if (target && target.global.includes(OWNER_FLAG)) {
         const ownerCount = permissions
@@ -120,6 +123,10 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
     },
     (args, ctx) => {
       const parts = args.split(/\s+/);
+      // No-argument invocation prints the legend so an operator who forgets
+      // the flag letters can recover without leaving IRC. The legend echoes
+      // the canonical letters defined in src/core/permissions.ts; keep the
+      // two in sync if a new flag letter is introduced.
       if (parts.length === 0 || !parts[0]) {
         ctx.reply(
           'Flag legend: n=owner (all access), m=master (user mgmt), o=op (channel cmds), v=voice, d=deop (no auto-op, +v if flagged)',
@@ -164,7 +171,8 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
       // otherwise run `.flags self +n` and have the hub silently promote
       // them. For botlink, ctx.nick is the caller's bot handle (cmd-exec.ts
       // pins ident/hostname to the literal `'botlink'`) so resolve by
-      // handle, not by the synthetic hostmask. See audit 2026-04-19.
+      // handle, not by the synthetic hostmask, which would never match a
+      // real user record.
       if (ctx.source !== 'repl') {
         const caller =
           ctx.source === 'botlink'
@@ -180,7 +188,12 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
 
       // Channel-specific path: `.flags <handle> <flags> #channel`. Channel
       // names start with `#` or `&` per RFC 2812, but the legacy `.flags`
-      // grammar only documents `#`, so keep the looser narrow here.
+      // grammar only documents `#`, so keep the narrow check here.
+      // `flagsArg.replace(/^\+/, '')` strips one leading `+` — the
+      // setGlobalFlags / setChannelFlags APIs interpret a bare `-x`
+      // as revoke and unprefixed letters as add. Stripping a single
+      // `+` lets the operator type either `+o` or `o` and get the
+      // same add semantics, while `-o` still revokes.
       if (parts.length >= 3 && parts[2].startsWith('#')) {
         const channel = parts[2];
         permissions.setChannelFlags(

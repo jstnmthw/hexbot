@@ -37,10 +37,17 @@ const DEFAULT_COOLDOWN_MS = 30_000;
 // runs in normal operation.
 const COOLDOWN_MAP_SWEEP_THRESHOLD = 1000;
 
+/**
+ * Plugin entry point. Reads `cooldown_ms`, `reply_type`, `compact_index`,
+ * `header`, and `footer` from `api.config`, then binds `pub`/`msg` handlers
+ * for `!help` plus a periodic `time` bind for cooldown-map sweeps. All
+ * mutable state (the cooldown map) is scoped inside this function so a
+ * plugin reload doesn't leak the previous module's map.
+ */
 export function init(api: PluginAPI): void {
-  // Per-nick cooldown map scoped inside `init()` — see audit finding
-  // W-SP3 (2026-04-14). A module-level Map gets pinned by the stale
-  // closure on reload; this scope bound ensures GC collects it.
+  // Per-nick cooldown map scoped inside `init()`. A module-level Map
+  // gets pinned by the stale closure on reload; this scope bound
+  // ensures GC collects it.
   const cooldowns = new Map<string, number>();
 
   const rawCooldown = api.config.cooldown_ms;
@@ -132,7 +139,6 @@ export function init(api: PluginAPI): void {
     // identity the bot sees without a services lookup; a determined attacker
     // can spoof ident on non-identd networks, but on an identd network or
     // against a services cloak this is effectively per-user.
-    // See audit 2026-04-24.
     const now = Date.now();
     const cooldownKey = `${ctx.ident}@${api.ircLower(ctx.hostname)}`;
     const last = cooldowns.get(cooldownKey);
@@ -192,7 +198,7 @@ export function init(api: PluginAPI): void {
   // Time-based sweep (every 5 minutes) to complement the size-threshold
   // sweep. On a rarely-used bot the map can accumulate entries for years
   // without ever crossing the 1000-entry threshold — this keeps it tidy
-  // regardless of volume. See audit 2026-04-19.
+  // regardless of volume.
   api.bind('time', '-', '300', () => {
     const now = Date.now();
     for (const [k, t] of cooldowns) {

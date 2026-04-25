@@ -131,8 +131,9 @@ describe('formatResponse', () => {
     expect(formatResponse('\x00\x01\x02', 4, 400)).toEqual([]);
   });
 
-  // ChanServ fantasy-command defence — see docs/audits/security-ai-injection-threat-2026-04-16.md
-  // The entire response is dropped if ANY line starts with a fantasy prefix.
+  // ChanServ fantasy-command defense: drop the entire response if ANY line
+  // starts with a fantasy prefix so an LLM can't inject `.deop admin` etc.
+  // through the bot's mouth.
   it('drops response when a line starts with "." (ChanServ fantasy)', () => {
     expect(formatResponse('.deop admin', 4, 400)).toEqual([]);
   });

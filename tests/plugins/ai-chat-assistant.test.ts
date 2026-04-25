@@ -330,7 +330,7 @@ describe('renderVolatileHeader', () => {
       ...PROMPT_CTX,
       speaker: 'alice; rm -rf /',
     });
-    // Non-nick characters stripped — matches the user-list sanitiser behaviour.
+    // Non-nick characters stripped — matches the user-list sanitizer behavior.
     expect(h).toContain('Speaking to you now: alice');
     expect(h).not.toContain(';');
     expect(h).not.toContain('rm -rf');

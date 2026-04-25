@@ -837,9 +837,10 @@ describe('ChannelState', () => {
 
   describe('IRCv3 account-notify event emissions', () => {
     // These tests exercise the event-bus surface added for late-authentication
-    // reconciliation (docs/services-identify-before-join.md). The old behaviour
-    // just updated cache state silently; now the transition itself is surfaced
-    // to chanmod and other subscribers.
+    // reconciliation. The old behavior just updated cache state silently; now
+    // the no-account -> account transition itself is surfaced so chanmod and
+    // other subscribers can re-evaluate auto-op grants when a user identifies
+    // mid-session.
     it('emits user:identified when a nick transitions from no account to an account', () => {
       const seen: Array<[string, string]> = [];
       eventBus.on('user:identified', (nick, account) => seen.push([nick, account]));
@@ -1770,7 +1771,7 @@ describe('ChannelState', () => {
         modes: [{ mode: '+l', param: 'abc' }],
       });
       const ch = state.getChannel('#test');
-      // Old behaviour stored NaN; new behaviour clamps to 0.
+      // Old behavior stored NaN; new behavior clamps to 0.
       expect(ch?.limit ?? 0).toBe(0);
     });
   });

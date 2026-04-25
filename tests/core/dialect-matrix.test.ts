@@ -122,7 +122,7 @@ const ALL_DIALECTS: readonly DialectFixture[] = [SOLANUM, INSPIRCD, UNREAL, IRCN
 
 /**
  * Build a `SupportsProvider` view over a dialect fixture. Mirrors
- * irc-framework's `network.supports()` behaviour: unknown keys return
+ * irc-framework's `network.supports()` behavior: unknown keys return
  * `undefined`; known keys return the pre-parsed value.
  */
 function clientFor(fixture: DialectFixture): SupportsProvider {
@@ -337,7 +337,7 @@ describe('NAMES parsing against each dialect', () => {
       modes: [{ mode: '+q', param: 'bob' }],
     });
     // IRCnet (ngIRCd) has no `q` prefix — our handler ignores it rather
-    // than inventing a prefix the server doesn't recognise.
+    // than inventing a prefix the server doesn't recognize.
     expect(state.getUserModes('#test2', 'bob')).not.toContain('q');
   });
 });

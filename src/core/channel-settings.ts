@@ -3,8 +3,7 @@
 //
 // Channel-key normalisation: every read/write goes through an injected
 // `ircLower` normaliser so `#Foo` and `#foo` land on the same record,
-// honouring the network's CASEMAPPING. See §12 of
-// `docs/audits/irc-logic-2026-04-11.md`. For backwards compatibility with
+// honouring the network's CASEMAPPING. For backwards compatibility with
 // pre-normalisation databases, `get()` falls back to the raw channel name
 // on a miss so operators don't silently lose existing settings.
 import type { BotDatabase } from '../database';

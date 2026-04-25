@@ -41,6 +41,10 @@ function formatFlagGrid(flags: SnapshotItem[], prefix = '  ', perRow = 4): strin
 
 /**
  * Format string/int settings one per line: `  key: value` or `  key*: value`.
+ * `*` after the key marks an overridden (non-default) value, matching the
+ * convention used by {@link formatFlagGrid} for boolean flags. An empty
+ * string renders as `(not set)` so a stripped value is visually distinct
+ * from a literal empty string the operator may have written intentionally.
  */
 function formatValueLines(items: SnapshotItem[], prefix = '  '): string[] {
   return items.map(({ entry, value, isDefault }) => {
@@ -86,8 +90,10 @@ export function registerChannelCommands(deps: ChannelCommandsDeps): void {
         return;
       }
 
+      // No key argument → list all registered settings for the channel.
+      // Splits flag-typed entries into a compact grid and others into
+      // labeled lines for legibility on a narrow DCC console.
       if (parts.length < 2 || !parts[1]) {
-        // List all available settings for this channel
         const snapshot = channelSettings.getChannelSnapshot(channel);
         if (snapshot.length === 0) {
           ctx.reply('No channel settings registered (no plugins with settings loaded)');
@@ -138,7 +144,11 @@ export function registerChannelCommands(deps: ChannelCommandsDeps): void {
         return;
       }
 
-      // No prefix: show current value with description (detail view)
+      // No prefix and exactly two args (`#chan key`): show the current
+      // value plus the registered description as a detail view. The mIRC
+      // color codes only render in clients that honor them; consoles
+      // that strip formatting (REPL, DCC with stripFormatting on output)
+      // simply see the unstyled text.
       if (parts.length === 2) {
         const value = channelSettings.get(channel, key);
         const isSet = channelSettings.isSet(channel, key);

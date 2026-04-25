@@ -1,4 +1,12 @@
 // chanmod — Automated channel moderation and operator tools.
+//
+// Plugin entry point: wires together the protection backends (Atheme/Anope),
+// per-channel settings registration, takeover-detection threat callback,
+// and every `setup*` helper that owns one feature area. Order in `init()`
+// matters — protection chain is built before backends are added; the
+// onBotIdentified handler is registered before setup helpers so a SASL
+// reconnect during init doesn't miss the re-probe; teardown order is
+// reverse-of-init so retained closures don't pin disposed state.
 import type { PluginAPI } from '../../src/types';
 import { AnopeBackend } from './anope-backend';
 import { AthemeBackend } from './atheme-backend';
@@ -27,8 +35,27 @@ export const name = 'chanmod';
 export const version = '3.0.0';
 export const description = 'Automated channel moderation and operator tools';
 
+/**
+ * Module-level teardown registry. Module-scoped (not per-call) because
+ * the plugin loader calls `init()` once per load and `teardown()` once
+ * per unload — there is no scenario in which two chanmod instances exist
+ * concurrently in the same process.
+ */
 let teardowns: Array<() => void> = [];
 
+/**
+ * Plugin entry point invoked by the plugin loader on `.load chanmod` or
+ * `.reload chanmod`. Wires up:
+ *   - shared state and protection backends (Atheme/Anope per `chanserv_services_type`)
+ *   - the ChanServ-notice router (with hostname-pattern guard)
+ *   - per-channel settings (`channelSettings.register`)
+ *   - threat callback feeding `assessThreat()` into ProtectionChain
+ *   - all `setup*` feature helpers (auto-op, mode-enforce, protection,
+ *     sticky bans, join-recovery, commands, invite, topic-recovery)
+ *
+ * @throws if `services_host_pattern` is missing — the ChanServ-impostor
+ *   guard cannot run without a pinned host pattern.
+ */
 export function init(api: PluginAPI): void {
   // Reset in case a previous teardown threw — otherwise the next unload
   // would re-run stale closures against disposed state.
@@ -73,7 +100,7 @@ export function init(api: PluginAPI): void {
       state.pendingRecoverCleanup.set(api.ircLower(channel), Date.now() + PENDING_STATE_TTL_MS);
     };
     // Null the callback on teardown so a retained backend reference can't
-    // pin `state` via this closure. See audit finding C3 (2026-04-14).
+    // pin `state` via this closure (the closure captures `state` by ref).
     teardowns.push(() => {
       backend.onRecoverCallback = undefined;
     });
@@ -214,13 +241,12 @@ export function init(api: PluginAPI): void {
     }
   }
 
-  // I-2: On plugin reload the bot is already in channels, so the bot-join
-  // event never fires. Re-probe ChanServ for each configured channel the bot
-  // is currently present in so protection restores without a manual restart.
+  // On plugin reload the bot is already in channels, so the bot-join event
+  // never fires. Re-probe ChanServ for each configured channel the bot is
+  // currently present in so protection restores without a manual restart.
   // Only fires when the chain already has a known non-none access level —
-  // if access is 'none', the C-2 onBotIdentified handler covers that case
+  // if access is 'none', the onBotIdentified handler below covers that case
   // (re-probe fires once the bot identifies with NickServ).
-  // See stability audit 2026-04-21.
   for (const ch of api.botConfig.irc.channels) {
     if (!api.getChannel(ch)) continue; // not currently in this channel
     if (chain.getAccess(ch) === 'none') continue; // handled by onBotIdentified re-probe
@@ -232,16 +258,16 @@ export function init(api: PluginAPI): void {
     api.log(`ChanServ re-probe on reload for ${ch}`);
   }
 
-  // C-2 + W-4: After a dirty reconnect (SASL miss → ChanServ probes fail →
-  // access stays 'none'), re-probe once the bot identifies. Clear stale probe
-  // state first so a lingering deferredAnopeNoAccess entry from the timed-out
-  // probe doesn't clobber the new result. See stability audit 2026-04-21.
+  // After a dirty reconnect (SASL miss → ChanServ probes fail → access stays
+  // 'none'), re-probe once the bot identifies. Clear stale probe state first
+  // so a lingering deferredAnopeNoAccess entry from the timed-out probe
+  // doesn't clobber the new result.
   const onBotIdentifiedHandler = (): void => {
     for (const ch of api.botConfig.irc.channels) {
       if (chain.getAccess(ch) !== 'none') continue;
       if (!api.getChannel(ch)) continue; // not in channel
       // Clear stale probe state so the old timed-out probe can't overwrite
-      // the fresh result (W-4 fix).
+      // the fresh result.
       const key = api.ircLower(ch);
       probeState.deferredAnopeNoAccess.delete(key);
       probeState.pendingAnopeProbes.delete(key);
@@ -290,11 +316,18 @@ export function init(api: PluginAPI): void {
 
   // Belt-and-braces: null every Map/Set on shared state at teardown so a
   // retained closure cannot pin the per-channel history graph. Registered
-  // last so earlier teardowns still see live state. See audit finding C3
-  // (2026-04-14).
+  // last so earlier teardowns still see live state.
   teardowns.push(() => clearSharedState(state));
 }
 
+/**
+ * Plugin teardown invoked by the plugin loader. Runs every teardown
+ * registered during `init()` in registration order — so the
+ * `clearSharedState` teardown registered last sees still-live state if
+ * any earlier teardown reads from it. Bind handlers and command
+ * registrations are reaped by the loader itself; teardown only owns
+ * timers, persistent listeners on the api, and shared-state wipes.
+ */
 export function teardown(): void {
   for (const td of teardowns) td();
   teardowns = [];

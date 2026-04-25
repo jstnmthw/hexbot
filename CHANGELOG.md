@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.5.0]
+## [Unreleased]
 
 ### Breaking
 
@@ -25,10 +25,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - **Ignored users can no longer trigger per-reply chatter through `!ai` garbage.** The pub-bind handler now checks the ignore list before dispatching subcommands, closing the gap where an ignored user's `!ai hello` would still get a "Unknown subcommand" reply.
-
-## [Unreleased]
-
-Branch `feature/ai-chat-plugin` — expands the ai-chat plugin substantially beyond the one-line mention under 0.3.0. Pending merge into `main`.
 
 ### BOTLINK — v2 handshake + fanout hardening
 

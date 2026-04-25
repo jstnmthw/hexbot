@@ -587,7 +587,7 @@ describe('MessageQueue', () => {
 
     it('stops draining once the wall-clock deadline has passed', () => {
       // Deadline of 0 ms means the loop exits before doing any work — the
-      // bound proves the deadline is honoured even on a backed-up queue.
+      // bound proves the deadline is honored even on a backed-up queue.
       vi.useRealTimers();
       const q = new MessageQueue({ rate: 1, burst: 0 });
       for (let i = 0; i < 50; i++) q.enqueue(T, () => {});

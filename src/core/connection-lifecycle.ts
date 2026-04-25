@@ -107,7 +107,7 @@ export interface ConnectionLifecycleDeps {
   /**
    * Read-only view of the STS store, consulted before mutating on a
    * plaintext ingestion. Lets `ingestSTSDirective` short-circuit when a
-   * policy already exists and the session is plaintext — defence in depth
+   * policy already exists and the session is plaintext — defense in depth
    * on top of `enforceSTS`, in case an attacker somehow gets us onto a
    * plaintext socket mid-policy and tries to extend or replace the stored
    * directive from the same host.
@@ -274,7 +274,7 @@ export function registerConnectionEvents(
     // a +r channel or ChanServ auto-op check. The two messages still race
     // over the wire (they're separate server-routed commands), but in
     // practice NickServ processes IDENTIFY fast enough that the bind
-    // lands first. See docs/services-identify-before-join.md.
+    // lands first.
     deps.identifyWithServices?.();
 
     // W-1: gate JOINs on identity when configured. Waits for bot:identified,
@@ -425,7 +425,7 @@ function applyCasemapping(deps: ConnectionLifecycleDeps): void {
     if (typeof raw === 'string' && raw.length > 0) {
       // Explicit warn so operators can track down a network advertising
       // something like `rfc7613` (Atheme unicode case folding) — we fall
-      // through to rfc1459 but the behaviour is wrong for that network.
+      // through to rfc1459 but the behavior is wrong for that network.
       deps.logger.warn(
         `Unknown CASEMAPPING "${raw}" advertised by server — falling back to rfc1459. ` +
           `Nick/channel case folding may be wrong on this network.`,
@@ -475,7 +475,7 @@ function ingestSTSDirective(deps: ConnectionLifecycleDeps): void {
     );
     return;
   }
-  // First-contact defence: a MITM-served CAP LS over TLS with
+  // First-contact defense: a MITM-served CAP LS over TLS with
   // `tls_verify=false` could pin a fake STS policy against a host the bot
   // has never spoken to before. With verification disabled, the cert the
   // bot trusted isn't authoritative — neither is the CAP list it returned.

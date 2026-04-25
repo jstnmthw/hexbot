@@ -77,17 +77,25 @@ export class MockIRCClient extends EventEmitter implements LifecycleIRCClient {
     this.connected = true;
   }
 
-  /** Simulate an incoming IRC event. */
+  /**
+   * Simulate an incoming IRC event by emitting it on the underlying
+   * EventEmitter. `event` matches the irc-framework event names that
+   * `IRCBridge` listens for ('privmsg', 'join', 'mode', 'ctcp request',
+   * 'irc error', 'unknown command', etc.); `data` is the event payload
+   * shape that the bridge destructures.
+   */
   simulateEvent(event: string, data: Record<string, unknown>): void {
     this.emit(event, data);
   }
 
-  /** Clear all captured messages. */
+  /** Clear all captured messages — useful between scenarios in a single test. */
   clearMessages(): void {
     this.messages = [];
   }
 
-  // Stub methods for removeListener compatibility
+  // Override is needed so MockIRCClient typechecks against the
+  // LifecycleIRCClient surface (which expects removeListener), even though
+  // we just delegate to EventEmitter's implementation.
   override removeListener(event: string, listener: (...args: unknown[]) => void): this {
     return super.removeListener(event, listener);
   }

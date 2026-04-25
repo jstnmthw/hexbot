@@ -68,8 +68,7 @@ export interface BotEvents {
    * Two paths can fire this: an explicit `verifyUser` ACC/STATUS round-trip
    * succeeding, and — passively — `channel-state.onAccount` noticing an
    * IRCv3 `account-notify` transition from unidentified to identified. The
-   * `handle` field carries the services account name. See
-   * docs/services-identify-before-join.md.
+   * `handle` field carries the services account name.
    */
   'user:identified': [nick: string, handle: string];
   /**

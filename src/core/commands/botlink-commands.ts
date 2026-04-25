@@ -19,12 +19,18 @@ import type { BotlinkDCCView } from '../dcc';
 // Commands forbidden from traveling over `.bot` because their positional
 // arguments are secrets. These never reach mod_log metadata and are refused
 // at the dispatch point so a compromised operator account cannot proxy a
-// password-rotation command through the bot link.
+// password-rotation command through the bot link. Comparison is done on
+// the lowercased subcommand name so case variants (`.CHPASS`) cannot
+// bypass the gate.
 const BOT_RELAY_FORBIDDEN_COMMANDS = new Set(['chpass']);
 
 // Subcommands whose args land in mod_log as `[redacted]` even when they are
 // allowed to dispatch. Kept separate from the hard-refusal list so future
 // secret-bearing admin verbs can be redacted without blocking them outright.
+// Currently identical to the forbidden set, but the redaction list is
+// consulted on the audit-write path while the forbidden list short-circuits
+// the dispatch — keep them as distinct sets so the layered defense stays
+// explicit.
 const BOT_RELAY_REDACTED_COMMANDS = new Set(['chpass']);
 
 // ---------------------------------------------------------------------------
@@ -82,7 +88,12 @@ function requireBotLink(
   return null;
 }
 
-/** Send a frame through whichever side of the link is active. */
+/**
+ * Send a frame through whichever side of the link is active. When `link`
+ * is a hub and `targetBot` is given, the frame is unicast to that leaf;
+ * a hub call without `targetBot` fans out to every leaf. A leaf always
+ * sends to its hub (the second arg is ignored on the leaf path).
+ */
 function sendFrame(link: BotLink, frame: LinkFrame, targetBot?: string): void {
   if (link.kind === 'hub' && targetBot) {
     link.hub.send(targetBot, frame);
@@ -201,6 +212,9 @@ function handleBotlinkBan(
     ctx.reply('Usage: .botlink ban <ip|cidr> [duration] [reason...]');
     return;
   }
+  // isValidIP gates the input before it reaches manualBan so a malformed
+  // CIDR string never lands in the ban table. See docs/SECURITY.md on
+  // input shape validation.
   if (!isValidIP(banIp)) {
     ctx.reply('Invalid IPv4 address or CIDR range.');
     return;
@@ -253,11 +267,17 @@ function handleBotlinkUnban(
 
 export interface BotlinkCommandsDeps {
   handler: CommandHandler;
+  /** Active hub instance, or null if this bot is not running as a hub. */
   hub: BotLinkHub | null;
+  /** Active leaf instance, or null if this bot is not running as a leaf. */
   leaf: BotLinkLeaf | null;
+  /** Bot link config; null when the feature is disabled. */
   config: BotlinkConfig | null;
+  /** Audit DB; nullable so the bot can run without persistence in tests. */
   db: BotDatabase | null;
+  /** DCC manager view used by `.relay`/`.whom` — null when DCC is disabled. */
   dccManager?: BotlinkDCCView | null;
+  /** Local IRC `say` injector for `.bsay self`/`.bsay *` — null on bots without IRC wired. */
   ircSay?: ((target: string, message: string) => void) | null;
 }
 
@@ -521,6 +541,9 @@ export function registerBotlinkCommands(deps: BotlinkCommandsDeps): void {
       // otherwise become `..status` on the leaf.
       const cmdText = command.startsWith('.') ? command.slice(1) : command;
       const [cmdNameRaw, ...cmdArgs] = cmdText.split(/\s+/);
+      // Lowercase for set membership: BOT_RELAY_FORBIDDEN_COMMANDS and
+      // BOT_RELAY_REDACTED_COMMANDS are stored lower-cased so a caller
+      // typing `.bot leaf1 CHPASS ...` cannot bypass either gate.
       const cmdName = cmdNameRaw.toLowerCase();
 
       if (BOT_RELAY_FORBIDDEN_COMMANDS.has(cmdName)) {
@@ -616,7 +639,7 @@ export function registerBotlinkCommands(deps: BotlinkCommandsDeps): void {
       const message = sanitize(rawMessage);
       const botname = sanitize(rawBotname);
       // mod_log rows are surfaced back into IRC via `.modlog` output, so strip
-      // IRC colour/format codes from user-controlled strings to keep the audit
+      // IRC color/format codes from user-controlled strings to keep the audit
       // view readable and prevent formatting bleed into surrounding rows.
       // Matches `.say`/`.msg` which already do the same.
       // `.bsay` is gated by `+m`, so the dispatcher either resolved the
@@ -626,7 +649,8 @@ export function registerBotlinkCommands(deps: BotlinkCommandsDeps): void {
       // matches the pattern `.bot` uses. The frame carries the handle
       // across the link so the hub can re-check `+m` on the target
       // channel before fanning out; a compromised leaf could otherwise
-      // assemble a raw BSAY and bypass the originating-leaf check.
+      // assemble a raw BSAY and bypass the originating-leaf check. See
+      // docs/BOTLINK.md on cross-bot privilege checks.
       const fromHandle = ctx.handle ?? ctx.nick;
       tryAudit(db, ctx, {
         action: 'bsay',
@@ -653,6 +677,10 @@ export function registerBotlinkCommands(deps: BotlinkCommandsDeps): void {
         return;
       }
 
+      // `*` = fan out to every linked bot. On a hub, that means every
+      // connected leaf; on a leaf, the leaf forwards the frame to its
+      // hub which then re-fans to its other leaves (the hub-side
+      // BSAY handler is responsible for not echoing back to origin).
       if (botname === '*') {
         sendLocal();
         if (hub) {
@@ -703,7 +731,7 @@ export function registerBotlinkCommands(deps: BotlinkCommandsDeps): void {
       // Sanitize for the wire path — the announcement fans out to every
       // linked bot's DCC consoles and those feeds must not carry CR/LF/NUL.
       // Strip IRC formatting for the mod_log copy so `.modlog` output doesn't
-      // bleed colour/bold into surrounding audit rows.
+      // bleed color/bold into surrounding audit rows.
       const message = sanitize(rawMessage);
       if (!message) {
         ctx.reply('Usage: .bannounce <message>');

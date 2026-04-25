@@ -125,7 +125,7 @@ describe('ContextManager', () => {
   });
 
   it('sliding prune strategy drops exactly one per overflow', () => {
-    // Escape hatch for operators who want the original per-turn behaviour —
+    // Escape hatch for operators who want the original per-turn behavior —
     // pruneStrategy: 'sliding' is wired through addMessage.
     const { mgr } = make({ maxMessages: 3, pruneStrategy: 'sliding' });
     for (let i = 0; i < 5; i++) mgr.addMessage('#c', 'alice', `m${i}`, false);

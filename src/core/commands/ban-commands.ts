@@ -60,6 +60,10 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
       }> = [];
       if (sharedBanList) {
         const channels = channelArg ? [channelArg] : sharedBanList.getChannels();
+        // Build the local-mask key set with `${channel}:${mask}` — the
+        // local channel is already case-folded by BanStore so we don't
+        // re-apply ircLower here. The shared lookup below DOES need
+        // ircLower since SharedBanList keys come straight off the wire.
         const localMasks = new Set(localBans.map((b) => `${b.channel}:${b.mask}`));
         for (const ch of channels) {
           for (const entry of sharedBanList.getBans(ch)) {
@@ -88,7 +92,7 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
       }
       for (const entry of sharedEntries) {
         // Shared entries arrive over botlink — sanitized at the frame
-        // boundary, but strip-format again for defence-in-depth so a
+        // boundary, but strip-format again for defense-in-depth so a
         // crafted `by` never repaints the operator's terminal.
         lines.push(
           `  ${stripFormatting(entry.channel).padEnd(12)} ${stripFormatting(entry.mask).padEnd(25)} by ${stripFormatting(entry.by).padEnd(10)} [shared]`,
@@ -138,6 +142,10 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
       }
       const reason = rest.join(' ') || undefined;
 
+      // Persist first, then push the MODE — the order matters because
+      // BanStore is the source of truth for sticky-ban re-application
+      // on rejoin. If the IRC send fails or the bot disconnects before
+      // ircop reflects, the next reconnect still has the row to reapply.
       banStore.storeBan(channel, mask, ctx.nick, durationMs);
       ircCommands.ban(channel, mask);
 

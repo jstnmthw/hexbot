@@ -51,7 +51,7 @@ export interface AIProviderConfig {
   /**
    * Stop sequences. llama.cpp-family providers pass these as `options.stop`;
    * hosted providers ignore. On hit, generation terminates mid-token — the
-   * cheapest prompt-echo / speaker-fabrication defence available. Cap ~10
+   * cheapest prompt-echo / speaker-fabrication defense available. Cap ~10
    * entries (llama.cpp stop-list bugs at larger sizes).
    */
   stop?: string[];
@@ -60,7 +60,7 @@ export interface AIProviderConfig {
   /**
    * Ollama-only: how long to keep the model loaded between requests
    * (e.g. `"30m"`, `"-1"` for "forever", `"0"` to unload immediately).
-   * Default Ollama behaviour is 5 minutes — too short for low-traffic bots
+   * Default Ollama behavior is 5 minutes — too short for low-traffic bots
    * since every idle gap forces a cold reload and discards KV-cache.
    */
   keepAlive?: string;

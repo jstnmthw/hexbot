@@ -25,7 +25,7 @@ describe('validateRequireAccFor: warns on unknown flags', () => {
     expect(warns.some((m) => m.includes('+Q'))).toBe(true);
   });
 
-  it('passes recognised flags through unchanged', () => {
+  it('passes recognized flags through unchanged', () => {
     const result = validateRequireAccFor(['+n', '+m', '+o', '+v'], null);
     expect(result).toEqual(['+n', '+m', '+o', '+v']);
   });

@@ -5,8 +5,7 @@
 // base class collects all of that so the concrete subclasses only declare
 // the pieces that genuinely differ (synthetic RECOVER for Anope, FLAGS vs
 // ACCESS LIST probes, GETKEY vs MODE -k, subscriber-specific response
-// parsers). Lift-and-dedupe only — no behavior change. See the 2026-04-19
-// quality audit.
+// parsers). Lift-and-dedupe only — no behavior change.
 import type { PluginAPI } from '../../src/types';
 import { getBotNick } from './helpers';
 import { type BackendAccess, type ProtectionBackend, accessAtLeast } from './protection-backend';
@@ -121,11 +120,14 @@ export abstract class ChanServBackendBase implements ProtectionBackend {
     // Defense-in-depth shape guards for AKICK interpolation. Current
     // callers pass hard-coded reasons and masks built by `buildBanMask()`
     // (which validates shape), so these checks are belt-and-braces for
-    // a future caller that wires user input through. See audit 2026-04-19.
+    // a future caller that wires user input through.
     if (/\s/.test(mask)) {
       this.api.warn(`AKICK mask "${mask}" contains whitespace — refusing to send`);
       return;
     }
+    // 100-char reason cap — every major IRCd truncates AKICK reasons well
+    // below this; the slice prevents a runaway reason from pushing the
+    // command past the 510-byte server limit.
     const safeReason = reason ? reason.slice(0, 100) : undefined;
     const cmd = safeReason
       ? `AKICK ${channel} ADD ${mask} ${safeReason}`

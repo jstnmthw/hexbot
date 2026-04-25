@@ -82,8 +82,9 @@ const pagers = new Map<string, PagerState>();
  * `registerModLogCommands`) so {@link clearAuditTailForSession} and
  * {@link shutdownModLogCommands} can find them from teardown paths.
  * Holds a closure over `ctx.reply` per entry, so any shutdown path
- * that skips cleanup leaks the REPL/DCC session context. See audit
- * findings W-CMD1 and W-CMD2 (2026-04-14).
+ * that skips cleanup leaks the REPL/DCC session context — DCC/REPL
+ * teardown must call the clear helpers eagerly, and `Bot.shutdown()`
+ * must call `shutdownModLogCommands` to drop everything.
  */
 interface TailEntry {
   listener: (entry: ModLogEntry) => void;
@@ -107,12 +108,22 @@ function pruneIdle(now = Date.now()): void {
   }
 }
 
-/** Clear a session's pager — exposed so DCC/REPL tear-down can drop the entry eagerly. */
+/**
+ * Clear a session's pager — exposed so DCC/REPL tear-down can drop the
+ * entry eagerly. The `key` must match the value computed by
+ * {@link sessionKey} for the originating context (e.g. `dcc:<handle>`
+ * for DCC, `'repl'` for REPL); a mismatched key is a silent no-op.
+ */
 export function clearPagerForSession(key: string): void {
   pagers.delete(key);
 }
 
-/** Clear a session's audit-tail subscription — exposed so DCC/REPL tear-down can unsubscribe eagerly. */
+/**
+ * Clear a session's audit-tail subscription — exposed so DCC/REPL
+ * tear-down can unsubscribe eagerly. Removes the listener from the
+ * event bus before dropping the map entry to avoid a window where
+ * the listener still fires on a closed session.
+ */
 export function clearAuditTailForSession(key: string): void {
   const entry = tailListeners.get(key);
   if (entry) {
@@ -236,7 +247,12 @@ export function parseModlogFilter(args: string): ParsedFilter {
   return { filter, error: null };
 }
 
-/** Parse `30m` / `2h` / `7d` into seconds. Returns null on bad input. */
+/**
+ * Parse `30m` / `2h` / `7d` into seconds. Returns null on bad input.
+ * Supported units: `s` (seconds), `m` (minutes), `h` (hours), `d` (days).
+ * The leading number must be positive — `0m` and negative values are
+ * rejected so a `since` filter can't quietly resolve to "the future".
+ */
 export function parseDurationSeconds(input: string): number | null {
   const m = /^(\d+)([smhd])$/.exec(input);
   if (!m) return null;
@@ -281,6 +297,12 @@ export interface ModlogPermissionResult {
   channelScope?: string[];
 }
 
+/**
+ * Resolve the caller's `.modlog` permission. Owners (`+n`) get unrestricted
+ * access; masters (`+m`) get a channel-scoped view limited to channels
+ * where they hold per-channel `o` or `n`; everyone else is rejected with
+ * the reason populated for the caller to surface in the reply.
+ */
 export function checkModlogPermission(
   permissions: Permissions,
   ctx: CommandContext,
@@ -298,9 +320,11 @@ export function checkModlogPermission(
     return { allowed: false, reason: 'requires +m or higher' };
   }
 
-  // Master flag: collect every channel where this user has per-channel `o`.
-  // Channel keys are stored case-folded by Permissions.setChannelFlags so we
-  // pass them through as-is.
+  // Master flag: collect every channel where this user has per-channel
+  // `o` or `n`. `n` is included because a per-channel owner has at
+  // least the audit privileges of an op on that channel. Channel keys
+  // are stored case-folded by Permissions.setChannelFlags so we pass
+  // them through as-is.
   const opChannels: string[] = [];
   for (const [channel, flags] of Object.entries(user.channels)) {
     if (flags.includes('o') || flags.includes('n')) opChannels.push(channel);
@@ -312,7 +336,12 @@ export function checkModlogPermission(
 // Rendering
 // ---------------------------------------------------------------------------
 
-/** Format an absolute unix-seconds timestamp as a relative "Xm ago". */
+/**
+ * Format an absolute unix-seconds timestamp as a relative "Xm ago" string.
+ * `now` is injectable for deterministic tests; defaults to the current
+ * wall clock. Negative deltas (clock skew, future timestamps) clamp to
+ * `0s ago` rather than producing "ago" with a negative number.
+ */
 export function relativeTime(ts: number, now = Math.floor(Date.now() / 1000)): string {
   const delta = Math.max(0, now - ts);
   if (delta < 60) return `${delta}s ago`;
@@ -350,7 +379,7 @@ function renderHeader(): string {
 function renderRow(row: ModLogEntry): string {
   // Strip IRC formatting before emission — the `.modlog show` path already
   // does this; keeping the pager/audit-tail row rendering symmetrical
-  // avoids colour bytes smuggled through a `by`/`reason`/`metadata` cell
+  // avoids color bytes smuggled through a `by`/`reason`/`metadata` cell
   // from painting the REPL view.
   return COLUMNS.map((c) => truncate(stripFormatting(c.get(row)), c.width).padEnd(c.width)).join(
     ' ',
@@ -371,7 +400,7 @@ function renderPage(state: PagerState, _db: BotDatabase): string[] {
   // SELECT COUNT(*) with the current filter grows linearly with
   // page count and makes deep pagination painful. The snapshot is
   // refreshed only when the user runs `.modlog top`, which starts
-  // a fresh query. See stability audit 2026-04-14.
+  // a fresh query.
   lines.push(
     `-- ${state.pageStart}-${state.pageEnd} of ${state.totalAtFirstQuery} — .modlog next | prev | top | show <id> --`,
   );
@@ -512,11 +541,17 @@ export function registerModlogCommands(deps: RegisterDeps): void {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Clamp a filter to the caller's permission scope. Owners pass `perm`
+ * with no `channelScope` and the filter is returned unchanged; masters
+ * pass a list of channels where they hold `+o`/`+n` and the filter is
+ * narrowed via `channelsIn` so the SQL query never reaches outside that
+ * set. Caller-supplied `channel` filters outside the scope deliberately
+ * collapse to an empty `channelsIn` so the query returns zero rows
+ * rather than silently widening to the full scope.
+ */
 function applyPermissionScope(filter: ModLogFilter, perm: ModlogPermissionResult): ModLogFilter {
   if (!perm.channelScope) return filter;
-  // Master users are restricted to their op'd channels. If the caller also
-  // supplied an explicit `channel` filter, keep it only when it's inside
-  // the allowed set — otherwise force-clamp to the channel scope.
   const scope = new Set(perm.channelScope.map((c) => c.toLowerCase()));
   if (filter.channel && !scope.has(filter.channel.toLowerCase())) {
     return { ...filter, channelsIn: [] }; // empty → no rows
@@ -676,7 +711,12 @@ function reply(ctx: CommandContext, lines: string[]): void {
   for (const line of lines) ctx.reply(line);
 }
 
-/** Compile an in-memory matcher from a parsed filter — used by `.audit-tail`. */
+/**
+ * Compile an in-memory matcher from a parsed filter — used by `.audit-tail`.
+ * Mirrors the SQL filter semantics in `getModLog` so a tail and a paged
+ * query with the same filter produce the same row set; any divergence
+ * here would surprise an operator who flips between the two.
+ */
 function makeMatcher(filter: ModLogFilter): (entry: ModLogEntry) => boolean {
   return (e) => {
     if (filter.action && e.action !== filter.action) return false;

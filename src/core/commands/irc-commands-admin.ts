@@ -9,7 +9,11 @@ import { tryAudit } from '../audit';
 import { validateChannel } from '../command-helpers';
 import type { ReconnectState } from '../reconnect-driver';
 
-/** Minimal IRC client interface for admin commands. */
+/**
+ * Minimal IRC client interface for admin commands. Kept narrow on purpose —
+ * each admin verb uses at most one method, so the surface here doubles as
+ * the audit ceiling for what these commands can do to the live IRC client.
+ */
 export interface AdminIRCClient {
   say(target: string, message: string): void;
   join(channel: string): void;
@@ -22,8 +26,9 @@ export interface AdminIRCClient {
 /**
  * Stability/observability metrics surfaced via `.status`. Every field
  * is optional because the getter is best-effort — a transient tracker
- * that hasn't been wired yet returns `undefined` rather than erroring.
- * See stability audit 2026-04-14.
+ * that hasn't been wired yet returns `undefined` rather than erroring,
+ * which keeps `.status` usable on a partially-constructed bot (tests,
+ * boot path before plugins are loaded).
  */
 export interface StabilityMetrics {
   /** NickServ verify timeouts since startup (services provider degradation signal). */
@@ -41,7 +46,8 @@ export interface StabilityMetrics {
   /**
    * Whether the bot's own NickServ identity has been confirmed for the current
    * session. `undefined` when identify-state tracking is not wired up.
-   * See stability audit 2026-04-21 (W-2 fix).
+   * Operators rely on this in `.status` to spot a quiet identify failure
+   * before granting auto-op flags that depend on services verification.
    */
   botIdentified?: boolean;
 }
@@ -90,12 +96,20 @@ export function registerIRCAdminCommands(deps: IrcAdminCommandsDeps): void {
         ctx.reply('Usage: .say <target> <message>');
         return;
       }
+      // `.say` is the channel/nick-shaped variant — `isValidCommandTarget`
+      // rejects services-style targets like `NickServ@services.`. Use
+      // `.msg` for those (looser target check). See docs/SECURITY.md on
+      // hostmask shapes.
       if (!isValidCommandTarget(parsed.target)) {
         ctx.reply('Invalid target.');
         return;
       }
+      // sanitize() strips CR/LF/NUL/U+2028/U+2029 — without it a crafted
+      // `.say` message could smuggle a second IRC line through the wire.
       client.say(parsed.target, sanitize(parsed.message));
       ctx.reply(`Message sent to ${parsed.target}`);
+      // mod_log copy uses stripFormatting so color bytes in the message
+      // don't bleed into surrounding rows when an operator runs `.modlog`.
       tryAudit(db, ctx, {
         action: 'say',
         target: parsed.target,
@@ -160,11 +174,17 @@ export function registerIRCAdminCommands(deps: IrcAdminCommandsDeps): void {
         ctx.reply('Usage: .msg <target> <message>');
         return;
       }
-      // .msg accepts any non-whitespace target (channel, nick, service).
+      // .msg accepts any non-whitespace target (channel, nick, service)
+      // — services targets like `NickServ@services.` are valid here
+      // even though they fail `isValidCommandTarget`'s channel/nick
+      // rules. The `\S+` check still rejects empty / whitespace-only
+      // targets that would split into an extra wire token.
       if (!/^\S+$/.test(parsed.target)) {
         ctx.reply('Invalid target.');
         return;
       }
+      // sanitize() strips CR/LF/NUL — a `\n` in the message would let
+      // the caller inject a second IRC command (PRIVMSG-stuffing).
       client.say(parsed.target, sanitize(parsed.message));
       ctx.reply(`Message sent to ${parsed.target}`);
       tryAudit(db, ctx, {
@@ -235,6 +255,9 @@ export function registerIRCAdminCommands(deps: IrcAdminCommandsDeps): void {
       const users = botInfo.getUserCount();
       const reconnectState = botInfo.getReconnectState();
 
+      // `.status` stacks short labeled lines so a reader can scan
+      // top-down — keep each line single-purpose and short enough to
+      // survive a typical IRC line-length cap when piped via `.bot`.
       const lines = [
         `Status: ${connected} as ${nick}`,
         `Uptime: ${uptime}`,
@@ -247,7 +270,7 @@ export function registerIRCAdminCommands(deps: IrcAdminCommandsDeps): void {
       // Stability metrics — emitted only when the bot has wired a
       // `getStabilityMetrics` provider (tests pass a minimal info
       // object that can omit it). One-line summary so `.status`
-      // stays operator-readable. See stability audit 2026-04-14.
+      // stays operator-readable across narrow DCC/REPL columns.
       if (botInfo.getStabilityMetrics) {
         const m = botInfo.getStabilityMetrics();
         const parts: string[] = [];
@@ -281,7 +304,7 @@ export function registerIRCAdminCommands(deps: IrcAdminCommandsDeps): void {
 /**
  * Render the reconnect driver state for the `.status` command. Returns
  * a single human-readable line — never more — since `.status` stacks
- * short labelled lines.
+ * short labeled lines.
  */
 export function formatReconnectState(state: ReconnectState): string {
   if (state.status === 'connected') {
@@ -317,7 +340,7 @@ function formatDelay(ms: number): string {
  * in bold+red mIRC formatting (\x02\x0304N\x0F) so the digits pop while
  * the unit letters stay plain — used by `.uptime` for a more scannable
  * reply than `.status`, which wants an unstyled value it can paste into
- * a labelled status block.
+ * a labeled status block.
  */
 function formatUptime(ms: number, colorize = false): string {
   const seconds = Math.floor(ms / 1000);
@@ -335,7 +358,12 @@ function formatUptime(ms: number, colorize = false): string {
   return parts.join(' ');
 }
 
-/** Convenience alias for the colourised `.uptime` reply path. */
+/**
+ * Convenience alias for the colourised `.uptime` reply path. Kept
+ * separate from {@link formatUptime} so callers don't need to thread
+ * a boolean through their own code; `.status` calls `formatUptime`
+ * directly to get the unstyled form.
+ */
 export function formatUptimeColored(ms: number): string {
   return formatUptime(ms, true);
 }

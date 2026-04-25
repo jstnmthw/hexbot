@@ -299,10 +299,10 @@ describe('Services', () => {
 
   describe('duplicate pending verification', () => {
     it('should share one in-flight promise across concurrent callers for the same nick', async () => {
-      // Stability audit 2026-04-14: the old behaviour cancelled the
+      // Stability audit 2026-04-14: the old behavior canceled the
       // existing pending verify on every duplicate, restarting the
       // timeout and piling up abandoned promises under dispatch
-      // pressure. The new behaviour deduplicates — both callers share
+      // pressure. The new behavior deduplicates — both callers share
       // one ACC/STATUS round-trip and see the same result.
       const { services, client } = createServices({ type: 'atheme' });
 

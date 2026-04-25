@@ -27,10 +27,20 @@ import {
 export { hashItem } from './feed-store';
 export { stripHtmlTags, formatItem } from './feed-formatter';
 
+/**
+ * Plugin-internal config, loaded by {@link loadConfig}. Extends the
+ * operator-facing `RssCommandsConfig` with the static feed list from
+ * plugins.json (runtime-added feeds are loaded separately from the KV store).
+ */
 interface RssPluginConfig extends RssCommandsConfig {
   feeds: FeedConfig[];
 }
 
+/**
+ * Project the runtime config into the {@link FetchFeedOpts} shape the
+ * fetcher consumes. Reads the live `abortController.signal` so a teardown
+ * after this call still aborts in-flight requests.
+ */
 function fetchOptsFor(cfg: RssPluginConfig): FetchFeedOpts {
   return {
     timeoutMs: cfg.request_timeout_ms,
@@ -238,6 +248,8 @@ export function teardown(): void {
 // Config
 // ---------------------------------------------------------------------------
 
+/** Read the operator config and apply per-key fallbacks. Invalid feed
+ *  entries are silently dropped via {@link isFeedConfig}. */
 function loadConfig(api: PluginAPI): RssPluginConfig {
   const c = api.config;
   const rawFeeds = c.feeds;

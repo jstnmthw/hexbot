@@ -64,8 +64,7 @@ export interface ProbeState {
    * (pattern match on first contact + pin for everything after)
    * prevents a user who takes the ChanServ nick during a services
    * outage from feeding the parser a crafted INFO/FLAGS response that
-   * grants the bot a phantom founder/op access tier. See audit
-   * 2026-04-19 / 2026-04-24 (CRITICAL).
+   * grants the bot a phantom founder/op access tier.
    */
   trustedServicesSource: { ident: string; hostname: string } | null;
   /**
@@ -91,13 +90,18 @@ export interface ProbeState {
   commitDeferredNoAccess: ((channel: string, why: string) => void) | null;
   /**
    * Timeout timers for probe responses. Using a Set (instead of an array)
-   * so self-removal on fire is O(1); see audit finding W-CM3.
+   * so self-removal on fire is O(1).
    */
   probeTimers: Set<ReturnType<typeof setTimeout>>;
-  /** Channels with pending GETKEY probes. Value = channel name. Callback fires with the key. */
+  /**
+   * Channels with pending GETKEY probes (Anope only). Key is the
+   * ircLower channel name; value is a callback that fires with the
+   * recovered key (or null if the channel has no key set).
+   */
   pendingGetKey: Map<string, (key: string | null) => void>;
 }
 
+/** Construct a fresh, empty {@link ProbeState}. Called once per plugin init. */
 export function createProbeState(): ProbeState {
   return {
     pendingAthemeProbes: new Map(),
@@ -123,14 +127,20 @@ export interface ChanServNoticeOptions {
   probeState: ProbeState;
 }
 
-/**
- * Bind a notice handler that routes ChanServ responses to the backend.
- * Returns a teardown function.
- */
+/** Type-narrowing helper for the dual-backend dispatch in `setupChanServNotice`. */
 function isAthemeBackend(b: NoticeBackend): b is AthemeNoticeBackend {
   return b.name === 'atheme';
 }
 
+/**
+ * Bind the ChanServ notice handler and dispatch each notice to either the
+ * Atheme or Anope parser. Also installs the source-pin guard described in
+ * `ProbeState.trustedServicesSource` and registers the deferred-no-access
+ * commit flusher used by the Anope INFO probe path.
+ *
+ * @returns teardown that drops the bind, clears every pending probe map,
+ *   and resets the trust pin so a `.reload chanmod` re-establishes it.
+ */
 export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
   const { api, config, backend, probeState } = opts;
   const csNick = config.chanserv_nick;
@@ -170,8 +180,7 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
     //   2. Subsequent notices: reject anything whose source diverges
     //      from the pinned `ident@host`.
     // The pin clears on plugin teardown — a `.reload chanmod` is the
-    // escape hatch if services legitimately rekeys its vhost. See
-    // audit 2026-04-19/2026-04-24 (CRITICAL).
+    // escape hatch if services legitimately rekeys its vhost.
     const srcIdent = api.ircLower(ctx.ident);
     const srcHost = api.ircLower(ctx.hostname);
     if (probeState.trustedServicesSource === null) {
@@ -179,12 +188,11 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
       // services-host pattern. Case-insensitive wildcard match (this is
       // a hostname — no IRC casemapping semantics).
       //
-      // When `services_host_pattern` is unset, `readConfig` has already
-      // emitted a loud `[security]` warning — we still pin here because
-      // falling back to closed-on-empty-config would break operators
-      // who upgraded chanmod without updating plugins.json. The pin is
-      // trust-on-first-use in that degraded mode, same as before the
-      // audit-fix landed.
+      // `readConfig` throws on empty/unset, so this branch is dead in
+      // practice. The defensive `?? ''` and length guard remain so the
+      // file is still safe to import in tests that bypass the loader
+      // (and to keep the path obvious if the load-time check is ever
+      // moved). When pattern is empty, the pin is plain trust-on-first-use.
       const pattern = (config.services_host_pattern ?? '').trim();
       if (pattern.length > 0) {
         if (!api.util.matchWildcard(pattern, ctx.hostname, { caseInsensitive: true })) {

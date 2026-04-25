@@ -96,7 +96,7 @@ describe('dcc-console-flags — parser/formatter', () => {
     expect(formatFlags(['w', 'm', 'j'])).toBe('mjw');
   });
 
-  it('isConsoleFlagLetter recognises valid letters', () => {
+  it('isConsoleFlagLetter recognizes valid letters', () => {
     expect(isConsoleFlagLetter('m')).toBe(true);
     expect(isConsoleFlagLetter('z')).toBe(false);
     expect(isConsoleFlagLetter('')).toBe(false);
@@ -127,7 +127,7 @@ describe('dcc-console-flags — parser/formatter', () => {
 });
 
 describe('dcc-console-flags — categorize', () => {
-  it('honours an explicit #category override on the source', () => {
+  it('honors an explicit #category override on the source', () => {
     expect(categorize('plugin:chanmod#k', 'info')).toBe('k');
   });
 

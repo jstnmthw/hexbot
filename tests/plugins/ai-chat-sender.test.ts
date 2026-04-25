@@ -1,5 +1,5 @@
 // Unit tests for the post-gate IRC send wrapper.
-// Verifies the latch behaviour (gate fires once, all subsequent lines drop),
+// Verifies the latch behavior (gate fires once, all subsequent lines drop),
 // the early-return paths in sendLinesGated, and the integration with the
 // drip-feed `sendLines` setTimeout path. Multi-line scheduling uses fake
 // timers so the test stays fast and deterministic.

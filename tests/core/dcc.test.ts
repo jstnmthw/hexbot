@@ -1281,7 +1281,7 @@ describe('DCCSession relay mode', () => {
 
       expect(written.join('')).toContain('Now relaying to leaf1');
 
-      // Advance past the original timeout — it should be cancelled
+      // Advance past the original timeout — it should be canceled
       vi.advanceTimersByTime(5000);
       expect(onTimeout).not.toHaveBeenCalled();
       expect(session.isRelaying).toBe(true);
@@ -1349,7 +1349,7 @@ describe('DCCSession relay mode', () => {
       const onTimeout1 = vi.fn();
       const onTimeout2 = vi.fn();
       session.enterRelay('leafA', () => {}, { timeoutMs: 3000, onTimeout: onTimeout1 });
-      // Re-enter for a different target — first timer must be cancelled
+      // Re-enter for a different target — first timer must be canceled
       session.enterRelay('leafB', () => {}, { timeoutMs: 3000, onTimeout: onTimeout2 });
       vi.advanceTimersByTime(3000);
       expect(onTimeout1).not.toHaveBeenCalled();

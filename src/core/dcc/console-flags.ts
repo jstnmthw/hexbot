@@ -2,7 +2,7 @@
 // Per-session filtering for the DCC log sink. Maps log-record sources to
 // single-letter categories and provides parse/format helpers for the
 // `.console` dot-command. Flag letters mirror Eggdrop's partyline console
-// mode — operators moving over from Eggdrop should recognise the set.
+// mode — operators moving over from Eggdrop should recognize the set.
 //
 // kv keys:
 //   namespace = "dcc"

@@ -262,6 +262,10 @@ function activeCharacter(
         api.db.del(`personality:${channel.toLowerCase()}`);
         name = legacy;
       } else {
+        // Try the channel name as-given first, then lowercase, so an operator
+        // who wrote `"#Foo": "bar"` in JSON still matches when irc-framework
+        // hands us the channel as `#foo`. The DB keys above are lowercased
+        // unconditionally; only the JSON config tolerates mixed case.
         const entry =
           cfg.channelCharacters[channel] ?? cfg.channelCharacters[channel.toLowerCase()];
         if (typeof entry === 'string') name = entry;
@@ -329,7 +333,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
     }, 60_000);
   }
 
-  // Plugin state: loaded characters. When a test injects state, we honour it
+  // Plugin state: loaded characters. When a test injects state, we honor it
   // as-is (including an empty characters map); when not injected, build a
   // fresh state and populate characters from disk.
   if (merged.state) {
@@ -408,7 +412,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
     // Small models tend to ramble, echo the prompt, fabricate speakers, and
     // parrot catchphrase lists when speaking unprompted — every small-tier
     // pathology is amplified on an unprompted utterance. Warn loudly so the
-    // operator knows the risk, but honour the explicit config.
+    // operator knows the risk, but honor the explicit config.
     if (cfg.modelClass === 'small') {
       api.warn(
         `ambient.enabled=true on modelClass=small (model=${cfg.model}). Small ` +
@@ -559,7 +563,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
   // -----------------------------------------------------------------------
   //
   // The handler splits into an eager prologue (cheap, idempotent things that
-  // must fire per-fragment for liveness signalling) and a deferred body
+  // must fire per-fragment for liveness signaling) and a deferred body
   // (everything that touches context, trackers, or the AI pipeline). The
   // deferred body runs once per coalesced burst — see message-coalescer.ts
   // for the wire-fragment problem this solves.
@@ -1063,6 +1067,9 @@ async function handleSubcommand(
     ctx,
     subArgs: rest.join(' ').trim(),
     hasAdmin: api.permissions.checkFlags(adminFlag, ctx),
+    // `n` = owner flag in the hexbot permission system (see
+    // src/core/permissions.ts). Used here for `!ai reset <nick>` because
+    // wiping another user's daily quota is a footgun in admin hands.
     hasOwner: api.permissions.checkFlags('n', ctx),
   });
   return true;

@@ -37,8 +37,16 @@ function sweepExpired<V>(
   }
 }
 
+// CMD/PROTECT request lifetime: well above the 10s pendingCmds and 5s
+// pendingProtect timeouts on either side of the link, but short enough
+// that a wedged peer's stale entries clear within one heartbeat tick.
 const SHORT_TTL = 30_000; // 30 seconds — request/reply cycles
+// Relay sessions stay live for as long as the user is interacting with a
+// remote bot. 1h is a soft fallback for the case where neither side
+// emits RELAY_END (network split before clean shutdown).
 const RELAY_TTL = 60 * 60_000; // 1 hour — live relay sessions
+// Remote DCC party members can sit idle but logged-in for days. We sweep
+// after a week as a hard backstop; PARTY_PART normally clears them sooner.
 const PARTY_TTL = 7 * 86_400_000; // 7 days — remote DCC party members
 
 /**
@@ -227,7 +235,7 @@ export class BotLinkRelayRouter {
       // otherwise craft RELAY_REQUEST for any handle the target bot knows
       // and execute commands under that handle's identity. Mirrors the
       // same hasRemoteSession gate the CMD relay applies at
-      // hub-cmd-relay.ts:62-71 — see docs/plans/botlink-handshake-v2.md §6.
+      // hub-cmd-relay.ts (see `handleCmdRelay`).
       if (!this.hasRemoteSession(handle, fromBot)) {
         this.deps.logger?.warn(
           `[security] RELAY_REQUEST from "${fromBot}" for handle "${handle}" rejected: no active DCC party session`,
@@ -246,7 +254,7 @@ export class BotLinkRelayRouter {
 
     const relay = this.activeRelays.get(handle);
     if (!relay) {
-      // Unified behaviour: if we don't know the relay any more (already ended,
+      // Unified behavior: if we don't know the relay any more (already ended,
       // never existed, TTL-swept), echo a RELAY_END back to the sender so its
       // state machine can clean up. Previously these three frame types
       // silently dropped, leaving originators waiting on a dead session.

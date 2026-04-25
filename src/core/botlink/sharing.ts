@@ -16,7 +16,13 @@ export interface BanEntry {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Validate that a mask looks like a ban mask (contains ! and @) and is not dangerously broad. */
+/**
+ * Validate that a mask looks like a ban mask (contains `!` and `@`) and is
+ * not literally `*!*@*` — that single mask, applied via a shared ban list
+ * sync, would kick every user on the channel via the enforcement loop.
+ * Other broad-but-not-universal masks are still allowed; defense in depth
+ * relies on the trust model plus the cap in {@link MAX_MASKS_PER_CHANNEL}.
+ */
 function isValidMask(mask: string): boolean {
   return mask.includes('!') && mask.includes('@') && mask !== '*!*@*';
 }
@@ -33,7 +39,7 @@ function isBanEntry(value: unknown): value is BanEntry {
 /**
  * Hard cap on masks tracked per channel. A compromised or hostile peer
  * could otherwise inject arbitrarily many masks via `syncBans` / `syncExempts`
- * — defence in depth, trusted-peer model is our first line. See memleak audit
+ * — defense in depth, trusted-peer model is our first line. See memleak audit
  * 2026-04-14 INFO note.
  */
 const MAX_MASKS_PER_CHANNEL = 256;

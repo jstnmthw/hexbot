@@ -48,7 +48,13 @@ import { getBotNick } from './helpers';
 const ANOPE_ACCESS_RE = /^\s*\d+\s+(\S+)\s+(-?\d+)/;
 /** Match XOP format (Rizon/Anope with XOP levels): "  <num>  <XOP>  <nick>" — e.g. "  1  SOP  d3m0n" */
 const ANOPE_XOP_ACCESS_RE = /^\s*\d+\s+(QOP|SOP|AOP|HOP|VOP)\s+(\S+)/i;
-/** Map Anope XOP keyword → equivalent numeric level. */
+/**
+ * Map Anope XOP keyword → equivalent numeric level. These are Anope's
+ * default level conventions: QOP (Channel Operator/founder-equivalent),
+ * SOP (SuperOp), AOP (AutoOp), HOP (HalfOp), VOP (VoiceOp). The numeric
+ * levels mirror what Anope itself reports for the XOP tiers in `ACCESS LIST`,
+ * so `levelToTier()` (in anope-backend.ts) can apply a single mapping.
+ */
 const XOP_TO_LEVEL: Record<string, number> = {
   QOP: 10000,
   SOP: 10,
@@ -171,6 +177,9 @@ export function handleAnopeNotice(
   const infoHeader = ANOPE_INFO_HEADER_RE.exec(text);
   if (infoHeader) {
     const channel = infoHeader[1];
+    // Only enter the multi-line INFO state if we asked about this channel;
+    // otherwise an operator's manual `/cs INFO #x` would trigger the founder
+    // parser below and corrupt our access table for #x.
     if (probeState.pendingInfoProbes.has(api.ircLower(channel))) {
       probeState.activeInfoChannel = channel;
     }

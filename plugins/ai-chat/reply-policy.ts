@@ -11,7 +11,7 @@
 //   4. 'skip'     — no reason to reply.
 //
 // Keeping this pure (no PluginAPI, no timers, no side effects) lets tests
-// pin behaviour down a roll at a time.
+// pin behavior down a roll at a time.
 import type { ActivityLevel } from './social-tracker';
 import type { TriggerMatch } from './triggers';
 
@@ -115,7 +115,7 @@ export function rolledProbability(input: {
 export function decideReply(input: ReplyPolicyInput): ReplyDecision {
   if (input.trigger) return 'address';
   if (input.engaged) {
-    // Even engaged replies honour the command-sigil guard — an engaged user
+    // Even engaged replies honor the command-sigil guard — an engaged user
     // typing `!help` is talking to another plugin, not continuing the thread.
     if (startsWithCommandSigil(input.text)) return 'skip';
     return 'engaged';

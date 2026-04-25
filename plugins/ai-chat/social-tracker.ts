@@ -60,7 +60,7 @@ const DEAD_THRESHOLD_MS = 30 * 60_000;
 const QUESTION_MAX_AGE_MS = 10 * 60_000;
 /** Channels whose last message is older than this are dropped by the sweep. */
 const IDLE_CHANNEL_MS = 24 * 60 * 60_000;
-/** Hard cap on tracked channels (defence against invite-spam / auto-join exhaustion). */
+/** Hard cap on tracked channels (defense against invite-spam / auto-join exhaustion). */
 const MAX_CHANNELS = 256;
 /** How often maintain() actually does work (opportunistically triggered from pruneAndRecalc). */
 const MAINTAIN_INTERVAL_MS = 60 * 60_000;
@@ -101,7 +101,7 @@ export class SocialTracker {
     }
 
     // Question tracking — hard cap keeps the list bounded even inside the
-    // 10-min prune window (defence against a crafted `foo?` flood).
+    // 10-min prune window (defense against a crafted `foo?` flood).
     if (!isBot && looksLikeQuestion(text)) {
       // Hard cap at 50 pending questions per channel — well above any
       // organic rate (questions arrive on the order of minutes, prune fires
@@ -346,7 +346,7 @@ export class SocialTracker {
  * engine to populate `pendingQuestions` for the unanswered-question
  * amplification path. Intentionally permissive — false positives just mean
  * the ambient engine *might* chime in if no one answers within the wait
- * window, which is the desired fallback behaviour anyway.
+ * window, which is the desired fallback behavior anyway.
  */
 export function looksLikeQuestion(text: string): boolean {
   const trimmed = text.trim();

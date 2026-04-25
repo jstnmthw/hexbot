@@ -220,6 +220,10 @@ export class EventDispatcher {
       };
       const timer = setInterval(() => {
         entry.hits++;
+        // Timer binds have no triggering user — every identity field is
+        // empty and reply/replyPrivate are no-ops. Plugins authoring timer
+        // handlers must produce output via api.say()/api.notice() against
+        // an explicit target rather than expecting ctx.reply to work.
         const timerCtx: HandlerContext = {
           nick: '',
           ident: '',

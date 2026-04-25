@@ -196,6 +196,9 @@ export class EngagementTracker {
   }
 
   private evictOldestChannel(): void {
+    // O(MAX_CHANNELS × MAX_ENGAGED_PER_CHANNEL) = O(256 × 8) = O(2048) max,
+    // and only fires when the channel cap is breached — fine for an
+    // overflow path. A heap would be premature optimisation.
     let oldestChKey: string | null = null;
     let oldestAt = Infinity;
     for (const [chKey, engaged] of this.channels) {

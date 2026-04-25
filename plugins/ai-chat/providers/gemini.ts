@@ -113,6 +113,10 @@ export class GeminiProvider implements AIProvider {
         throw new AIProviderError('Gemini returned no content', 'other');
       }
 
+      // Gemini may return multiple parts for a single candidate (e.g.
+      // text + tool-use parts); we only consume `text` parts and concatenate
+      // them in order. Non-text parts are silently dropped — the bot doesn't
+      // call any tool-use APIs, so any non-text part is unexpected output.
       const text = candidate.content.parts
         .map((p) => ('text' in p && typeof p.text === 'string' ? p.text : ''))
         .join('')

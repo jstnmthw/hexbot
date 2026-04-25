@@ -107,7 +107,7 @@ export class AmbientEngine {
 
     // Delimit user-supplied topic text so the LLM treats it as data rather
     // than as instructions. The system prompt's SAFETY_CLAUSE plus the
-    // output-formatter's fantasy-drop remain the primary defences; this
+    // output-formatter's fantasy-drop remain the primary defenses; this
     // just narrows the injection surface.
     const safeNick = filterNick(nick);
     const delimitedTopic = `<<<${sanitiseForPrompt(topic)}>>>`;
@@ -211,7 +211,7 @@ function filterNick(nick: string): string {
 /**
  * Neutralise characters that could close our delimiter or inject prompt
  * structure. The SAFETY_CLAUSE + fantasy-command dropper remain the primary
- * defences; this is a narrow sanity filter on spans we interpolate raw.
+ * defenses; this is a narrow sanity filter on spans we interpolate raw.
  */
 function sanitiseForPrompt(text: string): string {
   return text

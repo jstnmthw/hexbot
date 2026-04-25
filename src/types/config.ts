@@ -3,8 +3,7 @@
 // Runtime config types (after secret resolution) and on-disk config types
 // (pre-resolution, with `<field>_env` references). The config loader's
 // resolveSecrets() transforms the on-disk shapes into the runtime shapes
-// that the rest of the bot consumes. See src/config.ts and
-// docs/plans/config-secrets-env.md.
+// that the rest of the bot consumes. See src/config.ts.
 
 // ---------------------------------------------------------------------------
 // Config shapes — runtime (resolved)
@@ -12,17 +11,25 @@
 
 /** A channel entry — plain name or name+key for keyed (+k) channels. */
 export interface ChannelEntry {
+  /** Channel name including the `#` (or `&`) prefix. */
   name: string;
+  /** Channel key for joining +k channels. Treated as low-sensitivity per SECURITY.md §6. */
   key?: string;
 }
 
 /** IRC connection settings from config/bot.json. */
 export interface IrcConfig {
+  /** IRC server hostname or IP. */
   host: string;
+  /** TCP port for the IRC connection. Conventionally 6667 (plaintext) / 6697 (TLS). */
   port: number;
+  /** Use TLS for the connection. Strongly recommended; SASL PLAIN credentials over plaintext are refused at startup. */
   tls: boolean;
+  /** Primary nick the bot registers as. Subject to GHOST recovery if `ghost_on_recover` is true. */
   nick: string;
+  /** USER ident — the local part shown before `@host` in `nick!ident@host`. Often abbreviated. */
   username: string;
+  /** GECOS / realname — the free-text "real name" field shown in `/whois`. */
   realname: string;
   /** Channel list. Each entry is either a plain name (e.g. "#hexbot") or
    *  an object with a key (e.g. {"name": "#secret", "key": "pass"}). */
@@ -61,7 +68,9 @@ export interface IrcConfig {
 
 /** Owner settings from config/bot.json (runtime shape). */
 export interface OwnerConfig {
+  /** Stable handle for the owner (matches a `UserRecord.handle`). Not the same as a current IRC nick. */
   handle: string;
+  /** Initial owner hostmask seeded into the user record. Use account patterns (`$a:owner`) wherever possible — see SECURITY.md §3.3. */
   hostmask: string;
   /**
    * Seed password, resolved from `password_env` in the on-disk config. Used
@@ -78,22 +87,31 @@ export interface OwnerConfig {
  * loader's `resolveSecrets()` rewrites the `_env` suffix into its sibling.
  */
 export interface OwnerConfigOnDisk {
+  /** Stable handle for the owner (matches a `UserRecord.handle`). */
   handle: string;
+  /** Initial owner hostmask seeded into the user record. */
   hostmask: string;
+  /** Name of the env var holding the owner's seed password. Read once at first boot, ignored thereafter. */
   password_env?: string;
 }
 
 /** Identity verification settings. */
 export interface IdentityConfig {
+  /** Identity verification mechanism. Currently only `'hostmask'` is implemented. */
   method: 'hostmask';
+  /** Commands (matched by name) that require a successful NickServ ACC verification before running. */
   require_acc_for: string[];
 }
 
 /** Services (NickServ/SASL) settings. */
 export interface ServicesConfig {
+  /** Services flavor. Drives ACC vs STATUS verification syntax and protocol quirks. `'none'` disables NickServ integration entirely. */
   type: 'atheme' | 'anope' | 'dalnet' | 'none';
+  /** NickServ target — usually `'NickServ'` but some networks route via `nickserv@services.example.net`. */
   nickserv: string;
+  /** Resolved NickServ / SASL password (transformed from `password_env` on disk). */
   password: string;
+  /** Negotiate SASL at registration time. Strongly preferred over the `IDENTIFY` fallback. */
   sasl: boolean;
   /**
    * SASL mechanism to use. Defaults to "PLAIN" (password auth over TLS).
@@ -129,7 +147,9 @@ export interface ServicesConfig {
 
 /** Logging settings. */
 export interface LoggingConfig {
+  /** Minimum log level emitted by the bot. `'debug'` is verbose enough to drown a busy network — keep at `'info'` in production. */
   level: 'debug' | 'info' | 'warn' | 'error';
+  /** Persist privileged actions (op/kick/ban/chanset/...) to the `mod_log` table. Disable only in tests. */
   mod_actions: boolean;
   /**
    * Retention window for mod_log rows, in days. Optional; `0` or unset
@@ -169,7 +189,9 @@ export interface FloodConfig {
 export interface ProxyConfig {
   /** Must be true for the proxy to be used. */
   enabled: boolean;
+  /** Proxy hostname or IP. */
   host: string;
+  /** Proxy TCP port. */
   port: number;
   /** Optional SOCKS5 username. */
   username?: string;
@@ -195,11 +217,17 @@ export interface DccConfig {
 
 /** Bot-to-bot link settings. */
 export interface BotlinkConfig {
+  /** Master switch — when false, no hub server is started and no leaf connect is attempted. */
   enabled: boolean;
+  /** This bot's role in the botnet. A leaf connects out to a hub; a hub listens for leaves. */
   role: 'hub' | 'leaf';
+  /** This bot's identity within the botnet (distinct from its IRC nick). Must be unique across linked bots. */
   botname: string;
+  /** Hub endpoint to connect to. Required when `role: 'leaf'`. */
   hub?: { host: string; port: number };
+  /** Listen endpoint for incoming leaf connections. Required when `role: 'hub'`. */
   listen?: { host: string; port: number };
+  /** Resolved shared botnet password used in the HELLO HMAC challenge-response. See docs/BOTLINK.md. */
   password: string;
   /**
    * Per-botnet salt (hex). Seeds the scrypt-derived HMAC key used for the
@@ -211,11 +239,17 @@ export interface BotlinkConfig {
    * when `enabled: true`; operators never leave it unset for a live link.
    */
   link_salt?: string;
+  /** Initial reconnect delay (ms) for a leaf that loses its hub link. */
   reconnect_delay_ms?: number;
+  /** Cap on the leaf reconnect delay after exponential backoff (ms). */
   reconnect_max_delay_ms?: number;
+  /** Hub-side cap on simultaneous connected leaves. */
   max_leaves?: number;
+  /** Sync `_permissions` rows across the botnet (hub authoritative, leaves replay). */
   sync_permissions?: boolean;
+  /** Sync per-channel state snapshots (NAMES/MODES) on link-up. */
   sync_channel_state?: boolean;
+  /** Replicate channel ban/exempt list mutations across linked bots flagged `chanset:shared=true`. */
   sync_bans?: boolean;
   /** How often the hub pings leaves (ms). Default: 30 000. */
   ping_interval_ms?: number;
@@ -241,7 +275,11 @@ export interface BotlinkConfig {
   cmd_inbound_rate?: number;
 }
 
-/** Plugin-specific credentials stored in bot.json (not plugins.json) per SECURITY.md §6. */
+/**
+ * Plugin-specific credentials stored in bot.json (not plugins.json) per
+ * SECURITY.md §6 — secrets must live in env-backed bot.json, never in the
+ * plugin-config file that operators share with plugin authors.
+ */
 export interface ChanmodBotConfig {
   /** NickServ password for GHOST command during nick recovery. Never logged. */
   nick_recovery_password?: string;
@@ -259,19 +297,33 @@ export interface MemoConfig {
 
 /** Shape for config/bot.json. */
 export interface BotConfig {
+  /** IRC connection settings. */
   irc: IrcConfig;
+  /** Initial owner identity — seeds the first privileged user record on a fresh DB. */
   owner: OwnerConfig;
+  /** Identity verification policy (which commands require NickServ ACC). */
   identity: IdentityConfig;
+  /** NickServ / SASL settings. */
   services: ServicesConfig;
+  /** Path to the SQLite database file. Created on first start. */
   database: string;
+  /** Directory containing plugin folders. Each subdirectory is a plugin. */
   pluginDir: string;
+  /** Optional path to plugins.json (overrides plugin-shipped defaults). */
   pluginsConfig?: string;
+  /** Logging level + mod-action retention policy. */
   logging: LoggingConfig;
+  /** Outbound message queue / flood-protection settings. */
   queue?: QueueConfig;
+  /** Inbound flood limiter for user commands. */
   flood?: FloodConfig;
+  /** Optional SOCKS5 proxy for the IRC connection. */
   proxy?: ProxyConfig;
+  /** DCC CHAT console settings — gated by `enabled`. */
   dcc?: DccConfig;
+  /** Bot-to-bot link settings — gated by `enabled`. */
   botlink?: BotlinkConfig;
+  /** Server-visible QUIT message used during clean shutdown. */
   quit_message?: string;
   /** Interval in ms for the periodic channel presence check (rejoin missing channels). Default: 30000. Set to 0 to disable. */
   channel_rejoin_interval_ms?: number;
@@ -304,8 +356,7 @@ export interface BotConfig {
 // These describe the JSON schema stored in config/bot.json. Secrets are
 // referenced via `<field>_env` keys naming an environment variable. The
 // config loader calls resolveSecrets() to transform these into the runtime
-// BotConfig (above), which the rest of the bot reads. See src/config.ts
-// and docs/plans/config-secrets-env.md.
+// BotConfig (above), which the rest of the bot reads. See src/config.ts.
 // ---------------------------------------------------------------------------
 
 /**
@@ -360,8 +411,11 @@ export interface BotConfigOnDisk extends Omit<
 
 /** Shape for a single plugin entry in config/plugins.json. */
 export interface PluginConfig {
+  /** Disable a plugin without removing its directory. Defaults to true. */
   enabled?: boolean;
+  /** Optional channel allowlist — when set, the plugin's binds only fire on these channels. */
   channels?: string[];
+  /** Plugin-specific config blob. Schema is defined by the plugin itself. */
   config?: Record<string, unknown>;
 }
 

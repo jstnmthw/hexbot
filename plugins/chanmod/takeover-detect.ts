@@ -30,6 +30,13 @@ export type ThreatLevel =
 
 // ---------------------------------------------------------------------------
 // Threat event point values
+//
+// The values are calibrated against the default thresholds in `state.ts`
+// (`takeover_level_*_threshold` defaults: 3 / 6 / 10) — a single bot-kicked
+// event lands at ALERT (level 1), a bot-banned + bot-deopped pair lands at
+// ACTIVE (level 2), and a sustained burst pushes through CRITICAL (level 3).
+// Severity ordering mirrors how unrecoverable each event makes the bot:
+// banned > kicked > deopped > everything-else.
 // ---------------------------------------------------------------------------
 
 export const POINTS_BOT_DEOPPED = 3;
@@ -114,9 +121,7 @@ export function assessThreat(
   // Cap the per-channel event ring so a sustained takeover attempt
   // can't grow `threat.events` indefinitely. 1000 entries is enough
   // for attack forensics over a multi-hour siege without making the
-  // in-memory history of a single channel unreasonable. See
-  // stability audit 2026-04-14 — the previous cap of 200 truncated
-  // early events mid-attack.
+  // in-memory history of a single channel unreasonable.
   const RING_CAP = 1000;
   if (threat.events.length > RING_CAP) {
     threat.events.splice(0, threat.events.length - RING_CAP);

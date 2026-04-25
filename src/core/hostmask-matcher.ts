@@ -45,6 +45,10 @@ export function patternSpecificity(pattern: string): number {
     if (ch === '*' || ch === '?') wildcards++;
     else literal++;
   }
+  // Weighting: every literal byte counts ten times more than a wildcard
+  // penalty so a pattern with one extra literal char always outranks one
+  // with one fewer wildcard. Keeps `alice!*@host.isp.net` strictly above
+  // `*!*@host.isp.net` regardless of how many wildcards either has.
   return literal * 10 - wildcards;
 }
 

@@ -7,7 +7,7 @@ import type { AIMessage } from './providers/types';
  * surfacing it in a prompt. Keeps the inline `nick: text` attribution safe
  * against a nick containing `:`, whitespace, or control bytes that a model
  * might mis-parse as role metadata or prompt injection. Same regex used by
- * the volatile header's speaker sanitiser, kept here so history entries and
+ * the volatile header's speaker sanitizer, kept here so history entries and
  * session `[nick]` prefixes apply the same filter.
  */
 export function safeSpeakerName(nick: string): string {
@@ -37,16 +37,16 @@ export interface ContextManagerConfig {
    *   KV-cache / implicit-cache hits every turn between prunes.
    * - `'sliding'` — drop exactly the oldest-over-cap on each add. Prefix
    *   drifts every turn; every call is a cache miss. Escape hatch for
-   *   operators who want the old behaviour.
+   *   operators who want the old behavior.
    */
   pruneStrategy?: 'bulk' | 'sliding';
   /**
-   * Per-entry character cap. Defence-in-depth: even though the input
+   * Per-entry character cap. Defense-in-depth: even though the input
    * prompt cap (`cfg.input.maxPromptChars`) blocks oversize user
    * messages at the pipeline boundary, bot output and future code paths
    * can still call `addMessage()` directly. Truncate per-entry so a
    * single giant message can't blow through the byte budget below.
-   * Optional — undefined means no per-entry cap (legacy behaviour).
+   * Optional — undefined means no per-entry cap (legacy behavior).
    */
   maxMessageChars?: number;
 }
@@ -112,7 +112,7 @@ export class ContextManager {
       // history prefix stays byte-stable between prunes. That lets Ollama's
       // llama.cpp KV-cache and Gemini's implicit cache hit every turn except
       // the prune point itself, instead of drifting on every message.
-      // Sliding: drop-oldest-per-turn — preserves old behaviour if an
+      // Sliding: drop-oldest-per-turn — preserves old behavior if an
       // operator explicitly opts in.
       if (this.config.pruneStrategy === 'sliding') {
         buf.splice(0, buf.length - this.config.maxMessages);

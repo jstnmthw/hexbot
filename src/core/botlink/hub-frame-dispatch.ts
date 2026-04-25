@@ -194,7 +194,7 @@ const FRAME_HANDLERS: Record<string, FrameHandler> = {
 
 /**
  * Apply the full steady-state dispatch pipeline to a single frame. Mirrors
- * the old {@link BotLinkHub.onSteadyState} body exactly — any behaviour
+ * the old {@link BotLinkHub.onSteadyState} body exactly — any behavior
  * change here is a visible test diff. Returns nothing; all side effects
  * flow through `ctx`.
  */

@@ -15,7 +15,18 @@ import { ACCOUNT_PATTERN_PREFIX, HostmaskMatcher, patternSpecificity } from './h
 /** The database namespace for permissions data. */
 const DB_NAMESPACE = '_permissions';
 
-/** All valid flag characters, in descending privilege order, plus modifiers. */
+/**
+ * All valid flag characters, in descending privilege order, plus modifiers.
+ *
+ * - `n` — owner (implies all other flags)
+ * - `m` — master (admin commands)
+ * - `o` — op (auto-op grant)
+ * - `v` — voice (auto-voice grant)
+ * - `d` — deop (modifier — suppresses an automatic op/halfop grant)
+ *
+ * Order is preserved by `normalizeFlags()` so the canonical form of a
+ * deduplicated flag set is always lexicographically stable for tests.
+ */
 export const VALID_FLAGS = 'nmovd';
 
 /** Owner flag implies all other flags. */
@@ -56,16 +67,13 @@ export function hasOwnerOrMaster(record: { global: string }): boolean {
   return record.global.includes(OWNER_FLAG) || record.global.includes(MASTER_FLAG);
 }
 
-/**
- * Prefix for account-based identity patterns stored in `UserRecord.hostmasks`.
- * Inspired by Atheme's extended-ban syntax. A pattern `$a:foobar` matches a
- * user whose IRCv3 services account is `foobar`, regardless of their current
- * nick or host — the critical property for a post-cloak world where hostmask
- * matching alone is not strong enough.
- */
-// Shared wildcard+specificity scoring lives in `./hostmask-matcher` so the
-// contract (account matches outrank hostmask matches, literal chars beat
-// wildcards) can be unit-tested without standing up a Permissions instance.
+// Account-pattern matching (`$a:<account>`) and the wildcard+specificity
+// scoring it shares with hostmask patterns live in `./hostmask-matcher` so
+// the contract (account matches outrank hostmask matches, literal chars
+// beat wildcards) can be unit-tested without standing up a Permissions
+// instance. `ACCOUNT_PATTERN_PREFIX` is re-imported above and used by
+// `warnInsecureHostmask()` to skip the specificity check for account
+// patterns (they're inherently stronger than any hostmask pattern).
 
 // ---------------------------------------------------------------------------
 // Types
@@ -125,6 +133,11 @@ export class Permissions {
     if (initialUsers) this.users = new Map(initialUsers);
   }
 
+  /**
+   * Propagate the connected network's CASEMAPPING to the per-channel-flag
+   * lookup keys and to the wildcard matcher used by `findByHostmask`. Called
+   * by Bot once 005 ISUPPORT lands.
+   */
   setCasemapping(cm: Casemapping): void {
     this.casemapping = cm;
     this.matcher.setCasemapping(cm);
@@ -589,7 +602,7 @@ export class Permissions {
     if (hostmask.startsWith(ACCOUNT_PATTERN_PREFIX)) return;
 
     // Hostmasks without a `!` can't be scored meaningfully against the
-    // nick!ident@host shape — keep the historical "skip quietly" behaviour.
+    // nick!ident@host shape — keep the historical "skip quietly" behavior.
     if (!hostmask.includes('!')) return;
 
     if (patternSpecificity(hostmask) < WEAK_HOSTMASK_THRESHOLD) {

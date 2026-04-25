@@ -52,7 +52,9 @@ function isPrivilegeRestricted(ctx: ShouldRespondCtx): boolean {
   const botModes = ctx.botChannelModes;
   if (!botModes) return false;
 
-  // Check if bot has any elevated mode at or above threshold
+  // Check if bot has any elevated mode at or above threshold. The list is
+  // ordered most-privileged first so `slice(0, threshIdx + 1)` yields the
+  // tier and everything above it (e.g. threshold='o' → ['q','a','o']).
   const elevated = ['q', 'a', 'o', 'h']; // founder, admin, op, halfop
   const threshIdx = elevated.indexOf(sec.privilegedModeThreshold);
   if (threshIdx === -1) return false;

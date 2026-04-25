@@ -3,7 +3,19 @@
 import type { LoggerLike } from '../logger';
 import type { IdentityConfig } from '../types';
 
-/** Flag hierarchy for require_acc_for checking. */
+/**
+ * Flag hierarchy for `require_acc_for` checking. Higher number = more
+ * privileged. Used as a partial order: a bind tagged `n` (level 4) trips
+ * the ACC gate when `require_acc_for` lists *any* flag at level ≤ 4.
+ *
+ * - `n` — owner / network admin
+ * - `m` — master / global moderator
+ * - `o` — channel operator
+ * - `v` — voiced / trusted user
+ *
+ * Unknown flags resolve to level 0 (= disabled). See {@link requiresVerificationForFlags}
+ * for the fail-closed invariant that compensates for the level-0 default.
+ */
 export const FLAG_LEVEL: Record<string, number> = { n: 4, m: 3, o: 2, v: 1 };
 
 /**
@@ -12,7 +24,7 @@ export const FLAG_LEVEL: Record<string, number> = { n: 4, m: 3, o: 2, v: 1 };
  * to level 0, which disables the verification gate — exactly the thing an
  * operator was trying to enable. See stability audit 2026-04-14.
  *
- * Returns the filtered list of recognised entries (unknown ones are
+ * Returns the filtered list of recognized entries (unknown ones are
  * dropped) so callers can surface the real intent rather than the typo.
  */
 export function validateRequireAccFor(
@@ -43,7 +55,7 @@ export function validateRequireAccFor(
  * fail-open shape ("treat the unknown flag as not meeting the threshold"),
  * but every upstream caller already rejects unknown flags before this point
  * (binds reject at registration, command flags reject at parse). The net
- * behaviour is fail-closed — verify this holds before relaxing either path.
+ * behavior is fail-closed — verify this holds before relaxing either path.
  */
 export function requiresVerificationForFlags(
   bindFlags: string,

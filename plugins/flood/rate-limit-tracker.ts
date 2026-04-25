@@ -89,6 +89,7 @@ export class RateLimitTracker {
     this.counters.nick.reset();
   }
 
+  /** Look up the (windowMs, threshold) tuple for one of the four event kinds. */
   private windowFor(kind: RateLimitKind): { windowMs: number; threshold: number } {
     switch (kind) {
       case 'msg':

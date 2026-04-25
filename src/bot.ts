@@ -338,7 +338,7 @@ export class Bot {
     // typo like `["+O"]` silently defaults to level 0 (== disabled) —
     // exactly the footgun operators try to avoid. Warn and use the
     // filtered list so the dispatcher sees a consistent view of what was
-    // actually recognised. See stability audit 2026-04-14.
+    // actually recognized. See stability audit 2026-04-14.
     const validatedRequireAccFor = validateRequireAccFor(
       this.config.identity.require_acc_for,
       this.botLogger,
@@ -485,8 +485,9 @@ export class Bot {
 
     // Connect to IRC (all handlers are registered — safe to receive events).
     // NickServ IDENTIFY (non-SASL fallback) is triggered from the `registered`
-    // handler in connection-lifecycle, before joinConfiguredChannels — see
-    // docs/services-identify-before-join.md.
+    // handler in connection-lifecycle, BEFORE joinConfiguredChannels: this
+    // ensures channels with mode +r (registered-nicks-only) accept us on the
+    // first JOIN attempt rather than bouncing us with a 477 numeric.
     await this.connect();
 
     this.startTime = Date.now();
@@ -873,12 +874,12 @@ export class Bot {
             // Feed TARGMAX into the message queue. It's advisory (hexbot
             // never sends multi-target PRIVMSG lines) but surfaced so
             // plugins can inspect it via the queue for future multi-target
-            // logic — see docs/audits/irc-logic-2026-04-11.md §10.
+            // logic.
             this.messageQueue.setTargmax(caps.targmax);
           },
           onReconnecting: () => {
             // Drop cached services-account state so a user who took a
-            // recognised nick between sessions can't inherit its flags on
+            // recognized nick between sessions can't inherit its flags on
             // the new connection. Fresh account data will arrive via
             // extended-join / account-notify / account-tag on rejoin.
             this.channelState.clearNetworkAccounts();
@@ -1029,6 +1030,10 @@ export class Bot {
   // -------------------------------------------------------------------------
 
   private loadConfig(configPath: string): BotConfig {
+    // Probe readability separately from the open() so we can emit a
+    // friendlier "did you copy the example?" hint before the JSON parser
+    // even runs. The logger isn't constructed yet (the log level lives in
+    // the config we're loading), so write to console directly.
     try {
       accessSync(configPath, fsConstants.R_OK);
     } catch {
@@ -1101,7 +1106,14 @@ export class Bot {
     console.log();
   }
 
-  /** Read the version field from package.json. */
+  /**
+   * Read the version field from package.json. Resolves the path relative to
+   * this file (via `import.meta.url`) so the lookup works under both
+   * `tsx src/bot.ts` and the bundled `dist/bot.js` layout. Returns
+   * `'0.0.0'` on any error rather than throwing — the version string is
+   * only used for the banner / quit message, never for behavior, so a
+   * silent fallback is preferable to crashing startup.
+   */
   private readPackageVersion(): string {
     try {
       const thisDir = dirname(fileURLToPath(import.meta.url));

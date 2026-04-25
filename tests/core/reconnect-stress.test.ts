@@ -135,7 +135,7 @@ describe('reconnect stress (50 cycles)', () => {
     expect(driver.getState().status).toBe('connected');
     expect(driver.getState().nextAttemptAt).toBe(null);
 
-    // Shutdown path: listeners cleared, driver cancelled, no timers remain.
+    // Shutdown path: listeners cleared, driver canceled, no timers remain.
     handle.stopPresenceCheck();
     handle.cancelReconnect();
     handle.removeListeners();

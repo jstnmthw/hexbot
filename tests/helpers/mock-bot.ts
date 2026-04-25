@@ -21,6 +21,15 @@ import { PluginLoader } from '../../src/plugin-loader';
 import type { BotConfig } from '../../src/types';
 import { MockIRCClient } from './mock-irc';
 
+/**
+ * A fully wired bot fixture for plugin and integration tests. Every
+ * production module is real (in-memory database, real dispatcher, real
+ * permissions, real channel-state) except the IRC client, which is the
+ * `MockIRCClient` capture/replay double. `cleanup()` MUST be called from
+ * `afterEach` — it detaches every listener and closes the database, so
+ * leaking a `MockBot` across tests will leave dangling event handlers
+ * fighting fresh ones.
+ */
 export interface MockBot {
   client: MockIRCClient;
   db: BotDatabase;
@@ -37,6 +46,7 @@ export interface MockBot {
   pluginLoader: PluginLoader;
   botConfig: BotConfig;
   logger: Logger;
+  /** Detach every wired module and close the database. Call from `afterEach`. */
   cleanup(): void;
 }
 

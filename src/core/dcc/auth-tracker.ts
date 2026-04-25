@@ -168,6 +168,10 @@ export class DCCAuthTracker {
 
   /** Prune expired trackers — called from DCCManager sweep. */
   sweep(now: number = Date.now()): void {
+    // Keep ban escalation state for 24h past expiry so a repeat offender
+    // returning the next morning still lands on their escalated banCount
+    // rather than starting fresh. Mirrors BotLinkAuthManager — the same
+    // horizon applies to both DCC and botlink failure tracking.
     const STALE_MS = 86_400_000;
     for (const [key, tracker] of this.trackers) {
       const banExpired = tracker.bannedUntil < now;

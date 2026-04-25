@@ -13,19 +13,18 @@ const PREVIEW_COOLDOWN_MS = 60_000;
 
 // Conservative ceiling for topic length warnings. RFC 2812's 512-byte line cap
 // minus the per-server `:nick!user@host TOPIC #channel :` framing and CRLF
-// leaves ~390 usable bytes for the topic on most ircds. Honoured only when
+// leaves ~390 usable bytes for the topic on most ircds. Honored only when
 // the server doesn't advertise a more authoritative `TOPICLEN` via ISUPPORT.
 const TOPIC_LENGTH_WARN_DEFAULT = 390;
 
 /**
- * Resolve the topic length limit for `channel`. Honours the server's
+ * Resolve the topic length limit for `channel`. Honors the server's
  * ISUPPORT `TOPICLEN` value when present (some IRCds advertise 307, others
  * 500+) and falls back to the conservative {@link TOPIC_LENGTH_WARN_DEFAULT}
  * byte count when the capability is missing. The returned figure is
  * expressed in bytes — the topic-length comparison must be done with
  * `Buffer.byteLength(str, 'utf8')`, not `str.length`, so multi-byte code
  * points aren't silently over-permitted against a byte-counted server cap.
- * See audit 2026-04-24.
  */
 function resolveTopicLenBytes(api: PluginAPI): number {
   const supports = api.getServerSupports();
@@ -37,10 +36,16 @@ function resolveTopicLenBytes(api: PluginAPI): number {
   return TOPIC_LENGTH_WARN_DEFAULT;
 }
 
+/**
+ * Plugin entry point. Registers per-channel topic-protection settings
+ * (`topic_lock`, `topic_text`), the `!topic` / `!topics` op-only commands,
+ * and a `topic` bind that re-enforces the locked text whenever the server
+ * announces a topic change.
+ */
 export function init(api: PluginAPI): void {
   // `previewCooldown` lives inside `init()` as a const so a plugin
   // reload can't leak the old Map into bind closures that still reference
-  // the prior module. See audit finding W-SP2 (2026-04-14).
+  // the prior module.
   const previewCooldown = new Map<string, number>();
 
   // Register per-channel settings for topic protection
@@ -280,9 +285,9 @@ export function init(api: PluginAPI): void {
     // Skip restore when the bot lacks `+o` on the channel — TOPIC needs
     // ops on most ircds (or `+t` cleared, which on a locked channel
     // implies elevated threat), and attempting the mode burns a slot in
-    // the outbound message queue on every unauthorised change. Without
+    // the outbound message queue on every unauthorized change. Without
     // this guard a takeover scenario (bot deopped, topic rewritten
-    // repeatedly) would saturate the queue. See audit 2026-04-24.
+    // repeatedly) would saturate the queue.
     const ch = api.getChannel(channel);
     const botNickLower = api.ircLower(api.botConfig.irc.nick);
     const botUser = ch?.users.get(botNickLower);

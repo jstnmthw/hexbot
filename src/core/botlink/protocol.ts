@@ -5,7 +5,9 @@
 // Type declarations live in `./types.ts`. Rate limiting lives in
 // `./rate-counter.ts`. Command-execution glue lives in `./cmd-exec.ts`.
 // HELLO challenge-response helpers: deriveLinkKey, computeHelloHmac,
-// verifyHelloHmac — see `docs/plans/botlink-handshake-v2.md`.
+// verifyHelloHmac — fresh per-connection nonce defeats HELLO replay,
+// link_salt makes the derived key per-deployment so a wordlist cannot
+// reuse hashes across botnets.
 import { createHmac, scryptSync, timingSafeEqual } from 'node:crypto';
 import type { Socket } from 'node:net';
 import { createInterface as createReadline } from 'node:readline';
@@ -237,7 +239,7 @@ export class BotLinkProtocol {
         // means downstream switch statements never branch on
         // attacker-supplied strings. ERROR is the only frame type we
         // accept implicitly because it's emitted by older peers and
-        // carries no behaviour.
+        // carries no behavior.
         if (frame.type !== 'ERROR' && !isKnownFrameType(frame.type)) {
           this.logger?.warn(`Unknown frame type "${frame.type}" — dropping`);
           return;

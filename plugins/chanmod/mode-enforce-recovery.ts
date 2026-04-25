@@ -69,6 +69,11 @@ export function handleBotSelfDeop(
       cooldown.count++;
       if (cooldown.count >= MAX_ENFORCEMENTS) {
         const ch = api.getChannel(channel);
+        // Don't cycle through +i — the bot would PART successfully but be
+        // unable to JOIN back, leaving the channel hostile-controlled. The
+        // join-recovery path (via ChanServ INVITE) is the right escape
+        // hatch for invite-only channels; bypass cycle here and let
+        // ChanServ-OP recovery + reactive enforcement do the work.
         const isInviteOnly = ch?.modes.includes('i');
         if (!isInviteOnly) {
           api.log(`Cycling ${channel} to regain ops`);
@@ -78,11 +83,14 @@ export function handleBotSelfDeop(
           // deopped if anything in the inner callback throws or the
           // rejoin fails — and it's not needed for dedup: the
           // scheduleWithLock call above already suppressed duplicate
-          // cycles during its setup window. See stability audit
-          // 2026-04-14.
+          // cycles during its setup window.
           state.cycles.scheduleWithLock(cycleLockKey, config.cycle_delay_ms, () => {
             api.part(channel, 'Cycling to regain ops');
             state.cycles.unlock(cycleLockKey);
+            // 2s — give the server a chance to process PART and remove the
+            // bot from channel state before the JOIN, otherwise some ircds
+            // reject the JOIN as "already in channel". Empirically reliable
+            // on hybrid/charybdis/InspIRCd; longer if needed via cycle_delay_ms.
             state.cycles.schedule(2000, () => {
               api.join(channel);
               state.enforcementCooldown.delete(cooldownKey);
@@ -270,7 +278,7 @@ function performHostileResponse(
   // delayed second pass — a large chaotic burst (split-rejoin flood)
   // would otherwise produce a same-tick kick+ban flood that trips the
   // bot's own send-rate limiter and gets us flood-killed by the
-  // server. See audit 2026-04-24 WARNING.
+  // server.
   const firstBatch = hostileActors.slice(0, HOSTILE_BATCH_SIZE);
   const spill = hostileActors.slice(HOSTILE_BATCH_SIZE);
 
@@ -295,7 +303,6 @@ function performHostileResponse(
  * kick+ban flood that trips the bot's own send-rate limiter and gets
  * the bot flood-killed by the server. 5 actors per tick + a
  * 3-second spill pass keeps the queue under the limiter's threshold.
- * See audit 2026-04-24 WARNING.
  */
 const HOSTILE_BATCH_SIZE = 5;
 const HOSTILE_SPILL_DELAY_MS = 3000;

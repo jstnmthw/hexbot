@@ -10,7 +10,7 @@
 // Why a per-line gate? `sendLines` uses `setTimeout` between lines, and
 // ChanServ access can flip between ticks (services outage, ChanServ
 // toggles access while the bot is mid-send). Re-checking per line is the
-// last line of defence: a pipeline that passed the pre-send gate still
+// last line of defense: a pipeline that passed the pre-send gate still
 // loses remaining lines if the bot is demoted mid-batch.
 import { sendLines } from './assistant';
 

@@ -46,7 +46,7 @@ export function isValidNick(nick: string): boolean {
  * expired entries before recording the new one. A wildcard ban on a
  * populated channel can spike this map to thousands of entries between
  * the 60s periodic prune ticks, so we prune opportunistically past the
- * cap. See audit finding W-CM2 (2026-04-14).
+ * cap.
  */
 const INTENTIONAL_INLINE_SWEEP_AT = 10_000;
 
@@ -140,6 +140,10 @@ export function buildBanMask(hostmask: string, banType: number): string | null {
   const host = hostmask.substring(atIdx + 1);
   if (!host) return null;
 
+  // Cloaked host (e.g. `freenode/staff/...`, `gateway/...`) — networks use the
+  // `/` segment as a stable identity; trying to wildcard the suffix
+  // (`*.example.com`) here would either ban the whole cloak group or produce
+  // a syntactically valid but unenforceable mask. Always exact-host for these.
   if (host.includes('/')) return `*!*@${host}`;
 
   if (banType === 1) return `*!*@${host}`;

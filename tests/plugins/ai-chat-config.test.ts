@@ -494,7 +494,7 @@ describe('parseConfig model_class', () => {
     expect(cfg.defensiveVolatileHeader).toBe(false);
   });
 
-  it('honours explicit model_class over name-inferred tier', () => {
+  it('honors explicit model_class over name-inferred tier', () => {
     const cfg = parseConfig({ model: 'gemini-2.5-flash-lite', model_class: 'small' });
     expect(cfg.modelClass).toBe('small');
     expect(cfg.maxOutputTokens).toBe(80);
@@ -533,7 +533,7 @@ describe('parseConfig model_class', () => {
     expect(cfg.defensiveVolatileHeader).toBe(false);
   });
 
-  it('ambient.enabled honours operator intent on the small tier (warn is emitted at init, not here)', () => {
+  it('ambient.enabled honors operator intent on the small tier (warn is emitted at init, not here)', () => {
     const cfg = parseConfig({
       model: 'llama3.2:3b-instruct-q4_K_M',
       ambient: { enabled: true },

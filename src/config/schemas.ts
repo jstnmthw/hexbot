@@ -87,6 +87,9 @@ const ProxyConfigOnDiskSchema = z.strictObject({
   password_env: z.string().optional(),
 });
 
+// Validate the dotted-quad shape with a regex first, then refine to enforce
+// per-octet 0..255. The regex alone admits "999.999.999.999" because `\d{1,3}`
+// doesn't bound the integer value — the refine step closes that.
 const IPv4DottedQuadSchema = z
   .string()
   .regex(/^(?:\d{1,3}\.){3}\d{1,3}$/)
@@ -98,6 +101,9 @@ const IPv4DottedQuadSchema = z
     { message: 'ip must be a valid IPv4 dotted-quad (DCC advertises IPv4 literals only)' },
   );
 
+// DCC port range — both endpoints are above the well-known/IANA-registered
+// region (>=1024) and within the 16-bit cap. The refine ensures the tuple
+// is ordered so the listener allocator can iterate `[min..max]` directly.
 const DccPortTupleSchema = z
   .tuple([z.number().int().min(1024).max(65535), z.number().int().min(1024).max(65535)])
   .refine((tuple) => tuple[0] <= tuple[1], {

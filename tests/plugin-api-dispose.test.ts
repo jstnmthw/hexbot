@@ -62,7 +62,7 @@ describe('plugin-api dispose (W-PS1)', () => {
     const deps = makeDeps();
     const { api, dispose } = createPluginApi(deps, 'demo', {});
 
-    // Before dispose: normal behaviour
+    // Before dispose: normal behavior
     expect(api.isBotNick('hexbot')).toBe(true);
     expect(api.ircLower('FOO')).toBe('foo');
     expect(api.buildHostmask({ nick: 'a', ident: 'b', hostname: 'c' })).toBe('a!b@c');
@@ -101,7 +101,7 @@ describe('plugin-api dispose (W-PS1)', () => {
     expect(api.permissions.findByHostmask('a!b@c')).toBeUndefined();
     // The banStore sub-API (no-op stub path) — still no-ops, now via dispose
     expect(api.banStore.getBan('#c', 'mask')).toBeUndefined();
-    // db null-stub path also neutralised
+    // db null-stub path also neutralized
     expect(api.db.get('k')).toBeUndefined();
   });
 

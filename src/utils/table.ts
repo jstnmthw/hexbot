@@ -11,7 +11,7 @@ export interface TableOptions {
 /**
  * Strip ASCII control bytes from a cell before measuring / emitting. Cells
  * feeding `formatTable` come from user input on various code paths (handles,
- * hostmasks, plugin names); a stray `\x03` in one cell would bleed IRC colour
+ * hostmasks, plugin names); a stray `\x03` in one cell would bleed IRC color
  * codes into adjacent cells on the REPL and recompute column widths with
  * zero-width characters that pad visually wrong.
  */
@@ -29,8 +29,8 @@ function stripControlBytes(cell: string): string {
  * The **last column** is never padded — it flows naturally to the end of the line.
  *
  * Control bytes (`\x00-\x1f\x7f`) are stripped from every cell before
- * measurement and emission. Callers that rely on ANSI colour must apply
- * colour *after* formatting, not inside the cells.
+ * measurement and emission. Callers that rely on ANSI color must apply
+ * color *after* formatting, not inside the cells.
  *
  * @returns One string per row, joined with `\n`.
  */

@@ -12,7 +12,7 @@ import {
 
 /**
  * Build a `SupportsProvider` that returns canned ISUPPORT values.
- * Mirrors irc-framework's `network.supports(key)` behaviour — unknown keys
+ * Mirrors irc-framework's `network.supports(key)` behavior — unknown keys
  * return `undefined`, values are in their parsed form (PREFIX as array of
  * `{symbol,mode}`, CHANMODES as string[], CHANTYPES as char array).
  */

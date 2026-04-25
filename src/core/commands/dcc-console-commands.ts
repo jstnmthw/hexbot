@@ -107,6 +107,12 @@ function recordConsoleAudit(
   });
 }
 
+/**
+ * Render the caller's current flags plus a legend of every available flag
+ * with `*` marking the ones currently subscribed. The legend reads off
+ * {@link CONSOLE_FLAG_LETTERS}'s declared order so the output is stable
+ * across calls — operators rely on muscle memory for which row is which.
+ */
 function replyWithCurrentFlags(ctx: CommandContext, session: DCCSessionEntry): void {
   const flags = session.getConsoleFlags();
   const shown = flags.length > 0 ? `+${flags}` : '+-';

@@ -190,6 +190,10 @@ export class BotLinkAuthManager {
     this.linkKey = deriveLinkKey(config.password, config.link_salt!);
     this.store = new BotLinkAuthStore(db, logger);
 
+    // Sweep every 5 minutes — frequent enough that a steady scanner does
+    // not push the LRU map past its cap between sweeps under realistic
+    // load, but rare enough that the sweep itself is a non-issue on the
+    // hot path. The same cadence is used in DCCManager for symmetry.
     this.sweepTimer = setInterval(() => this.sweepStaleTrackers(), 300_000);
     this.sweepTimer.unref(); // Don't keep the process alive
   }

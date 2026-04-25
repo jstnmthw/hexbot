@@ -75,6 +75,9 @@ export class MessageCoalescer {
     onFire: (msg: CoalescedMessage) => void,
   ): void {
     const key = this.keyOf(channel, nick);
+    // Buffer.byteLength matches the IRC wire encoding (UTF-8) so the cap is
+    // expressed in the same units the server fragments at — a string-length
+    // cap would under-count multibyte content (emoji, CJK).
     const fragmentBytes = Buffer.byteLength(text, 'utf8');
     const existing = this.pending.get(key);
 

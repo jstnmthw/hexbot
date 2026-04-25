@@ -81,6 +81,11 @@ export function markSeen(api: PluginAPI, feedId: string, hash: string): void {
   trimSeenToCap(api, feedId);
 }
 
+/**
+ * Trim the per-feed seen set down to {@link MAX_SEEN_PER_FEED}, dropping
+ * the oldest-stamped entries first. Sort cost is bounded by the cap, so
+ * even pathological feeds keep this O(n log n) on a small n.
+ */
 function trimSeenToCap(api: PluginAPI, feedId: string): void {
   const entries = api.db.list(`rss:seen:${feedId}:`);
   if (entries.length <= MAX_SEEN_PER_FEED) return;

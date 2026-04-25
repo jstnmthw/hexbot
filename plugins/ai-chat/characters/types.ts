@@ -1,6 +1,6 @@
 // Character definition for the ai-chat plugin.
 // A character is a channel regular, not an AI agent. The structured fields
-// control runtime behaviour (speech formatting, when to speak); the persona
+// control runtime behavior (speech formatting, when to speak); the persona
 // carries the actual personality.
 
 /** A loaded character definition. */

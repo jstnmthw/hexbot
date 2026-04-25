@@ -198,7 +198,7 @@ describe('validateFeedUrl', () => {
     }
   });
 
-  it('honours a caller-supplied allowedPorts set', async () => {
+  it('honors a caller-supplied allowedPorts set', async () => {
     stubLookup([{ address: '8.8.8.8', family: 4 }]);
     const result = await validateFeedUrl('https://example.com:9000/feed', {
       allowedPorts: new Set(['9000']),

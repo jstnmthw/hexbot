@@ -6,15 +6,20 @@
 // reload via `clear()` — index.ts no longer touches the map directly.
 import type { PluginAPI } from '../../src/types';
 
+/** Tracker entry for one (event-kind, hostmask, channel) tuple. */
 interface OffenceEntry {
+  /** Number of distinct flood bursts attributed to this key (drives escalation). */
   count: number;
+  /** Last hit timestamp, used for same-burst dedup and offence-window pruning. */
   lastSeen: number;
 }
 
+/** KV-persisted record for an active flood-tempban; rehydrated across reloads. */
 interface BanRecord {
   mask: string;
   channel: string;
   ts: number;
+  /** Epoch-ms expiry, or 0 for "permanent until operator lifts". */
   expires: number;
 }
 
@@ -32,17 +37,17 @@ export interface EnforcementConfig {
 }
 
 // Hard cap on distinct keys in the offence tracker. Acts as a belt-and-braces
-// defence against nick-rotation botnets: even after C2's hostmask rekey, a
+// defense against nick-rotation botnets: even with hostmask rekeying, a
 // spoof-ident attacker can still produce thousands of unique hostmasks per
 // minute. When the tracker is about to grow past this, oldest-insertion-first
-// entries get evicted. See audit finding C2 (2026-04-14).
+// entries get evicted.
 const MAX_OFFENCE_ENTRIES = 2000;
 
 /**
  * Per-channel enforcement action cap. A burst of 100+ kicks in ~1s
  * would otherwise hit the server rate limit and risk a collateral
  * K-line. Anything past this cap within the rolling window is
- * dropped with a warn log. See stability audit 2026-04-14.
+ * dropped with a warn log.
  */
 const MAX_ACTIONS_PER_CHANNEL_WINDOW = 10;
 /** Rolling window over which {@link MAX_ACTIONS_PER_CHANNEL_WINDOW} applies. */
@@ -289,12 +294,24 @@ export class EnforcementExecutor {
     }
   }
 
+  /**
+   * Map a 0-indexed offence count to its escalation action. Counts past the
+   * end of the configured ladder repeat the final entry (typically `tempban`)
+   * so a persistent flooder keeps getting the strongest action rather than
+   * cycling back to `warn`.
+   */
   private actionFor(offenceCount: number): string {
     const { actions } = this.cfg;
     if (actions.length === 0) return 'warn';
     return actions[Math.min(offenceCount, actions.length - 1)];
   }
 
+  /**
+   * Execute the chosen action against `nick` in `channel`. Falls back to a
+   * plain kick when a tempban can't be built (no hostmask in channel state,
+   * or the host fails {@link HOST_SHAPE_RE}) so the user is still removed
+   * even if we can't safely persist a ban mask.
+   */
   private async applyInner(
     action: string,
     channel: string,
@@ -356,6 +373,12 @@ export class EnforcementExecutor {
     }
   }
 
+  /**
+   * Persist a tempban record in the plugin KV namespace so {@link liftExpiredBans}
+   * can re-pick it up after a plugin reload — without persistence the unban
+   * scheduling would be lost on every reload and the ban would stick until a
+   * human op intervened.
+   */
   private storeBan(channel: string, mask: string): void {
     const now = Date.now();
     const minutes = this.cfg.banDurationMinutes;
@@ -417,6 +440,7 @@ function buildFloodBanMask(hostmask: string): string | null {
   return mask;
 }
 
+/** Type guard for a deserialized ban KV row; corrupt rows are deleted by the caller. */
 function isBanRecord(value: unknown): value is BanRecord {
   /* v8 ignore next -- defensive: JSON.parse on stored bans returns object */
   if (typeof value !== 'object' || value === null) return false;

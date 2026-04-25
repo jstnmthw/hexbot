@@ -33,7 +33,7 @@ export interface ThreatState {
  * use. Callers never touch the backing Set directly — every path goes through
  * this API so teardown is guaranteed complete on plugin unload.
  *
- * Two scheduling flavours:
+ * Two scheduling flavors:
  *   - schedule(ms, fn)           — one-shot, auto-removes on fire
  *   - scheduleWithLock(k, ms, fn) — keyed schedule guarded by a deduplication
  *                                   lock; caller is responsible for unlock()
@@ -56,7 +56,7 @@ export interface CycleState {
   /** Release a dedup lock taken by `scheduleWithLock`. */
   unlock(key: string): void;
   /**
-   * Register an externally-created timer so it is cancelled on teardown.
+   * Register an externally-created timer so it is canceled on teardown.
    * Used where the caller must retain the timer reference for its own
    * cancellation logic (join-recovery's sustained-presence reset timer).
    */
@@ -204,8 +204,7 @@ export function createState(): SharedState {
  * Belt-and-braces teardown helper: null every Map/Set on the shared state so
  * that even if something retains a reference to `state` past plugin unload
  * (e.g. a closure captured by a backend callback that outlived its owner),
- * the per-channel history graph cannot pin the process. See audit finding
- * C3 (2026-04-14).
+ * the per-channel history graph cannot pin the process.
  */
 export function clearSharedState(state: SharedState): void {
   state.intentionalModeChanges.clear();
@@ -299,8 +298,7 @@ export interface ChanmodConfig {
    * `*.libera.chat`, `services.rizon.net`). The ChanServ-notice router
    * rejects any notice whose sender host does not match this pattern —
    * closes the trust-on-first-use impostor window during a services
-   * outage. No sensible default: the CRITICAL fix requires the operator
-   * to pin an actual services host. See audit 2026-04-24.
+   * outage. No sensible default: operators must pin an actual services host.
    */
   services_host_pattern: string;
   chanserv_unban_retry_ms: number;
@@ -393,6 +391,12 @@ function cfgEnum<T extends string>(
   return fallback;
 }
 
+/**
+ * Read and validate the chanmod plugin config from `api.config`. Each
+ * field is type-checked via the `cfg*` helpers; invalid values fall back
+ * to the documented default and emit a `[chanmod]` warning. Throws when
+ * `services_host_pattern` is unset/blank — see the throw-site comment.
+ */
 export function readConfig(api: PluginAPI): ChanmodConfig {
   const c = api.config;
   const log = (msg: string) => api.log(msg);
@@ -443,9 +447,9 @@ export function readConfig(api: PluginAPI): ChanmodConfig {
       api.botConfig.services.type === 'anope' ? 'anope' : 'atheme',
       log,
     ),
-    // services_host_pattern is REQUIRED (CRITICAL fix, audit 2026-04-24).
-    // The loader throws below if it is missing/empty so operators cannot
-    // silently run without the ChanServ impostor guard.
+    // services_host_pattern is REQUIRED — the loader throws below if it
+    // is missing/empty so operators cannot silently run without the
+    // ChanServ impostor guard.
     services_host_pattern: cfgString(c, 'services_host_pattern', '', log),
     chanserv_unban_retry_ms: cfgNum(c, 'chanserv_unban_retry_ms', 2000, log),
     chanserv_unban_max_retries: cfgNum(c, 'chanserv_unban_max_retries', 3, log),
@@ -460,19 +464,23 @@ export function readConfig(api: PluginAPI): ChanmodConfig {
   };
 
   // services_host_pattern is load-bearing for the ChanServ-impostor
-  // guard. No default is provided: the CRITICAL audit (2026-04-24)
-  // requires the operator to pin a real services-host suffix (e.g.
-  // `services.*`, `*.libera.chat`, `services.rizon.net`). We refuse to
-  // load without it — clean-cut over trust-on-first-use, since a silent
-  // degraded posture is exactly the failure mode the audit flagged.
+  // guard. No default is provided: operators must pin a real services-host
+  // suffix (e.g. `services.*`, `*.libera.chat`, `services.rizon.net`). We
+  // refuse to load without it — clean-cut over trust-on-first-use, since
+  // a silent degraded posture trivially exposes the bot to a phantom
+  // founder/op grant via a crafted INFO/FLAGS response from someone who
+  // takes the ChanServ nick during a services outage.
   // See config/plugins.example.json for per-network suggestions.
   if (!config.services_host_pattern.trim()) {
     throw new Error(
-      'chanmod: services_host_pattern is required. Set it in plugins.json chanmod.config (e.g. "services.*", "*.libera.chat", "services.rizon.net"). The ChanServ-impostor guard depends on this pattern — during a services outage, anyone who grabs the ChanServ nick can feed the bot a crafted INFO/FLAGS response that elevates them to founder. See config/plugins.example.json. (audit 2026-04-24 CRITICAL ChanServ pin)',
+      'chanmod: services_host_pattern is required. Set it in plugins.json chanmod.config (e.g. "services.*", "*.libera.chat", "services.rizon.net"). The ChanServ-impostor guard depends on this pattern — during a services outage, anyone who grabs the ChanServ nick can feed the bot a crafted INFO/FLAGS response that elevates them to founder. See config/plugins.example.json.',
     );
   }
 
-  // Validate threshold ordering
+  // Threat thresholds must be strictly ascending — the threat-level lookup in
+  // `scoreToLevel()` uses `>=` against each tier in order, so a non-monotonic
+  // config (e.g. level_1 >= level_2) would make it impossible to reach the
+  // higher tier. Reset to defaults rather than try to repair partial input.
   if (config.takeover_level_1_threshold >= config.takeover_level_2_threshold) {
     log(
       `takeover_level_1_threshold (${config.takeover_level_1_threshold}) >= level_2 (${config.takeover_level_2_threshold}) — resetting thresholds to defaults`,

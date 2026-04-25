@@ -124,7 +124,7 @@ export function setupJoinRecovery(opts: JoinRecoveryOptions): () => void {
   // ban→rejoin indefinitely, generating unlimited ChanServ requests.
   // Instead, schedule a delayed reset after sustained channel presence.
   // If the bot is banned again before the timer fires, the timer is
-  // cancelled and backoff continues escalating.
+  // canceled and backoff continues escalating.
 
   api.bind('join', '-', '*', (ctx) => {
     if (!api.isBotNick(ctx.nick)) return;
@@ -155,7 +155,7 @@ export function setupJoinRecovery(opts: JoinRecoveryOptions): () => void {
   //
   // Without this, a recoveryState entry left over from a failed join
   // sticks around for the plugin lifetime if an operator manually .parts
-  // the channel. See audit finding W-CM4 (2026-04-14).
+  // the channel.
   const dropRecovery = (channel: string) => {
     const chanKey = api.ircLower(channel);
     const rs = recoveryState.get(chanKey);

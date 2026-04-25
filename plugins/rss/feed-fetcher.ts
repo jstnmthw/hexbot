@@ -32,10 +32,23 @@ import { type ResolvedAddress, validateFeedUrl } from './url-validator';
 type RssCustomFields = Record<string, never>;
 type RssParser = Parser<RssCustomFields, RssCustomFields>;
 
-export const DEFAULT_MAX_FEED_BYTES = 5 * 1024 * 1024; // 5 MiB
+/** Default response body cap. 5 MiB is several orders of magnitude above
+ *  any real-world RSS/Atom feed; existing as a safety net against runaway
+ *  responses, slow-loris drips, and intentionally-oversized payloads. */
+export const DEFAULT_MAX_FEED_BYTES = 5 * 1024 * 1024;
+/** Maximum redirect hops we will follow before giving up. Each hop is
+ *  re-validated through `validateFeedUrl`, so a chain of 5 still requires
+ *  5 successful SSRF checks. */
 const MAX_REDIRECTS = 5;
+/** Bytes from the start of the body that {@link containsDoctype} scans.
+ *  4 KiB easily covers the XML prolog where DOCTYPE declarations are
+ *  legal; bytes past that are element content and can't legally
+ *  re-introduce a DOCTYPE. */
 const DOCTYPE_SCAN_WINDOW = 4096;
-/** Hard wall-clock cap as a multiple of the socket inactivity timeout. */
+/** Hard wall-clock cap as a multiple of the socket inactivity timeout.
+ *  3× lets a legitimately slow server complete while still bounding the
+ *  total time a single fetch can hold a socket and the plugin's abort
+ *  signal listener. */
 const WALL_CLOCK_MULTIPLIER = 3;
 
 export interface FetchFeedOpts {
@@ -71,6 +84,15 @@ export const httpLayer = {
  */
 export type PollMode = 'silent' | 'announce' | 'seedPreview';
 
+/**
+ * Fetch and parse one feed, mark every observed item as seen, and return
+ * the subset selected by `mode` (see {@link PollMode}). Aborts if the
+ * caller's `fetchOpts.signal` is already triggered or fires partway through.
+ *
+ * @param maxPerPoll - In `'announce'` mode, hard cap on returned items so a
+ *   feed that posts 200 articles in one batch doesn't dump them all at once.
+ * @returns The items selected for announcement (possibly empty).
+ */
 export async function pollFeed(
   api: PluginAPI,
   parser: RssParser,
@@ -119,8 +141,7 @@ export async function pollFeed(
  * cannot 302 the bot into a private range. The socket `lookup` is pinned to
  * the validator's DNS result — Node's Agent would otherwise do its own
  * `dns.lookup` on connect, which lets a rebinding DNS server return a
- * public IP during validation and a private IP during fetch. See the
- * earlier audit at docs/audits/rss-2026-04-14.md for the full write-up.
+ * public IP during validation and a private IP during fetch (TOCTOU).
  *
  * NOTE: Tests replace `httpLayer.fetchFeedXml` with a stub, so this real
  * implementation is never driven by the unit suite — the URL validator
@@ -166,8 +187,18 @@ export async function fetchFeedXml(url: string, opts: FetchFeedOpts): Promise<st
   throw new Error(`too many redirects fetching ${url}`);
 }
 
+/** Outcome of one HTTP request: either a fully-read body or a single redirect
+ *  hop the caller must re-validate. */
 type FetchResult = { kind: 'body'; body: string } | { kind: 'redirect'; location: string };
 
+/**
+ * Perform a single HTTP(S) GET with the IP pinned to the validator's
+ * resolved address. Returns either the response body or the next URL to
+ * follow on a 3xx — the caller (fetchFeedXml) re-validates that URL before
+ * issuing the next hop. Rejects on non-2xx/3xx, body cap exceeded, DOCTYPE
+ * present, content-type not in the XML allowlist, socket inactivity past
+ * `timeoutMs`, or wall-clock past 3× `timeoutMs`.
+ */
 function doRequest(
   target: URL,
   resolvedAddresses: ResolvedAddress[],
@@ -304,6 +335,12 @@ function doRequest(
   });
 }
 
+/**
+ * True if the body contains an XML DOCTYPE declaration. We refuse any
+ * such body: a DOCTYPE can pull in external entities or define billion-laughs
+ * style entity expansion, both of which the rss-parser's xml2js backend
+ * has historically been vulnerable to.
+ */
 function containsDoctype(body: string): boolean {
   // Scan only the first few KiB: DOCTYPE declarations must appear in the XML
   // prolog before any element, so a scan window covers every legitimate

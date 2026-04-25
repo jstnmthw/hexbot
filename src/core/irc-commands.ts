@@ -128,7 +128,10 @@ export class IRCCommands {
     this.client = client;
     this.db = db;
     this.logger = logger?.child('irc-commands') ?? null;
-    this.modesPerLine = modesPerLine ?? 4; // Safe default; updated from ISUPPORT
+    // Conservative default before ISUPPORT lands. RFC 2812 mandates a floor
+    // of 3; 4 matches Solanum/Libera; the real number arrives via
+    // `setCapabilities()` once 005 is parsed and may go up to 20+.
+    this.modesPerLine = modesPerLine ?? 4;
   }
 
   /** Update the max modes per line from ISUPPORT. */

@@ -21,7 +21,7 @@ const GETKEY_TIMEOUT_MS = 10_000;
  * Cap on concurrent pending GETKEY probes. During a services outage
  * that affects many channels simultaneously the callback closures
  * here hold references to `api`/`channel`/`probeState`; leaving them
- * uncapped creates memory pressure. See stability audit 2026-04-14.
+ * uncapped creates memory pressure.
  */
 const MAX_PENDING_GETKEY = 64;
 
@@ -128,7 +128,7 @@ export class AnopeBackend extends ChanServBackendBase {
       // Hard cap concurrent pending callbacks — during a services
       // outage across many channels the closures captured here
       // hold references to api/channel/probeState and can accumulate
-      // unbounded. See stability audit 2026-04-14.
+      // unbounded.
       if (
         !this.probeState.pendingGetKey.has(chanKey) &&
         this.probeState.pendingGetKey.size >= MAX_PENDING_GETKEY

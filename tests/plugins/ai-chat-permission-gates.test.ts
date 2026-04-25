@@ -136,7 +136,7 @@ const BASE_CTX = {
 describe('isPrivilegeRestricted edge cases (via shouldRespond)', () => {
   it('does not gate when bot mode threshold is unknown', () => {
     // 'X' is not in the elevated list — gate falls through (defensive
-    // behaviour: misconfigured threshold should not block all users).
+    // behavior: misconfigured threshold should not block all users).
     expect(
       shouldRespond({
         ...BASE_CTX,

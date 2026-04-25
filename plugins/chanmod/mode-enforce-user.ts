@@ -52,6 +52,10 @@ export function handleBitchMode(
   if (api.isBotNick(setter) || api.isBotNick(target)) return true;
   if (!isNodesynch && botHasOps(api, channel)) {
     const targetFlags = getUserFlags(api, channel, target);
+    // The `d` flag is auto-deop: even if the user has an op-tier flag (n/m/o),
+    // a +d on the same record forces deop. Mirrors the suppress logic in
+    // auto-op.ts:computeDesiredMode, so a user explicitly flagged for "no ops
+    // here" is treated as unauthorized in bitch mode too.
     const isAuthorized =
       modeStr === '+o'
         ? hasAnyFlag(targetFlags, config.op_flags) && !targetFlags?.includes('d')

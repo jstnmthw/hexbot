@@ -6,6 +6,13 @@ export const name = '8ball';
 export const version = '1.0.0';
 export const description = 'Magic 8-Ball — ask a yes/no question';
 
+/**
+ * Canonical 20-response Magic 8-Ball pool, ordered by category. Counts
+ * (10 affirmative / 5 non-committal / 5 negative) match the physical toy's
+ * icosahedron faces and produce its classic skew toward "yes". Reorder or
+ * resize cautiously — uniform random selection over this array is what
+ * gives the response distribution.
+ */
 const RESPONSES = [
   // Affirmative
   'It is certain.',
@@ -32,6 +39,11 @@ const RESPONSES = [
   'Very doubtful.',
 ];
 
+/**
+ * Plugin entry point. Registers the `!8ball` help entry and binds a `pub`
+ * handler that emits a random response. Called once by the plugin loader on
+ * load and again on reload.
+ */
 export function init(api: PluginAPI): void {
   api.registerHelp([
     {
@@ -57,6 +69,9 @@ export function init(api: PluginAPI): void {
   });
 }
 
-export function teardown(): void {
-  // No cleanup needed — binds are auto-removed by the loader
-}
+/**
+ * Plugin teardown. Binds and help entries registered through the scoped
+ * `PluginAPI` are tracked and reaped by the loader, so this hook has no
+ * resources of its own to release.
+ */
+export function teardown(): void {}

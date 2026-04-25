@@ -19,9 +19,20 @@ export interface LockdownConfig {
   lockDurationMs: number;
 }
 
+/**
+ * Channel-wide lockdown coordinator. Counts distinct flooders per channel
+ * inside a rolling window; once the count crosses `lockCount`, applies the
+ * configured channel mode (`+R` or `+i`) and schedules an auto-unlock.
+ *
+ * State is keyed by IRC-lowercase channel name so a server CASEMAPPING
+ * change can't fragment counters across folds.
+ */
 export class LockdownController {
+  /** IRC-lower channel → set of distinct IRC-lower flooder hostmasks in window. */
   private flooders = new Map<string, Set<string>>();
+  /** IRC-lower channel → epoch-ms timestamps, one per distinct flooder add. */
   private timestamps = new Map<string, number[]>();
+  /** IRC-lower channel → pending auto-unlock timer (canceled in teardown). */
   private activeLocks = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(
@@ -43,7 +54,7 @@ export class LockdownController {
     // While a lockdown is active for this channel, stop recording new
     // flooders. Without this the per-channel `flooders` Set grows to
     // botnet-size during long lockdowns since `sweep()` deliberately
-    // skips locked channels. See audit finding W-FL3 (2026-04-14).
+    // skips locked channels.
     if (this.activeLocks.has(lowerChannel)) return;
 
     if (!this.flooders.has(lowerChannel)) {
@@ -53,6 +64,8 @@ export class LockdownController {
     const flooders = this.flooders.get(lowerChannel)!;
     const timestamps = this.timestamps.get(lowerChannel)!;
 
+    // Already counted this hostmask in the current window — don't
+    // double-tick the lockdown threshold for the same flooder.
     if (flooders.has(lowerMask)) return;
 
     const now = Date.now();
@@ -105,7 +118,7 @@ export class LockdownController {
    * Drop lockdown state for a channel the bot just left or was kicked
    * from. Without this the scheduled unlock timer still fires against
    * a channel the bot isn't in, and the entry lingers until the timer
-   * does. See audit finding W-FL2 (2026-04-14).
+   * does.
    */
   dropChannel(channel: string): void {
     const lowerChannel = this.api.ircLower(channel);
@@ -118,6 +131,11 @@ export class LockdownController {
     this.timestamps.delete(lowerChannel);
   }
 
+  /**
+   * Apply the configured lockdown mode and schedule the auto-unlock. Caller
+   * must already have confirmed the threshold was reached and that no lock
+   * is currently active for this channel.
+   */
   private trigger(channel: string): void {
     if (!this.botHasOps(channel)) return;
 
@@ -138,6 +156,14 @@ export class LockdownController {
     }, this.cfg.lockDurationMs);
     this.activeLocks.set(lowerChannel, timer);
   }
+
+  /**
+   * Auto-unlock callback. Clears all per-channel state and removes the mode
+   * if the bot still has ops. If we lost ops during the lockdown the mode
+   * stays on the server until a human op lifts it — there's no safe way to
+   * remove it from here, and dropping the local state still prevents the
+   * timer entry from leaking.
+   */
 
   private lift(channel: string, mode: string): void {
     const lowerChannel = this.api.ircLower(channel);

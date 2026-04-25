@@ -1,6 +1,11 @@
 // HexBot — ctcp plugin
 // Handles CTCP VERSION, PING, and TIME requests with fixed responses.
-// Responses are not user-configurable
+// Responses are not user-configurable.
+//
+// Loop protection: replies go out via `api.ctcpResponse`, which uses
+// irc-framework's NOTICE-based CTCP reply (RFC 2812 §3.3.2). NOTICEs must
+// not auto-reply, so two HexBots staring at each other can't spiral into
+// a CTCP-flood. Do NOT reimplement these as PRIVMSG.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -10,6 +15,11 @@ export const name = 'ctcp';
 export const version = '1.0.0';
 export const description = 'Replies to CTCP VERSION, PING, and TIME requests.';
 
+/**
+ * Plugin entry point. Reads `name` and `version` out of the bot's
+ * `package.json` once (at load time) to construct the VERSION reply, then
+ * registers ctcp binds for VERSION / PING / TIME.
+ */
 export function init(api: PluginAPI): void {
   let versionString: string;
   try {
@@ -48,6 +58,9 @@ export function init(api: PluginAPI): void {
   });
 }
 
-// Binds are auto-cleaned by the plugin loader, but an explicit teardown
-// export makes intent clear and keeps lint checks that require one happy.
+/**
+ * Plugin teardown. Binds are auto-reaped by the loader; the explicit
+ * export exists to make the no-cleanup case unambiguous and to satisfy
+ * tooling that expects the symbol.
+ */
 export function teardown(): void {}

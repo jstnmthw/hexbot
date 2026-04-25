@@ -6,6 +6,12 @@ import type { MockBot } from '../helpers/mock-bot';
 import { createMockBot } from '../helpers/mock-bot';
 import { giveBotOps, simulateMode, tick } from '../helpers/plugin-test-helpers';
 
+// chanmod hostile-op response — when the bot regains ops after a takeover
+// it counter-attacks the actor whose deop pushed the channel into "Active"
+// threat. These tests pin the policy: deop / kickban / akick variants,
+// revenge_exempt_flags shielding, fallback paths when the bot has no ops at
+// fire time, and the no-op when the actor has already parted.
+
 const PLUGIN_PATH = resolve('./plugins/chanmod/index.ts');
 
 // Local `addToChannel` is a custom variant that accepts an extra `modes` string

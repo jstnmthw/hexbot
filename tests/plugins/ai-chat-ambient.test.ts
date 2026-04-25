@@ -119,7 +119,7 @@ describe('AmbientEngine', () => {
       expect(sent).toHaveLength(1);
       expect(sent[0].kind).toBe('unanswered');
       // Attacker-controlled nick/text are wrapped in delimiters so the LLM
-      // treats them as data, not instruction (W13 defence-in-depth).
+      // treats them as data, not instruction (W13 defense-in-depth).
       expect(sent[0].prompt).toContain('<<<alice>>> asked');
       expect(sent[0].prompt).toContain('<<<does anyone know how to do this?>>>');
     });

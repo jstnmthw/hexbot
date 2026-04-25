@@ -220,7 +220,10 @@ export function setupProtection(
           api.kick(channel, kickerNick, config.revenge_kick_reason);
           api.log(`Revenge: kicked ${kickerNick} from ${channel} for kicking bot`);
         } else {
-          // revenge_action is 'kickban' — last remaining option after 'deop' and 'kick'
+          // revenge_action is 'kickban' — last remaining option after 'deop' and 'kick'.
+          // Ban-type 1 = `*!*@host` — strongest practical ban from a single nick;
+          // type 2/3 are too narrow for revenge against an actor that just demonstrated
+          // willingness to kick the bot.
           const hostmask = api.getUserHostmask(channel, kickerNick);
           const mask = hostmask ? buildBanMask(hostmask, 1) : null;
           /* v8 ignore next 4 -- defensive: getUserHostmask returns empty only if the kicker already left the channel between kick and revenge */

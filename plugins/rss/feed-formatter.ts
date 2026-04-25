@@ -32,6 +32,13 @@ const NAMED_ENTITIES: Record<string, string> = {
   rdquo: '”',
 };
 
+/**
+ * Resolve named (`&amp;`), hex numeric (`&#x26;`) and decimal numeric (`&#38;`)
+ * entities. The match regex caps name length at 11 chars and forbids `&` in
+ * the body, so a malformed entity like `&unterminated text` won't be greedy
+ * and consume legitimate prose. Code points outside Unicode (>U+10FFFF) are
+ * left as the literal entity reference.
+ */
 function decodeEntities(input: string): string {
   return input.replace(/&(#x?[0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]{1,10});/g, (match, body) => {
     if (body.startsWith('#x') || body.startsWith('#X')) {
