@@ -24,6 +24,11 @@ function isModeEntry(m: unknown): m is { mode?: string; param?: string } {
 /**
  * Validate that a value is an irc-framework modes array
  * (each element has an optional `mode: string` and optional `param: string`).
+ *
+ * Note: only `mode` is type-checked. `param` is not validated, so a payload
+ * like `{ mode: 'b', param: 123 }` will pass the guard. Callers must coerce
+ * or re-check `param` (typically `String(p.param ?? '')`) before passing it
+ * to `raw()` or interpolating into IRC strings.
  */
 export function isModeArray(val: unknown): val is Array<{ mode?: string; param?: string }> {
   return Array.isArray(val) && val.every(isModeEntry);

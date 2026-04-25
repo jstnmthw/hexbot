@@ -70,6 +70,7 @@ Override the lockdown mode per-channel using `.chanset`:
 - **Unrecognized actions** — Any action string not matching `warn` or `kick` is treated as `tempban`.
 - **Lockdown is per-channel** — Each channel tracks its own distinct-flooder count independently.
 - **No double-lock** — If a channel is already locked, additional flooders do not reset the unlock timer or re-set the mode.
+- **Privileged-user exemption** — When `ignore_ops` is `true`, users with `n`/`m`/`o` flags bypass enforcement. On networks without IRCv3 `account-tag`, the exemption resolves the user by hostmask alone, so a record pinned to a weak pattern (e.g. `nick!*@*`) lets a nick-squatter inherit the bypass. Pin privileged records to `$a:account` patterns or specific hostmasks.
 
 Example override in `config/plugins.json`:
 
