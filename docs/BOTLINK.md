@@ -261,6 +261,48 @@ Commands with `relayToHub: true` in their registration options are automatically
 - `RELAY_REQUEST` is gated on a live DCC party session for the requesting handle. A compromised leaf cannot relay into arbitrary target-bot handles.
 - The hub is the single source of truth. A compromised hub compromises the entire botnet.
 
+### Handshake flow
+
+Both sides pre-compute the per-botnet HMAC key from the shared password and salt:
+
+```mermaid
+flowchart LR
+    P["password<br/>(shared secret, env)"] --> KDF[scrypt KDF]
+    S["link_salt<br/>(per-botnet hex)"] --> KDF
+    KDF --> K["linkKey<br/>(32-byte HMAC key)"]
+```
+
+The salt is not secret — its job is to make the derived key per-deployment unique, so a precomputed table built against one botnet is useless against another. `scrypt` makes each guess expensive enough that brute-forcing a strong password is infeasible.
+
+On every accepted connection the hub issues a fresh nonce. The leaf signs it with `linkKey`; the hub re-derives the same key from its own config and verifies in constant time:
+
+```mermaid
+sequenceDiagram
+    participant Leaf
+    participant Hub
+    Leaf->>Hub: TCP connect
+    Hub->>Hub: generate fresh random nonce
+    Hub-->>Leaf: HELLO_CHALLENGE { nonce }
+    Leaf->>Leaf: hmac = HMAC-SHA256(linkKey, nonce)
+    Leaf-->>Hub: HELLO { hmac }
+    Hub->>Hub: verifyHelloHmac(linkKey, nonce, hmac)
+    alt HMAC matches
+        Hub-->>Leaf: WELCOME / AUTH_OK
+        Note over Leaf,Hub: sync starts (perms, channel state, bans)
+    else HMAC mismatch
+        Hub-->>Leaf: AUTH_FAILED
+        Note over Leaf,Hub: failure counted toward per-IP rate limit
+    end
+```
+
+Three independent defenses, each blocking a different attack:
+
+| Threat                                         | Defense                                                       |
+| ---------------------------------------------- | ------------------------------------------------------------- |
+| Stranger connects to the hub port              | shared password — proves authorization to join the botnet     |
+| Attacker sniffs and replays a `HELLO`          | per-connection nonce + HMAC — password never crosses the wire |
+| Attacker brute-forces with a precomputed table | per-botnet `link_salt` — no cross-deployment table reuse      |
+
 See `docs/SECURITY.md` section 11 for the full security model.
 
 ---
