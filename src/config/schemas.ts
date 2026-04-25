@@ -5,6 +5,13 @@
 // in config files (e.g. "hots" instead of "host") which otherwise silently
 // load as undefined and cause obscure runtime failures later.
 //
+// Every leaf field carries a `@reload:<class>` token in its `.describe(...)`
+// annotation. The settings registry reads the token via
+// `parseReloadClassFromZod` and uses it to drive the live-config command
+// surface (`live` applies on the spot, `reload` reattaches a subsystem,
+// `restart` warns the operator). Reload classes follow the matrix in
+// docs/plans/live-config-updates.md §4.
+//
 // If you add/rename a field in types/config.ts, update the matching schema
 // here. The _SchemaMatchesInterface assertion below will flag drift at
 // `tsc --noEmit` time if the two diverge.
@@ -23,50 +30,69 @@ const ChannelListEntrySchema = z.union([z.string(), ChannelEntryOnDiskSchema], {
 });
 
 const IrcConfigOnDiskSchema = z.strictObject({
-  host: z.string(),
-  port: z.number(),
-  tls: z.boolean(),
-  nick: z.string(),
-  username: z.string(),
-  realname: z.string(),
-  channels: z.array(ChannelListEntrySchema),
-  tls_verify: z.boolean().optional(),
-  tls_cert: z.string().optional(),
-  tls_key: z.string().optional(),
-  alt_nick: z.string().optional(),
-  ghost_on_recover: z.boolean().optional(),
+  host: z.string().describe('@reload:restart IRC server hostname'),
+  port: z.number().describe('@reload:restart IRC TCP port'),
+  tls: z.boolean().describe('@reload:restart Use TLS'),
+  nick: z.string().describe('@reload:reload Primary nick'),
+  username: z.string().describe('@reload:restart USER ident'),
+  realname: z.string().describe('@reload:restart GECOS / realname'),
+  channels: z.array(ChannelListEntrySchema).describe('@reload:live Configured channels'),
+  tls_verify: z.boolean().optional().describe('@reload:restart Verify TLS certificate'),
+  tls_cert: z.string().optional().describe('@reload:restart TLS client certificate path'),
+  tls_key: z.string().optional().describe('@reload:restart TLS client key path'),
+  alt_nick: z.string().optional().describe('@reload:restart Fallback nick on collision'),
+  ghost_on_recover: z.boolean().optional().describe('@reload:restart Auto-GHOST nick on collision'),
 });
 
+// Owner handle and hostmask now come from HEX_OWNER_HANDLE /
+// HEX_OWNER_HOSTMASK (see src/bootstrap.ts). Only the password reference
+// remains in bot.json, via the `_env` convention.
 const OwnerConfigSchema = z.strictObject({
-  handle: z.string(),
-  hostmask: z.string(),
-  password_env: z.string().optional(),
+  password_env: z.string().optional().describe('@reload:restart Owner DCC password env var'),
 });
 
 const IdentityConfigSchema = z.strictObject({
-  method: z.literal('hostmask'),
-  require_acc_for: z.array(z.string()),
+  method: z.literal('hostmask').describe('@reload:restart Identity verification method'),
+  require_acc_for: z
+    .array(z.string())
+    .describe('@reload:live Flags requiring NickServ ACC verification'),
 });
 
 const ServicesConfigOnDiskSchema = z.strictObject({
-  type: z.enum(['atheme', 'anope', 'dalnet', 'none']),
-  nickserv: z.string(),
-  password_env: z.string().optional(),
-  sasl: z.boolean(),
-  sasl_mechanism: z.enum(['PLAIN', 'EXTERNAL']).optional(),
-  identify_before_join: z.boolean().optional(),
-  identify_before_join_timeout_ms: z.number().int().min(0).optional(),
+  type: z.enum(['atheme', 'anope', 'dalnet', 'none']).describe('@reload:reload Services flavor'),
+  nickserv: z.string().describe('@reload:reload NickServ target'),
+  password_env: z.string().optional().describe('@reload:restart NickServ password env var'),
+  sasl: z.boolean().describe('@reload:restart Negotiate SASL at registration'),
+  sasl_mechanism: z
+    .enum(['PLAIN', 'EXTERNAL'])
+    .optional()
+    .describe('@reload:restart SASL mechanism'),
+  identify_before_join: z
+    .boolean()
+    .optional()
+    .describe('@reload:live Wait for bot:identified before JOIN'),
+  identify_before_join_timeout_ms: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe('@reload:live Identify-before-join timeout (ms)'),
 });
 
 const LoggingConfigSchema = z.strictObject({
-  level: z.enum(['debug', 'info', 'warn', 'error']),
-  mod_actions: z.boolean(),
-  mod_log_retention_days: z.number().int().min(0).optional(),
+  level: z.enum(['debug', 'info', 'warn', 'error']).describe('@reload:live Minimum log level'),
+  mod_actions: z.boolean().describe('@reload:live Persist privileged actions to mod_log'),
+  mod_log_retention_days: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe('@reload:live mod_log retention window (days; 0 = unlimited)'),
 });
 
 const QueueConfigSchema = z.strictObject({
-  rate: z.number().optional(),
-  burst: z.number().optional(),
+  rate: z.number().optional().describe('@reload:live Outbound message rate (msgs/sec)'),
+  burst: z.number().optional().describe('@reload:live Outbound message burst size'),
 });
 
 const FloodWindowConfigSchema = z.strictObject({
@@ -75,16 +101,16 @@ const FloodWindowConfigSchema = z.strictObject({
 });
 
 const FloodConfigSchema = z.strictObject({
-  pub: FloodWindowConfigSchema.optional(),
-  msg: FloodWindowConfigSchema.optional(),
+  pub: FloodWindowConfigSchema.optional().describe('@reload:live Pub/pubm flood window'),
+  msg: FloodWindowConfigSchema.optional().describe('@reload:live Msg/msgm flood window'),
 });
 
 const ProxyConfigOnDiskSchema = z.strictObject({
-  enabled: z.boolean(),
-  host: z.string(),
-  port: z.number(),
-  username: z.string().optional(),
-  password_env: z.string().optional(),
+  enabled: z.boolean().describe('@reload:restart SOCKS5 proxy enabled'),
+  host: z.string().describe('@reload:restart SOCKS5 proxy host'),
+  port: z.number().describe('@reload:restart SOCKS5 proxy port'),
+  username: z.string().optional().describe('@reload:restart SOCKS5 username'),
+  password_env: z.string().optional().describe('@reload:restart SOCKS5 password env var'),
 });
 
 // Validate the dotted-quad shape with a regex first, then refine to enforce
@@ -111,12 +137,15 @@ const DccPortTupleSchema = z
   });
 
 const DccConfigSchema = z.strictObject({
-  enabled: z.boolean(),
-  ip: IPv4DottedQuadSchema,
-  port_range: DccPortTupleSchema,
-  require_flags: z.string().optional(),
-  max_sessions: z.number().optional(),
-  idle_timeout_ms: z.number().optional(),
+  enabled: z.boolean().describe('@reload:reload DCC CHAT enabled'),
+  ip: IPv4DottedQuadSchema.describe('@reload:reload DCC public IPv4'),
+  port_range: DccPortTupleSchema.describe('@reload:reload DCC passive listener port range'),
+  require_flags: z
+    .string()
+    .optional()
+    .describe('@reload:live Flags required to open a DCC session'),
+  max_sessions: z.number().optional().describe('@reload:live Max concurrent DCC sessions'),
+  idle_timeout_ms: z.number().optional().describe('@reload:live DCC idle disconnect (ms)'),
 });
 
 const BotlinkEndpointSchema = z.strictObject({
@@ -125,12 +154,14 @@ const BotlinkEndpointSchema = z.strictObject({
 });
 
 const BotlinkConfigOnDiskSchema = z.strictObject({
-  enabled: z.boolean(),
-  role: z.enum(['hub', 'leaf']),
-  botname: z.string(),
-  hub: BotlinkEndpointSchema.optional(),
-  listen: BotlinkEndpointSchema.optional(),
-  password_env: z.string().optional(),
+  enabled: z.boolean().describe('@reload:restart Bot-link enabled'),
+  role: z.enum(['hub', 'leaf']).describe('@reload:restart Bot-link role'),
+  botname: z.string().describe('@reload:restart Bot identity within the botnet'),
+  hub: BotlinkEndpointSchema.optional().describe('@reload:reload Bot-link hub endpoint (leaf)'),
+  listen: BotlinkEndpointSchema.optional().describe(
+    '@reload:reload Bot-link listen endpoint (hub)',
+  ),
+  password_env: z.string().optional().describe('@reload:reload Bot-link password env var'),
   // Per-botnet HMAC salt — hex string, ≥ 32 chars (16 bytes decoded).
   // Optional at schema level so the schema still loads when `botlink` is
   // disabled with only `enabled: false` present; required at runtime when
@@ -139,52 +170,86 @@ const BotlinkConfigOnDiskSchema = z.strictObject({
     .string()
     .min(32, 'link_salt must be at least 32 hex chars (16 bytes)')
     .regex(/^[0-9a-fA-F]+$/, 'link_salt must be hex characters only')
-    .optional(),
-  reconnect_delay_ms: z.number().optional(),
-  reconnect_max_delay_ms: z.number().optional(),
-  max_leaves: z.number().optional(),
-  sync_permissions: z.boolean().optional(),
-  sync_channel_state: z.boolean().optional(),
-  sync_bans: z.boolean().optional(),
-  ping_interval_ms: z.number().optional(),
-  link_timeout_ms: z.number().optional(),
-  max_auth_failures: z.number().optional(),
-  auth_window_ms: z.number().optional(),
-  auth_ban_duration_ms: z.number().optional(),
-  auth_ip_whitelist: z.array(z.string()).optional(),
-  handshake_timeout_ms: z.number().optional(),
-  max_pending_handshakes: z.number().optional(),
-  cmd_inbound_rate: z.number().optional(),
+    .optional()
+    .describe('@reload:restart Bot-link HELLO HMAC salt'),
+  reconnect_delay_ms: z.number().optional().describe('@reload:live Initial reconnect delay (ms)'),
+  reconnect_max_delay_ms: z.number().optional().describe('@reload:live Max reconnect delay (ms)'),
+  max_leaves: z.number().optional().describe('@reload:live Hub-side concurrent leaf cap'),
+  sync_permissions: z
+    .boolean()
+    .optional()
+    .describe('@reload:live Replicate _permissions across botnet'),
+  sync_channel_state: z
+    .boolean()
+    .optional()
+    .describe('@reload:live Replicate channel state on link-up'),
+  sync_bans: z.boolean().optional().describe('@reload:live Replicate ban list mutations'),
+  ping_interval_ms: z.number().optional().describe('@reload:live Hub→leaf ping interval (ms)'),
+  link_timeout_ms: z.number().optional().describe('@reload:live Leaf disconnect threshold (ms)'),
+  max_auth_failures: z.number().optional().describe('@reload:live Auth failures before IP ban'),
+  auth_window_ms: z.number().optional().describe('@reload:live Auth-failure window (ms)'),
+  auth_ban_duration_ms: z.number().optional().describe('@reload:live Auth-ban base duration (ms)'),
+  auth_ip_whitelist: z
+    .array(z.string())
+    .optional()
+    .describe('@reload:live Auth rate-limit CIDR whitelist'),
+  handshake_timeout_ms: z.number().optional().describe('@reload:live HELLO handshake timeout (ms)'),
+  max_pending_handshakes: z
+    .number()
+    .optional()
+    .describe('@reload:live Concurrent unauth handshakes per IP'),
+  cmd_inbound_rate: z.number().optional().describe('@reload:live Hub→leaf CMD frames/sec ceiling'),
 });
 
 const ChanmodBotConfigOnDiskSchema = z.strictObject({
-  nick_recovery_password_env: z.string().optional(),
+  nick_recovery_password_env: z
+    .string()
+    .optional()
+    .describe('@reload:restart NickServ GHOST password env var'),
 });
 
 const MemoConfigSchema = z.strictObject({
-  memoserv_relay: z.boolean().optional(),
-  memoserv_nick: z.string().optional(),
-  delivery_cooldown_seconds: z.number().int().min(0).optional(),
+  memoserv_relay: z.boolean().optional().describe('@reload:live MemoServ notice relay'),
+  memoserv_nick: z.string().optional().describe('@reload:live MemoServ service nick'),
+  delivery_cooldown_seconds: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe('@reload:live Per-user join-delivery cooldown (sec)'),
 });
 
+// `database` and `pluginDir` now come from HEX_DB_PATH / HEX_PLUGIN_DIR
+// (see src/bootstrap.ts). They are intentionally absent from the on-disk
+// schema; the strict-object guard rejects bot.json files that still
+// carry them, and `parseBotConfigOnDisk` rewrites the resulting Zod
+// error to point operators at the env var to set.
 export const BotConfigOnDiskSchema = z.strictObject({
   irc: IrcConfigOnDiskSchema,
   owner: OwnerConfigSchema,
   identity: IdentityConfigSchema,
   services: ServicesConfigOnDiskSchema,
-  database: z.string(),
-  pluginDir: z.string(),
-  pluginsConfig: z.string().optional(),
+  pluginsConfig: z.string().optional().describe('@reload:restart plugins.json path'),
   logging: LoggingConfigSchema,
   queue: QueueConfigSchema.optional(),
   flood: FloodConfigSchema.optional(),
   proxy: ProxyConfigOnDiskSchema.optional(),
   dcc: DccConfigSchema.optional(),
   botlink: BotlinkConfigOnDiskSchema.optional(),
-  quit_message: z.string().optional(),
-  channel_rejoin_interval_ms: z.number().optional(),
-  channel_retry_schedule_ms: z.array(z.number().nonnegative()).optional(),
-  command_prefix: z.string().min(1).optional(),
+  quit_message: z.string().optional().describe('@reload:live Server-visible QUIT message'),
+  channel_rejoin_interval_ms: z
+    .number()
+    .optional()
+    .describe('@reload:live Periodic presence-check interval (ms)'),
+  channel_retry_schedule_ms: z
+    .array(z.number().nonnegative())
+    .optional()
+    .describe('@reload:live Channel rejoin backoff schedule (ms)'),
+  command_prefix: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('@reload:live Built-in admin command prefix'),
   chanmod: ChanmodBotConfigOnDiskSchema.optional(),
   memo: MemoConfigSchema.optional(),
 });

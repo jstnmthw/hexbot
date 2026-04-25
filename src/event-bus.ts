@@ -52,14 +52,10 @@ export interface BotEvents {
   'bot:nick-collision': [actualNick: string];
   'plugin:loaded': [pluginId: string];
   'plugin:unloaded': [pluginId: string];
-  'plugin:reloaded': [pluginId: string];
-  /**
-   * Fired when `reload()` successfully tore down the old plugin but
-   * failed to load the new one. Operators must intervene — the plugin
-   * is now in the unloaded state. Payload is the plugin name and the
-   * load error string. See stability audit 2026-04-14.
-   */
-  'plugin:reload_failed': [pluginId: string, error: string];
+  // `plugin:reloaded` and `plugin:reload_failed` were removed in the
+  // 2026-04-25 live-config refactor (alongside `.reload` and the
+  // cache-busting import path). Plugin enable/disable cycles fire
+  // `plugin:loaded` / `plugin:unloaded` only.
   'mod:op': [channel: string, nick: string, by: string];
   'mod:kick': [channel: string, nick: string, by: string, reason: string];
   'mod:ban': [channel: string, mask: string, by: string];

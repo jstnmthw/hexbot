@@ -45,6 +45,8 @@ function makeDeps(): PluginApiDeps {
     services: null,
     helpRegistry: null,
     channelSettings: null,
+    coreSettings: null,
+    pluginSettings: null,
     banStore: null,
     rootLogger: null,
     getCasemapping: () => 'rfc1459',

@@ -8,7 +8,7 @@ This document describes HexBot's stable architectural decisions. For current fea
 
 ## 1. Project overview
 
-HexBot is a single-process, plugin-based IRC bot written in TypeScript. It connects to any IRC network, loads plugins at runtime with hot-reload, and manages channel operations through an event bind system and flag-based permissions.
+HexBot is a single-process, plugin-based IRC bot written in TypeScript. It connects to any IRC network, manages channel operations through an event bind system and flag-based permissions, and supports live config updates via a three-scope settings registry (`core` / `<plugin-id>` / `<channel>`) backed by SQLite KV. Plugin enable/disable is itself a config key, and KV is canonical after first boot — JSON config files are first-run seeds, then operator `.set` / `.unset` / `.rehash` writes win.
 
 The goal is an open-source alternative to Eggdrop that eliminates the pain of C compilation, Tcl scripting, flat-file databases, and telnet-era admin interfaces — while preserving the design patterns that made Eggdrop successful for three decades.
 
@@ -18,7 +18,7 @@ The goal is an open-source alternative to Eggdrop that eliminates the pain of C 
 - **Convention over configuration.** Sane defaults that work on any network out of the box. Tune later if needed.
 - **Plugins are self-contained.** Each plugin ships its own default config, registers its own binds, manages its own database namespace. No plugin depends on another plugin.
 - **Core modules are the foundation.** A small set of core modules (permissions, services, irc-commands, channel-state) provide shared functionality that plugins build on. Core modules can depend on each other.
-- **Modern developer experience.** TypeScript, ESM modules, async/await, `pnpm install && pnpm start`, hot-reload without restart, attached REPL for development.
+- **Modern developer experience.** TypeScript, ESM modules, async/await, `pnpm install && pnpm start`, attached REPL for development. Process-level `tsx watch` covers the edit-test loop without leaking ESM module-graph residue.
 
 ### Tech stack
 
@@ -800,12 +800,14 @@ export default defineConfig({
 });
 ```
 
-### Hot-reload workflow
+### Plugin iteration workflow
 
-1. Edit plugin source code
-2. Rebuild: `pnpm build:plugins` (esbuild bundling is <100ms per plugin)
-3. In REPL or IRC: `.reload my-plugin`
-4. Changes are live — no bot restart needed
+1. Edit plugin source code.
+2. Rebuild: `pnpm build:plugins` (esbuild bundling is <100ms per plugin).
+3. Restart the process: `.restart` from the REPL/IRC, or run `tsx watch` to auto-restart on save.
+4. The new process loads the rebuilt plugin from a clean ESM module graph — no cached residue from prior versions.
+
+The pre-2026-04-25 `.reload <plugin>` flow has been deleted. Node's ESM loader has no module-graph eviction API, so the cache-busted re-import that powered hot-reload accumulated one full module graph per reload for the lifetime of the process (audit CRITICAL — see `docs/audits/memleak-all-2026-04-25.md`). Process restart costs sub-second on this codebase; the leak-free guarantee is worth that price.
 
 ### Testing against a local IRC server
 

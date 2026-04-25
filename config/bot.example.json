@@ -3,16 +3,14 @@
     "host": "irc.rizon.net",
     "port": 6697,
     "tls": true,
-    "nick": "Hexbot",
+    "nick": "HexBot",
+    "alt_nick": "HexBot^",
     "username": "hexbot",
     "realname": "HexBot IRC Bot",
-    "channels": ["#hexbot", { "name": "#secret", "key": "channel-key-here" }],
-    "alt_nick": "Hexbot_",
+    "channels": ["#hexbot"],
     "ghost_on_recover": true
   },
   "owner": {
-    "handle": "admin",
-    "hostmask": "*!yourident@your.host.here",
     "password_env": "HEX_OWNER_PASSWORD"
   },
   "identity": {
@@ -28,73 +26,11 @@
     "identify_before_join": true,
     "identify_before_join_timeout_ms": 10000
   },
-  "database": "./data/hexbot.db",
-  "pluginDir": "./plugins",
   "logging": {
     "level": "info",
     "mod_actions": true
   },
-  "queue": {
-    "rate": 1,
-    "burst": 5
-  },
-  "flood": {
-    "pub": { "count": 5, "window": 10 },
-    "msg": { "count": 5, "window": 10 }
-  },
-  "dcc": {
-    "enabled": false,
-    "ip": "0.0.0.0",
-    "port_range": [49152, 49171],
-    "require_flags": "m",
-    "max_sessions": 5,
-    "idle_timeout_ms": 300000
-  },
-  "proxy": {
-    "enabled": false,
-    "host": "127.0.0.1",
-    "port": 9050,
-    "password_env": "HEX_PROXY_PASSWORD"
-  },
-  "botlink": {
-    "enabled": false,
-    "role": "leaf",
-    "botname": "mybot",
-    "hub": {
-      "host": "192.168.1.10",
-      "port": 5051
-    },
-    "listen": {
-      "host": "127.0.0.1",
-      "port": 5051
-    },
-    "password_env": "HEX_BOTLINK_PASSWORD",
-    "link_salt": "0000000000000000000000000000000000000000000000000000000000000000",
-    "reconnect_delay_ms": 5000,
-    "reconnect_max_delay_ms": 60000,
-    "max_leaves": 10,
-    "sync_permissions": true,
-    "sync_channel_state": true,
-    "sync_bans": true,
-    "ping_interval_ms": 30000,
-    "link_timeout_ms": 90000,
-    "max_auth_failures": 5,
-    "auth_window_ms": 60000,
-    "auth_ban_duration_ms": 300000,
-    "auth_ip_whitelist": [],
-    "handshake_timeout_ms": 10000,
-    "max_pending_handshakes": 3,
-    "cmd_inbound_rate": 50
-  },
   "chanmod": {
     "nick_recovery_password_env": "HEX_CHANMOD_RECOVERY_PASSWORD"
-  },
-  "memo": {
-    "memoserv_relay": true,
-    "memoserv_nick": "MemoServ",
-    "delivery_cooldown_seconds": 60
-  },
-  "quit_message": "HexBot",
-  "channel_rejoin_interval_ms": 30000,
-  "channel_retry_schedule_ms": [300000, 900000, 2700000]
+  }
 }

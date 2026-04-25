@@ -98,9 +98,15 @@ describe('Bot (mock)', () => {
       expect(names).toContain('part');
       expect(names).toContain('status');
       expect(names).toContain('plugins');
-      expect(names).toContain('load');
-      expect(names).toContain('unload');
-      expect(names).toContain('reload');
+      // .load / .unload / .reload were deleted in the live-config refactor;
+      // plugin enable/disable is `.set core plugins.<id>.enabled true/false`
+      // and `.restart` is the canonical "pick up code edits" path. The
+      // Mock bot harness does not wire `.set` / `.unset` (those need a
+      // real `coreSettings` registry); the assertion just verifies the
+      // legacy commands are gone.
+      expect(names).not.toContain('load');
+      expect(names).not.toContain('unload');
+      expect(names).not.toContain('reload');
     });
   });
 

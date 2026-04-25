@@ -16,6 +16,7 @@ import type { IRCCommands } from './core/irc-commands';
 import type { MessageQueue } from './core/message-queue';
 import type { Permissions } from './core/permissions';
 import type { Services } from './core/services';
+import type { SettingsRegistry } from './core/settings-registry';
 import type { BotDatabase } from './database';
 import type { BindRegistrar } from './dispatcher';
 import type { BotEventBus } from './event-bus';
@@ -36,12 +37,16 @@ import type {
   PluginBanStore,
   PluginBotConfig,
   PluginChannelSettings,
+  PluginCoreSettingsView,
   PluginDB,
   PluginModActor,
   PluginPermissions,
   PluginServices,
+  PluginSettingDef,
+  PluginSettings,
   PluginSlidingWindowCounter,
   PluginUtil,
+  SettingsChangeCallback,
 } from './types';
 import { sanitize } from './utils/sanitize';
 import { SlidingWindowCounter } from './utils/sliding-window';
@@ -79,6 +84,10 @@ export interface PluginApiDeps {
   services: Services | null;
   helpRegistry: HelpRegistry | null;
   channelSettings: ChannelSettings | null;
+  /** Core-scope settings registry — plugins observe via `api.coreSettings`. */
+  coreSettings: SettingsRegistry | null;
+  /** This plugin's own settings registry (created/destroyed per load by the loader). */
+  pluginSettings: SettingsRegistry | null;
   banStore: BanStore | null;
   /** Root bot logger — the factory derives a per-plugin child from it. */
   rootLogger: LoggerLike | null;
@@ -132,6 +141,8 @@ const SUB_API_KEYS = new Set([
   'db',
   'banStore',
   'channelSettings',
+  'coreSettings',
+  'settings',
   'audit',
   'util',
 ]);
@@ -311,6 +322,8 @@ export function createPluginApi(
       return undefined;
     },
     channelSettings: createPluginChannelSettingsApi(deps.channelSettings, pluginId),
+    coreSettings: createPluginCoreSettingsView(deps.coreSettings, pluginId),
+    settings: createPluginSettingsApi(deps.pluginSettings, pluginId),
     ...createPluginHelpApi(deps.helpRegistry, pluginId),
     stripFormatting(text: string): string {
       return stripFormatting(text);
@@ -897,6 +910,147 @@ function createPluginChannelSettingsApi(
       channelSettings?.onChange(pluginId, callback);
     },
   } satisfies PluginChannelSettings);
+}
+
+/**
+ * Build the read-only `api.coreSettings` view. Plugins observe core-scope
+ * setting state but cannot mutate it — that path is reserved for operator
+ * commands and core subsystems. The on-change subscription is owner-keyed
+ * to the pluginId so the loader's `cleanupPluginResources` drains it on
+ * unload alongside every other plugin-attached listener.
+ *
+ * Core-scope keys are bot-wide singletons; the underlying registry stores
+ * them under instance `''`. We mirror that here so plugins can call
+ * `api.coreSettings.get('logging.level')` without threading an instance
+ * argument they have no business knowing about.
+ */
+function createPluginCoreSettingsView(
+  registry: SettingsRegistry | null,
+  pluginId: string,
+): PluginCoreSettingsView {
+  if (!registry) {
+    return Object.freeze({
+      get(): ChannelSettingValue {
+        return '';
+      },
+      getFlag(): boolean {
+        return false;
+      },
+      getString(): string {
+        return '';
+      },
+      getInt(): number {
+        return 0;
+      },
+      isSet(): boolean {
+        return false;
+      },
+      onChange(): void {},
+      offChange(): void {},
+    });
+  }
+  return Object.freeze({
+    get(key: string): ChannelSettingValue {
+      return registry.get('', key);
+    },
+    getFlag(key: string): boolean {
+      return registry.getFlag('', key);
+    },
+    getString(key: string): string {
+      return registry.getString('', key);
+    },
+    getInt(key: string): number {
+      return registry.getInt('', key);
+    },
+    isSet(key: string): boolean {
+      return registry.isSet('', key);
+    },
+    onChange(callback: SettingsChangeCallback): void {
+      // The registry's onChange callback signature is
+      // `(instance, key, value)`; for core scope `instance` is always `''`
+      // so we discard it and only surface `(key, value)` to plugins.
+      registry.onChange(pluginId, (_instance, key, value) => callback(key, value));
+    },
+    offChange(_callback: SettingsChangeCallback): void {
+      // The registry's owner-scoped offChange drains every callback
+      // registered under this plugin id; per-callback off is unnecessary
+      // because we only attach one wrapper per plugin via createPluginCoreSettingsView.
+      registry.offChange(pluginId);
+    },
+  });
+}
+
+/**
+ * Build the read/write `api.settings` view scoped to the plugin's own
+ * registry (`plugin:<pluginId>` namespace). Mirrors `api.channelSettings`
+ * shape but operates on a singleton (no per-channel dimension).
+ *
+ * `set` / `unset` here go through the registry without an actor — plugin
+ * self-writes are unattributed, matching `api.channelSettings.set()`
+ * today. Operator-driven writes via `.set <plugin> <key> <value>` route
+ * through the registry with an `auditActor(ctx)` so the mod_log row
+ * attributes the change to the user.
+ */
+function createPluginSettingsApi(
+  registry: SettingsRegistry | null,
+  pluginId: string,
+): PluginSettings {
+  if (!registry) {
+    return Object.freeze({
+      register(): void {},
+      get(): ChannelSettingValue {
+        return '';
+      },
+      getFlag(): boolean {
+        return false;
+      },
+      getString(): string {
+        return '';
+      },
+      getInt(): number {
+        return 0;
+      },
+      set(): void {},
+      unset(): void {},
+      isSet(): boolean {
+        return false;
+      },
+      onChange(): void {},
+      offChange(): void {},
+    });
+  }
+  return Object.freeze({
+    register(defs: PluginSettingDef[]): void {
+      registry.register(pluginId, defs);
+    },
+    get(key: string): ChannelSettingValue {
+      return registry.get('', key);
+    },
+    getFlag(key: string): boolean {
+      return registry.getFlag('', key);
+    },
+    getString(key: string): string {
+      return registry.getString('', key);
+    },
+    getInt(key: string): number {
+      return registry.getInt('', key);
+    },
+    set(key: string, value: ChannelSettingValue): void {
+      registry.set('', key, value);
+    },
+    unset(key: string): void {
+      registry.unset('', key);
+    },
+    isSet(key: string): boolean {
+      return registry.isSet('', key);
+    },
+    onChange(callback: SettingsChangeCallback): void {
+      registry.onChange(pluginId, (_instance, key, value) => callback(key, value));
+    },
+    offChange(_callback: SettingsChangeCallback): void {
+      registry.offChange(pluginId);
+    },
+  });
 }
 
 function createPluginHelpApi(

@@ -25,7 +25,20 @@ cp config/plugins.example.json config/plugins.json
 cp config/bot.env.example config/bot.env && chmod 600 config/bot.env
 ```
 
-Edit `config/bot.json` with your IRC server details and owner hostmask. Secrets (NickServ password, proxy credentials, etc.) go in `config/bot.env` via environment variables -- see the [NickServ / SASL](#nickserv--sasl) section below.
+Edit `config/bot.env` with the bootstrap values and any secrets:
+
+```
+HEX_DB_PATH=./data/hexbot.db
+HEX_PLUGIN_DIR=./plugins
+HEX_OWNER_HANDLE=admin
+HEX_OWNER_HOSTMASK=*!yourident@your.host.here
+HEX_OWNER_PASSWORD=choose-a-strong-password
+HEX_NICKSERV_PASSWORD=
+```
+
+Bootstrap values are required at every boot — they are read before the SQLite KV is opened. The owner identity is consumed only on first boot to seed the user record; the DB is the store of record after that. See the [NickServ / SASL](#nickserv--sasl) section for secrets.
+
+Edit `config/bot.json` with your IRC server details:
 
 ```json
 {
@@ -39,17 +52,9 @@ Edit `config/bot.json` with your IRC server details and owner hostmask. Secrets 
     "channels": ["#hexbot"]
   },
   "owner": {
-    "handle": "admin",
-    "hostmask": "*!yourident@your.host.here",
     "password_env": "HEX_OWNER_PASSWORD"
   }
 }
-```
-
-Then put the owner's DCC password in `config/bot.env`:
-
-```
-HEX_OWNER_PASSWORD=choose-a-strong-password
 ```
 
 The first time the bot starts it will read `HEX_OWNER_PASSWORD`, hash it with scrypt, and store it in the database. Subsequent restarts leave the stored hash alone, so if you later rotate via `.chpass` those changes persist across reboots. The env var behaves like MySQL's `MYSQL_ROOT_PASSWORD` — leave it set in your env file; it only seeds when the DB has no hash on file.
@@ -103,10 +108,38 @@ Plugin commands use the `!` prefix:
 Admin commands use the `.` prefix and require permission flags:
 
 ```
-.adduser bob *!bob@example.com o    # add a user with +o flag
-.flags bob                          # check bob's flags
-.reload greeter                     # hot-reload the greeter plugin
+.adduser bob *!bob@example.com o                 # add a user with +o flag
+.flags bob                                       # check bob's flags
+.set core plugins.greeter.enabled false          # disable the greeter plugin
+.set core logging.level debug                    # crank logs to debug live
+.restart                                         # clean process restart
 ```
+
+## Live config
+
+Most config keys can be changed at runtime. The full operator surface:
+
+```
+.set <scope> <key> <value>      # write one key (live-apply via onChange)
+.unset <scope> <key>            # delete from KV → reads registered default
+.info <scope>                   # snapshot of every key in the scope
+.helpset <scope> <key>          # type, default, description, reload-class
+.rehash [scope]                 # re-read JSON files, apply changed keys
+.restart                        # clean process restart
+```
+
+Scopes are `core`, `<plugin-id>`, or a channel name (`#chan`). KV is canonical after first boot — `bot.json` / `plugins.json` are seeds; `.set` / `.unset` win thereafter. `.rehash` is the deliberate path for pulling JSON edits in.
+
+Plugin enable/disable lives on `core.plugins.<id>.enabled`:
+
+```
+.set core plugins.ai-chat.enabled true     # load and start the plugin
+.set core plugins.ai-chat.enabled false    # stop and unload the plugin
+```
+
+The pre-2026-04-25 `.load` / `.unload` / `.reload` commands have been deleted (they were the source of an ESM-cache leak). Plugin authors picking up code edits use `.restart` (clean process, no leak) or run `tsx watch` at the process level during active development.
+
+See [`docs/CONFIG.md`](CONFIG.md) for the full key matrix and reload-class hints.
 
 ## Adding users
 

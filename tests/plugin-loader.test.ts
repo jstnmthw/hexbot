@@ -499,112 +499,77 @@ describe('PluginLoader', () => {
     });
   });
 
-  describe('reload', () => {
-    it('should reload a plugin (unload old binds, load new binds)', async () => {
-      // Vitest's module transform cache prevents true code-change reload testing.
-      // Instead we verify the mechanism: unload removes binds, load re-registers.
+  // The pre-refactor `reload()` method, the cache-busting import path,
+  // and the `plugin:reloaded` / `plugin:reload_failed` events were
+  // deleted in the 2026-04-25 live-config refactor. Plugin enable /
+  // disable flows through `core.plugins.<id>.enabled` (the registry's
+  // onChange triggers load/unload via the api factory's wiring); plugin
+  // authors picking up code edits use `.restart` for a clean process
+  // restart with no module-graph residue. The deleted tests for those
+  // code paths are intentionally not replaced — the contract is now
+  // "no in-process re-import", which `unloadAll` covers.
+
+  describe('unloadAll', () => {
+    it('runs teardown for every loaded plugin', async () => {
       const pluginPath = writePlugin(
         tempDir,
-        'reload-plugin',
+        'teardown-plugin',
         `
-        export const name = 'reload-plugin';
+        export const name = 'teardown-plugin';
         export const version = '1.0.0';
         export const description = '';
+        let teardownCalled = false;
         export function init(api) {
-          api.bind('pub', '-', '!reload-cmd', (ctx) => {});
+          api.bind('pub', '-', '!teardown', () => {});
+        }
+        export function teardown() {
+          (globalThis).__teardownPluginCalled = true;
         }
       `,
       );
 
-      const { loader, dispatcher, eventBus } = createLoader(tempDir);
-      await loader.load(pluginPath);
-
-      expect(dispatcher.listBinds({ pluginId: 'reload-plugin' })).toHaveLength(1);
-
-      const reloadedListener = vi.fn();
-      eventBus.on('plugin:reloaded', reloadedListener);
-
-      const result = await loader.reload('reload-plugin');
-
-      expect(result.status).toBe('ok');
-      expect(reloadedListener).toHaveBeenCalledWith('reload-plugin');
-      // After reload, binds should be re-registered (old ones removed, new ones added)
-      const binds = dispatcher.listBinds({ pluginId: 'reload-plugin' });
-      expect(binds).toHaveLength(1);
-      expect(binds[0].mask).toBe('!reload-cmd');
-    });
-
-    it('should throw when reloading a plugin that is not loaded', async () => {
       const { loader } = createLoader(tempDir);
-      await expect(loader.reload('nonexistent')).rejects.toThrow('not loaded');
+      await loader.load(pluginPath);
+      expect(loader.list().map((p) => p.name)).toContain('teardown-plugin');
+
+      await loader.unloadAll();
+      expect(loader.list()).toHaveLength(0);
+      expect((globalThis as Record<string, unknown>).__teardownPluginCalled).toBe(true);
+      delete (globalThis as Record<string, unknown>).__teardownPluginCalled;
     });
 
-    it('should not emit plugin:reloaded when reload fails', async () => {
-      // Use globalThis to track load count across cache-busted imports
-      (globalThis as Record<string, unknown>).__reloadFailCount = 0;
-      const pluginPath = writePlugin(
+    it('continues unloading siblings when one teardown throws', async () => {
+      const pathA = writePlugin(
         tempDir,
-        'reload-fail',
+        'tear-a',
         `
-        export const name = 'reload-fail';
+        export const name = 'tear-a';
         export const version = '1.0.0';
         export const description = '';
-        export function init(api) {
-          globalThis.__reloadFailCount++;
-          if (globalThis.__reloadFailCount > 1) throw new Error('reload boom');
-        }
+        export function init(api) {}
+        export function teardown() { (globalThis).__tearACalled = true; }
+        `,
+      );
+      const pathB = writePlugin(
+        tempDir,
+        'tear-b',
+        `
+        export const name = 'tear-b';
+        export const version = '1.0.0';
+        export const description = '';
+        export function init(api) {}
+        export function teardown() { throw new Error('boom'); }
         `,
       );
 
-      const { loader, eventBus } = createLoader(tempDir);
-      const first = await loader.load(pluginPath);
-      expect(first.status).toBe('ok');
+      const { loader } = createLoader(tempDir);
+      await loader.load(pathA);
+      await loader.load(pathB);
+      await loader.unloadAll();
 
-      const reloadedListener = vi.fn();
-      eventBus.on('plugin:reloaded', reloadedListener);
-
-      const result = await loader.reload('reload-fail');
-
-      expect(result.status).toBe('error');
-      expect(reloadedListener).not.toHaveBeenCalled();
-      delete (globalThis as Record<string, unknown>).__reloadFailCount;
-    });
-
-    it('preserves plugins.json overrides across reload', async () => {
-      // Regression: before this fix, reload() called load() without the
-      // plugins.json overrides, so ai-chat would silently flip from the
-      // configured provider (e.g. ollama) back to its config.json default
-      // (gemini) and enter degraded mode when no Gemini key was set.
-      writePluginConfig(tempDir, 'cfg-reload', { greeting: 'default' });
-      writePlugin(
-        tempDir,
-        'cfg-reload',
-        `
-        export const name = 'cfg-reload';
-        export const version = '1.0.0';
-        export const description = '';
-        export function init(api) {
-          api.db.set('seen-greeting', String(api.config.greeting ?? ''));
-        }
-      `,
-      );
-
-      const cfgPath = writePluginsJson(tempDir, {
-        'cfg-reload': { enabled: true, config: { greeting: 'override' } },
-      });
-
-      const db = new BotDatabase(':memory:');
-      db.open();
-      const { loader } = createLoader(tempDir, db);
-      await loader.loadAll(cfgPath);
-
-      expect(db.get('cfg-reload', 'seen-greeting')).toBe('override');
-
-      const result = await loader.reload('cfg-reload');
-      expect(result.status).toBe('ok');
-      expect(db.get('cfg-reload', 'seen-greeting')).toBe('override');
-
-      db.close();
+      expect(loader.list()).toHaveLength(0);
+      expect((globalThis as Record<string, unknown>).__tearACalled).toBe(true);
+      delete (globalThis as Record<string, unknown>).__tearACalled;
     });
   });
 

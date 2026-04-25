@@ -87,8 +87,8 @@ export class BotDatabase {
   private db: DatabaseType | null = null;
   private readonly path: string;
   private logger: LoggerLike | null;
-  private readonly modLogEnabled: boolean;
-  private readonly modLogRetentionDays: number;
+  private modLogEnabled: boolean;
+  private modLogRetentionDays: number;
   private eventBus: BotEventBus | null = null;
   /** Owns mod_log persistence — created during `open()`. */
   private modLog: ModLog | null = null;
@@ -368,6 +368,17 @@ export class BotDatabase {
   /** Query the mod log with optional filters. */
   getModLog(filter?: ModLogFilter): ModLogEntry[] {
     return this.ensureModLog().getModLog(filter);
+  }
+
+  /** Toggle persistence of `logModAction` writes at runtime — used by
+   *  `core.logging.mod_actions` onChange. Past rows are not affected. */
+  setModLogEnabled(enabled: boolean): void {
+    this.modLogEnabled = enabled;
+  }
+
+  /** Update the retention window in days. `0` or unset means unlimited. */
+  setModLogRetentionDays(days: number): void {
+    this.modLogRetentionDays = days;
   }
 
   /**

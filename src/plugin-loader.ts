@@ -14,6 +14,7 @@ import type { IRCCommands } from './core/irc-commands';
 import type { MessageQueue } from './core/message-queue';
 import type { Permissions } from './core/permissions';
 import type { Services } from './core/services';
+import { SettingsRegistry } from './core/settings-registry';
 import type { BotDatabase } from './database';
 import type { EventDispatcher } from './dispatcher';
 import type { BotEventBus } from './event-bus';
@@ -103,6 +104,18 @@ export interface PluginLoaderDeps {
   services?: Services | null;
   helpRegistry?: HelpRegistry | null;
   channelSettings?: ChannelSettings | null;
+  /**
+   * Core-scope settings registry. Plugins consume it as a read-only
+   * view via `api.coreSettings`; the loader passes it through to the
+   * api factory.
+   */
+  coreSettings?: SettingsRegistry | null;
+  /**
+   * Shared map of per-plugin settings registries (Bot owns it). The
+   * loader inserts a fresh `SettingsRegistry` per plugin on `load()`
+   * and removes it on `unload()`.
+   */
+  pluginSettings?: Map<string, SettingsRegistry> | null;
   banStore?: BanStore | null;
   logger?: LoggerLike | null;
   getCasemapping?: () => Casemapping;
@@ -119,11 +132,19 @@ export interface PluginLoaderDeps {
  * Plugin DB namespaces share the same key space as core reserved namespaces
  * (`_bans`, `_sts`, `_permissions`, `_linkbans`). The leading-alphanumeric
  * requirement here is what keeps plugins from colliding with them — every
- * reserved core namespace starts with an underscore, which this regex's
- * anchor rejects. Do not loosen the anchor without wiring a separate
- * reserved-prefix check.
+ * underscore-prefixed reserved core namespace is rejected by this regex's
+ * anchor. The non-underscore reserved namespaces (`core`, `chanset`,
+ * `plugin:<id>`) are guarded by {@link RESERVED_PLUGIN_NAMES} below.
  */
 const SAFE_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
+
+/**
+ * Plugin names reserved by core. These are the names (without leading
+ * underscore) that core uses for KV namespaces — a plugin claiming any
+ * of them would shadow core state. The check runs alongside SAFE_NAME_RE
+ * in `loadAll()` / `load()`.
+ */
+const RESERVED_PLUGIN_NAMES: ReadonlySet<string> = new Set(['core', 'chanset', 'plugin']);
 
 // ---------------------------------------------------------------------------
 // PluginLoader
@@ -144,6 +165,8 @@ export class PluginLoader {
   private services: Services | null;
   private helpRegistry: HelpRegistry | null;
   private channelSettings: ChannelSettings | null;
+  private coreSettings: SettingsRegistry | null;
+  private pluginSettings: Map<string, SettingsRegistry> | null;
   private banStore: BanStore | null;
   private logger: LoggerLike | null;
   private rootLogger: LoggerLike | null;
@@ -158,13 +181,10 @@ export class PluginLoader {
     Array<(nick: string, previousAccount: string) => void>
   > = new Map();
   private botIdentifiedListeners: Map<string, Array<() => void>> = new Map();
-  /** Absolute paths of plugin entry files already imported in this process. */
-  private importedOnce: Set<string> = new Set();
   /**
-   * Path to `plugins.json` captured by the most recent `loadAll()`. Used by
-   * `reload()` to re-read the user's overrides — without it, reload would
-   * fall back to each plugin's `config.json` defaults (e.g. ai-chat would
-   * flip from ollama to gemini on reload).
+   * Path to `plugins.json` captured by the most recent `loadAll()` so
+   * a `core.plugins.<id>.enabled` mid-session toggle picks up the same
+   * config the boot path used.
    */
   private pluginsConfigPath: string | null = null;
 
@@ -182,6 +202,8 @@ export class PluginLoader {
     this.services = deps.services ?? null;
     this.helpRegistry = deps.helpRegistry ?? null;
     this.channelSettings = deps.channelSettings ?? null;
+    this.coreSettings = deps.coreSettings ?? null;
+    this.pluginSettings = deps.pluginSettings ?? null;
     this.banStore = deps.banStore ?? null;
     this.rootLogger = deps.logger ?? null;
     this.logger = deps.logger?.child('plugin-loader') ?? null;
@@ -227,11 +249,50 @@ export class PluginLoader {
       /* plugin dir may not exist or not be readable */
     }
 
+    // Register `core.plugins.<id>.enabled` for every discovered plugin
+    // before any load happens. Once registered, the seed-from-json walker
+    // is the right path for picking up plugins.json's `enabled` flag —
+    // but seed-from-json is keyed off registered defs and we know the
+    // plugin set only here, so we register first, then run a pinpoint
+    // seed for each. Bot's onChange handler (Phase 9) routes future
+    // operator `.set core plugins.<id>.enabled` writes to load/unload.
+    if (this.coreSettings) {
+      for (const name of pluginNames) {
+        // Default to true: a plugin discovered on disk is enabled by
+        // default unless plugins.json or the operator says otherwise.
+        // The seed below pulls the operator's preference in.
+        this.coreSettings.register('bot', [
+          {
+            key: `plugins.${name}.enabled`,
+            type: 'flag',
+            default: true,
+            description: `Whether the "${name}" plugin is loaded`,
+            reloadClass: 'live',
+          },
+        ]);
+        // Seed from plugins.json on first boot. `enabled` defaults to
+        // `true` if the operator hasn't expressed an opinion at all
+        // (matches the pre-refactor "auto-discovered plugins are loaded
+        // unless plugins.json explicitly disables them" behaviour).
+        if (!this.coreSettings.isSet('', `plugins.${name}.enabled`)) {
+          const cfg = pluginsConfig[name];
+          const seedValue = cfg ? cfg.enabled !== false : true;
+          this.coreSettings.set('', `plugins.${name}.enabled`, seedValue);
+        }
+      }
+    }
+
     const results: LoadResult[] = [];
 
     for (const name of pluginNames) {
-      const config = pluginsConfig[name];
-      if (config && config.enabled === false) {
+      // KV-canonical: enabled state lives on `core.plugins.<id>.enabled`.
+      // `plugins.json[name].enabled` was already folded in by the
+      // seed-from-json step above on first boot; on subsequent boots KV
+      // wins (operator's `.set core plugins.<id>.enabled` persists).
+      const enabled = this.coreSettings
+        ? this.coreSettings.getFlag('', `plugins.${name}.enabled`)
+        : pluginsConfig[name]?.enabled !== false;
+      if (!enabled) {
         this.logger?.debug(`Skipping disabled plugin: ${name}`);
         continue;
       }
@@ -299,6 +360,13 @@ export class PluginLoader {
         error: `Plugin directory name "${inferredName}" contains invalid characters`,
       };
     }
+    if (RESERVED_PLUGIN_NAMES.has(inferredName)) {
+      return {
+        name: inferredName,
+        status: 'error',
+        error: `Plugin name "${inferredName}" is reserved by core (settings-registry namespace)`,
+      };
+    }
 
     if (!existsSync(absPath)) {
       return { name: inferredName, status: 'error', error: `Plugin file not found: ${absPath}` };
@@ -306,7 +374,15 @@ export class PluginLoader {
 
     let mod: Record<string, unknown>;
     try {
-      mod = await this.importWithCacheBust(absPath);
+      // Plain ESM import — no cache-busting query string. The 2026-04-25
+      // memleak audit's CRITICAL traced to `import('?t=<timestamp>')`
+      // cycling: Node's ESM loader keys its registry by full URL with no
+      // eviction API, so every cache-busted re-import minted a permanent
+      // module-graph entry. Killing that path at the source is the
+      // resolution: a second `load()` of the same plugin path resolves
+      // to the same cached module, which is exactly what an unload→load
+      // cycle wants.
+      mod = (await import(pathToFileURL(absPath).href)) as Record<string, unknown>;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return {
@@ -347,6 +423,24 @@ export class PluginLoader {
         status: 'error',
         error: `Plugin "${pluginName}" is already loaded`,
       };
+    }
+
+    // Create the per-plugin settings registry up-front so the api factory
+    // can hand both a read/write view to the plugin and the underlying
+    // registry to operator commands. Recreated on each `load()` (a stale
+    // reload should never inherit listener stacks from the previous
+    // instance — see audit W-PS2 cross-cutting verification).
+    if (this.pluginSettings && this.db) {
+      this.pluginSettings.set(
+        pluginName,
+        new SettingsRegistry({
+          scope: 'plugin',
+          namespace: `plugin:${pluginName}`,
+          db: this.db,
+          logger: this.rootLogger?.child(`plugin-settings:${pluginName}`),
+          auditActions: { set: 'pluginset-set', unset: 'pluginset-unset' },
+        }),
+      );
     }
 
     // Create scoped API
@@ -444,44 +538,25 @@ export class PluginLoader {
   }
 
   /**
-   * Reload a plugin (unload + load from same path).
-   *
-   * Fail-loud on reload failure: when `load()` fails after `unload()`
-   * has already run, the plugin is left in the unloaded state with a
-   * prominent error log and a `plugin:reload_failed` event emit.
-   * Silently resurrecting the old instance would mask the breakage
-   * and leave operators running stale code without realising it.
-   * Operator must fix the code and re-run `.load`. See stability
-   * audit 2026-04-14.
+   * Unload every loaded plugin in reverse load order. Called from
+   * `Bot.shutdown()` so plugins get a clean teardown chance on process
+   * exit (see audit W-PS finding 2026-04-25). Errors from individual
+   * teardowns are logged but never abort the loop — every remaining
+   * plugin still gets its teardown call.
    */
-  async reload(pluginName: string): Promise<LoadResult> {
-    const plugin = this.loaded.get(pluginName);
-    if (!plugin) {
-      throw new Error(`Plugin "${pluginName}" is not loaded`);
+  async unloadAll(): Promise<void> {
+    const names = Array.from(this.loaded.keys()).reverse();
+    for (const name of names) {
+      try {
+        await this.unload(name);
+      } catch (err) {
+        this.logger?.error(`unloadAll: unload(${name}) threw — continuing:`, err);
+        // Force-remove from the loaded map so a subsequent unloadAll
+        // doesn't keep trying. The teardown failure itself is already
+        // logged loudly via unload()'s own catch.
+        this.loaded.delete(name);
+      }
     }
-
-    const filePath = plugin.filePath;
-    await this.unload(pluginName);
-
-    // Re-read plugins.json so reload picks up the user's current overrides
-    // (and any edits made since the last load). Without this, reload would
-    // fall back to the plugin's shipped config.json defaults.
-    const pluginsConfig = this.pluginsConfigPath
-      ? (this.readPluginsConfig(this.pluginsConfigPath) ?? undefined)
-      : undefined;
-    const result = await this.load(filePath, pluginsConfig);
-
-    if (result.status === 'ok') {
-      this.eventBus.emit('plugin:reloaded', pluginName);
-    } else {
-      this.logger?.error(
-        `[plugin-loader] RELOAD FAILED for "${pluginName}" — plugin is now UNLOADED. ` +
-          `Fix the code and run \`.load ${pluginName}\` to recover. Error: ${result.error}`,
-      );
-      this.eventBus.emit('plugin:reload_failed', pluginName, result.error ?? 'unknown error');
-    }
-
-    return result;
   }
 
   /** List all loaded plugins. */
@@ -528,6 +603,18 @@ export class PluginLoader {
     this.helpRegistry?.unregister(pluginName);
     this.channelSettings?.unregister(pluginName);
     this.channelSettings?.offChange(pluginName);
+
+    // Drop the plugin's own settings registry and any core-scope
+    // listener it installed via `api.coreSettings.onChange(...)`. The
+    // KV-stored values are preserved (operator data survives plugin
+    // unloads); only the in-memory def map and listener stack go.
+    this.coreSettings?.offChange(pluginName);
+    const pluginRegistry = this.pluginSettings?.get(pluginName);
+    if (pluginRegistry) {
+      pluginRegistry.unregister(pluginName);
+      pluginRegistry.offChange(pluginName);
+    }
+    this.pluginSettings?.delete(pluginName);
 
     // Drain the per-plugin `onModesReady` listeners registered via the
     // plugin API. These live in a parallel map (not trackListener) so the
@@ -641,6 +728,8 @@ export class PluginLoader {
         services: this.services,
         helpRegistry: this.helpRegistry,
         channelSettings: this.channelSettings,
+        coreSettings: this.coreSettings,
+        pluginSettings: this.pluginSettings?.get(pluginId) ?? null,
         banStore: this.banStore,
         rootLogger: this.rootLogger,
         getCasemapping: this.getCasemapping,
@@ -708,24 +797,6 @@ export class PluginLoader {
       this.logger?.error('Failed to parse plugins.json:', err);
       return null;
     }
-  }
-
-  /**
-   * Import a plugin bundle, side-stepping the ESM loader cache on subsequent
-   * imports of the same path. Node's ESM loader keys the cache by full URL,
-   * so appending a fresh `?t=<timestamp>` query string forces a re-evaluation
-   * of the module — required for `.reload <plugin>` to actually pick up edited
-   * code. The first import is cache-friendly (no query string) so production
-   * loads don't accumulate distinct module instances.
-   */
-  private async importWithCacheBust(absPath: string): Promise<Record<string, unknown>> {
-    if (!this.importedOnce.has(absPath)) {
-      this.importedOnce.add(absPath);
-      return (await import(pathToFileURL(absPath).href)) as Record<string, unknown>;
-    }
-    const ts = Date.now();
-    const fileUrl = pathToFileURL(absPath).href + `?t=${ts}`;
-    return (await import(fileUrl)) as Record<string, unknown>;
   }
 
   /**

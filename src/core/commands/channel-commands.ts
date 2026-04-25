@@ -1,58 +1,19 @@
 // HexBot — Per-channel settings commands
 // Registers .chanset and .chaninfo with the command handler.
+// `.chanset` is the channel-scope-specific operator surface — its
+// Eggdrop-style `+key`/`-key` toggle ergonomics make it the path of
+// least friction for per-channel flags. `.set #chan key value` does
+// the same thing internally (both routes call the same
+// SettingsRegistry); operators pick by preference.
 import type { CommandHandler } from '../../command-handler';
 import type { BotDatabase } from '../../database';
 import type { ChannelSettingEntry, ChannelSettingValue } from '../../types';
 import { sanitize } from '../../utils/sanitize';
 import { tryAudit } from '../audit';
 import type { ChannelSettings } from '../channel-settings';
-
-// -------------------------------------------------------------------------
-// Formatting helpers — Compact display
-// -------------------------------------------------------------------------
+import { formatFlagGrid, formatValueLines } from './settings-render';
 
 type SnapshotItem = { entry: ChannelSettingEntry; value: ChannelSettingValue; isDefault: boolean };
-
-/**
- * Format flag settings as an +/- grid.
- * Overridden values are marked with `*` (e.g. `+enforce_modes*`).
- * Pads entries to uniform width.
- *
- * `perRow = 4` keeps a typical 4-flag row well under the 80-column DCC
- * console width even when keys carry the `*` overridden marker — wider
- * grids wrap in xchat / mIRC and ruin the at-a-glance scan.
- */
-function formatFlagGrid(flags: SnapshotItem[], prefix = '  ', perRow = 4): string[] {
-  if (flags.length === 0) return [];
-  const entries = flags.map(({ entry, value, isDefault }) => {
-    const sign = value ? '+' : '-';
-    const marker = isDefault ? '' : '*';
-    return `${sign}${entry.key}${marker}`;
-  });
-  const maxLen = Math.max(...entries.map((e) => e.length));
-  const lines: string[] = [];
-  for (let i = 0; i < entries.length; i += perRow) {
-    const row = entries.slice(i, i + perRow);
-    const padded = row.map((e, j) => (j < row.length - 1 ? e.padEnd(maxLen) : e));
-    lines.push(prefix + padded.join('  '));
-  }
-  return lines;
-}
-
-/**
- * Format string/int settings one per line: `  key: value` or `  key*: value`.
- * `*` after the key marks an overridden (non-default) value, matching the
- * convention used by {@link formatFlagGrid} for boolean flags. An empty
- * string renders as `(not set)` so a stripped value is visually distinct
- * from a literal empty string the operator may have written intentionally.
- */
-function formatValueLines(items: SnapshotItem[], prefix = '  '): string[] {
-  return items.map(({ entry, value, isDefault }) => {
-    const display = value === '' ? '(not set)' : String(value);
-    const marker = isDefault ? '' : '*';
-    return `${prefix}${entry.key}${marker}: ${display}`;
-  });
-}
 
 export interface ChannelCommandsDeps {
   handler: CommandHandler;

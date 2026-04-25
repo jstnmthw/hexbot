@@ -42,6 +42,17 @@ export function parseBotConfigOnDisk(raw: unknown): BotConfigOnDisk {
   throw new Error(formatZodError(result.error));
 }
 
+// Maps bot.json keys that were moved to the bootstrap env layer to the
+// env var that replaces them. Surfaced in formatZodError so an operator
+// who left a removed key in bot.json sees the exact env var to set
+// instead of a bare "Unrecognized key" line.
+const BOOTSTRAP_HINT: Record<string, string> = {
+  database: 'set HEX_DB_PATH in config/bot.env (loaded by src/bootstrap.ts)',
+  pluginDir: 'set HEX_PLUGIN_DIR in config/bot.env (loaded by src/bootstrap.ts)',
+  'owner.handle': 'set HEX_OWNER_HANDLE in config/bot.env (loaded by src/bootstrap.ts)',
+  'owner.hostmask': 'set HEX_OWNER_HOSTMASK in config/bot.env (loaded by src/bootstrap.ts)',
+};
+
 function formatZodError(err: z.ZodError): string {
   const lines = ['[config] Invalid config/bot.json:'];
   for (const issue of err.issues) {
@@ -54,6 +65,21 @@ function formatZodError(err: z.ZodError): string {
     if (issue.code === 'invalid_type' && message.includes('received undefined')) {
       const expected = (issue as { expected?: string }).expected ?? 'value';
       message = `required field missing (expected ${expected})`;
+    }
+    // Strict-object rejection of a field that was moved to the bootstrap
+    // env layer — point the operator at the env var to set instead.
+    if (issue.code === 'unrecognized_keys') {
+      const keys = (issue as { keys?: string[] }).keys ?? [];
+      for (const key of keys) {
+        const fullPath = where === '(root)' ? key : `${where}.${key}`;
+        const hint = BOOTSTRAP_HINT[fullPath];
+        if (hint) {
+          lines.push(`  - ${fullPath}: removed from bot.json — ${hint}`);
+        } else {
+          lines.push(`  - ${where}: Unrecognized key: "${key}"`);
+        }
+      }
+      continue;
     }
     lines.push(`  - ${where}: ${message}`);
   }
@@ -95,7 +121,21 @@ const ENV_SUFFIX_RE = /^(.+)_env$/;
  * - `_env` value is non-string (array/object/number): leave as-is, warn.
  * - Both `field` and `field_env` present: `_env` wins, warn (config drift).
  */
-export function resolveSecrets(obj: BotConfigOnDisk, logger?: LoggerLike | null): BotConfig;
+/**
+ * Resolved-but-not-yet-bootstrap-merged BotConfig: the shape of
+ * `BotConfigOnDisk` after `_env` resolution, before bootstrap values
+ * (`database`, `pluginDir`, `owner.handle`, `owner.hostmask`) are folded
+ * in. `Bot.loadConfig` performs that merge to produce the runtime
+ * `BotConfig`.
+ */
+export type ResolvedBotConfigPreBootstrap = Omit<BotConfig, 'database' | 'pluginDir' | 'owner'> & {
+  owner?: { password?: string };
+};
+
+export function resolveSecrets(
+  obj: BotConfigOnDisk,
+  logger?: LoggerLike | null,
+): ResolvedBotConfigPreBootstrap;
 export function resolveSecrets(
   obj: Record<string, unknown>,
   logger?: LoggerLike | null,

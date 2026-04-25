@@ -187,6 +187,8 @@ function makeMockAPI(db: BotDatabase, config: Record<string, unknown> = {}): Moc
     buildHostmask: (s) => `${s.nick}!${s.ident}@${s.hostname}`,
     isBotNick: () => false,
     channelSettings: {} as never,
+    coreSettings: {} as never,
+    settings: {} as never,
     registerHelp(_entries: HelpEntry[]) {},
     getHelpEntries: () => [],
     stripFormatting: (text: string) => text,

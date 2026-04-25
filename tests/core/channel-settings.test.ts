@@ -293,7 +293,7 @@ describe('ChannelSettings', () => {
       cs.register('myplugin', [flagDef]);
       cs.set('#chan', 'bitch', true, { by: 'alice', source: 'irc' });
 
-      const rows = db.getModLog({ action: 'chanset' });
+      const rows = db.getModLog({ action: 'chanset-set' });
       expect(rows).toHaveLength(1);
       expect(rows[0].by).toBe('alice');
       expect(rows[0].target).toBe('bitch');
@@ -307,7 +307,7 @@ describe('ChannelSettings', () => {
       cs.register('myplugin', [flagDef]);
       cs.set('#chan', 'bitch', true, { by: 'bot', source: 'plugin', plugin: 'myplugin' });
 
-      const rows = db.getModLog({ action: 'chanset' });
+      const rows = db.getModLog({ action: 'chanset-set' });
       expect(rows).toHaveLength(1);
       expect(rows[0].source).toBe('plugin');
       expect(rows[0].plugin).toBe('myplugin');
@@ -316,7 +316,7 @@ describe('ChannelSettings', () => {
     it('skips the audit row when no actor is supplied (legacy caller)', () => {
       cs.register('myplugin', [flagDef]);
       cs.set('#chan', 'bitch', true);
-      expect(db.getModLog({ action: 'chanset' })).toHaveLength(0);
+      expect(db.getModLog({ action: 'chanset-set' })).toHaveLength(0);
     });
   });
 });

@@ -8,10 +8,7 @@
     "realname": "Rizon Helper Bot",
     "channels": ["#help", "#casual"]
   },
-  "owner": {
-    "handle": "admin",
-    "hostmask": "*!yourident@your.host.here"
-  },
+  "owner": {},
   "identity": {
     "method": "hostmask",
     "require_acc_for": ["+o", "+n"]
@@ -23,8 +20,6 @@
     "sasl": true,
     "sasl_mechanism": "PLAIN"
   },
-  "database": "./data/rizon-leaf.db",
-  "pluginDir": "./plugins",
   "pluginsConfig": "./config/rizon/leaf-plugins.json",
   "logging": {
     "level": "info",

@@ -7,6 +7,7 @@ import { accessSync, constants as fsConstants, mkdirSync, readFileSync, statSync
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { type Bootstrap, loadBootstrap } from './bootstrap';
 import { CommandHandler } from './command-handler';
 import {
   parseBotConfigOnDisk,
@@ -28,6 +29,7 @@ import { registerModlogCommands, shutdownModLogCommands } from './core/commands/
 import { registerPasswordCommands } from './core/commands/password-commands';
 import { registerPermissionCommands } from './core/commands/permission-commands';
 import { registerPluginCommands } from './core/commands/plugin-commands';
+import { registerSettingsCommands } from './core/commands/settings-commands';
 import {
   type ConnectionLifecycleHandle,
   registerConnectionEvents,
@@ -45,14 +47,16 @@ import {
   createReconnectDriver,
 } from './core/reconnect-driver';
 import { RelayOrchestrator } from './core/relay-orchestrator';
+import { seedFromJson } from './core/seed-from-json';
 import { Services } from './core/services';
+import { SettingsRegistry } from './core/settings-registry';
 import { STSStore, enforceSTS } from './core/sts';
 import { BotDatabase } from './database';
 import { EventDispatcher } from './dispatcher';
 import type { VerificationProvider } from './dispatcher';
 import { BotEventBus } from './event-bus';
 import { IRCBridge } from './irc-bridge';
-import { type LoggerLike, createLogger } from './logger';
+import { type LogLevel, type LoggerLike, createLogger } from './logger';
 import { PluginLoader } from './plugin-loader';
 import type { BotConfig, Casemapping, ChannelEntry } from './types';
 import { buildSocksOptions } from './utils/socks';
@@ -128,6 +132,10 @@ export class Bot {
 
   readonly pluginLoader: PluginLoader;
   readonly channelSettings: ChannelSettings;
+  /** Core-scope settings registry — bot-wide live config. Owner: `'bot'`. */
+  readonly coreSettings: SettingsRegistry;
+  /** Per-plugin settings registries, keyed by pluginId. Created lazily by the loader. */
+  readonly pluginSettings: Map<string, SettingsRegistry> = new Map();
   readonly channelState: ChannelState;
   readonly ircCommands: IRCCommands;
   readonly messageQueue: MessageQueue;
@@ -152,6 +160,9 @@ export class Bot {
    * double-close the db after one already ran.
    */
   private _isShuttingDown = false;
+
+  /** Bot config path captured during construction so `.rehash` can re-read it on demand. */
+  private readonly _botConfigPath: string;
 
   /** Snapshot of the reconnect driver state — used by the `.status` command. */
   getReconnectState(): ReconnectState | null {
@@ -195,8 +206,22 @@ export class Bot {
   private failedPlugins: string[] = [];
 
   constructor(configPath?: string) {
+    // Bootstrap MUST run before loadConfig: the database path, plugin
+    // directory, and initial owner identity are env-sourced now (they
+    // are needed before the SQLite KV is open) so we read them up-front
+    // and fold them into the runtime BotConfig that loadConfig returns.
+    let bootstrap: Bootstrap;
+    try {
+      bootstrap = loadBootstrap();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(message);
+      process.exit(1);
+    }
+
     const cfgPath = resolve(configPath ?? './config/bot.json');
-    this.config = this.loadConfig(cfgPath);
+    this._botConfigPath = cfgPath;
+    this.config = this.loadConfig(cfgPath, bootstrap);
 
     // Create root logger from config level
     this.logger = createLogger(this.config.logging.level);
@@ -228,8 +253,418 @@ export class Bot {
     this.stsStore = services.stsStore;
     this.memo = services.memo;
 
+    this.coreSettings = new SettingsRegistry({
+      scope: 'core',
+      namespace: 'core',
+      db: this.db,
+      logger: this.logger.child('core-settings'),
+      auditActions: { set: 'coreset-set', unset: 'coreset-unset' },
+    });
+    this.registerCoreSettings();
+
     this.wireDispatcher();
     this.pluginLoader = this.createPluginLoader();
+  }
+
+  /**
+   * Register every core-scope setting def + its onChange listener.
+   * Mirrors the matrix in docs/plans/live-config-updates.md §4: live
+   * keys apply on the spot, reload keys reattach a subsystem, restart
+   * keys warn the operator that a process restart is needed.
+   *
+   * Defs are registered directly (rather than via Zod schema
+   * reflection) so each onChange listener can close over the bot's
+   * wired subsystems. Reload classes still match the Zod `.describe`
+   * tokens in `src/config/schemas.ts` so introspection sees the same
+   * contract.
+   *
+   * Skipped here (handled out-of-band): array-typed settings
+   * (`irc.channels`, `channel_retry_schedule_ms`, `identity.require_acc_for`,
+   * `botlink.auth_ip_whitelist`) and tuple-typed `dcc.port_range`. These
+   * read from `this.config` directly until typed-array support lands.
+   */
+  private registerCoreSettings(): void {
+    // Live keys — apply via onChange dispatch below.
+    this.coreSettings.register('bot', [
+      {
+        key: 'logging.level',
+        type: 'string',
+        default: 'info',
+        description: 'Minimum log level',
+        allowedValues: ['debug', 'info', 'warn', 'error'],
+        reloadClass: 'live',
+      },
+      {
+        key: 'logging.mod_actions',
+        type: 'flag',
+        default: true,
+        description: 'Persist privileged actions to mod_log',
+        reloadClass: 'live',
+      },
+      {
+        key: 'logging.mod_log_retention_days',
+        type: 'int',
+        default: 0,
+        description: 'mod_log retention window in days (0 = unlimited)',
+        reloadClass: 'live',
+      },
+      {
+        key: 'queue.rate',
+        type: 'int',
+        default: 2,
+        description: 'Outbound message rate (msgs/sec)',
+        reloadClass: 'live',
+      },
+      {
+        key: 'queue.burst',
+        type: 'int',
+        default: 4,
+        description: 'Outbound message burst size',
+        reloadClass: 'live',
+      },
+      {
+        key: 'flood.pub.count',
+        type: 'int',
+        default: 0,
+        description: 'Pub/pubm flood window count (0 = disabled)',
+        reloadClass: 'live',
+      },
+      {
+        key: 'flood.pub.window',
+        type: 'int',
+        default: 0,
+        description: 'Pub/pubm flood window seconds',
+        reloadClass: 'live',
+      },
+      {
+        key: 'flood.msg.count',
+        type: 'int',
+        default: 0,
+        description: 'Msg/msgm flood window count (0 = disabled)',
+        reloadClass: 'live',
+      },
+      {
+        key: 'flood.msg.window',
+        type: 'int',
+        default: 0,
+        description: 'Msg/msgm flood window seconds',
+        reloadClass: 'live',
+      },
+      {
+        key: 'memo.memoserv_relay',
+        type: 'flag',
+        default: true,
+        description: 'Relay MemoServ notices to console',
+        reloadClass: 'live',
+      },
+      {
+        key: 'memo.memoserv_nick',
+        type: 'string',
+        default: 'MemoServ',
+        description: 'MemoServ service nick',
+        reloadClass: 'live',
+      },
+      {
+        key: 'memo.delivery_cooldown_seconds',
+        type: 'int',
+        default: 60,
+        description: 'Per-user join-delivery cooldown (sec)',
+        reloadClass: 'live',
+      },
+      {
+        key: 'quit_message',
+        type: 'string',
+        default: '',
+        description: 'Server-visible QUIT message',
+        reloadClass: 'live',
+      },
+      {
+        key: 'channel_rejoin_interval_ms',
+        type: 'int',
+        default: 30000,
+        description: 'Periodic presence-check interval (ms)',
+        reloadClass: 'live',
+      },
+      {
+        key: 'services.identify_before_join',
+        type: 'flag',
+        default: false,
+        description: 'Wait for bot:identified before JOIN',
+        reloadClass: 'live',
+      },
+      {
+        key: 'services.identify_before_join_timeout_ms',
+        type: 'int',
+        default: 10000,
+        description: 'Identify-before-join timeout (ms)',
+        reloadClass: 'live',
+      },
+      {
+        key: 'services.services_host_pattern',
+        type: 'string',
+        default: '',
+        description: 'NickServ services-host wildcard match',
+        reloadClass: 'live',
+      },
+      {
+        key: 'dcc.require_flags',
+        type: 'string',
+        default: 'm',
+        description: 'Flags required to open a DCC session',
+        reloadClass: 'live',
+      },
+      {
+        key: 'dcc.max_sessions',
+        type: 'int',
+        default: 5,
+        description: 'Max concurrent DCC sessions',
+        reloadClass: 'live',
+      },
+      {
+        key: 'dcc.idle_timeout_ms',
+        type: 'int',
+        default: 300000,
+        description: 'DCC idle disconnect (ms)',
+        reloadClass: 'live',
+      },
+      // Reload-class keys — onReload reattaches the relevant subsystem.
+      {
+        key: 'irc.nick',
+        type: 'string',
+        default: '',
+        description: 'Primary nick (live: triggers NICK)',
+        reloadClass: 'reload',
+        onReload: (value) => {
+          if (typeof value === 'string' && value.length > 0) {
+            this.client.changeNick(value);
+          }
+        },
+      },
+      // Restart-class keys — read at boot only. The onRestartRequired
+      // closures explain why so the operator-facing reply is specific.
+      {
+        key: 'irc.host',
+        type: 'string',
+        default: '',
+        description: 'IRC server host (effective on next connect)',
+        reloadClass: 'restart',
+      },
+      {
+        key: 'irc.port',
+        type: 'int',
+        default: 0,
+        description: 'IRC server port (effective on next connect)',
+        reloadClass: 'restart',
+      },
+      {
+        key: 'irc.tls',
+        type: 'flag',
+        default: true,
+        description: 'TLS for the IRC connection (effective on next connect)',
+        reloadClass: 'restart',
+      },
+      {
+        key: 'irc.username',
+        type: 'string',
+        default: '',
+        description: 'USER ident (sent at registration)',
+        reloadClass: 'restart',
+      },
+      {
+        key: 'irc.realname',
+        type: 'string',
+        default: '',
+        description: 'GECOS / realname (sent at registration)',
+        reloadClass: 'restart',
+      },
+      {
+        key: 'identity.method',
+        type: 'string',
+        default: 'hostmask',
+        description: 'Identity verification method',
+        allowedValues: ['hostmask'],
+        reloadClass: 'restart',
+      },
+      {
+        key: 'services.type',
+        type: 'string',
+        default: 'none',
+        description: 'Services flavor',
+        allowedValues: ['atheme', 'anope', 'dalnet', 'none'],
+        reloadClass: 'restart',
+      },
+      {
+        key: 'services.nickserv',
+        type: 'string',
+        default: 'NickServ',
+        description: 'NickServ target',
+        reloadClass: 'restart',
+      },
+      {
+        key: 'services.sasl',
+        type: 'flag',
+        default: false,
+        description: 'SASL at registration',
+        reloadClass: 'restart',
+      },
+      {
+        key: 'services.sasl_mechanism',
+        type: 'string',
+        default: 'PLAIN',
+        description: 'SASL mechanism',
+        allowedValues: ['PLAIN', 'EXTERNAL'],
+        reloadClass: 'restart',
+      },
+      {
+        key: 'pluginsConfig',
+        type: 'string',
+        default: '',
+        description: 'plugins.json path (read at loadAll)',
+        reloadClass: 'restart',
+      },
+      {
+        key: 'command_prefix',
+        type: 'string',
+        default: '.',
+        description: 'Built-in admin command prefix',
+        reloadClass: 'restart',
+      },
+    ]);
+
+    // Single onChange dispatcher — the registry fans every change
+    // here so subsystem reattach + state rebuilds live in one place.
+    this.coreSettings.onChange('bot', (_instance, key, value) => {
+      this.applyCoreSettingChange(key, value);
+    });
+  }
+
+  /**
+   * Dispatch a `core.<key>` change to the relevant subsystem. Restart-
+   * class keys land here too but no-op (the `restart` reload class on
+   * the def handles operator messaging via the registry's outcome).
+   */
+  private applyCoreSettingChange(key: string, value: unknown): void {
+    switch (key) {
+      case 'logging.level':
+        if (typeof value === 'string') this.logger.setLevel(value as LogLevel);
+        return;
+      case 'logging.mod_actions':
+        if (typeof value === 'boolean') this.db.setModLogEnabled(value);
+        return;
+      case 'logging.mod_log_retention_days':
+        if (typeof value === 'number') this.db.setModLogRetentionDays(value);
+        return;
+      case 'queue.rate':
+      case 'queue.burst': {
+        const rate = this.coreSettings.getInt('', 'queue.rate') || this.config.queue?.rate || 2;
+        const burst = this.coreSettings.getInt('', 'queue.burst') || this.config.queue?.burst || 4;
+        this.messageQueue.setRate(rate, burst);
+        return;
+      }
+      case 'flood.pub.count':
+      case 'flood.pub.window':
+      case 'flood.msg.count':
+      case 'flood.msg.window': {
+        const pubCount = this.coreSettings.getInt('', 'flood.pub.count');
+        const pubWindow = this.coreSettings.getInt('', 'flood.pub.window');
+        const msgCount = this.coreSettings.getInt('', 'flood.msg.count');
+        const msgWindow = this.coreSettings.getInt('', 'flood.msg.window');
+        const next: {
+          pub?: { count: number; window: number };
+          msg?: { count: number; window: number };
+        } = {};
+        if (pubCount > 0 && pubWindow > 0) next.pub = { count: pubCount, window: pubWindow };
+        if (msgCount > 0 && msgWindow > 0) next.msg = { count: msgCount, window: msgWindow };
+        this.dispatcher.setFloodConfig(next);
+        return;
+      }
+      case 'memo.memoserv_relay':
+      case 'memo.memoserv_nick':
+      case 'memo.delivery_cooldown_seconds':
+        this.memo.setConfig({
+          memoserv_relay: this.coreSettings.getFlag('', 'memo.memoserv_relay'),
+          memoserv_nick: this.coreSettings.getString('', 'memo.memoserv_nick') || 'MemoServ',
+          delivery_cooldown_seconds: this.coreSettings.getInt('', 'memo.delivery_cooldown_seconds'),
+        });
+        return;
+      case 'channel_rejoin_interval_ms':
+        // The lifecycle handle isn't built until connect(); on next
+        // reconnect it picks up this.config.channel_rejoin_interval_ms.
+        // Update the in-memory config too so a mid-session reconnect
+        // sees the new value.
+        if (typeof value === 'number') this.config.channel_rejoin_interval_ms = value;
+        return;
+      case 'quit_message':
+        if (typeof value === 'string') this.config.quit_message = value;
+        return;
+      case 'services.services_host_pattern':
+        if (typeof value === 'string' && this.services) {
+          // Services reads this on every NickServ NOTICE; mutating the
+          // config record is enough — no rebuild needed.
+          this.config.services.services_host_pattern = value;
+        }
+        return;
+      case 'services.identify_before_join':
+        if (typeof value === 'boolean') this.config.services.identify_before_join = value;
+        return;
+      case 'services.identify_before_join_timeout_ms':
+        if (typeof value === 'number') this.config.services.identify_before_join_timeout_ms = value;
+        return;
+      case 'dcc.require_flags':
+        if (typeof value === 'string' && this.config.dcc) this.config.dcc.require_flags = value;
+        return;
+      case 'dcc.max_sessions':
+        if (typeof value === 'number' && this.config.dcc) this.config.dcc.max_sessions = value;
+        return;
+      case 'dcc.idle_timeout_ms':
+        if (typeof value === 'number' && this.config.dcc) this.config.dcc.idle_timeout_ms = value;
+        return;
+      default:
+        // Plugin lifecycle: `core.plugins.<id>.enabled` toggles the plugin
+        // load state at runtime. `.set core plugins.<id>.enabled false`
+        // stops and unloads the plugin; `true` loads it. The state
+        // persists in KV, so a restart preserves the operator's choice.
+        if (key.startsWith('plugins.') && key.endsWith('.enabled')) {
+          const pluginId = key.slice('plugins.'.length, -'.enabled'.length);
+          if (typeof value === 'boolean') {
+            void this.applyPluginEnabled(pluginId, value);
+          }
+          return;
+        }
+        // Restart-class keys land here — no live action; the `restart`
+        // reload class on the def is what surfaces the warning to the
+        // operator via the registry's `applyReloadClass` outcome.
+        return;
+    }
+  }
+
+  /**
+   * Apply a `core.plugins.<id>.enabled` change to the running loader.
+   * `true` → load the plugin if not already loaded. `false` → unload
+   * if currently loaded. Idempotent both ways so a redundant `.set`
+   * never double-loads or double-unloads. Errors are logged loudly so
+   * an operator who saw the change ack but not the load can investigate.
+   */
+  private async applyPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
+    const isLoaded = this.pluginLoader.isLoaded(pluginId);
+    if (enabled && !isLoaded) {
+      const pluginPath = `${resolve(this.config.pluginDir)}/${pluginId}/dist/index.js`;
+      const result = await this.pluginLoader.load(pluginPath);
+      if (result.status !== 'ok') {
+        this.botLogger.error(
+          `Plugin "${pluginId}" enable via .set failed: ${result.error ?? 'unknown error'}`,
+        );
+      }
+      return;
+    }
+    if (!enabled && isLoaded) {
+      try {
+        await this.pluginLoader.unload(pluginId);
+      } catch (err) {
+        this.botLogger.error(`Plugin "${pluginId}" disable via .set failed:`, err);
+      }
+      return;
+    }
   }
 
   /**
@@ -405,6 +840,8 @@ export class Bot {
       services: this.services,
       helpRegistry: this.helpRegistry,
       channelSettings: this.channelSettings,
+      coreSettings: this.coreSettings,
+      pluginSettings: this.pluginSettings,
       banStore: this.banStore,
       logger: this.logger,
       getCasemapping: () => this.getCasemapping(),
@@ -439,6 +876,20 @@ export class Bot {
     this.db.open();
     this.botLogger.info('Database opened');
     this.permissions.loadFromDb();
+
+    // Boot-time seed: any registered core-scope key that has no stored
+    // value yet pulls its initial value from bot.json. KV is canonical
+    // after first boot; an operator-set value never gets clobbered by
+    // a routine restart. `.rehash` is the deliberate path to pull JSON
+    // edits in — see docs/plans/live-config-updates.md §1.
+    seedFromJson(this.coreSettings, this.config as unknown as Record<string, unknown>, {
+      seedOnly: true,
+    });
+    // Re-apply log level from KV in case the operator set a different
+    // level than bot.json carries — `setLevel` is idempotent and the
+    // initial logger was constructed from the file value.
+    const storedLevel = this.coreSettings.getString('', 'logging.level');
+    if (storedLevel) this.logger.setLevel(storedLevel as LogLevel);
 
     await ensureOwner({
       config: this.config,
@@ -543,6 +994,22 @@ export class Bot {
       handler: this.commandHandler,
       channelSettings: this.channelSettings,
       db: this.db,
+    });
+    registerSettingsCommands({
+      handler: this.commandHandler,
+      coreSettings: this.coreSettings,
+      channelSettings: this.channelSettings,
+      pluginSettings: this.pluginSettings,
+      db: this.db,
+      readBotJson: () => this.readBotJsonAsRecord(),
+      readPluginsJson: () => this.readPluginsJsonAsRecord(),
+      // `.restart` exits the process cleanly so the supervisor restarts
+      // the container. Delegate the actual exit to a tiny hook so tests
+      // can stub it out — production wiring uses `process.exit(0)`.
+      restartProcess: async () => {
+        await this.shutdown();
+        process.exit(0);
+      },
     });
     registerModlogCommands({
       handler: this.commandHandler,
@@ -747,9 +1214,29 @@ export class Bot {
       }
     });
 
+    // Tear down every loaded plugin so each plugin's `teardown()` runs
+    // on process exit. Without this, plugin-owned timers / DB cursors /
+    // listeners would only get the dispatcher's auto-unbind step at
+    // shutdown — never the plugin's own cleanup hook. Doubles as the
+    // fix for audit W-PS finding 2026-04-25 ("plugins miss their
+    // teardown chance on process exit").
+    try {
+      await this.pluginLoader.unloadAll();
+    } catch (err) {
+      this.botLogger.error('Shutdown step "plugin-loader.unloadAll" threw:', err);
+    }
+
     step('memo.detach', () => this.memo.detach());
     step('services.detach', () => this.services.detach());
     step('channel-state.detach', () => this.channelState.detach());
+
+    // Drain core-scope listener stacks so a future module-level
+    // re-init (test harnesses, or a mid-process restart hot-path) does
+    // not double-fire `onChange` from the previous incarnation.
+    step('core-settings.drain', () => {
+      this.coreSettings.unregister('bot');
+      this.coreSettings.offChange('bot');
+    });
 
     step('bridge.detach', () => {
       if (this.bridge) {
@@ -1029,7 +1516,7 @@ export class Bot {
   // Config loading
   // -------------------------------------------------------------------------
 
-  private loadConfig(configPath: string): BotConfig {
+  private loadConfig(configPath: string, bootstrap: Bootstrap): BotConfig {
     // Probe readability separately from the open() so we can emit a
     // friendlier "did you copy the example?" hint before the JSON parser
     // even runs. The logger isn't constructed yet (the log level lives in
@@ -1068,15 +1555,28 @@ export class Bot {
       // load as undefined and surface as confusing runtime errors later.
       const onDisk = parseBotConfigOnDisk(parsed);
       // Resolve `_env` suffix fields from process.env into their sibling
-      // non-suffixed fields. After this, internal code reads the resolved
-      // runtime BotConfig shape (services.password, botlink.password, etc.).
+      // non-suffixed fields. The on-disk shape excludes the bootstrap-
+      // sourced fields (database, pluginDir, owner.handle, owner.hostmask),
+      // so the resolved object is BotConfig-shaped except for those keys —
+      // we fold them in from the bootstrap layer below to satisfy the
+      // runtime BotConfig type the rest of the bot consumes.
       const resolved = resolveSecrets(onDisk);
-      validateResolvedSecrets(resolved);
+      const merged: BotConfig = {
+        ...resolved,
+        database: bootstrap.dbPath,
+        pluginDir: bootstrap.pluginDir,
+        owner: {
+          handle: bootstrap.ownerHandle,
+          hostmask: bootstrap.ownerHostmask,
+          ...(resolved.owner?.password !== undefined ? { password: resolved.owner.password } : {}),
+        },
+      };
+      validateResolvedSecrets(merged);
       // Channels keyed via key_env need their own post-resolution check —
       // the resolver drops unset env vars, so validateResolvedSecrets can't
       // tell the difference between "never had a key" and "env var unset".
-      validateChannelKeys(onDisk.irc.channels, resolved.irc.channels);
-      return resolved;
+      validateChannelKeys(onDisk.irc.channels, merged.irc.channels);
+      return merged;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(message);
@@ -1104,6 +1604,45 @@ export class Bot {
     console.log(`${dim('-')} Channels:    ${channels}`);
     console.log(`${dim('-')} Plugins:     ${this.config.pluginDir}`);
     console.log();
+  }
+
+  /**
+   * Re-read bot.json on demand for `.rehash`. Runs the same parse +
+   * resolveSecrets pipeline as the boot path so both routes apply
+   * identical coercions; bootstrap fields are folded back into the
+   * resulting record so seed-from-json walkers see the same shape they
+   * see at boot time.
+   */
+  private readBotJsonAsRecord(): Record<string, unknown> | null {
+    try {
+      const raw = readFileSync(this._botConfigPath, 'utf-8');
+      const parsed = JSON.parse(raw) as unknown;
+      const onDisk = parseBotConfigOnDisk(parsed);
+      const resolved = resolveSecrets(onDisk) as unknown as Record<string, unknown>;
+      return resolved;
+    } catch (err) {
+      this.botLogger.warn('Failed to re-read bot.json for .rehash:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Re-read plugins.json on demand for `.rehash`. Returns the bare
+   * plugins map; `.rehash` reaches into each plugin's `config` block
+   * to seed that plugin's settings registry.
+   */
+  private readPluginsJsonAsRecord(): Record<
+    string,
+    { config?: Record<string, unknown> } | undefined
+  > | null {
+    if (!this.config.pluginsConfig) return null;
+    try {
+      const raw = readFileSync(resolve(this.config.pluginsConfig), 'utf-8');
+      return JSON.parse(raw) as Record<string, { config?: Record<string, unknown> } | undefined>;
+    } catch (err) {
+      this.botLogger.warn('Failed to re-read plugins.json for .rehash:', err);
+      return null;
+    }
   }
 
   /**

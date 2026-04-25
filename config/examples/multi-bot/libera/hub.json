@@ -8,10 +8,7 @@
     "realname": "Libera Channel Enforcer",
     "channels": ["#myproject", { "name": "#myproject-admin", "key": "admin-key-here" }]
   },
-  "owner": {
-    "handle": "admin",
-    "hostmask": "*!yourident@your.host.here"
-  },
+  "owner": {},
   "identity": {
     "method": "hostmask",
     "require_acc_for": ["+o", "+n"]
@@ -23,8 +20,6 @@
     "sasl": true,
     "sasl_mechanism": "PLAIN"
   },
-  "database": "./data/libera-hub.db",
-  "pluginDir": "./plugins",
   "pluginsConfig": "./config/libera/hub-plugins.json",
   "logging": {
     "level": "info",

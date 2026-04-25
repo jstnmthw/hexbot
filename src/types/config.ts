@@ -82,15 +82,13 @@ export interface OwnerConfig {
 }
 
 /**
- * On-disk owner settings (before secret resolution). Mirrors {@link OwnerConfig}
- * but accepts `password_env` instead of a resolved `password`. The config
- * loader's `resolveSecrets()` rewrites the `_env` suffix into its sibling.
+ * On-disk owner settings (before secret resolution). The handle and
+ * hostmask are bootstrap values — they live in `HEX_OWNER_HANDLE` /
+ * `HEX_OWNER_HOSTMASK` env vars (loaded by `src/bootstrap.ts`), not in
+ * bot.json. Only the password reference remains here, following the
+ * `<field>_env` convention.
  */
 export interface OwnerConfigOnDisk {
-  /** Stable handle for the owner (matches a `UserRecord.handle`). */
-  handle: string;
-  /** Initial owner hostmask seeded into the user record. */
-  hostmask: string;
   /** Name of the env var holding the owner's seed password. Read once at first boot, ignored thereafter. */
   password_env?: string;
 }
@@ -392,10 +390,19 @@ export interface ChanmodBotConfigOnDisk {
   nick_recovery_password_env?: string;
 }
 
-/** On-disk bot config — the raw JSON schema before secret resolution. */
+/**
+ * On-disk bot config — the raw JSON schema before secret resolution.
+ *
+ * `database`, `pluginDir`, `owner.handle`, and `owner.hostmask` are
+ * bootstrap values: they live in env vars (`HEX_DB_PATH`,
+ * `HEX_PLUGIN_DIR`, `HEX_OWNER_HANDLE`, `HEX_OWNER_HOSTMASK`) loaded by
+ * `src/bootstrap.ts` *before* this config is parsed. The on-disk shape
+ * therefore omits them; `Bot.loadConfig` folds the bootstrap values into
+ * the runtime {@link BotConfig} shape on construction.
+ */
 export interface BotConfigOnDisk extends Omit<
   BotConfig,
-  'irc' | 'owner' | 'services' | 'proxy' | 'botlink' | 'chanmod'
+  'irc' | 'owner' | 'services' | 'proxy' | 'botlink' | 'chanmod' | 'database' | 'pluginDir'
 > {
   irc: IrcConfigOnDisk;
   owner: OwnerConfigOnDisk;

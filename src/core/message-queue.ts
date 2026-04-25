@@ -91,12 +91,12 @@ export class MessageQueue {
   private budgetMs: number;
   private lastRefill: number;
   private timer: ReturnType<typeof setInterval> | null = null;
-  private readonly rate: number;
-  private readonly burst: number;
+  private rate: number;
+  private burst: number;
   /** Millisecond cost per message: floor(1000 / rate). */
-  private readonly costMs: number;
+  private costMs: number;
   /** Maximum budget in milliseconds: burst * costMs. */
-  private readonly capacityMs: number;
+  private capacityMs: number;
   private readonly logger: LoggerLike | null;
   /** ISUPPORT TARGMAX map, surfaced but not enforced. Keys are uppercased command names. */
   private targmax: Record<string, number> = {};
@@ -218,6 +218,25 @@ export class MessageQueue {
       clearInterval(this.timer);
       this.timer = null;
     }
+  }
+
+  /**
+   * Update the steady-state rate and burst allowance. Called by the
+   * `core.queue.rate` / `core.queue.burst` onChange listener so a `.set`
+   * applies to the running drain loop without a process restart. Never
+   * exceeds the in-flight budget — pending sends already accounted
+   * against the previous capacity continue to drain at the new pace.
+   */
+  setRate(rate: number, burst: number): void {
+    if (!Number.isFinite(rate) || rate <= 0) return;
+    if (!Number.isFinite(burst) || burst <= 0) return;
+    this.rate = rate;
+    this.burst = burst;
+    this.costMs = Math.floor(1000 / rate);
+    this.capacityMs = Math.max(this.costMs, burst * this.costMs);
+    // Clamp the live budget to the new capacity so a shrink takes
+    // effect immediately rather than waiting for the next refill.
+    if (this.budgetMs > this.capacityMs) this.budgetMs = this.capacityMs;
   }
 
   /**

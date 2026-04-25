@@ -8,7 +8,7 @@ HexBot is a modular Internet Relay Chat bot for Node.js, written in TypeScript. 
 
 - **Event bind system** — register handlers for IRC events with `bind(type, flags, mask, handler)`.
 - **Flag-based permissions** — owner/master/op/voice flags with hostmask and IRCv3 account-tag matching
-- **Hot-reloadable plugins** — load, unload, and reload plugins at runtime without restarting the bot
+- **Live config + plugin lifecycle as config** — `.set core <key> <value>` applies most changes on the spot. Plugin enable/disable flows through `.set core plugins.<id>.enabled true/false`. SQLite KV preserves operator changes across restarts; `.restart` covers the small subset of keys that can't apply live
 - **DCC CHAT console** — remote admin console (party line) with per-user authentication (scrypt passwords) and per-session log-stream flags
 - **Bot linking** — hub-and-leaf multi-bot networking with permission sync, command relay, and ban sharing
 - **Audit log** — every privileged action lands in `mod_log` with structured filters via `.modlog` / `.audit-tail`
@@ -26,8 +26,9 @@ pnpm install
 cp config/bot.example.json config/bot.json
 cp config/plugins.example.json config/plugins.json
 cp config/bot.env.example config/bot.env && chmod 600 config/bot.env
-# Edit config/bot.json for your server, nick, owner hostmask, and plugins.
-# Put secrets (NickServ password, etc.) in config/bot.env.
+# Edit config/bot.json for your IRC server, nick, channels, and plugins.
+# Edit config/bot.env to set bootstrap values (HEX_DB_PATH, HEX_PLUGIN_DIR,
+# HEX_OWNER_HANDLE, HEX_OWNER_HOSTMASK) and any secrets.
 pnpm dev          # start with interactive REPL
 ```
 
@@ -35,9 +36,14 @@ pnpm dev          # start with interactive REPL
 
 For a more detailed walkthrough, see the **[Getting Started guide](docs/GETTING_STARTED.md)**.
 
-### Secrets in `config/bot.env`
+### Bootstrap + secrets in `config/bot.env`
 
-Secret values never live in `bot.json`. Each secret field is named via a `_env` suffix — the loader reads the named environment variable at startup and fails loudly if a required secret is missing. `pnpm start` / `pnpm dev` auto-load `config/bot.env`. Default env vars (defined in `config/bot.env.example`): `HEX_NICKSERV_PASSWORD`, `HEX_BOTLINK_PASSWORD`, `HEX_CHANMOD_RECOVERY_PASSWORD`, `HEX_PROXY_PASSWORD`, `HEX_GEMINI_API_KEY`. The `HEX_` prefix namespaces these so they won't collide with other services on the host. Plugin configs may declare their own `<field>_env` fields; the loader resolves them before the plugin sees its config.
+Two classes of values live in `config/bot.env`:
+
+1. **Bootstrap (required at every boot, read before the SQLite KV is opened):** `HEX_DB_PATH`, `HEX_PLUGIN_DIR`, `HEX_OWNER_HANDLE`, `HEX_OWNER_HOSTMASK`. The owner identity is consumed only on first boot to seed the user record; the DB is the store of record after that.
+2. **Secrets (resolved via `<field>_env` in `bot.json`):** `HEX_NICKSERV_PASSWORD`, `HEX_BOTLINK_PASSWORD`, `HEX_CHANMOD_RECOVERY_PASSWORD`, `HEX_PROXY_PASSWORD`, `HEX_GEMINI_API_KEY`, etc.
+
+The loader fails loudly if a required value is missing. `pnpm start` / `pnpm dev` auto-load `config/bot.env`. The `HEX_` prefix namespaces these so they won't collide with other services on the host. Plugin configs may declare their own `<field>_env` fields; the loader resolves them before the plugin sees its config.
 
 ### Running multiple bots
 

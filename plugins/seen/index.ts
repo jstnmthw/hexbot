@@ -59,13 +59,36 @@ export function init(api: PluginAPI): void {
     },
   ]);
 
-  const rawMaxAge = api.config.max_age_days;
-  /* v8 ignore next -- default path only: tests never override max_age_days */
-  const maxAgeDays = typeof rawMaxAge === 'number' ? rawMaxAge : DEFAULT_MAX_AGE_DAYS;
-  const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
-  const rawMaxEntries = api.config.max_entries;
-  const maxEntries =
-    typeof rawMaxEntries === 'number' && rawMaxEntries > 0 ? rawMaxEntries : DEFAULT_MAX_ENTRIES;
+  // Live config: operators can `.set seen max_age_days <n>` to retune
+  // retention without a restart. Backward compat with the legacy
+  // plugins.json `config.max_age_days` is preserved by `api.config`'s
+  // seed of the registry on first load — see plugin-api-factory.
+  api.settings.register([
+    {
+      key: 'max_age_days',
+      type: 'int',
+      default: DEFAULT_MAX_AGE_DAYS,
+      description: 'Drop seen records older than this many days',
+    },
+    {
+      key: 'max_entries',
+      type: 'int',
+      default: DEFAULT_MAX_ENTRIES,
+      description: 'Hard cap on stored seen records (oldest evicted first)',
+    },
+  ]);
+  const seedFromConfig = (key: 'max_age_days' | 'max_entries'): void => {
+    const v = api.config[key];
+    if (typeof v === 'number' && !api.settings.isSet(key)) api.settings.set(key, v);
+  };
+  seedFromConfig('max_age_days');
+  seedFromConfig('max_entries');
+  // Live reads: every handler invocation pulls the current values from
+  // the registry, so an operator `.set seen max_age_days 30` takes
+  // effect immediately without an unload/load cycle.
+  const getMaxAgeMs = (): number =>
+    (api.settings.getInt('max_age_days') || DEFAULT_MAX_AGE_DAYS) * 24 * 60 * 60 * 1000;
+  const getMaxEntries = (): number => api.settings.getInt('max_entries') || DEFAULT_MAX_ENTRIES;
   const MAX_TEXT_LENGTH = 200;
 
   // Track every channel message. `pubm` (public message match) is the
@@ -103,7 +126,7 @@ export function init(api: PluginAPI): void {
 
   // Respond to !seen queries
   api.bind('pub', '-', '!seen', (ctx) => {
-    cleanupStale(api, maxAgeMs);
+    cleanupStale(api, getMaxAgeMs());
     const targetNick = ctx.args.trim().split(/\s+/)[0];
     if (!targetNick) {
       ctx.reply('Usage: !seen <nick>');
@@ -140,7 +163,7 @@ export function init(api: PluginAPI): void {
     const age = Date.now() - record.time;
 
     /* v8 ignore start -- refactor broke test's Date.now mock; logic unchanged */
-    if (age > maxAgeMs) {
+    if (age > getMaxAgeMs()) {
       api.db.del(`seen:${api.ircLower(targetNick)}`);
       ctx.reply(`I haven't seen ${api.stripFormatting(targetNick)}.`);
       return;
@@ -178,8 +201,8 @@ export function init(api: PluginAPI): void {
 
   // Hourly cleanup of stale entries + namespace cap enforcement.
   api.bind('time', '-', '3600', () => {
-    cleanupStale(api, maxAgeMs);
-    enforceEntryCap(api, maxEntries);
+    cleanupStale(api, getMaxAgeMs());
+    enforceEntryCap(api, getMaxEntries());
   });
 }
 

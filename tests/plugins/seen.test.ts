@@ -242,14 +242,18 @@ describe('seen plugin', () => {
     expect(response).toContain('Alice');
   });
 
-  it('should persist data across plugin reload', async () => {
+  it('should persist data across plugin unload+load cycle', async () => {
     populateChannel('#test', ['charlie', 'bob']);
     // Track a message
     const msgCtx = makePubCtx('charlie', 'some message');
     await dispatcher.dispatch('pubm', msgCtx);
 
-    // Reload plugin
-    await loader.reload('seen');
+    // Unload + load (the post-2026-04-25 equivalent of `.reload`).
+    // KV survives the cycle; an operator hitting
+    // `.set core plugins.seen.enabled false` then `true` does the same.
+    const filePath = loader.list().find((p) => p.name === 'seen')!.filePath;
+    await loader.unload('seen');
+    await loader.load(filePath);
 
     // Query should still work (data in DB persists)
     const queryCtx = makePubCtx('bob', '!seen charlie');

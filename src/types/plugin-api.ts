@@ -330,6 +330,20 @@ export interface PluginAPI {
   // Per-channel settings
   channelSettings: PluginChannelSettings;
 
+  /**
+   * Read-only view of bot-wide core settings (`logging.level`,
+   * `command_prefix`, etc.) plus a change subscription. Mutation is
+   * reserved for operator commands and core subsystems.
+   */
+  coreSettings: PluginCoreSettingsView;
+
+  /**
+   * Plugin's own settings registry, scoped to namespace
+   * `plugin:<pluginId>`. The same store operators reach via
+   * `.set <plugin-id> <key> <value>`. Replaces `api.config`.
+   */
+  settings: PluginSettings;
+
   // Help registry
   registerHelp(entries: HelpEntry[]): void;
   getHelpEntries(): HelpEntry[];
@@ -518,6 +532,68 @@ export interface PluginChannelSettings {
   isSet(channel: string, key: string): boolean;
   /** Register a callback that fires when any per-channel setting changes. Auto-cleaned on unload. */
   onChange(callback: ChannelSettingChangeCallback): void;
+}
+
+/** Reload class declared on each setting def. See settings-registry.ts. */
+export type ReloadClass = 'live' | 'reload' | 'restart';
+
+/**
+ * Plugin-facing setting definition. Same shape as ChannelSettingDef plus
+ * an optional reload class — defaults to `'live'` when omitted (the
+ * plugin's `onChange` listener does the work). `'reload'` and
+ * `'restart'` are reserved for plugin-controlled subsystem swaps that
+ * cannot apply on the spot.
+ */
+export interface PluginSettingDef extends ChannelSettingDef {
+  reloadClass?: ReloadClass;
+}
+
+/** Callback signature for core/plugin scope setting changes. */
+export type SettingsChangeCallback = (key: string, value: ChannelSettingValue) => void;
+
+/**
+ * Read-only view of the bot's core-scope settings. Plugins can read
+ * core values (e.g. `core.command_prefix`) and subscribe to changes,
+ * but mutation is reserved for operator commands and the bot's own
+ * subsystems — passing through `api.coreSettings` would let one plugin
+ * stomp another's expectations.
+ */
+export interface PluginCoreSettingsView {
+  /** Read a core-scope setting (untyped union). Returns def.default if not set. */
+  get(key: string): ChannelSettingValue;
+  getFlag(key: string): boolean;
+  getString(key: string): string;
+  getInt(key: string): number;
+  /** True if an operator has explicitly stored a value for this key. */
+  isSet(key: string): boolean;
+  /** Register a callback that fires when any core setting changes. Auto-cleaned on unload. */
+  onChange(callback: SettingsChangeCallback): void;
+  /** Remove the registered callback. No-op when not registered. */
+  offChange(callback: SettingsChangeCallback): void;
+}
+
+/**
+ * Plugin's own scoped settings registry. Reads/writes the per-plugin
+ * KV namespace (`plugin:<pluginId>`) — operators see and mutate the
+ * same store via `.set <plugin-id> <key> <value>`.
+ */
+export interface PluginSettings {
+  /** Declare typed setting definitions for this plugin. Call once in init(). */
+  register(defs: PluginSettingDef[]): void;
+  get(key: string): ChannelSettingValue;
+  getFlag(key: string): boolean;
+  getString(key: string): string;
+  getInt(key: string): number;
+  /** Write a value to the plugin's scope (mirrors operator `.set <plugin> <key> <value>`). */
+  set(key: string, value: ChannelSettingValue): void;
+  /** Delete a value, reverting reads to the registered default. */
+  unset(key: string): void;
+  /** True if an explicit value is stored. */
+  isSet(key: string): boolean;
+  /** Register a callback that fires when any plugin-scope setting changes. Auto-cleaned on unload. */
+  onChange(callback: SettingsChangeCallback): void;
+  /** Remove the registered callback. No-op when not registered. */
+  offChange(callback: SettingsChangeCallback): void;
 }
 
 // ---------------------------------------------------------------------------

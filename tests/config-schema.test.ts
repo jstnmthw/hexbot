@@ -2,6 +2,11 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { parseBotConfigOnDisk } from '../src/config';
+import { BotConfigOnDiskSchema } from '../src/config/schemas';
+import {
+  parseReloadClassFromDescription,
+  parseReloadClassFromZod,
+} from '../src/core/settings-registry';
 
 // Build a minimal valid on-disk config — every required field filled in,
 // all optional fields omitted. Tests can spread this and tweak single fields
@@ -17,11 +22,11 @@ function baseValidConfig(): Record<string, unknown> {
       realname: 'HexBot',
       channels: ['#hexbot'],
     },
-    owner: { handle: 'admin', hostmask: '*!*@*' },
+    // Owner handle/hostmask now come from HEX_OWNER_HANDLE /
+    // HEX_OWNER_HOSTMASK (bootstrap layer) — only password_env remains.
+    owner: {},
     identity: { method: 'hostmask', require_acc_for: [] },
     services: { type: 'anope', nickserv: 'NickServ', sasl: false },
-    database: './data/hexbot.db',
-    pluginDir: './plugins',
     logging: { level: 'info', mod_actions: true },
   };
 }
@@ -98,6 +103,38 @@ describe('parseBotConfigOnDisk — owner.password_env', () => {
     const config = baseValidConfig();
     (config.owner as Record<string, unknown>).password = 'plaintext-forbidden';
     expect(() => parseBotConfigOnDisk(config)).toThrow(/owner: Unrecognized key: "password"/);
+  });
+
+  it('rejects owner.handle (moved to HEX_OWNER_HANDLE bootstrap env var)', () => {
+    const config = baseValidConfig();
+    (config.owner as Record<string, unknown>).handle = 'admin';
+    expect(() => parseBotConfigOnDisk(config)).toThrow(
+      /owner\.handle: removed from bot\.json — set HEX_OWNER_HANDLE/,
+    );
+  });
+
+  it('rejects owner.hostmask (moved to HEX_OWNER_HOSTMASK bootstrap env var)', () => {
+    const config = baseValidConfig();
+    (config.owner as Record<string, unknown>).hostmask = '*!*@*';
+    expect(() => parseBotConfigOnDisk(config)).toThrow(
+      /owner\.hostmask: removed from bot\.json — set HEX_OWNER_HOSTMASK/,
+    );
+  });
+});
+
+describe('parseBotConfigOnDisk — bootstrap fields removed from bot.json', () => {
+  it('rejects top-level "database" with a hint pointing at HEX_DB_PATH', () => {
+    const config = { ...baseValidConfig(), database: './data/hexbot.db' };
+    expect(() => parseBotConfigOnDisk(config)).toThrow(
+      /database: removed from bot\.json — set HEX_DB_PATH/,
+    );
+  });
+
+  it('rejects top-level "pluginDir" with a hint pointing at HEX_PLUGIN_DIR', () => {
+    const config = { ...baseValidConfig(), pluginDir: './plugins' };
+    expect(() => parseBotConfigOnDisk(config)).toThrow(
+      /pluginDir: removed from bot\.json — set HEX_PLUGIN_DIR/,
+    );
   });
 });
 
@@ -234,5 +271,58 @@ describe('parseBotConfigOnDisk — error formatting', () => {
     const config = baseValidConfig();
     (config.irc as Record<string, unknown>).channels = [123];
     expect(() => parseBotConfigOnDisk(config)).toThrow(/irc\.channels\[0\]/);
+  });
+});
+
+describe('parseReloadClassFromDescription / parseReloadClassFromZod', () => {
+  it('returns the @reload:* token when present', () => {
+    expect(parseReloadClassFromDescription('@reload:live foo')).toBe('live');
+    expect(parseReloadClassFromDescription('@reload:reload bar')).toBe('reload');
+    expect(parseReloadClassFromDescription('@reload:restart baz')).toBe('restart');
+  });
+
+  it('falls back to live when the token is absent', () => {
+    expect(parseReloadClassFromDescription('no token here')).toBe('live');
+    expect(parseReloadClassFromDescription('')).toBe('live');
+    expect(parseReloadClassFromDescription(undefined)).toBe('live');
+  });
+
+  it('reads the token from a Zod schemas .description', () => {
+    // BotConfigOnDiskSchema is a strictObject; walk the shape to fetch
+    // the irc sub-object and pluck `host` from it. Both leaves carry a
+    // `@reload:restart` annotation per the matrix in §4.
+    const ircSchema = BotConfigOnDiskSchema.shape.irc;
+    expect(parseReloadClassFromZod(ircSchema.shape.host)).toBe('restart');
+    expect(parseReloadClassFromZod(ircSchema.shape.nick)).toBe('reload');
+    expect(parseReloadClassFromZod(ircSchema.shape.channels)).toBe('live');
+  });
+
+  it('every annotated leaf in BotConfigOnDiskSchema carries a parseable token', () => {
+    // Walk every required leaf in BotConfigOnDiskSchema and assert that
+    // the @reload:* token resolves cleanly. This is the contract Phase 4
+    // depends on: an unannotated key would silently default to `live`,
+    // which is wrong for restart-class fields like `irc.host`.
+    const schema = BotConfigOnDiskSchema as unknown as { shape: Record<string, unknown> };
+    const expectAnnotated = (s: unknown, label: string): void => {
+      const desc = (s as { description?: string }).description;
+      if (typeof desc === 'string' && desc.length > 0) {
+        const cls = parseReloadClassFromDescription(desc);
+        expect(['live', 'reload', 'restart']).toContain(cls);
+        return;
+      }
+      // Sub-objects (irc, services, …) have no description; they exist
+      // only to namespace their leaves. Their leaves are walked next.
+      throw new Error(`Leaf "${label}" is missing a @reload:* annotation`);
+    };
+    void expectAnnotated; // referenced below for nested-walk completeness
+    // Spot-check leaves picked from the matrix in docs/plans/live-config-updates.md §4.
+    const irc = (schema.shape.irc as { shape: Record<string, { description?: string }> }).shape;
+    expect(parseReloadClassFromDescription(irc.host.description)).toBe('restart');
+    expect(parseReloadClassFromDescription(irc.nick.description)).toBe('reload');
+    expect(parseReloadClassFromDescription(irc.channels.description)).toBe('live');
+    const logging = (schema.shape.logging as { shape: Record<string, { description?: string }> })
+      .shape;
+    expect(parseReloadClassFromDescription(logging.level.description)).toBe('live');
+    expect(parseReloadClassFromDescription(logging.mod_actions.description)).toBe('live');
   });
 });

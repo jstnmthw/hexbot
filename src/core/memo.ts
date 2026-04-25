@@ -168,6 +168,16 @@ export class MemoManager {
     this.dccManager = dcc;
   }
 
+  /**
+   * Apply a partial config update. Used by the `core.memo.*` onChange
+   * listeners so a `.set` takes effect on the running memo manager
+   * without a process restart. Unknown / undefined fields are ignored
+   * — operator can clear a value via `.unset` instead.
+   */
+  setConfig(partial: Partial<MemoConfig>): void {
+    this.config = { ...this.config, ...partial };
+  }
+
   // -------------------------------------------------------------------------
   // Lifecycle
   // -------------------------------------------------------------------------

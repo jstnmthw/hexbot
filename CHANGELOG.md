@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased] — Live config + audit-CRITICAL kill (2026-04-26)
+
+### Breaking
+
+- **`.load` / `.unload` / `.reload` removed.** Plugin enable/disable now flows through `.set core plugins.<id>.enabled true/false`; `.restart` is the canonical "pick up code edits" path. The cache-busting import path that powered `.reload` is deleted outright — it was the source of the 2026-04-25 audit's CRITICAL (Node ESM loader has no eviction API; every cache-busted re-import minted a permanent module-graph entry). See `docs/audits/memleak-all-2026-04-25.md`.
+- **`database`, `pluginDir`, `owner.handle`, `owner.hostmask` removed from `config/bot.json`.** They are now bootstrap env vars: `HEX_DB_PATH`, `HEX_PLUGIN_DIR`, `HEX_OWNER_HANDLE`, `HEX_OWNER_HOSTMASK`. The strict-object schema rejects bot.json files that still carry them with a hint pointing at the env var to set.
+- **`plugin-load` / `plugin-unload` / `plugin-reload` `mod_log` action strings retired.** Historical rows remain queryable; new rows use `coreset-set` / `coreset-unset` / `pluginset-set` / `pluginset-unset` / `chanset-set` / `chanset-unset` / `rehash` / `restart`.
+
+### Added
+
+- **Three-scope settings registry** (`src/core/settings-registry.ts`): generalises the per-channel `chanset` pattern to `core` (bot-wide live config), `plugin:<id>` (per-plugin), and the existing `chanset` channel scope. KV-canonical-after-first-boot semantics: `bot.json` / `plugins.json` are first-run seeds, then operator `.set` / `.unset` / `.rehash` writes win.
+- **`.set <scope> <key> <value>` / `.unset <scope> <key>` / `.info <scope>` / `.helpset <scope> <key>` / `.rehash [scope]` / `.restart`** (`src/core/commands/settings-commands.ts`). Audit attribution flows through `auditActor(ctx)` so REPL / IRC / DCC / botlink-relay all converge on the same mod_log shape.
+- **Reload-class metadata** on every config schema field via `.describe('@reload:live|reload|restart')`. `.set` echoes the class as a hint: `(applied live)` / `(applied; subsystem reloaded)` / `(stored; takes effect after .restart)`.
+- **`PluginAPI.coreSettings`** (read-only view of bot-wide settings) and **`PluginAPI.settings`** (read/write own plugin scope) surface the registry to plugins. `api.config` remains in place for compatibility — individual plugins migrate at their own pace; `seen` is the worked example.
+- **`pluginLoader.unloadAll()`** runs on `Bot.shutdown()` so every plugin gets a clean teardown chance on process exit (closes the audit's W-PS finding).
+
+### Fixed
+
+- **Audit-CRITICAL (`importWithCacheBust` ESM-cache leak) resolved by deletion**, not mitigation. `load()` now uses a plain `await import(pathToFileURL(absPath).href)`; `importedOnce`, `reload(name)`, `plugin:reloaded` / `plugin:reload_failed` events all removed.
+
 ## [0.5.0] - 2026-04-25
 
 ### Breaking
