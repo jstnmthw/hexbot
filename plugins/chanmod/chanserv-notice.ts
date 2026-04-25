@@ -99,6 +99,14 @@ export interface ProbeState {
    * recovered key (or null if the channel has no key set).
    */
   pendingGetKey: Map<string, (key: string | null) => void>;
+  /**
+   * Sources (`ident@host`, lowered) we've already logged a "dropping
+   * notice" warning for. ChanServ replies arrive line-by-line, so a
+   * multi-line INFO/ACCESS response with a misconfigured
+   * `services_host_pattern` would otherwise spam one WRN per line.
+   * Cleared on teardown so a `.reload chanmod` re-arms the warning.
+   */
+  untrustedSourcesWarned: Set<string>;
 }
 
 /** Construct a fresh, empty {@link ProbeState}. Called once per plugin init. */
@@ -113,6 +121,7 @@ export function createProbeState(): ProbeState {
     commitDeferredNoAccess: null,
     probeTimers: new Set(),
     pendingGetKey: new Map(),
+    untrustedSourcesWarned: new Set(),
   };
 }
 
@@ -196,9 +205,13 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
       const pattern = (config.services_host_pattern ?? '').trim();
       if (pattern.length > 0) {
         if (!api.util.matchWildcard(pattern, ctx.hostname, { caseInsensitive: true })) {
-          api.warn(
-            `Dropping first ChanServ notice from ${ctx.nick}!${ctx.ident}@${ctx.hostname} — hostname does not match services_host_pattern (${pattern}). Possible services impostor during outage. Adjust services_host_pattern in plugins.json if your services host legitimately differs.`,
-          );
+          const sourceKey = `${srcIdent}@${srcHost}`;
+          if (!probeState.untrustedSourcesWarned.has(sourceKey)) {
+            probeState.untrustedSourcesWarned.add(sourceKey);
+            api.warn(
+              `Dropping first ChanServ notice from ${ctx.nick}!${ctx.ident}@${ctx.hostname} — hostname does not match services_host_pattern (${pattern}). Possible services impostor during outage. Adjust services_host_pattern in plugins.json if your services host legitimately differs.`,
+            );
+          }
           return;
         }
       }
@@ -207,9 +220,13 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
     } else {
       const pinned = probeState.trustedServicesSource;
       if (pinned.ident !== srcIdent || pinned.hostname !== srcHost) {
-        api.warn(
-          `Dropping notice from ${ctx.nick}!${ctx.ident}@${ctx.hostname} — does not match pinned ChanServ source (${pinned.ident}@${pinned.hostname}). Possible services spoof.`,
-        );
+        const sourceKey = `${srcIdent}@${srcHost}`;
+        if (!probeState.untrustedSourcesWarned.has(sourceKey)) {
+          probeState.untrustedSourcesWarned.add(sourceKey);
+          api.warn(
+            `Dropping notice from ${ctx.nick}!${ctx.ident}@${ctx.hostname} — does not match pinned ChanServ source (${pinned.ident}@${pinned.hostname}). Possible services spoof.`,
+          );
+        }
         return;
       }
     }
@@ -232,6 +249,7 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
     probeState.pendingGetKey.clear();
     probeState.activeInfoChannel = null;
     probeState.trustedServicesSource = null;
+    probeState.untrustedSourcesWarned.clear();
     for (const t of probeState.probeTimers) clearTimeout(t);
     probeState.probeTimers.clear();
   };

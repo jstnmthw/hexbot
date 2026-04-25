@@ -734,6 +734,38 @@ describe('ChanServ notice handler — services source pin', () => {
     ).toBe(true);
   });
 
+  // Regression: a misconfigured services_host_pattern was logging WRN once per
+  // notice line for a multi-line ChanServ INFO/ACCESS response, since every
+  // line goes through the first-contact gate and fails. Dedup by ident@host so
+  // we warn once per untrusted source until plugin reload.
+  it('only warns once per untrusted source when multiple notices arrive', () => {
+    const { api, notice, logs } = createMockApi();
+    const mockApi = api as unknown as {
+      util: { matchWildcard: (p: string, t: string) => boolean };
+    };
+    mockApi.util = {
+      matchWildcard: (pattern: string, text: string) => {
+        if (pattern === 'services.*') return text.startsWith('services.');
+        return false;
+      },
+    };
+    const { backend } = createMockAthemeBackend();
+    const probeState = createProbeState();
+    const config = { ...createMockConfig(), services_host_pattern: 'services.*' } as ChanmodConfig;
+
+    setupChanServNotice({ api, config, backend, probeState });
+    markProbePending(api, probeState, '#test', 'atheme');
+
+    // Simulate a multi-line ChanServ INFO response from an untrusted source.
+    notice('ChanServ', 'Information for channel #test:', { ident: 'evil', hostname: 'evil.net' });
+    notice('ChanServ', '  Founder: someone', { ident: 'evil', hostname: 'evil.net' });
+    notice('ChanServ', '  Description: ...', { ident: 'evil', hostname: 'evil.net' });
+
+    const warnLines = logs.filter((l) => l.includes('does not match services_host_pattern'));
+    expect(warnLines).toHaveLength(1);
+    expect(probeState.trustedServicesSource).toBeNull();
+  });
+
   it('pins normally when hostname matches services_host_pattern', () => {
     const { api, notice } = createMockApi();
     const mockApi = api as unknown as {
