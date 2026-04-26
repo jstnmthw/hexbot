@@ -2,7 +2,6 @@ services:
   hexbot:
     build: .
     restart: unless-stopped
-    env_file: config/bot.env
     ports:
       - '49152-49171:49152-49171'
     volumes:

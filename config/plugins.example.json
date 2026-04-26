@@ -1,94 +1,11 @@
 {
   "chanmod": {
     "config": {
-      "auto_op": true,
-      "op_flags": ["n", "m", "o"],
-      "halfop_flags": [],
-      "voice_flags": ["v"],
-      "notify_on_fail": false,
-      "enforce_modes": false,
-      "enforce_channel_modes": "+nt",
-      "enforce_channel_key": "",
-      "enforce_channel_limit": 0,
-      "enforce_delay_ms": 500,
-      "nodesynch_nicks": ["ChanServ"],
-      "cycle_on_deop": false,
-      "cycle_delay_ms": 5000,
-      "default_kick_reason": "Requested",
-      "default_ban_duration": 120,
-      "default_ban_type": 3,
-      "rejoin_on_kick": true,
-      "rejoin_delay_ms": 5000,
-      "max_rejoin_attempts": 3,
-      "rejoin_attempt_window_ms": 300000,
-      "revenge_on_kick": false,
-      "revenge_action": "deop",
-      "revenge_delay_ms": 3000,
-      "revenge_kick_reason": "Don't kick me.",
-      "revenge_exempt_flags": "nm",
-      "bitch": false,
-      "punish_deop": false,
-      "punish_action": "kick",
-      "punish_kick_reason": "Don't deop my friends.",
-      "enforcebans": false,
-      "nick_recovery": true,
-      "nick_recovery_ghost": false,
-      "stopnethack_mode": 0,
-      "split_timeout_ms": 300000,
-      "chanserv_nick": "ChanServ",
-      "chanserv_op_delay_ms": 1000,
-      "chanserv_services_type": "",
-      "services_host_pattern": "services.*",
-      "chanserv_unban_retry_ms": 2000,
-      "chanserv_unban_max_retries": 3,
-      "chanserv_recover_cooldown_ms": 60000,
-      "anope_recover_step_delay_ms": 200,
-      "takeover_window_ms": 30000,
-      "takeover_level_1_threshold": 3,
-      "takeover_level_2_threshold": 6,
-      "takeover_level_3_threshold": 10,
-      "takeover_response_delay_ms": 0
-    }
-  },
-  "flood": {
-    "config": {
-      "msg_threshold": 5,
-      "msg_window_secs": 3,
-      "join_threshold": 3,
-      "join_window_secs": 60,
-      "part_threshold": 3,
-      "part_window_secs": 60,
-      "nick_threshold": 3,
-      "nick_window_secs": 60,
-      "ban_duration_minutes": 10,
-      "ignore_ops": true,
-      "actions": ["warn", "kick", "tempban"],
-      "offence_window_ms": 300000,
-      "flood_lock_count": 3,
-      "flood_lock_window": 60,
-      "flood_lock_duration": 60,
-      "flood_lock_mode": "R"
-    }
-  },
-  "greeter": {
-    "config": {
-      "message": "Welcome to {channel}, {nick}!",
-      "delivery": "say",
-      "join_notice": "",
-      "min_flag": "v"
-    }
-  },
-  "help": {
-    "config": {
-      "cooldown_ms": 30000,
-      "reply_type": "notice",
-      "compact_index": true,
-      "header": "HexBot Commands",
-      "footer": "*** End of Help ***"
+      "services_host_pattern": "services.*"
     }
   },
   "rss": {
-    "enabled": true,
+    "enabled": false,
     "config": {
       "feeds": [
         {
@@ -98,11 +15,7 @@
           "channels": ["#tech"],
           "interval": 900
         }
-      ],
-      "dedup_window_days": 30,
-      "max_title_length": 300,
-      "request_timeout_ms": 10000,
-      "max_per_poll": 5
+      ]
     }
   },
   "ai-chat": {
@@ -110,8 +23,8 @@
     "channels": ["#mychannel"],
     "config": {
       "provider": "gemini",
-      "model": "gemini-2.5-flash-lite",
-      "temperature": 0.9
+      "api_key_env": "HEX_GEMINI_API_KEY",
+      "model": "gemini-2.5-flash-lite"
     }
   }
 }
