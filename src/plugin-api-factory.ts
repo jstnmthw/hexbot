@@ -1081,13 +1081,22 @@ function createPluginSettingsApi(
 function createPluginHelpApi(
   helpRegistry: HelpRegistry | null | undefined,
   pluginId: string,
-): Pick<PluginAPI, 'registerHelp' | 'getHelpEntries'> {
+): Pick<PluginAPI, 'registerHelp' | 'getHelpRegistry'> {
   return {
     registerHelp(entries: HelpEntry[]): void {
       helpRegistry?.register(pluginId, entries);
     },
-    getHelpEntries(): HelpEntry[] {
-      return helpRegistry?.getAll() ?? [];
+    getHelpRegistry() {
+      // Frozen view: same `get` / `getAll` semantics as the underlying
+      // registry, but no `register` / `unregister` surface — those run
+      // through `api.registerHelp` so the factory can stamp the
+      // pluginId. When the bot was constructed without a help registry
+      // (rare; integration test fixtures only), return an empty view.
+      const registry = helpRegistry;
+      return Object.freeze({
+        get: (command: string) => registry?.get(command),
+        getAll: () => registry?.getAll() ?? [],
+      });
     },
   };
 }

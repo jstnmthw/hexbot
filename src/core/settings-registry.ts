@@ -28,9 +28,11 @@ import type {
   ChannelSettingDef,
   ChannelSettingEntry,
   ChannelSettingValue,
+  HelpEntry,
 } from '../types';
 import type { ModActor } from './audit';
 import { tryLogModAction } from './audit';
+import type { HelpRegistry } from './help-registry';
 
 export type { ChannelSettingChangeCallback };
 
@@ -138,6 +140,33 @@ export interface SettingsRegistryOptions {
    * `core` / `plugin` (which always use identity folding).
    */
   ircLower?: ChannelLower;
+  /**
+   * Shared help corpus. When supplied alongside {@link scopeLabel}, every
+   * registered def is mirrored as a `HelpEntry` so `!help set <scope> <key>`
+   * resolves through the same renderer that powers `!help <command>`. Optional
+   * so embedded test fixtures stay terse.
+   */
+  helpRegistry?: HelpRegistry;
+  /**
+   * Visible scope name used in mirrored help entries (`'core'`, `'channel'`,
+   * or the plugin id). Required for help mirroring; absent values disable it.
+   */
+  scopeLabel?: string;
+  /**
+   * One-line description rendered in the bare `!help set` index next to this
+   * scope. Plugin scopes pass the plugin module's `description` export;
+   * `core` and `channel` get short hardcoded strings at construction.
+   * When set, the registry registers a synthetic scope-header entry into
+   * the help corpus so the renderer can display it without reaching back
+   * into the registry instance.
+   */
+  scopeSummary?: string;
+  /**
+   * Command prefix to bake into mirrored help entries (`'.set core foo'`
+   * vs `'!set core foo'`). Defaults to `'.'` when omitted, since `.set`
+   * is the canonical operator surface.
+   */
+  commandPrefix?: string;
 }
 
 /**
@@ -155,6 +184,10 @@ export class SettingsRegistry {
   private readonly defs: Map<string, SettingEntry> = new Map();
   /** Per-owner `onChange` listener stacks. */
   private readonly listeners: Map<string, ChannelSettingChangeCallback[]> = new Map();
+  private readonly helpRegistry: HelpRegistry | undefined;
+  private readonly scopeLabel: string | undefined;
+  private readonly scopeSummary: string | undefined;
+  private readonly commandPrefix: string;
 
   constructor(opts: SettingsRegistryOptions) {
     this.scope = opts.scope;
@@ -163,6 +196,58 @@ export class SettingsRegistry {
     this.logger = opts.logger;
     this.auditActions = opts.auditActions;
     this.fold = opts.scope === 'channel' ? (opts.ircLower ?? IDENTITY_LOWER) : IDENTITY_LOWER;
+    this.helpRegistry = opts.helpRegistry;
+    this.scopeLabel = opts.scopeLabel;
+    this.scopeSummary = opts.scopeSummary;
+    this.commandPrefix = opts.commandPrefix ?? '.';
+
+    // Synthetic scope-header entry. Lets the renderer surface a per-scope
+    // summary line in the bare `!help set` index without reaching back into
+    // the registry instance. Plugin-scope headers ride the pluginId bucket
+    // so they vanish on plugin unload; core / channel headers ride the
+    // reserved `'core'` bucket which is never auto-dropped.
+    if (this.helpRegistry && this.scopeLabel && this.scopeSummary) {
+      const headerOwner = this.scope === 'plugin' ? this.scopeLabel : 'core';
+      this.helpRegistry.register(headerOwner, [this.buildScopeHeaderEntry()]);
+    }
+  }
+
+  /**
+   * Synthetic help entry representing the scope itself (e.g. `.set core`).
+   * Distinct from per-key entries so the renderer can differentiate "show
+   * the scope summary" from "show this specific setting".
+   */
+  private buildScopeHeaderEntry(): HelpEntry {
+    return {
+      command: `${this.commandPrefix}set ${this.scopeLabel}`,
+      flags: 'n',
+      usage: `${this.commandPrefix}set ${this.scopeLabel} <key> [value]`,
+      description: this.scopeSummary ?? '',
+      category: `set:${this.scopeLabel}`,
+    };
+  }
+
+  /**
+   * Build the per-key derived help entry mirrored into the shared corpus.
+   * Uses the registry's `commandPrefix` and `scopeLabel` so the rendered
+   * trigger matches the operator-facing `.set` shape the value-side
+   * command expects.
+   */
+  private buildHelpEntryForDef(def: SettingEntry): HelpEntry {
+    const detail = [
+      `Type: ${def.type}  Default: ${formatDefault(def)}  Reload: ${def.reloadClass}`,
+    ];
+    if (def.allowedValues && def.allowedValues.length > 0) {
+      detail.push(`Allowed: ${def.allowedValues.join(', ')}`);
+    }
+    return {
+      command: `${this.commandPrefix}set ${this.scopeLabel} ${def.key}`,
+      flags: 'n',
+      usage: `${this.commandPrefix}set ${this.scopeLabel} ${def.key} <${def.type}>`,
+      description: def.description,
+      detail,
+      category: `set:${this.scopeLabel}`,
+    };
   }
 
   /**
@@ -179,11 +264,19 @@ export class SettingsRegistry {
         );
         continue;
       }
-      this.defs.set(def.key, {
+      const entry: SettingEntry = {
         ...def,
         owner,
         reloadClass: def.reloadClass ?? 'live',
-      });
+      };
+      this.defs.set(def.key, entry);
+      // Mirror into the shared help corpus so `!help` / `.help` see this
+      // setting alongside command entries. Bucketed by `owner` so plugin
+      // unload (which calls `helpRegistry.unregister(pluginId)`) drops
+      // them naturally.
+      if (this.helpRegistry && this.scopeLabel) {
+        this.helpRegistry.register(owner, [this.buildHelpEntryForDef(entry)]);
+      }
     }
   }
 
@@ -454,6 +547,22 @@ export class SettingsRegistry {
         return stored;
     }
   }
+}
+
+/**
+ * Render a setting's default value into the operator-friendly form used
+ * in mirrored help-entry detail lines. Booleans collapse onto ON/OFF
+ * (matches `.info` rendering); empty strings become `(empty)` so the
+ * detail isn't a dangling colon; ints round-trip via `String()`.
+ */
+function formatDefault(def: SettingDef): string {
+  if (def.type === 'flag') {
+    return def.default ? 'ON' : 'OFF';
+  }
+  if (def.type === 'string') {
+    return def.default === '' ? '(empty)' : String(def.default);
+  }
+  return String(def.default);
 }
 
 /**

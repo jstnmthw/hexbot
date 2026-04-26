@@ -77,8 +77,9 @@ export function formatValueLines<E extends RenderableEntry>(
 
 /**
  * Render a per-key detail line — `<scope> <key> (type) = <value> — <description>`.
- * Used by `.set <scope> <key>` (no value) and `.helpset <scope> <key>`
- * to surface a single setting's current state alongside its description.
+ * Used by `.set <scope> <key>` (no value) to surface a single setting's
+ * current state alongside its description. The unified `.help set <scope>
+ * <key>` path renders its own detail format from the help corpus.
  *
  * The mIRC `\x02` (bold) and `\x03<color>` codes only render in clients
  * that honour them; consoles that strip formatting (REPL, DCC with

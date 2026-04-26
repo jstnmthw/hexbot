@@ -4,6 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ModActor } from '../../src/core/audit';
+import { HelpRegistry } from '../../src/core/help-registry';
 import { SettingsRegistry } from '../../src/core/settings-registry';
 import { BotDatabase } from '../../src/database';
 import type { ChannelSettingDef } from '../../src/types';
@@ -281,5 +282,163 @@ describe('SettingsRegistry — reload class', () => {
     const out = reg.set('', 'greet_msg', 'new.host');
     expect(out.reloadClass).toBe('restart');
     expect(out.restartReason).toMatch(/restart/i);
+  });
+});
+
+describe('SettingsRegistry — help corpus mirroring', () => {
+  let db: BotDatabase;
+
+  beforeEach(() => {
+    db = makeDb();
+  });
+
+  it('registers a synthetic scope-header entry on construction when summary is supplied', () => {
+    const help = new HelpRegistry();
+    new SettingsRegistry({
+      scope: 'core',
+      namespace: 'core',
+      db,
+      auditActions: { set: 'coreset-set', unset: 'coreset-unset' },
+      helpRegistry: help,
+      scopeLabel: 'core',
+      scopeSummary: 'Bot-wide singletons',
+      commandPrefix: '.',
+    });
+
+    const header = help.get('.set core');
+    expect(header).toBeDefined();
+    expect(header?.category).toBe('set:core');
+    expect(header?.description).toBe('Bot-wide singletons');
+    expect(header?.flags).toBe('n');
+  });
+
+  it('mirrors per-def help entries on register() under the def owner bucket', () => {
+    const help = new HelpRegistry();
+    const reg = new SettingsRegistry({
+      scope: 'core',
+      namespace: 'core',
+      db,
+      auditActions: { set: 'coreset-set', unset: 'coreset-unset' },
+      helpRegistry: help,
+      scopeLabel: 'core',
+      scopeSummary: 'Bot-wide singletons',
+    });
+    reg.register('bot', [{ ...stringDef, description: 'Greeting message' }]);
+
+    const entry = help.get('.set core greet_msg');
+    expect(entry).toBeDefined();
+    expect(entry?.category).toBe('set:core');
+    expect(entry?.description).toBe('Greeting message');
+    expect(entry?.usage).toBe('.set core greet_msg <string>');
+    expect(entry?.pluginId).toBe('bot');
+    // Detail line carries type/default/reload metadata so `.help set core greet_msg`
+    // can render it without re-deriving from the def at lookup time.
+    expect(entry?.detail?.[0]).toContain('Type: string');
+    expect(entry?.detail?.[0]).toContain('Default: Welcome!');
+    expect(entry?.detail?.[0]).toContain('Reload: live');
+  });
+
+  it('uses the configured command prefix when mirroring entries', () => {
+    const help = new HelpRegistry();
+    const reg = new SettingsRegistry({
+      scope: 'plugin',
+      namespace: 'plugin:rss',
+      db,
+      auditActions: { set: 'pluginset-set', unset: 'pluginset-unset' },
+      helpRegistry: help,
+      scopeLabel: 'rss',
+      scopeSummary: 'RSS feed announcer',
+      commandPrefix: '!',
+    });
+    reg.register('rss', [stringDef]);
+
+    expect(help.get('!set rss')).toBeDefined();
+    expect(help.get('!set rss greet_msg')?.usage).toBe('!set rss greet_msg <string>');
+  });
+
+  it('formats default values for ON/OFF flags, empty strings, and ints', () => {
+    const help = new HelpRegistry();
+    const reg = new SettingsRegistry({
+      scope: 'core',
+      namespace: 'core',
+      db,
+      auditActions: { set: 'coreset-set', unset: 'coreset-unset' },
+      helpRegistry: help,
+      scopeLabel: 'core',
+      scopeSummary: 'Core',
+    });
+    reg.register('bot', [
+      { key: 'feature', type: 'flag', default: true, description: 'On flag' },
+      { key: 'host', type: 'string', default: '', description: 'Empty string default' },
+      { key: 'count', type: 'int', default: 5, description: 'Int default' },
+    ]);
+
+    expect(help.get('.set core feature')?.detail?.[0]).toContain('Default: ON');
+    expect(help.get('.set core host')?.detail?.[0]).toContain('Default: (empty)');
+    expect(help.get('.set core count')?.detail?.[0]).toContain('Default: 5');
+  });
+
+  it('emits an Allowed line when the def declares allowedValues', () => {
+    const help = new HelpRegistry();
+    const reg = new SettingsRegistry({
+      scope: 'core',
+      namespace: 'core',
+      db,
+      auditActions: { set: 'coreset-set', unset: 'coreset-unset' },
+      helpRegistry: help,
+      scopeLabel: 'core',
+      scopeSummary: 'Core',
+    });
+    reg.register('bot', [
+      {
+        key: 'log.level',
+        type: 'string',
+        default: 'info',
+        description: 'Log level',
+        allowedValues: ['debug', 'info', 'warn', 'error'],
+      },
+    ]);
+
+    const detail = help.get('.set core log.level')?.detail;
+    expect(detail).toEqual(
+      expect.arrayContaining([expect.stringContaining('Allowed: debug, info, warn, error')]),
+    );
+  });
+
+  it('omits help mirroring entirely when helpRegistry is not supplied', () => {
+    const help = new HelpRegistry();
+    const reg = new SettingsRegistry({
+      scope: 'core',
+      namespace: 'core',
+      db,
+      auditActions: { set: 'coreset-set', unset: 'coreset-unset' },
+      // No helpRegistry / scopeLabel / scopeSummary — registry stays in
+      // "settings only" mode.
+    });
+    reg.register('bot', [stringDef]);
+
+    expect(help.getAll()).toHaveLength(0);
+  });
+
+  it('drops mirrored entries when the owner plugin unloads (helpRegistry.unregister)', () => {
+    const help = new HelpRegistry();
+    const reg = new SettingsRegistry({
+      scope: 'plugin',
+      namespace: 'plugin:rss',
+      db,
+      auditActions: { set: 'pluginset-set', unset: 'pluginset-unset' },
+      helpRegistry: help,
+      scopeLabel: 'rss',
+      scopeSummary: 'RSS feed announcer',
+    });
+    reg.register('rss', [stringDef]);
+    expect(help.get('.set rss greet_msg')).toBeDefined();
+    expect(help.get('.set rss')).toBeDefined();
+
+    // Plugin unload calls help.unregister(pluginId) — both the per-key
+    // entry AND the scope header (registered into the plugin bucket) go.
+    help.unregister('rss');
+    expect(help.get('.set rss greet_msg')).toBeUndefined();
+    expect(help.get('.set rss')).toBeUndefined();
   });
 });

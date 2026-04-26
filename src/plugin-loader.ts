@@ -430,6 +430,7 @@ export class PluginLoader {
     // reload should never inherit listener stacks from the previous
     // instance — see audit W-PS2 cross-cutting verification).
     if (this.pluginSettings && this.db) {
+      const moduleDescription = typeof mod.description === 'string' ? mod.description : undefined;
       this.pluginSettings.set(
         pluginName,
         new SettingsRegistry({
@@ -438,6 +439,10 @@ export class PluginLoader {
           db: this.db,
           logger: this.rootLogger?.child(`plugin-settings:${pluginName}`),
           auditActions: { set: 'pluginset-set', unset: 'pluginset-unset' },
+          helpRegistry: this.helpRegistry ?? undefined,
+          scopeLabel: pluginName,
+          scopeSummary: moduleDescription,
+          commandPrefix: this.botConfig.command_prefix,
         }),
       );
     }

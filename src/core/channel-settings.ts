@@ -16,6 +16,7 @@ import type {
   ChannelSettingValue,
 } from '../types';
 import type { ModActor } from './audit';
+import type { HelpRegistry } from './help-registry';
 import { type ChannelLower, SettingsRegistry } from './settings-registry';
 
 export type { ChannelSettingChangeCallback };
@@ -23,10 +24,26 @@ export type { ChannelLower };
 
 const DEFAULT_LOWER: ChannelLower = (s) => s.toLowerCase();
 
+/**
+ * Optional opts forwarded to the underlying {@link SettingsRegistry}.
+ * Wired by the bot at construction so per-channel settings show up in
+ * the unified `!help` corpus alongside core / plugin scopes.
+ */
+export interface ChannelSettingsOptions {
+  helpRegistry?: HelpRegistry;
+  scopeSummary?: string;
+  commandPrefix?: string;
+}
+
 export class ChannelSettings {
   private readonly registry: SettingsRegistry;
 
-  constructor(db: BotDatabase, logger?: LoggerLike, ircLower?: ChannelLower) {
+  constructor(
+    db: BotDatabase,
+    logger?: LoggerLike,
+    ircLower?: ChannelLower,
+    opts?: ChannelSettingsOptions,
+  ) {
     this.registry = new SettingsRegistry({
       scope: 'channel',
       namespace: 'chanset',
@@ -34,6 +51,10 @@ export class ChannelSettings {
       logger,
       auditActions: { set: 'chanset-set', unset: 'chanset-unset' },
       ircLower: ircLower ?? DEFAULT_LOWER,
+      helpRegistry: opts?.helpRegistry,
+      scopeLabel: opts ? 'channel' : undefined,
+      scopeSummary: opts?.scopeSummary,
+      commandPrefix: opts?.commandPrefix,
     });
   }
 

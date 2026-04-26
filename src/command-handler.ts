@@ -2,8 +2,16 @@
 // Parses command strings and dispatches to registered handlers.
 // Transport-agnostic — works with REPL, IRC, or any future input source.
 import type { DCCSessionEntry } from './core/dcc';
-import type { HandlerContext } from './types';
-import { formatTable } from './utils/table';
+import { HelpRegistry } from './core/help-registry';
+import {
+  type RenderPermissions,
+  lookup,
+  renderCategory,
+  renderCommand,
+  renderIndex,
+  renderScope,
+} from './core/help-render';
+import type { HandlerContext, HelpEntry } from './types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -99,11 +107,25 @@ export class CommandHandler {
    * common case but the parser accepts any non-empty string.
    */
   private readonly prefix: string;
+  /**
+   * Shared help corpus. Every {@link registerCommand} call mirrors its
+   * options into the registry under the reserved `'core'` pluginId so
+   * a single `!help` / `.help` view spans plugin commands and core
+   * dot-commands. Bot wires the shared instance in production; tests
+   * that don't pass one get a private auto-instantiated registry — same
+   * code path either way.
+   */
+  private readonly helpRegistry: HelpRegistry;
 
-  constructor(permissions?: CommandPermissionsProvider | null, commandPrefix?: string) {
+  constructor(
+    permissions?: CommandPermissionsProvider | null,
+    commandPrefix?: string,
+    helpRegistry?: HelpRegistry,
+  ) {
     this.permissions = permissions ?? null;
     this.prefix =
       commandPrefix && commandPrefix.length > 0 ? commandPrefix : DEFAULT_COMMAND_PREFIX;
+    this.helpRegistry = helpRegistry ?? new HelpRegistry();
     // Register the built-in help command. Usage string uses the configured
     // prefix so `.help`-style docs stay accurate when an operator switches
     // to `!` or `~`.
@@ -129,6 +151,14 @@ export class CommandHandler {
   /** Register a command. */
   registerCommand(name: string, options: CommandOptions, handler: CommandHandlerFn): void {
     this.commands.set(name.toLowerCase(), { name, options, handler });
+    const entry: HelpEntry = {
+      command: `${this.prefix}${name}`,
+      flags: options.flags,
+      usage: options.usage,
+      description: options.description,
+      category: options.category,
+    };
+    this.helpRegistry.register('core', [entry]);
   }
 
   /** Remove a previously registered command. Returns true if it existed. */
@@ -284,42 +314,67 @@ export class CommandHandler {
     return Array.from(this.commands.values());
   }
 
-  /** Get help text for one or all commands. */
-  getHelp(commandName?: string): string {
-    if (commandName) {
-      const entry = this.commands.get(commandName.toLowerCase());
-      if (!entry) return `Unknown command: ${commandName}`;
-      return `${entry.options.usage} — ${entry.options.description} [flags: ${entry.options.flags}]`;
-    }
-
-    // List all commands grouped by category
-    const byCategory = new Map<string, CommandEntry[]>();
-    for (const entry of this.commands.values()) {
-      const cat = entry.options.category;
-      let bucket = byCategory.get(cat);
-      if (!bucket) {
-        bucket = [];
-        byCategory.set(cat, bucket);
-      }
-      bucket.push(entry);
-    }
-
-    const lines: string[] = ['Available commands:'];
-    for (const [category, entries] of byCategory) {
-      lines.push(`  [${category}]`);
-      const rows = entries.map((e) => [`${this.prefix}${e.name}`, `— ${e.options.description}`]);
-      lines.push(formatTable(rows, { indent: '    ' }));
-    }
-    lines.push(`Type ${this.prefix}help <command> for details on a specific command.`);
-    return lines.join('\n');
-  }
-
   // -------------------------------------------------------------------------
   // Built-in commands
   // -------------------------------------------------------------------------
 
   private handleHelp(args: string, ctx: CommandContext): void {
-    const commandName = args.trim() || undefined;
-    ctx.reply(this.getHelp(commandName));
+    // Bridge the CommandContext into the HandlerContext shape the renderer's
+    // permissions check expects. REPL and botlink are trusted transports —
+    // pass `null` perms so every entry is visible (matches the bypass at
+    // checkCommandPermissions).
+    const handlerCtx: HandlerContext = {
+      nick: ctx.nick,
+      ident: ctx.ident ?? '',
+      hostname: ctx.hostname ?? '',
+      channel: ctx.channel,
+      text: '',
+      command: 'help',
+      args,
+      reply: ctx.reply,
+      replyPrivate: ctx.reply,
+    };
+    if (ctx.account !== undefined) handlerCtx.account = ctx.account;
+    const renderPerms: RenderPermissions | null =
+      ctx.source === 'repl' || ctx.source === 'botlink' ? null : this.permissions;
+
+    const arg = args.trim();
+    if (arg) {
+      const result = lookup(this.helpRegistry, arg, handlerCtx, renderPerms);
+      switch (result.kind) {
+        case 'command':
+          ctx.reply(renderCommand(result.entry).join('\n'));
+          return;
+        case 'category':
+          ctx.reply(renderCategory(result.category, result.entries).join('\n'));
+          return;
+        case 'scope':
+          ctx.reply(
+            renderScope(result.scope, result.header, result.entries, this.prefix).join('\n'),
+          );
+          return;
+        case 'denied':
+        case 'none':
+          ctx.reply(`No help for "${arg}" — type ${this.prefix}help for a list of commands`);
+          return;
+      }
+      return;
+    }
+
+    // Bare-index render. Verbose mode (compact: false) so the trusted
+    // operator console gets the categorised listing operators expect.
+    const visibleEntries =
+      renderPerms === null
+        ? this.helpRegistry.getAll()
+        : this.helpRegistry
+            .getAll()
+            .filter((e) => e.flags === '-' || renderPerms.checkFlags(e.flags, handlerCtx));
+    const lines = renderIndex(visibleEntries, {
+      compact: false,
+      header: 'Available commands',
+      footer: `Type ${this.prefix}help <command> for details on a specific command.`,
+      prefix: this.prefix,
+    });
+    ctx.reply(lines.join('\n'));
   }
 }

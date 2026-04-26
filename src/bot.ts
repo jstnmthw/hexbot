@@ -259,6 +259,10 @@ export class Bot {
       db: this.db,
       logger: this.logger.child('core-settings'),
       auditActions: { set: 'coreset-set', unset: 'coreset-unset' },
+      helpRegistry: this.helpRegistry,
+      scopeLabel: 'core',
+      scopeSummary: 'Bot-wide singletons (logging, queue, flood, services, dcc, ...)',
+      commandPrefix: this.config.command_prefix ?? '.',
     });
     this.registerCoreSettings();
 
@@ -701,7 +705,14 @@ export class Bot {
     db.setEventBus(eventBus);
     const permissions = new Permissions(db, this.logger, eventBus);
     const dispatcher = new EventDispatcher(permissions, this.logger);
-    const commandHandler = new CommandHandler(permissions, this.config.command_prefix);
+    // Construct the help corpus before CommandHandler so every
+    // registerCommand call from boot-time mirrors into the shared registry.
+    const helpRegistry = new HelpRegistry(this.logger.child('help-registry'));
+    const commandHandler = new CommandHandler(
+      permissions,
+      this.config.command_prefix,
+      helpRegistry,
+    );
     const client = new IrcClient();
     const configuredChannels = this.config.irc.channels.map((entry) =>
       typeof entry === 'string' ? { name: entry } : { name: entry.name, key: entry.key },
@@ -725,9 +736,15 @@ export class Bot {
       db,
       botNick: this.config.irc.nick,
     });
-    const helpRegistry = new HelpRegistry();
-    const channelSettings = new ChannelSettings(db, this.logger.child('channel-settings'), (s) =>
-      ircLower(s, this.getCasemapping()),
+    const channelSettings = new ChannelSettings(
+      db,
+      this.logger.child('channel-settings'),
+      (s) => ircLower(s, this.getCasemapping()),
+      {
+        helpRegistry,
+        scopeSummary: 'Per-channel overrides registered by plugins (chanmod, greeter, ...)',
+        commandPrefix: this.config.command_prefix ?? '.',
+      },
     );
     const banStore = new BanStore(db, (s) => ircLower(s, this.getCasemapping()));
     const stsStore = new STSStore(db);

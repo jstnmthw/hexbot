@@ -5,6 +5,7 @@ import {
   CommandHandler,
   type CommandPermissionsProvider,
 } from '../src/command-handler';
+import { HelpRegistry } from '../src/core/help-registry';
 
 /** Helper: create a minimal CommandContext with a typed reply mock. */
 function makeCtx(
@@ -68,7 +69,7 @@ describe('CommandHandler', () => {
       await handler.execute('.help nosuchcommand', ctx);
 
       const output = ctx.reply.mock.calls[0][0];
-      expect(output).toContain('Unknown command');
+      expect(output).toContain('No help for "nosuchcommand"');
     });
   });
 
@@ -445,6 +446,150 @@ describe('CommandHandler', () => {
     it('falls back to the default `.` when an empty string is supplied', () => {
       const handler = new CommandHandler(null, '');
       expect(handler.getPrefix()).toBe('.');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // HelpRegistry mirroring
+  // -------------------------------------------------------------------------
+
+  describe('helpRegistry mirroring', () => {
+    it('mirrors built-in .help into the shared corpus under the core bucket', () => {
+      const registry = new HelpRegistry();
+      new CommandHandler(null, '.', registry);
+
+      const entry = registry.get('.help');
+      expect(entry).toBeDefined();
+      expect(entry?.pluginId).toBe('core');
+      expect(entry?.command).toBe('.help');
+      expect(entry?.usage).toBe('.help [command]');
+      expect(entry?.category).toBe('general');
+    });
+
+    it('mirrors every registerCommand call into the help registry', () => {
+      const registry = new HelpRegistry();
+      const handler = new CommandHandler(null, '.', registry);
+      handler.registerCommand(
+        'kick',
+        { flags: 'o', description: 'Kick a user', usage: '.kick <nick>', category: 'moderation' },
+        vi.fn(),
+      );
+
+      const entry = registry.get('.kick');
+      expect(entry).toMatchObject({
+        command: '.kick',
+        flags: 'o',
+        description: 'Kick a user',
+        category: 'moderation',
+        pluginId: 'core',
+      });
+    });
+
+    it('uses the configured prefix when mirroring command names', () => {
+      const registry = new HelpRegistry();
+      const handler = new CommandHandler(null, '!', registry);
+      handler.registerCommand(
+        'ping',
+        { flags: '-', description: 'Ping', usage: '!ping', category: 'fun' },
+        vi.fn(),
+      );
+
+      expect(registry.get('!ping')).toBeDefined();
+      expect(registry.get('ping')?.command).toBe('!ping');
+    });
+
+    it('auto-instantiates a private registry when none is supplied', () => {
+      // Bot wires the shared instance in production; standalone constructors
+      // get their own so registerCommand always has a corpus to mirror into.
+      const handler = new CommandHandler();
+      handler.registerCommand(
+        'noop',
+        { flags: '-', description: 'Noop', usage: '.noop', category: 'test' },
+        vi.fn(),
+      );
+      // The auto-registry is private — reach for it via the .help dispatch
+      // which renders from it directly.
+      expect(handler.getCommands().some((c) => c.name === 'noop')).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // .help via shared renderer (Phase 3)
+  // -------------------------------------------------------------------------
+
+  describe('.help via shared renderer', () => {
+    it('routes .help <plugin-cmd> through the shared corpus to render the plugin entry', async () => {
+      const registry = new HelpRegistry();
+      const handler = new CommandHandler(null, '.', registry);
+      // Simulate a plugin entry living in the shared corpus
+      registry.register('rss', [
+        {
+          command: '!rss',
+          flags: '-',
+          usage: '!rss <feed>',
+          description: 'Subscribe to an RSS feed',
+          category: 'feeds',
+        },
+      ]);
+      const ctx = makeCtx();
+      await handler.execute('.help rss', ctx);
+
+      const out = ctx.reply.mock.calls[0][0];
+      expect(out).toContain('!rss');
+      expect(out).toContain('Subscribe to an RSS feed');
+    });
+
+    it('routes .help set <scope> through the scope renderer (lists keys)', async () => {
+      const registry = new HelpRegistry();
+      const handler = new CommandHandler(null, '.', registry);
+      registry.register('bot', [
+        {
+          command: '.set core',
+          flags: 'n',
+          usage: '.set core <key> [value]',
+          description: 'Bot-wide singletons',
+          category: 'set:core',
+        },
+        {
+          command: '.set core logging.level',
+          flags: 'n',
+          usage: '.set core logging.level <string>',
+          description: 'Minimum log level',
+          category: 'set:core',
+        },
+      ]);
+
+      const ctx = makeCtx();
+      await handler.execute('.help set core', ctx);
+
+      const out = ctx.reply.mock.calls[0][0];
+      expect(out).toContain('core');
+      expect(out).toContain('logging.level');
+      expect(out).toContain('Type .help set core <key> for detail.');
+    });
+
+    it('routes .help set <scope> <key> through the per-entry detail render', async () => {
+      const registry = new HelpRegistry();
+      const handler = new CommandHandler(null, '.', registry);
+      registry.register('bot', [
+        {
+          command: '.set core logging.level',
+          flags: 'n',
+          usage: '.set core logging.level <string>',
+          description: 'Minimum log level',
+          detail: ['Type: string  Default: info  Reload: live'],
+          category: 'set:core',
+        },
+      ]);
+
+      const ctx = makeCtx();
+      await handler.execute('.help set core logging.level', ctx);
+
+      const out = ctx.reply.mock.calls[0][0];
+      expect(out).toContain('logging.level');
+      expect(out).toContain('Minimum log level');
+      expect(out).toContain('Type: string');
+      expect(out).toContain('Default: info');
     });
   });
 });

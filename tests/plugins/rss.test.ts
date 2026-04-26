@@ -212,7 +212,7 @@ function makeMockAPI(db: BotDatabase, config: Record<string, unknown> = {}): Moc
       };
     })(),
     registerHelp(_entries: HelpEntry[]) {},
-    getHelpEntries: () => [],
+    getHelpRegistry: () => ({ get: () => undefined, getAll: () => [] }),
     stripFormatting: (text: string) => text,
     getChannelKey: () => undefined,
     util: {

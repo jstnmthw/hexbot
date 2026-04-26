@@ -1,31 +1,19 @@
 // help — IRC help system plugin
 // Responds to !help [command|category] with a permission-filtered list of available commands.
-import type { HandlerContext, HelpEntry, PluginAPI } from '../../src/types';
+// All rendering / lookup logic lives in `src/core/help-render` so the IRC
+// transport here and the core `.help` built-in stay in lockstep.
+import {
+  lookup,
+  renderCategory,
+  renderCommand,
+  renderIndex,
+  renderScope,
+} from '../../src/core/help-render';
+import type { HandlerContext, PluginAPI } from '../../src/types';
 
 export const name = 'help';
 export const version = '1.0.0';
 export const description = 'Provides !help command listing available bot commands';
-
-/** Bold the trigger (first word) of a usage string, leaving args unbolded. */
-function boldTrigger(usage: string): string {
-  const spaceIdx = usage.indexOf(' ');
-  if (spaceIdx === -1) return `\x02${usage}\x02`;
-  return `\x02${usage.slice(0, spaceIdx)}\x02${usage.slice(spaceIdx)}`;
-}
-
-/**
- * Filter a list of help entries down to those the invoking user may see.
- * Unflagged entries (`'-'`) are always visible; flagged entries pass through
- * the permissions check. Used by both the list view and the category view
- * so privileged commands never leak to unprivileged users.
- */
-function filterByPermission(
-  api: PluginAPI,
-  entries: HelpEntry[],
-  ctx: HandlerContext,
-): HelpEntry[] {
-  return entries.filter((e) => e.flags === '-' || api.permissions.checkFlags(e.flags, ctx));
-}
 
 /** Valid `reply_type` config values. */
 type ReplyType = 'notice' | 'privmsg' | 'channel_notice';
@@ -113,58 +101,34 @@ export function init(api: PluginAPI): void {
     }
   }
 
+  /** Reply privately for sub-views (detail / category / scope). */
+  function privateReply(ctx: HandlerContext, lines: string[]): void {
+    for (const line of lines) {
+      api.notice(ctx.nick, line);
+    }
+  }
+
   function handler(ctx: HandlerContext): void {
     const arg = ctx.args.trim();
+    const helpRegistry = api.getHelpRegistry();
 
     if (arg) {
-      // Accept both `!help foo` and `!help !foo` — strip the optional
-      // leading `!` so the lookup matches command entries regardless of
-      // whether the user typed the prefix.
-      const normalized = arg.replace(/^!/, '');
-
-      // Priority 1: match as a command name
-      const entry = api
-        .getHelpEntries()
-        .find((e) => e.command.replace(/^!/, '').toLowerCase() === normalized.toLowerCase());
-
-      if (entry) {
-        // Filter by permission — don't reveal privileged commands to unprivileged users
-        if (entry.flags !== '-' && !api.permissions.checkFlags(entry.flags, ctx)) {
+      const result = lookup(helpRegistry, arg, ctx, api.permissions);
+      switch (result.kind) {
+        case 'command':
+          privateReply(ctx, renderCommand(result.entry));
+          return;
+        case 'category':
+          privateReply(ctx, renderCategory(result.category, result.entries));
+          return;
+        case 'scope':
+          privateReply(ctx, renderScope(result.scope, result.header, result.entries, '!'));
+          return;
+        case 'denied':
+        case 'none':
           api.notice(ctx.nick, `No help for "${arg}" — try !help for a list`);
           return;
-        }
-        // Detail view — always private to nick. Flags collapse onto the
-        // header as `| Requires: <flags>`; absence of that suffix is itself
-        // the signal that no flags are required, saving a line per command.
-        const flagsSuffix = entry.flags === '-' ? '' : ` | Requires: ${entry.flags}`;
-        api.notice(ctx.nick, `${boldTrigger(entry.usage)} — ${entry.description}${flagsSuffix}`);
-        if (entry.detail) {
-          for (const line of entry.detail) {
-            api.notice(ctx.nick, `  ${line}`);
-          }
-        }
-        return;
       }
-
-      // Priority 2: match as a category name (permission-filtered)
-      const visible = filterByPermission(api, api.getHelpEntries(), ctx);
-      const categoryEntries = visible.filter(
-        (e) => (e.category ?? e.pluginId ?? '').toLowerCase() === normalized.toLowerCase(),
-      );
-
-      if (categoryEntries.length > 0) {
-        // Category view — always private to nick
-        const actualCategory = categoryEntries[0].category ?? categoryEntries[0].pluginId ?? '';
-        api.notice(ctx.nick, `\x02[${actualCategory}]\x02`);
-        for (const e of categoryEntries) {
-          api.notice(ctx.nick, `  ${boldTrigger(e.usage)} — ${e.description}`);
-        }
-        return;
-      }
-
-      // Nothing matched
-      api.notice(ctx.nick, `No help for "${arg}" — try !help for a list`);
-      return;
     }
 
     // List view: !help with no args — enforce per-user cooldown.
@@ -191,43 +155,17 @@ export function init(api: PluginAPI): void {
     }
     cooldowns.set(cooldownKey, now);
 
-    // Filter entries by permission
-    const visible = filterByPermission(api, api.getHelpEntries(), ctx);
-
-    if (visible.length === 0) {
-      send(ctx, 'No commands available.');
-      return;
-    }
-
-    // Group by category
-    const groups = new Map<string, HelpEntry[]>();
-    for (const entry of visible) {
-      const cat = entry.category ?? entry.pluginId ?? '';
-      const list = groups.get(cat) ?? [];
-      list.push(entry);
-      groups.set(cat, list);
-    }
-
-    const compactIndex = api.settings.getFlag('compact_index');
-    const header = api.settings.getString('header') || 'HexBot Commands';
-
-    if (compactIndex) {
-      // Compact index: one intro line + one line per category
-      send(ctx, `\x02${header}\x02 — !help <category> or !help <command>`);
-      for (const [category, entries] of groups) {
-        const commands = entries.map((e) => e.command.replace(/^!/, '')).join('  ');
-        send(ctx, `  \x02${category}\x02: ${commands}`);
-      }
-    } else {
-      // Verbose full list with bold formatting
-      send(ctx, `\x02${header}\x02`);
-      for (const [category, entries] of groups) {
-        send(ctx, `\x02[${category}]\x02`);
-        for (const entry of entries) {
-          send(ctx, `  ${boldTrigger(entry.usage)} — ${entry.description}`);
-        }
-      }
-      send(ctx, api.settings.getString('footer') || '*** End of Help ***');
+    const visible = helpRegistry
+      .getAll()
+      .filter((e) => e.flags === '-' || api.permissions.checkFlags(e.flags, ctx));
+    const lines = renderIndex(visible, {
+      compact: api.settings.getFlag('compact_index'),
+      header: api.settings.getString('header') || 'HexBot Commands',
+      footer: api.settings.getString('footer') || '*** End of Help ***',
+      prefix: '!',
+    });
+    for (const line of lines) {
+      send(ctx, line);
     }
   }
 

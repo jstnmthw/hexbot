@@ -232,8 +232,8 @@ describe('settings-commands — .info', () => {
   });
 });
 
-describe('settings-commands — .helpset', () => {
-  it('shows type, default, reload class, and owner', async () => {
+describe('settings-commands — .helpset removal', () => {
+  it('returns Unknown command when invoked (renamed to `.help set <scope> <key>`)', async () => {
     const { handler, coreSettings } = setup();
     coreSettings.register('bot', [
       {
@@ -247,12 +247,7 @@ describe('settings-commands — .helpset', () => {
     ]);
     const ctx = makeCtx();
     await handler.execute('.helpset core logging.level', ctx);
-    const out = ctx.reply.mock.calls.map((c) => c[0]).join('\n');
-    expect(out).toMatch(/type: string/);
-    expect(out).toMatch(/default: info/);
-    expect(out).toMatch(/reload: live/);
-    expect(out).toMatch(/owner: bot/);
-    expect(out).toMatch(/allowed:/);
+    expect(ctx.reply.mock.calls[0][0]).toMatch(/Unknown command/);
   });
 });
 

@@ -123,7 +123,7 @@ Most config keys can be changed at runtime. The full operator surface:
 .set <scope> <key> <value>      # write one key (live-apply via onChange)
 .unset <scope> <key>            # delete from KV → reads registered default
 .info <scope>                   # snapshot of every key in the scope
-.helpset <scope> <key>          # type, default, description, reload-class
+.help set <scope> <key>         # type, default, description, reload-class
 .rehash [scope]                 # re-read JSON files, apply changed keys
 .restart                        # clean process restart
 ```

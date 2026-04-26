@@ -342,7 +342,17 @@ export interface PluginAPI {
 
   // Help registry
   registerHelp(entries: HelpEntry[]): void;
-  getHelpEntries(): HelpEntry[];
+  /**
+   * Read-only view of the unified help corpus. Exposes the registry's
+   * own `get()` (case- and prefix-insensitive command lookup, with
+   * namespaced-fallback resolution) plus `getAll()` so renderers and
+   * sub-help dispatchers can stay in lockstep with the canonical
+   * resolution. Plugins still register entries through
+   * {@link registerHelp} — the registry's mutating methods are owner-
+   * scoped, but routing every register through the API factory keeps
+   * the pluginId-stamping logic in one place.
+   */
+  getHelpRegistry(): HelpRegistryView;
 
   /**
    * Strip IRC formatting and control characters from a string.
@@ -615,6 +625,24 @@ export interface HelpEntry {
   category?: string; // grouping label, defaults to pluginId
   /** Populated automatically by the help registry — do not set manually. */
   pluginId?: string;
+}
+
+/**
+ * Read-only window onto the unified help corpus. Mirrors the lookup
+ * surface of the underlying `HelpRegistry` (case- and prefix-insensitive
+ * `get`, plus `getAll`) without exposing the mutating `register` /
+ * `unregister` paths — those go through the scoped `api.registerHelp`
+ * so the factory can stamp the pluginId.
+ */
+export interface HelpRegistryView {
+  /**
+   * Look up an entry by command name. Strips an optional leading `!` or
+   * `.`, lowercases, and resolves namespaced fallback forms
+   * (`<pluginId>:command`) for the loser of a collision.
+   */
+  get(command: string): HelpEntry | undefined;
+  /** All entries across every owner bucket. */
+  getAll(): HelpEntry[];
 }
 
 // ---------------------------------------------------------------------------

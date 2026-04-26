@@ -712,4 +712,91 @@ describe('help plugin', () => {
 
     expect(mockNotice).toHaveBeenCalled();
   });
+
+  // ---------------------------------------------------------------------------
+  // Settings-scope index folding (Phase 2)
+  // ---------------------------------------------------------------------------
+
+  describe('settings-scope index', () => {
+    function registerScope(
+      registry: HelpRegistry,
+      owner: string,
+      scope: string,
+      summary: string,
+      keys: Array<{ key: string; description: string }>,
+    ): void {
+      registry.register(owner, [
+        {
+          command: `.set ${scope}`,
+          flags: 'n',
+          usage: `.set ${scope} <key> [value]`,
+          description: summary,
+          category: `set:${scope}`,
+        },
+        ...keys.map((k) => ({
+          command: `.set ${scope} ${k.key}`,
+          flags: 'n',
+          usage: `.set ${scope} ${k.key} <string>`,
+          description: k.description,
+          category: `set:${scope}`,
+        })),
+      ]);
+    }
+
+    it('folds set:* categories into one line per scope with summary + key count', async () => {
+      await loadHelp({ help: { enabled: true, config: { cooldown_ms: 0 } } });
+      // Bare index path needs the operator flag so settings entries pass
+      // the per-entry permission filter.
+      permissions.addUser('admin', 'user1!user@host.com', 'n', 'test');
+      permissions.loadFromDb();
+
+      registerScope(helpRegistry, 'bot', 'core', 'Bot-wide singletons', [
+        { key: 'logging.level', description: 'Log level' },
+        { key: 'queue.rate', description: 'Outbound rate' },
+      ]);
+      registerScope(helpRegistry, 'rss', 'rss', 'RSS feed announcer', [
+        { key: 'dedup_window_days', description: 'Dedup window' },
+      ]);
+
+      const ctx = makeCtx({ nick: 'user1', ident: 'user', hostname: 'host.com' });
+      await dispatcher.dispatch('pub', ctx);
+
+      const messages = mockNotice.mock.calls.map((c) => c[1]);
+      // Header pseudo-category should appear.
+      expect(messages.some((m) => m.includes('\x02[settings]\x02'))).toBe(true);
+      // One folded line per scope with key count + summary.
+      expect(messages.some((m) => m.includes('\x02core\x02') && m.includes('(2 keys)'))).toBe(true);
+      expect(messages.some((m) => m.includes('Bot-wide singletons'))).toBe(true);
+      expect(messages.some((m) => m.includes('\x02rss\x02') && m.includes('(1 key)'))).toBe(true);
+      // The per-key entries should NOT appear inline in the bare index.
+      expect(messages.some((m) => m.includes('logging.level'))).toBe(false);
+      expect(messages.some((m) => m.includes('dedup_window_days'))).toBe(false);
+    });
+
+    it('omits the settings index entirely when no set:* entries are visible', async () => {
+      await loadHelp({ help: { enabled: true, config: { cooldown_ms: 0 } } });
+      helpRegistry.register('8ball', [BALL_ENTRY]);
+
+      const ctx = makeCtx();
+      await dispatcher.dispatch('pub', ctx);
+
+      const messages = mockNotice.mock.calls.map((c) => c[1]);
+      expect(messages.some((m) => m.includes('[settings]'))).toBe(false);
+    });
+
+    it('hides set:* entries from unprivileged users (per-entry flag filter)', async () => {
+      await loadHelp({ help: { enabled: true, config: { cooldown_ms: 0 } } });
+      registerScope(helpRegistry, 'bot', 'core', 'Bot-wide singletons', [
+        { key: 'logging.level', description: 'Log level' },
+      ]);
+
+      // user1 has no flags — settings entries (flags 'n') are filtered out.
+      const ctx = makeCtx();
+      await dispatcher.dispatch('pub', ctx);
+
+      const messages = mockNotice.mock.calls.map((c) => c[1]);
+      expect(messages.some((m) => m.includes('[settings]'))).toBe(false);
+      expect(messages.some((m) => m.includes('core'))).toBe(false);
+    });
+  });
 });

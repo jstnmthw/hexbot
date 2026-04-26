@@ -1,9 +1,11 @@
-// HexBot — Live config commands (.set / .unset / .info / .helpset)
+// HexBot — Live config commands (.set / .unset / .info / .rehash / .restart)
 //
 // Operator surface for the three-scope settings registry. Mirrors
 // Eggdrop's `.set` / `.unset` / `.help set` triple where the operator
 // muscle-memory exists; extends it with the `.info <scope>` snapshot
-// view inherited from `.chaninfo`. Scopes resolved at command time:
+// view inherited from `.chaninfo`. Per-key help (`.help set <scope>
+// <key>`) flows through the unified help corpus — no dedicated
+// `.helpset` command. Scopes resolved at command time:
 //
 //   - `core`     → coreSettings (bot-wide singletons)
 //   - `<chan>`   → channelSettings.getRegistry() (#/&-prefixed names)
@@ -17,7 +19,7 @@ import type { BotDatabase } from '../../database';
 import { auditActor, tryAudit } from '../audit';
 import type { ChannelSettings } from '../channel-settings';
 import { type SeedCounts, addCounts, seedFromJson } from '../seed-from-json';
-import type { SettingEntry, SettingsRegistry } from '../settings-registry';
+import type { SettingsRegistry } from '../settings-registry';
 import {
   coerceValue,
   formatDetailLine,
@@ -324,56 +326,6 @@ export function registerSettingsCommands(deps: SettingsCommandsDeps): void {
         lines.push(...formatValueLines(others, ownerPrefix));
       }
       ctx.reply(lines.join('\n'));
-    },
-  );
-
-  // ---------------------------------------------------------------------------
-  // .helpset <scope> <key> — type, default, description, reload-class
-  // ---------------------------------------------------------------------------
-  // Operators reach for "tell me everything about this key" via Eggdrop's
-  // `.help set <scope> <key>`; we surface the same data under a dedicated
-  // `.helpset` command rather than monkey-patching the built-in `.help`
-  // dispatcher. Read-only flag — `.help set` was always informational.
-  handler.registerCommand(
-    'helpset',
-    {
-      flags: '-',
-      description: 'Show type, default, description, and reload-class for a setting',
-      usage: '.helpset <scope> <key>',
-      category: 'settings',
-    },
-    (args, ctx) => {
-      const parts = args
-        .trim()
-        .split(/\s+/)
-        .filter((p) => p.length > 0);
-      if (parts.length < 2) {
-        ctx.reply('Usage: .helpset <scope> <key>');
-        return;
-      }
-      const resolved = resolveScope(parts[0], deps);
-      if (!resolved) {
-        ctx.reply(`Unknown scope "${parts[0]}" — try one of: ${listScopes(deps).join(', ')}`);
-        return;
-      }
-      const { registry, instance, label } = resolved;
-      const key = parts[1].replace(/^[+-]/, '');
-      const def: SettingEntry | undefined = registry.getDef(key);
-      if (!def) {
-        ctx.reply(`Unknown setting: "${key}" in scope "${label}"`);
-        return;
-      }
-      const value = registry.get(instance, key);
-      const isDefault = !registry.isSet(instance, key);
-      ctx.reply(formatDetailLine(label, { entry: def, value, isDefault }));
-      const defaultDisplay =
-        def.type === 'flag' ? (def.default ? 'ON' : 'OFF') : String(def.default) || '(empty)';
-      ctx.reply(
-        `  type: ${def.type}  default: ${defaultDisplay}  reload: ${def.reloadClass}  owner: ${def.owner}`,
-      );
-      if (def.allowedValues && def.allowedValues.length > 0) {
-        ctx.reply(`  allowed: ${def.allowedValues.join(', ')}`);
-      }
     },
   );
 

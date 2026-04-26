@@ -27,7 +27,7 @@ After first boot, `bot.json` edits do **not** auto-apply on restart. Run `.rehas
 .set <scope> <key> <value>      # write one key to KV (live-apply via onChange)
 .unset <scope> <key>            # delete from KV → reads registered default
 .info <scope>                   # show current values + which are overridden vs default
-.helpset <scope> <key>          # type, default, description, reload-class
+.help set <scope> <key>         # type, default, description, reload-class
 
 .rehash [scope]                 # re-read JSON files, diff vs KV, apply changed keys
 .restart                        # shut down cleanly so the supervisor restarts the process

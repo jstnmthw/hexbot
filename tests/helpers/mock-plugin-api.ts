@@ -129,7 +129,10 @@ export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginA
       bootConfig: Object.freeze({}),
     },
     registerHelp: noop,
-    getHelpEntries: vi.fn().mockReturnValue([]),
+    getHelpRegistry: vi.fn().mockReturnValue({
+      get: vi.fn().mockReturnValue(undefined),
+      getAll: vi.fn().mockReturnValue([]),
+    }),
     stripFormatting: (s: string) => s,
     getChannelKey: vi.fn().mockReturnValue(undefined),
     util: {
