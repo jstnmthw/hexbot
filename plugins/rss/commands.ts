@@ -57,7 +57,7 @@ type CmdOutcome = 'attempt' | 'rejected' | 'ok' | 'error';
  * errors that quote the rejected URL), so we strip IRC formatting / ANSI
  * control bytes before returning — otherwise an attacker who persuades
  * an operator to run `!rss add <url-with-color-codes>` could inject a
- * channel-visible bold/colored line. See audit 2026-04-19.
+ * channel-visible bold/colored line.
  */
 function errorMessage(err: unknown): string {
   /* v8 ignore next -- defensive: tests always throw Error instances */
@@ -113,7 +113,7 @@ export function handleList(deps: RssCommandsDeps, ctx: ChannelHandlerContext): v
     // tolerates some control-byte characters in the path/fragment
     // components, so a feed URL added via `.load` or an older migration
     // could contain bold/color bytes that would reshape this line when
-    // rendered in the operator's client. See audit 2026-04-24.
+    // rendered in the operator's client.
     api.notice(
       ctx.nick,
       `  ${feed.id} — ${api.stripFormatting(feed.url)} → ${channels} (every ${interval}s) [${source}]`,
@@ -251,7 +251,7 @@ export async function handleAdd(
   // Strip IRC formatting from the URL before it lands in mod_log. The
   // field is scrubbed at display time by the audit writer, but stripping
   // at the source keeps the raw row byte-clean for downstream consumers
-  // (exports, REPL `.audit-tail`, etc). See audit 2026-04-24.
+  // (exports, REPL `.audit-tail`, etc).
   api.audit.log('rss-feed-add', {
     channel,
     target: id,

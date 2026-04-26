@@ -109,10 +109,10 @@ describe('flood plugin — message flood', () => {
   });
 
   it('treats a sustained burst as one strike, not many', async () => {
-    // Regression test for incident 2026-04-19: a long chatbot response
-    // triggered warn+kick+tempban in ~1s because every line past the
-    // threshold counted as a separate strike. With same-burst dedup the
-    // sustained burst should escalate by at most one strike.
+    // Regression test: a long chatbot response previously triggered
+    // warn+kick+tempban in ~1s because every line past the threshold
+    // counted as a separate strike. With same-burst dedup the sustained
+    // burst should escalate by at most one strike.
     for (let i = 0; i < 20; i++) {
       simulatePrivmsg(bot, 'LongReply', 'lr', 'lr.host', '#test', `line ${i}`);
     }

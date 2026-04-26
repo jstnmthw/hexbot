@@ -22,8 +22,8 @@ function stripLogControls(input: string): string {
  * `key=value` or `"key":"value"` pair. Defense-in-depth — no current call
  * path logs the config object or credential tuples directly, but a future
  * careless caller shouldn't be able to leak a password into `[bot]`
- * output. See audit 2026-04-19. Keep the list short and biased toward
- * true positives (matches on exact key names, not substrings).
+ * output. Keep the list short and biased toward true positives (matches
+ * on exact key names, not substrings).
  */
 const REDACT_FIELDS = [
   'password',
@@ -56,7 +56,7 @@ const REDACT_ASSIGN_RE = new RegExp(
  * Replace the value portion of any `REDACT_FIELDS`-named key inside `s`.
  * Handles both JSON-shaped (`"password":"abc"`) and loose (`password=abc`,
  * `password: abc`) forms. Purely defensive — callers should still avoid
- * logging credential-bearing objects. See audit 2026-04-19.
+ * logging credential-bearing objects.
  */
 function redactCredentialFields(s: string): string {
   return s.replace(REDACT_JSON_RE, '$1"[REDACTED]"').replace(REDACT_ASSIGN_RE, '$1=[REDACTED]');
@@ -184,20 +184,47 @@ export class Logger implements LoggerLike {
     }
   }
 
+  /**
+   * Sink-count threshold above which {@link addSink} logs a warning. Plugins
+   * should `removeSink` in `teardown()`, so a steady climb past this
+   * suggests a teardown leak — every leaked sink holds a closure over
+   * the unloaded plugin's module scope. Adjust upward only after
+   * auditing what the legitimate set looks like in production.
+   */
+  private static readonly SINK_WARN_THRESHOLD = 8;
+  /** True after we've already warned about exceeding SINK_WARN_THRESHOLD. */
+  private static sinkWarnFired = false;
+
+  /** Number of currently registered sinks (for diagnostics / audits). */
+  static sinkCount(): number {
+    return Logger.sinks.size;
+  }
+
   /** Add a sink. Every subsequent log line is delivered to it. */
   static addSink(sink: LogSink): void {
     Logger.sinks.add(sink);
+    if (Logger.sinks.size > Logger.SINK_WARN_THRESHOLD && !Logger.sinkWarnFired) {
+      Logger.sinkWarnFired = true;
+      console.warn(
+        `[logger] sink count is ${Logger.sinks.size} (threshold ${Logger.SINK_WARN_THRESHOLD}). ` +
+          'Plugins must removeSink() in teardown() — suspect leak if this keeps climbing.',
+      );
+    }
   }
 
   /** Remove a previously registered sink. */
   static removeSink(sink: LogSink): void {
     Logger.sinks.delete(sink);
+    // Re-arm the warning once the count drops back under the threshold so
+    // a future re-leak warns instead of silently growing past it again.
+    if (Logger.sinks.size <= Logger.SINK_WARN_THRESHOLD) Logger.sinkWarnFired = false;
   }
 
   /** Remove every registered sink, including the default console sink. */
   static clearSinks(): void {
     Logger.sinks.clear();
     Logger.hookWrapper = null;
+    Logger.sinkWarnFired = false;
   }
 
   /**

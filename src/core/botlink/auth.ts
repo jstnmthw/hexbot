@@ -325,8 +325,7 @@ export class BotLinkAuthManager {
    * `banCount` by one step. Legitimate users who finally auth
    * correctly shouldn't carry the escalation weight of every previous
    * typo. The tracker entry stays so repeat offenders returning
-   * hours later still land on an escalated tier. See stability audit
-   * 2026-04-14.
+   * hours later still land on an escalated tier.
    */
   noteSuccess(ip: string, whitelisted: boolean): void {
     if (whitelisted || ip === 'unknown') return;

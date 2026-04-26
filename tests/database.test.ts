@@ -523,7 +523,7 @@ describe('BotDatabase', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // transaction() helper + error classification (stability audit 2026-04-14)
+  // transaction() helper + error classification
   // ---------------------------------------------------------------------------
 
   describe('transaction() helper', () => {

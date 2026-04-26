@@ -1,7 +1,7 @@
-// Covers stability audit 2026-04-14: `validateRequireAccFor` must warn
-// on unknown flag characters at config load so an operator typo like
-// `["+O"]` is surfaced instead of silently defaulting to level 0 (which
-// disables the ACC verification gate for that flag).
+// `validateRequireAccFor` must warn on unknown flag characters at config
+// load so an operator typo like `["+O"]` is surfaced instead of silently
+// defaulting to level 0 (which disables the ACC verification gate for that
+// flag).
 import { describe, expect, it } from 'vitest';
 
 import type { LoggerLike } from '../../src/logger';

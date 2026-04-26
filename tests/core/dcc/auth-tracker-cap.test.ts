@@ -1,9 +1,8 @@
-// Covers two audit findings against DCCAuthTracker:
-//  - W-DCC4 (memleak 2026-04-14): `maxEntries` hard cap with
-//    oldest-by-`firstFailure` eviction.
-//  - stability 2026-04-14: banCount decay on success + cap at BAN_COUNT_MAX
-//    so legitimate users who occasionally typo don't accumulate a
-//    permanently escalating lockout.
+// Covers two behaviors of DCCAuthTracker:
+//  - `maxEntries` hard cap with oldest-by-`firstFailure` eviction.
+//  - banCount decay on success + cap at BAN_COUNT_MAX so legitimate users
+//    who occasionally typo don't accumulate a permanently escalating
+//    lockout.
 import { describe, expect, it } from 'vitest';
 
 import { DCCAuthTracker } from '../../../src/core/dcc/auth-tracker';

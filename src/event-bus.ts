@@ -32,14 +32,13 @@ export interface BotEvents {
    * either via IRCv3 account-notify (SASL success) or via a NickServ
    * "You are now identified" notice (password IDENTIFY fallback). Consumers
    * (chanmod) use this to trigger a ChanServ re-probe after a SASL miss.
-   * See stability audit 2026-04-21.
    */
   'bot:identified': [];
   /**
    * Fired by `Services` when the bot loses its NickServ identity — either
    * via IRCv3 account-notify showing the account was removed, or on
    * disconnect (identity state reset to unknown). The symmetric counterpart
-   * to `bot:identified`. See stability audit 2026-04-21.
+   * to `bot:identified`.
    */
   'bot:deidentified': [];
   /**
@@ -47,7 +46,6 @@ export interface BotEvents {
    * than the one in config (IRC server appended `_` due to collision). Payload
    * is the actual registered nick. Subscribers (bot.ts) update channelState and
    * bridge, then initiate GHOST if `ghost_on_recover` is configured.
-   * See stability audit 2026-04-21 (C-4 fix).
    */
   'bot:nick-collision': [actualNick: string];
   'plugin:loaded': [pluginId: string];
@@ -98,27 +96,66 @@ export interface BotEvents {
 // Typed event bus
 // ---------------------------------------------------------------------------
 
+/**
+ * Per-event listener-count thresholds at which we log a warning. Earlier
+ * tripwires than the cap so a slow accumulation (e.g. a plugin re-enable
+ * cycle that fails to detach) is visible long before Node's
+ * MaxListenersExceededWarning fires. Each threshold logs once per event
+ * to avoid log spam during a steady-state subscription burst at startup.
+ */
+const LISTENER_WARN_THRESHOLDS = [10, 15] as const;
+
 export class BotEventBus extends EventEmitter {
   /**
    * Per-owner listener registry. Populated by {@link trackListener} so
    * {@link removeByOwner} can drain every subscription a plugin (or
    * subsystem) added without each owner having to bookkeep its own
-   * list. See audit finding W-BO1 (2026-04-14).
+   * list.
    */
   private readonly ownerListeners = new Map<
     string,
     Array<{ event: keyof BotEvents; fn: (...args: never[]) => void }>
   >();
+  /** Per-event set of thresholds we've already warned about. */
+  private readonly warnedThresholds = new Map<string, Set<number>>();
 
   constructor() {
     super();
-    // Four-plus plugins routinely subscribe to the same event (e.g.
-    // `user:added`, `user:flagsChanged`), which trips Node's default
-    // 10-listener warning even when every subscription is legitimate and
-    // tracked. Raise to 50 explicitly — high enough for the MVP plugin
-    // set plus core subsystems, low enough to still catch a real leak.
-    // Do NOT set this to Infinity; that would silence genuine leaks.
-    this.setMaxListeners(50);
+    // Cap at 20 — high enough for the MVP plugin set plus core
+    // subsystems (every plugin api factory subscriber is mapped through
+    // a single shared wrapper, so the count is closer to "subsystems"
+    // than "plugins × events"), low enough that a real leak from a
+    // failed cleanup cycle hits the cap quickly. The 10/15 thresholds
+    // below give earlier signal so operators see the trend before the
+    // cap fires. Do NOT raise this without diagnosing the trip — the
+    // cap exists to catch leaks, not to silence them.
+    this.setMaxListeners(20);
+  }
+
+  /**
+   * Emit a one-shot warning whenever the listener count for `event`
+   * crosses one of {@link LISTENER_WARN_THRESHOLDS}. Stays silent on
+   * subsequent crossings of the same threshold so a churny event doesn't
+   * spam logs every time a listener is added and removed.
+   */
+  private checkListenerThresholds(event: string | symbol): void {
+    const count = this.listenerCount(event);
+    const key = String(event);
+    let warned = this.warnedThresholds.get(key);
+    for (const threshold of LISTENER_WARN_THRESHOLDS) {
+      if (count >= threshold) {
+        if (!warned) {
+          warned = new Set();
+          this.warnedThresholds.set(key, warned);
+        }
+        if (!warned.has(threshold)) {
+          warned.add(threshold);
+          console.warn(
+            `[event-bus] listener count for "${key}" reached ${count} (threshold ${threshold}/20). Suspect leak if this keeps climbing.`,
+          );
+        }
+      }
+    }
   }
 
   override emit<K extends keyof BotEvents>(event: K, ...args: BotEvents[K]): boolean;
@@ -128,7 +165,9 @@ export class BotEventBus extends EventEmitter {
 
   override on<K extends keyof BotEvents>(event: K, listener: (...args: BotEvents[K]) => void): this;
   override on(event: string | symbol, listener: (...args: unknown[]) => void): this {
-    return super.on(event, listener);
+    super.on(event, listener);
+    this.checkListenerThresholds(event);
+    return this;
   }
 
   override once<K extends keyof BotEvents>(

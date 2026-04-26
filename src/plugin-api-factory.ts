@@ -123,7 +123,6 @@ const PERMISSIONS_CHANGE_EVENTS = [
  * architectural defense against closures that outlive plugin unload: even
  * if a stale `setInterval` or retained ESM module still holds `api`, once
  * disposed it cannot fan out to the dispatcher, database, or IRC client.
- * See audit finding W-PS1 (2026-04-14).
  */
 export interface PluginApiHandle {
   readonly api: PluginAPI;
@@ -682,7 +681,6 @@ function createPluginChannelStateApi(
   // Per-plugin callback→wrapper maps used by off*() to look up the actual
   // listener that was installed on the event bus. Keyed by the plugin's
   // original callback reference so a plugin can `offX(sameFn)` cleanly.
-  // See audit finding W-PS2 (2026-04-14).
   const modesReadyByCallback = new Map<(channel: string) => void, (channel: string) => void>();
   const permissionsByCallback = new Map<
     (handle: string) => void,
@@ -701,7 +699,7 @@ function createPluginChannelStateApi(
   // Error-boundary wrapper — mirrors the dispatcher's handler try/catch.
   // Without this, one plugin's throw from a mode-ready callback would
   // propagate through EventEmitter and abort `emit()` for every sibling
-  // subscriber. See stability audit 2026-04-14.
+  // subscriber.
   const safeInvoke = (ev: string, fn: () => void): void => {
     try {
       fn();
@@ -716,11 +714,15 @@ function createPluginChannelStateApi(
       const wrappedListener = (channel: string): void => {
         safeInvoke('channel:modesReady', () => callback(channel));
       };
-      eventBus.on('channel:modesReady', wrappedListener);
+      // Tracking-map writes precede `eventBus.on` so a future bus override
+      // that throws from `on()` cannot strand a listener attached to the
+      // bus but unknown to cleanupPluginResources. If `on()` does throw,
+      // the off() path safely no-ops on the missing wrapper.
       modesReadyByCallback.set(callback, wrappedListener);
       const list = modesReadyListeners.get(pluginId) ?? [];
       list.push(wrappedListener);
       modesReadyListeners.set(pluginId, list);
+      eventBus.on('channel:modesReady', wrappedListener);
     },
     offModesReady(callback: (channel: string) => void): void {
       const wrapped = modesReadyByCallback.get(callback);
@@ -741,13 +743,14 @@ function createPluginChannelStateApi(
       const wrappedListener = (handle: string, ..._rest: unknown[]): void => {
         safeInvoke('permissions-changed', () => callback(handle));
       };
-      for (const ev of PERMISSIONS_CHANGE_EVENTS) {
-        eventBus.on(ev, wrappedListener);
-      }
+      // Tracking first, then bus subscribe — same rationale as onModesReady.
       permissionsByCallback.set(callback, wrappedListener);
       const list = permissionsChangedListeners.get(pluginId) ?? [];
       list.push(wrappedListener);
       permissionsChangedListeners.set(pluginId, list);
+      for (const ev of PERMISSIONS_CHANGE_EVENTS) {
+        eventBus.on(ev, wrappedListener);
+      }
     },
     offPermissionsChanged(callback: (handle: string) => void): void {
       const wrapped = permissionsByCallback.get(callback);
@@ -767,11 +770,12 @@ function createPluginChannelStateApi(
       const wrappedListener = (nick: string, account: string): void => {
         safeInvoke('user:identified', () => callback(nick, account));
       };
-      eventBus.on('user:identified', wrappedListener);
+      // Tracking first, then bus subscribe — same rationale as onModesReady.
       userIdentifiedByCallback.set(callback, wrappedListener);
       const list = userIdentifiedListeners.get(pluginId) ?? [];
       list.push(wrappedListener);
       userIdentifiedListeners.set(pluginId, list);
+      eventBus.on('user:identified', wrappedListener);
     },
     offUserIdentified(callback: (nick: string, account: string) => void): void {
       const wrapped = userIdentifiedByCallback.get(callback);
@@ -789,11 +793,12 @@ function createPluginChannelStateApi(
       const wrappedListener = (nick: string, previousAccount: string): void => {
         safeInvoke('user:deidentified', () => callback(nick, previousAccount));
       };
-      eventBus.on('user:deidentified', wrappedListener);
+      // Tracking first, then bus subscribe — same rationale as onModesReady.
       userDeidentifiedByCallback.set(callback, wrappedListener);
       const list = userDeidentifiedListeners.get(pluginId) ?? [];
       list.push(wrappedListener);
       userDeidentifiedListeners.set(pluginId, list);
+      eventBus.on('user:deidentified', wrappedListener);
     },
     offUserDeidentified(callback: (nick: string, previousAccount: string) => void): void {
       const wrapped = userDeidentifiedByCallback.get(callback);
@@ -811,11 +816,12 @@ function createPluginChannelStateApi(
       const wrappedListener = (): void => {
         safeInvoke('bot:identified', callback);
       };
-      eventBus.on('bot:identified', wrappedListener);
+      // Tracking first, then bus subscribe — same rationale as onModesReady.
       botIdentifiedByCallback.set(callback, wrappedListener);
       const list = botIdentifiedListeners.get(pluginId) ?? [];
       list.push(wrappedListener);
       botIdentifiedListeners.set(pluginId, list);
+      eventBus.on('bot:identified', wrappedListener);
     },
     offBotIdentified(callback: () => void): void {
       const wrapped = botIdentifiedByCallback.get(callback);

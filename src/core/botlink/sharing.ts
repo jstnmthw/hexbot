@@ -40,8 +40,7 @@ function isBanEntry(value: unknown): value is BanEntry {
 /**
  * Hard cap on masks tracked per channel. A compromised or hostile peer
  * could otherwise inject arbitrarily many masks via `syncBans` / `syncExempts`
- * — defense in depth, trusted-peer model is our first line. See memleak audit
- * 2026-04-14 INFO note.
+ * — defense in depth, trusted-peer model is our first line.
  */
 const MAX_MASKS_PER_CHANNEL = 256;
 

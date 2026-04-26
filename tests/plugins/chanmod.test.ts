@@ -81,8 +81,8 @@ describe('chanmod plugin — auto-op', () => {
   beforeAll(async () => {
     bot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(bot, '#test');
-    // The grantMode hard-gate (audit 2026-04-24 CRITICAL) unconditionally
-    // requires NickServ verification before granting +o/+h/+v. Stub
+    // The grantMode hard-gate unconditionally requires NickServ
+    // verification before granting +o/+h/+v. Stub
     // services as available + auto-verifying so these tests exercise the
     // grant path without standing up a full NickServ mock. Tests that
     // specifically verify the gate (see "NickServ auto-op verification
@@ -481,7 +481,7 @@ describe('chanmod plugin — auto-op', () => {
     // Services-free network fallback: hostmask-only auto-op requires the
     // stored pattern to clear the specificity threshold. `weakOp!*@*` is
     // trivially spoofable — the grant must be refused even though the
-    // record has +o. See audit 2026-04-24 CRITICAL follow-up.
+    // record has +o.
     const liveBot = createMockBot({ botNick: 'hexbot' });
     giveBotOps(liveBot, '#test');
     try {
@@ -1773,8 +1773,8 @@ describe('chanmod plugin — ban commands', () => {
     ).toBeDefined();
   });
 
-  // Regressions for audit 2026-04-24 WARNING: overbroad-mask guard and
-  // trailing-numeric-arg disambiguation on .ban.
+  // Regressions: overbroad-mask guard and trailing-numeric-arg
+  // disambiguation on .ban.
   it('!ban refuses *!*@* without --force (mask too broad)', async () => {
     simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!ban *!*@*');
     await flush();
@@ -3283,10 +3283,10 @@ describe('chanmod plugin — NickServ auto-op verification failure', () => {
     }
   });
 
-  // Regression for audit 2026-04-24 CRITICAL: the hard gate must fire
-  // regardless of whether the grant flag is listed in require_acc_for.
-  // Pre-fix, an operator who set `require_acc_for: ["+n"]` while leaving
-  // `+o` off would silently allow hostmask-only auto-op.
+  // The hard gate must fire regardless of whether the grant flag is
+  // listed in require_acc_for. Pre-fix, an operator who set
+  // `require_acc_for: ["+n"]` while leaving `+o` off would silently allow
+  // hostmask-only auto-op.
   it('hard-gates +o via verifyUser even when require_acc_for omits it', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
     try {
@@ -3319,11 +3319,11 @@ describe('chanmod plugin — NickServ auto-op verification failure', () => {
 // ---------------------------------------------------------------------------
 // IRCv3 account-tag fast path for auto-op
 // ---------------------------------------------------------------------------
-// Regression coverage for the Phase 1 audit finding — the join bind uses flag
-// `'-'` which bypasses the dispatcher's VerificationProvider gate, so the
-// only thing standing between a compromised nick and an ACC race is the
-// manual gate inside grantMode(). These tests lock in that gate for every
-// mode path and prove the extended-join fast path skips NickServ.
+// The join bind uses flag `'-'` which bypasses the dispatcher's
+// VerificationProvider gate, so the only thing standing between a
+// compromised nick and an ACC race is the manual gate inside grantMode().
+// These tests lock in that gate for every mode path and prove the
+// extended-join fast path skips NickServ.
 describe('chanmod plugin — account-tag auto-op fast path', () => {
   it('uses extended-join account instead of NickServ when account present on JOIN', async () => {
     const freshBot = createMockBot({ botNick: 'hexbot' });
@@ -4358,9 +4358,8 @@ describe('chanmod plugin — invite handling', () => {
     bot.channelSettings.set('#test', 'invite', false);
   });
 
-  // Regression for audit 2026-04-24 WARNING: invite handler must reject
-  // channel values that don't parse as a channel name, even if the
-  // bridge sanitizer let them through.
+  // Invite handler must reject channel values that don't parse as a
+  // channel name, even if the bridge sanitizer let them through.
   it('should reject invite to malformed channel name', async () => {
     bot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
     bot.client.clearMessages();

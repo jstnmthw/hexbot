@@ -67,7 +67,6 @@ export function hasSeen(api: PluginAPI, feedId: string, hash: string): boolean {
  * 30k+ items in a day would otherwise accumulate all of them between daily
  * `cleanupSeen` sweeps, causing `db.list('rss:seen:')` to briefly hold them
  * all in memory. Trimming oldest-first on every write keeps the table bounded.
- * See memleak audit 2026-04-14 INFO note.
  */
 export const MAX_SEEN_PER_FEED = 1000;
 

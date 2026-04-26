@@ -61,7 +61,7 @@ export interface IrcConfig {
   /**
    * When true, the bot will attempt GHOST + NICK to reclaim its primary nick
    * if it registers under a collision nick. Requires `services.password` to
-   * be set. Default: false. See stability audit 2026-04-21 (C-4 fix).
+   * be set. Default: false.
    */
   ghost_on_recover?: boolean;
 }
@@ -122,7 +122,6 @@ export interface ServicesConfig {
    * When true, the bot waits for `bot:identified` (or the timeout below)
    * before sending JOIN commands after registration. Eliminates the race
    * between IDENTIFY and ChanServ probes on non-SASL networks. Default: false.
-   * See stability audit 2026-04-21 (W-1 fix).
    */
   identify_before_join?: boolean;
   /**

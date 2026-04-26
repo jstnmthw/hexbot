@@ -97,7 +97,7 @@ export class BotDatabase {
    * database degrades to read-only: all writes throw
    * {@link DatabaseFullError} immediately without re-hitting SQLite, and
    * read paths stay available so operators can still run diagnostic
-   * commands. See stability audit 2026-04-14.
+   * commands.
    */
   private writesDisabled = false;
   /**
@@ -134,7 +134,7 @@ export class BotDatabase {
   /**
    * Attach a fallback sink for audit writes that failed at the SQLite
    * layer (busy, full). Lets the bot spill the row somewhere durable
-   * instead of dropping it entirely. See stability audit 2026-04-14.
+   * instead of dropping it entirely.
    */
   setAuditFallback(sink: ((options: LogModActionOptions) => void) | null): void {
     this.auditFallback = sink;
@@ -236,7 +236,7 @@ export class BotDatabase {
     // momentarily locked (e.g. a concurrent reader holds the WAL, or a
     // checkpoint is running). Without this, a transient lock surfaces
     // as a synchronous SQLITE_BUSY and aborts whichever handler
-    // happened to touch the DB. See stability audit 2026-04-14.
+    // happened to touch the DB.
     db.pragma('busy_timeout = 5000');
 
     // KV store — unchanged by the Phase 1 rewrite

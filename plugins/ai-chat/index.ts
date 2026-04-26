@@ -111,8 +111,7 @@ let sessionExpiryInterval: ReturnType<typeof setInterval> | null = null;
  * and the ambient sender closure at its await boundaries. Without this, a
  * reload during a 5-line response with a 500ms inter-line gap would hold
  * the captured `ctx.reply` / `api.say` closures (and the IRC client behind
- * them) alive for up to 2s after the plugin was unloaded. See audit
- * 2026-04-19 W-29 and W-30.
+ * them) alive for up to 2s after the plugin was unloaded.
  */
 let teardownController: AbortController | null = null;
 let gamesDir: string = '';
@@ -329,6 +328,14 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
         sessionManager?.expireInactive();
       } catch (err) {
         api.error('Session expiry sweep threw:', err);
+      }
+      // Drop empty TTL'd buffers from the context manager on the same
+      // tick — without this, an idle channel's empty buffer survives
+      // until the next addMessage to that channel.
+      try {
+        contextManager?.pruneAll();
+      } catch (err) {
+        api.error('Context manager pruneAll threw:', err);
       }
     }, 60_000);
   }
@@ -547,20 +554,47 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
   }
 
   // Drop per-channel state when the bot itself leaves — otherwise social
-  // tracker and context buffers accumulate dead channels forever.
+  // tracker and context buffers accumulate dead channels forever. Non-bot
+  // part/kick branches forget per-user residue (engagement, session, social
+  // activeUsers) immediately instead of waiting on each tracker's TTL/cap
+  // eviction.
+  const onUserLeave = (channel: string, nick: string): void => {
+    socialTracker?.forgetUser(channel, nick);
+    engagementTracker?.endEngagement(channel, nick);
+    sessionManager?.endSession(nick, channel);
+    rateLimiter?.forgetUser(nick);
+  };
   api.bind('part', '-', '*', (ctx: HandlerContext) => {
     if (!ctx.channel) return;
-    if (!api.isBotNick(ctx.nick)) return;
-    socialTracker?.dropChannel(ctx.channel);
-    contextManager?.clearContext(ctx.channel);
-    engagementTracker?.dropChannel(ctx.channel);
+    if (api.isBotNick(ctx.nick)) {
+      socialTracker?.dropChannel(ctx.channel);
+      contextManager?.clearContext(ctx.channel);
+      engagementTracker?.dropChannel(ctx.channel);
+      lastRateLimitOpNoticeAt.delete(ctx.channel);
+      return;
+    }
+    onUserLeave(ctx.channel, ctx.nick);
   });
   api.bind('kick', '-', '*', (ctx: HandlerContext) => {
     if (!ctx.channel) return;
-    if (!api.isBotNick(ctx.nick)) return;
-    socialTracker?.dropChannel(ctx.channel);
-    contextManager?.clearContext(ctx.channel);
-    engagementTracker?.dropChannel(ctx.channel);
+    if (api.isBotNick(ctx.nick)) {
+      socialTracker?.dropChannel(ctx.channel);
+      contextManager?.clearContext(ctx.channel);
+      engagementTracker?.dropChannel(ctx.channel);
+      lastRateLimitOpNoticeAt.delete(ctx.channel);
+      return;
+    }
+    onUserLeave(ctx.channel, ctx.nick);
+  });
+  // QUIT carries no channel — fan out to every channel the bot is in. The
+  // forget* APIs are no-ops for channels the user wasn't tracked in, so
+  // worst case is O(joinedChannels) Map.delete calls per QUIT. Without
+  // this the per-nick stats sit until activity-window or LRU eviction.
+  api.bind('quit', '-', '*', (ctx: HandlerContext) => {
+    if (api.isBotNick(ctx.nick)) return;
+    for (const channel of api.getJoinedChannels()) {
+      onUserLeave(channel, ctx.nick);
+    }
   });
 
   // -----------------------------------------------------------------------
@@ -1093,11 +1127,11 @@ export function teardown(): void {
   // awaiters might touch on resolution. Without this, a 60s Ollama fetch
   // (or a 30s Gemini withTimeout) outlives the reload and, when it
   // resolves against the old closure, touches torn-down tokenTracker /
-  // rateLimiter / semaphore instances. See audit 2026-04-19 CRITICAL #2.
+  // rateLimiter / semaphore instances.
   provider?.abort?.();
   // Same rationale for the drip-send path and ambient sender closure:
   // abort cuts the setTimeout chain in sendLines and short-circuits the
-  // ambient closure at its await boundaries. See audit 2026-04-19 W-29, W-30.
+  // ambient closure at its await boundaries.
   teardownController?.abort();
   teardownController = null;
   rateLimiter?.reset();

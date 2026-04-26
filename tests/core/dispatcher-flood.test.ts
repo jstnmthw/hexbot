@@ -273,3 +273,138 @@ describe('EventDispatcher — flood limiter', () => {
     }
   });
 });
+
+describe('EventDispatcher — per-plugin bind cap', () => {
+  it('logs a warning at the soft cap and refuses binds past the hard cap', () => {
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      child: () => logger,
+      setLevel: () => {},
+      getLevel: () => 'info' as const,
+    };
+    const dispatcher = new EventDispatcher(null, logger);
+    const handler = () => {};
+
+    // 500 binds takes us up to but not past the warn threshold.
+    for (let i = 0; i < 500; i++) {
+      dispatcher.bind('pubm', '-', `m${i}`, handler, 'noisy-plugin');
+    }
+    expect(logger.warn).not.toHaveBeenCalled();
+
+    // 501st bind crosses the warn threshold and logs once.
+    dispatcher.bind('pubm', '-', 'm500', handler, 'noisy-plugin');
+    const warnCalls = logger.warn.mock.calls.filter((c) => String(c[0]).includes('warn threshold'));
+    expect(warnCalls).toHaveLength(1);
+
+    // Fast-forward to the hard cap. listBinds count is the source of truth.
+    for (let i = 501; i < 1000; i++) {
+      dispatcher.bind('pubm', '-', `m${i}`, handler, 'noisy-plugin');
+    }
+    expect(dispatcher.listBinds({ pluginId: 'noisy-plugin' })).toHaveLength(1000);
+
+    // Past the hard cap: the new bind is refused and an error is logged.
+    dispatcher.bind('pubm', '-', 'overflow', handler, 'noisy-plugin');
+    expect(dispatcher.listBinds({ pluginId: 'noisy-plugin' })).toHaveLength(1000);
+    const errorCalls = logger.error.mock.calls.filter((c) => String(c[0]).includes('hit bind cap'));
+    expect(errorCalls).toHaveLength(1);
+
+    // unbindAll resets the per-plugin tally so the plugin can re-register.
+    dispatcher.unbindAll('noisy-plugin');
+    expect(dispatcher.listBinds({ pluginId: 'noisy-plugin' })).toHaveLength(0);
+    dispatcher.bind('pubm', '-', 'fresh', handler, 'noisy-plugin');
+    expect(dispatcher.listBinds({ pluginId: 'noisy-plugin' })).toHaveLength(1);
+  });
+
+  it('recomputes per-plugin bind counts when a non-stackable type replaces a sibling plugin bind', () => {
+    const dispatcher = new EventDispatcher();
+    const handler = () => {};
+
+    // Seed an unrelated bind on a different plugin so the recount loop has
+    // an entry to walk after the non-stackable filter clears the replaced
+    // one — without it the recount runs against an empty array.
+    dispatcher.bind('pubm', '-', '*', handler, 'observer-plugin');
+
+    // pub is non-stackable: a second `pub` on the same mask evicts the
+    // first one. The evicted bind belonged to a different plugin, so the
+    // dispatcher must recount or the original plugin's tally would stay
+    // inflated forever.
+    dispatcher.bind('pub', '-', '!hello', handler, 'plugin-a');
+    expect(dispatcher.listBinds({ pluginId: 'plugin-a' })).toHaveLength(1);
+
+    dispatcher.bind('pub', '-', '!hello', handler, 'plugin-b');
+    expect(dispatcher.listBinds({ pluginId: 'plugin-a' })).toHaveLength(0);
+    expect(dispatcher.listBinds({ pluginId: 'plugin-b' })).toHaveLength(1);
+    // observer-plugin's bind survived and its tally is intact.
+    expect(dispatcher.listBinds({ pluginId: 'observer-plugin' })).toHaveLength(1);
+  });
+
+  it('clearFloodState resets per-key flood state', () => {
+    const dispatcher = new EventDispatcher();
+    expect(() => dispatcher.clearFloodState()).not.toThrow();
+  });
+
+  it('warns when a time bind is registered with non-empty flags', () => {
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      child: () => logger,
+      setLevel: () => {},
+      getLevel: () => 'info' as const,
+    };
+    const dispatcher = new EventDispatcher(null, logger);
+    dispatcher.bind('time', '+m', '60', () => {}, 'flagged-timer');
+    const warnCalls = logger.warn.mock.calls.filter((c) =>
+      String(c[0]).includes('timer binds ignore flags'),
+    );
+    expect(warnCalls).toHaveLength(1);
+  });
+});
+
+describe('EventDispatcher — auto-disabled timer binds', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('splices an auto-disabled timer bind out of binds[] after the failure threshold', async () => {
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      child: () => logger,
+      setLevel: () => {},
+      getLevel: () => 'info' as const,
+    };
+    const dispatcher = new EventDispatcher(null, logger);
+
+    let calls = 0;
+    const failingTimer = (): void => {
+      calls++;
+      throw new Error('boom');
+    };
+
+    dispatcher.bind('time', '-', '10', failingTimer, 'flaky-plugin');
+    expect(dispatcher.listBinds({ pluginId: 'flaky-plugin' })).toHaveLength(1);
+
+    // 10 failures crosses TIMER_FAILURE_THRESHOLD; the dispatcher clears the
+    // interval AND splices the entry out so it can't show up as a zombie.
+    for (let i = 0; i < 12; i++) {
+      vi.advanceTimersByTime(10_000);
+      // Allow any microtasks scheduled by the dispatcher's promise plumbing
+      // to settle before the next tick.
+      await Promise.resolve();
+    }
+
+    expect(calls).toBeGreaterThanOrEqual(10);
+    expect(dispatcher.listBinds({ pluginId: 'flaky-plugin' })).toHaveLength(0);
+  });
+});

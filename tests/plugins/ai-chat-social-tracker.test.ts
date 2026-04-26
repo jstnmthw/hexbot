@@ -288,4 +288,24 @@ describe('SocialTracker', () => {
       expect(st.getUnansweredQuestions('#seeded', 0)).toHaveLength(1);
     });
   });
+
+  describe('forgetUser', () => {
+    it('drops a single nick from a channel without affecting others or other channels', () => {
+      const st = new SocialTracker();
+      st.onMessage('#one', 'alice', 'hi', false);
+      st.onMessage('#one', 'bob', 'hi', false);
+      st.onMessage('#two', 'alice', 'hi', false);
+
+      st.forgetUser('#one', 'alice');
+      expect(st.getState('#one')?.activeUsers.has('alice')).toBe(false);
+      expect(st.getState('#one')?.activeUsers.has('bob')).toBe(true);
+      // Different channel keeps its own copy of alice.
+      expect(st.getState('#two')?.activeUsers.has('alice')).toBe(true);
+    });
+
+    it('is a no-op for an unknown channel', () => {
+      const st = new SocialTracker();
+      expect(() => st.forgetUser('#unknown', 'alice')).not.toThrow();
+    });
+  });
 });

@@ -53,7 +53,7 @@ function scrubModLogField(value: string | null | undefined): string | null {
  * Parse a mod_log `metadata` JSON blob, returning null on failure instead of
  * throwing. A single corrupted row (interrupted write, manual edit, bad
  * botlink relay) would otherwise poison every `.modlog` query that touches
- * it. See stability audit 2026-04-14.
+ * it.
  */
 function parseMetadataSafe(
   raw: string | null,
@@ -230,8 +230,7 @@ export class ModLog {
    * Flipped once SQLITE_FULL is observed on any write. While set, writes
    * throw {@link DatabaseFullError} immediately without re-hitting SQLite.
    * BotDatabase consults the same flag on its own writes — they share state
-   * via a setter call from the parent on transition. See stability
-   * audit 2026-04-14.
+   * via a setter call from the parent on transition.
    */
   private writesDisabled = false;
   /** External observer hook — BotDatabase uses this to mirror the flag. */
@@ -285,9 +284,8 @@ export class ModLog {
   }
 
   /**
-   * Classify SQLite errors into the three tiers the stability audit calls
-   * for. Mirrors the logic in BotDatabase.runClassified so the ModLog write
-   * path degrades identically — see stability audit 2026-04-14.
+   * Classify SQLite errors into three tiers. Mirrors the logic in
+   * BotDatabase.runClassified so the ModLog write path degrades identically.
    */
   private runClassified<T>(opName: string, fn: () => T): T {
     try {
@@ -618,8 +616,7 @@ export class ModLog {
    * holding the write lock. The first batch runs synchronously so
    * a small prune completes before open() returns; subsequent
    * batches are scheduled on setImmediate so the event loop can
-   * handle other work (IRC registration, plugin loads). See
-   * stability audit 2026-04-14.
+   * handle other work (IRC registration, plugin loads).
    */
   pruneOldModLogRows(): void {
     this.pruneModLogIfConfigured();

@@ -1,9 +1,8 @@
 // rss — circuit-breaker state machine
 //
-// Stability audit 2026-04-14 introduced this breaker so a chronically
-// failing feed (DNS gone, 500ing forever) does not pile its poll calls
-// onto the network or spam the operator with a warn every minute. The
-// behaviors that matter:
+// The breaker exists so a chronically failing feed (DNS gone, 500ing
+// forever) does not pile its poll calls onto the network or spam the
+// operator with a warn every minute. The behaviors that matter:
 //   - opens only after THRESHOLD consecutive failures
 //   - backoff doubles per failure past the threshold, capped at MAX
 //   - operator is warned exactly once per breaker cycle (not per failure)

@@ -381,11 +381,10 @@ describe('.modlog command', () => {
     });
 
     it('footer total is cached from the first query (does not re-count on nav)', async () => {
-      // Stability audit 2026-04-14: `.modlog next/prev` no longer
-      // re-runs `SELECT COUNT(*)` against the filter on every nav —
-      // the total is snapshotted at first-query time and stays
-      // stable until the user runs `.modlog top`. On a 10M-row
-      // table, repeated counts were the dominant nav cost.
+      // `.modlog next/prev` no longer re-runs `SELECT COUNT(*)` against
+      // the filter on every nav — the total is snapshotted at first-query
+      // time and stays stable until the user runs `.modlog top`. On a
+      // 10M-row table, repeated counts were the dominant nav cost.
       seed(db, 12);
       const ctx = makeCtx();
       await handler.execute('.modlog', ctx);

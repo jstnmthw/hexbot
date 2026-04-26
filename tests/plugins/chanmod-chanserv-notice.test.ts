@@ -624,7 +624,7 @@ describe('ChanServ notice handler — probe timeout', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Source pinning (services-spoof defense — audit 2026-04-19 CRITICAL)
+// Source pinning (services-spoof defense)
 // ---------------------------------------------------------------------------
 
 describe('ChanServ notice handler — services source pin', () => {
@@ -699,10 +699,10 @@ describe('ChanServ notice handler — services source pin', () => {
     expect(calls).toHaveLength(2);
   });
 
-  // Regression for audit 2026-04-24 CRITICAL: the first-contact gate
-  // must reject a notice whose hostname does not match the configured
-  // services_host_pattern — closes the trust-on-first-use impostor
-  // hole when a user grabs the ChanServ nick during a services outage.
+  // The first-contact gate must reject a notice whose hostname does not
+  // match the configured services_host_pattern — closes the
+  // trust-on-first-use impostor hole when a user grabs the ChanServ nick
+  // during a services outage.
   it('refuses to pin on first contact when hostname does not match services_host_pattern', () => {
     const { api, notice, logs } = createMockApi();
     const mockApi = api as unknown as {

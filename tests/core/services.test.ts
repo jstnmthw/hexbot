@@ -299,11 +299,11 @@ describe('Services', () => {
 
   describe('duplicate pending verification', () => {
     it('should share one in-flight promise across concurrent callers for the same nick', async () => {
-      // Stability audit 2026-04-14: the old behavior canceled the
-      // existing pending verify on every duplicate, restarting the
-      // timeout and piling up abandoned promises under dispatch
-      // pressure. The new behavior deduplicates — both callers share
-      // one ACC/STATUS round-trip and see the same result.
+      // The old behavior canceled the existing pending verify on every
+      // duplicate, restarting the timeout and piling up abandoned
+      // promises under dispatch pressure. The new behavior deduplicates
+      // — both callers share one ACC/STATUS round-trip and see the same
+      // result.
       const { services, client } = createServices({ type: 'atheme' });
 
       const promise1 = services.verifyUser('Alice', 5000);
@@ -610,7 +610,7 @@ describe('Services', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Bot identify state machine (stability audit 2026-04-21)
+  // Bot identify state machine
   // ---------------------------------------------------------------------------
 
   describe('bot identify state transitions', () => {

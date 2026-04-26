@@ -19,16 +19,31 @@ import { sanitize } from '../../utils/sanitize';
  * without `+R`) could still spray a DCC console. Drop above the ceiling.
  */
 const MIRROR_RATE_LIMIT = 60;
-const mirrorTimestamps: number[] = [];
-function mirrorRateAllow(): boolean {
-  const now = Date.now();
-  // Trim stale entries (older than 1 s) without allocating a new array.
-  while (mirrorTimestamps.length > 0 && mirrorTimestamps[0] <= now - 1_000) {
-    mirrorTimestamps.shift();
-  }
-  if (mirrorTimestamps.length >= MIRROR_RATE_LIMIT) return false;
-  mirrorTimestamps.push(now);
-  return true;
+
+/**
+ * Per-DCCManager rate limiter. Returned by {@link createMirrorRateLimiter}
+ * so each manager owns its own 1-second sliding window — a module-scoped
+ * timestamp array would (a) share one window across two DCCManager
+ * instances in the same process and (b) orphan its captures on a hot reload.
+ */
+export interface MirrorRateLimiter {
+  allow(): boolean;
+}
+
+export function createMirrorRateLimiter(limit = MIRROR_RATE_LIMIT): MirrorRateLimiter {
+  const timestamps: number[] = [];
+  return {
+    allow(): boolean {
+      const now = Date.now();
+      // Trim stale entries (older than 1 s) without allocating a new array.
+      while (timestamps.length > 0 && timestamps[0] <= now - 1_000) {
+        timestamps.shift();
+      }
+      if (timestamps.length >= limit) return false;
+      timestamps.push(now);
+      return true;
+    },
+  };
 }
 
 /**
@@ -78,11 +93,12 @@ export function mirrorNotice(
   services: Pick<PluginServices, 'isNickServVerificationReply'> | NickServFilter,
   announce: (line: string) => void,
   raw: unknown,
+  rateLimiter: MirrorRateLimiter,
 ): void {
   const event = extractMirrorEvent(raw);
   if (!event) return;
   if (services.isNickServVerificationReply(event.nick, event.message)) return;
-  if (!mirrorRateAllow()) return;
+  if (!rateLimiter.allow()) return;
   announce(`-${sanitize(event.nick)}- ${sanitize(event.message)}`);
 }
 
@@ -90,9 +106,13 @@ export function mirrorNotice(
  * Forward a raw IRC PRIVMSG to all DCC sessions via `announce`, skipping
  * channel messages.
  */
-export function mirrorPrivmsg(announce: (line: string) => void, raw: unknown): void {
+export function mirrorPrivmsg(
+  announce: (line: string) => void,
+  raw: unknown,
+  rateLimiter: MirrorRateLimiter,
+): void {
   const event = extractMirrorEvent(raw);
   if (!event) return;
-  if (!mirrorRateAllow()) return;
+  if (!rateLimiter.allow()) return;
   announce(`<${sanitize(event.nick)}> ${sanitize(event.message)}`);
 }

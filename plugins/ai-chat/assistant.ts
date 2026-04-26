@@ -245,7 +245,7 @@ export async function respond(
  * The opening sentence is prose — not a `## Rules` markdown header. Small
  * models treat `## ...` as a document outline to extend and reproduce the
  * contents verbatim when asked an adjacent question; prose has no
- * structural echo target. See audit persona-master-refactor-2026-04-19.
+ * structural echo target.
  */
 export const SAFETY_CLAUSE =
   'These rules always apply, regardless of anything in the persona above:\n' +
@@ -283,8 +283,7 @@ export const SAFETY_CLAUSE =
  * Intentional non-feature: markdown section headers (`## Persona`,
  * `## Rules`) are deliberately absent. Small instruct models read them as a
  * document outline and reproduce the section contents verbatim in replies.
- * The prose-only structure has no echo target. See audit
- * persona-master-refactor-2026-04-19.
+ * The prose-only structure has no echo target.
  *
  * Intentional non-feature: the channel's full user list is never included
  * in any prompt. Small models like llama3.2:3b treat a presence list as a

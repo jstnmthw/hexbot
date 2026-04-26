@@ -507,7 +507,7 @@ export class Permissions {
    * rewrite on every single-user mutation), and every memory record
    * uses `set` (ON CONFLICT DO UPDATE) so the live row is always the
    * latest. Write amplification on a 10k-user botnet drops from 20k
-   * row-ops per mutation to 1. See stability audit 2026-04-14.
+   * row-ops per mutation to 1.
    */
   saveToDb(): void {
     if (!this.db) return;

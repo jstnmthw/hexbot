@@ -145,7 +145,7 @@ export function parseISupport(client: SupportsProvider): ServerCapabilities {
   // advertise values up to ~20. A malicious or compromised server could
   // advertise `MODES=1000000` and blow up downstream per-mode allocations
   // in the batcher. Cap at a hard ceiling so we can't be coerced into
-  // huge allocations by a server token. See audit 2026-04-19.
+  // huge allocations by a server token.
   const MODES_HARD_CEILING = 100;
   const modesRaw = supports('MODES');
   const modesPerLine =
@@ -167,7 +167,7 @@ export function parseISupport(client: SupportsProvider): ServerCapabilities {
   // TARGMAX — raw string of the form `PRIVMSG:4,NOTICE:4,JOIN:`; empty
   // value = unlimited. Cap each per-command limit at a sane ceiling so a
   // hostile server can't coerce downstream code into allocating per-target
-  // arrays at pathological scale. See audit 2026-04-19.
+  // arrays at pathological scale.
   const TARGMAX_HARD_CEILING = 10_000;
   const targmaxRaw = supports('TARGMAX');
   const targmax: Record<string, number> = {};

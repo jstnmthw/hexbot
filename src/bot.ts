@@ -201,7 +201,7 @@ export class Bot {
   /**
    * Plugin names that failed to load at startup. Surfaced via
    * `.status` so operators can see degraded plugin state without
-   * grepping logs. See stability audit 2026-04-14.
+   * grepping logs.
    */
   private failedPlugins: string[] = [];
 
@@ -773,7 +773,7 @@ export class Bot {
     // typo like `["+O"]` silently defaults to level 0 (== disabled) —
     // exactly the footgun operators try to avoid. Warn and use the
     // filtered list so the dispatcher sees a consistent view of what was
-    // actually recognized. See stability audit 2026-04-14.
+    // actually recognized.
     const validatedRequireAccFor = validateRequireAccFor(
       this.config.identity.require_acc_for,
       this.botLogger,
@@ -818,8 +818,10 @@ export class Bot {
 
     // Reset per-user rate-limit buckets on disconnect so a stale old-
     // session flag doesn't leak into the first message after reconnect.
-    // See stability audit 2026-04-14.
-    this.eventBus.on('bot:disconnected', () => {
+    // Tracked under the 'bot' owner so shutdown's removeByOwner sweeps it;
+    // bare `.on()` would survive the bus if a future refactor re-runs
+    // wireDispatcher.
+    this.eventBus.trackListener('bot', 'bot:disconnected', () => {
       this.dispatcher.clearFloodState();
     });
   }
@@ -926,7 +928,7 @@ export class Bot {
     // Track plugin-load failures for the startup banner and `.status`
     // observability surface. A silent "one plugin failed" was the
     // dominant reason operators didn't notice degraded functionality
-    // until a user report landed. See stability audit 2026-04-14.
+    // until a user report landed.
     this.failedPlugins = pluginResults.filter((r) => r.status === 'error').map((r) => r.name);
     if (this.failedPlugins.length > 0) {
       this.botLogger.error(
@@ -968,10 +970,9 @@ export class Bot {
         getBindCount: () => this.dispatcher.listBinds().length,
         getUserCount: () => this.permissions.listUsers().length,
         getReconnectState: () => this.getReconnectState(),
-        // Stability metrics — see stability audit 2026-04-14. These
-        // give operators a .status-visible signal about services
-        // degradation and plugin-load failures without trawling
-        // logs.
+        // Stability metrics. These give operators a .status-visible signal
+        // about services degradation and plugin-load failures without
+        // trawling logs.
         getStabilityMetrics: () => ({
           servicesTimeoutCount: this.services.getServicesTimeoutCount(),
           pendingVerifyCount: this.services.getPendingVerifyCount(),
@@ -1037,7 +1038,9 @@ export class Bot {
     // C-4: on nick collision, update channelState and bridge so channel-join
     // tracking uses the real nick, then attempt GHOST if configured.
     // The listener fires synchronously before joinConfiguredChannels runs.
-    this.eventBus.on('bot:nick-collision', (actualNick: string) => {
+    // Tracked under the 'bot' owner so shutdown's removeByOwner sweeps it
+    // — keeps the closure (which captures `this`) from outliving the Bot.
+    this.eventBus.trackListener('bot', 'bot:nick-collision', (actualNick: string) => {
       this.channelState.setBotNick(actualNick);
       this.bridge!.setBotNick(actualNick);
       this.botLogger.warn(
@@ -1169,8 +1172,7 @@ export class Bot {
     // Each step is independent of the others — a throw in one subsystem's
     // teardown must not block the ones after it. Previously, every step
     // ran sequentially without catches, so a single bad `close()` skipped
-    // `db.close()` and leaked everything downstream. See audit finding
-    // W-BO2 (2026-04-14).
+    // `db.close()` and leaked everything downstream.
     const step = (name: string, fn: () => void): void => {
       try {
         fn();
@@ -1262,8 +1264,15 @@ export class Bot {
     // Drop modlog pagers and audit-tail subscriptions — each tail
     // listener holds a closure over the REPL reply function so
     // leaving them attached leaks the full session context across
-    // a reload. See audit findings W-CMD1/W-CMD2 (2026-04-14).
+    // a reload.
     step('modlog-commands.shutdown', () => shutdownModLogCommands());
+
+    // Drain every listener registered under the 'bot' owner — wireDispatcher,
+    // attachBridge, and src/index.ts heartbeat all use trackListener('bot'),
+    // so this is the single safety net that keeps closures over `this`
+    // from outliving the Bot. Runs before db.close() so any final emit
+    // (e.g. a late audit write) doesn't fan out to a torn-down listener.
+    step('event-bus.removeByOwner-bot', () => this.eventBus.removeByOwner('bot'));
 
     step('db.close', () => this.db.close());
     this.botLogger.info('Shutdown complete');
@@ -1282,8 +1291,7 @@ export class Bot {
     // STS refusal is a fatal configuration condition — we must exit with
     // code 2 (permanent-failure tier) so supervisors do not restart-loop
     // on an unreachable/misconfigured host. A default `throw` would
-    // propagate as code 1 (transient), spinning forever. See stability
-    // audit 2026-04-14.
+    // propagate as code 1 (transient), spinning forever.
     try {
       this.applySTSPolicyToConfig();
     } catch (err) {
@@ -1377,7 +1385,7 @@ export class Bot {
             this.channelState.clearAllChannels();
             // Fail any in-flight NickServ verifications fast rather than
             // letting them age out to a misleading `nickserv-verify-timeout`
-            // audit row. See audit finding W-CL2 (2026-04-14).
+            // audit row.
             this.services.cancelPendingVerifies('disconnected');
           },
           onSTSDirective: (directive, currentTls) => {

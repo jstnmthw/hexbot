@@ -1,9 +1,9 @@
 // HexBot — Small shared helpers for core command handlers.
 //
 // These exist to stamp out patterns that appeared three or more times across
-// `src/core/commands/*` (see audit 2026-04-14, Phase M2). Each helper is a
-// few lines but extracting them keeps the command files focused on intent
-// rather than argument-parsing boilerplate.
+// `src/core/commands/*`. Each helper is a few lines but extracting them keeps
+// the command files focused on intent rather than argument-parsing
+// boilerplate.
 import type { CommandContext } from '../command-handler';
 import type { BotDatabase, LogModActionOptions } from '../database';
 import { tryAudit } from './audit';

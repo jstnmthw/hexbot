@@ -38,8 +38,7 @@ export class GeminiProvider implements AIProvider {
    * doesn't expose a cancel API, so we can't stop the underlying HTTP POST
    * — but we can reject the outer {@link withTimeout} race so the plugin's
    * awaiters see an AbortError and release their captured refs. The SDK
-   * call finishes on its own and its result is dropped. See audit 2026-04-19
-   * CRITICAL #2.
+   * call finishes on its own and its result is dropped.
    */
   private inflightControllers = new Set<AbortController>();
 
@@ -221,8 +220,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, abortSignal?: AbortSignal): P
  * with `AIza` followed by 35 URL-safe chars; the SDK has, in past versions,
  * embedded the key in the status-line string on auth failures. Every error
  * message we emit passes through this so a 401/403 can't leak an AIza…
- * literal into logs, DCC mirrors, or channel-visible error paths. See
- * audit 2026-04-19.
+ * literal into logs, DCC mirrors, or channel-visible error paths.
  */
 export function redactGeminiKey(s: string): string {
   return s.replace(/AIza[0-9A-Za-z_-]{35,}/g, '[REDACTED_API_KEY]');

@@ -439,7 +439,10 @@ export function registerBotlinkCommands(deps: BotlinkCommandsDeps): void {
       // When the hub itself originates a relay, register it in the routing
       // table so RELAY_OUTPUT/END frames from the leaf are delivered locally.
       if (link.kind === 'hub') {
-        link.hub.registerRelay(session.handle, targetBot);
+        if (!link.hub.registerRelay(session.handle, targetBot)) {
+          ctx.reply('Hub relay table full — try again later.');
+          return;
+        }
       }
 
       sendFrame(link, requestFrame, targetBot);

@@ -783,8 +783,7 @@ describe('ModLog malformed metadata handling', () => {
   });
 
   it('returns metadata=null and logs a warning when the JSON is corrupted', () => {
-    // Stability audit 2026-04-14: a single bad row must not poison the
-    // entire .modlog query.
+    // A single bad row must not poison the entire .modlog query.
     const modLog = new ModLog(raw, makeLogger());
     modLog.logModAction({
       action: 'a',

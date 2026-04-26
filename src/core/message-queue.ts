@@ -178,7 +178,6 @@ export class MessageQueue {
    * operator queued before a netsplit still get pushed into the
    * irc-framework send buffer (where they may or may not reach the
    * server) — instead of being silently discarded by {@link clear}.
-   * See stability audit 2026-04-14.
    *
    * @returns number of messages drained from the queue.
    */

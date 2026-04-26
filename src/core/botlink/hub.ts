@@ -152,7 +152,7 @@ export class BotLinkHub {
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       this.server = createServer((socket) => this.handleConnection(socket));
-      this.server.on('error', reject);
+      this.server.once('error', reject);
       this.server.listen(port, host, () => {
         this.logger?.info(`Listening on ${host}:${port}`);
         // Loud warning when the hub is bound to a publicly-reachable
@@ -190,8 +190,7 @@ export class BotLinkHub {
    * buffer full, socket half-open) or throws is logged and the
    * remaining leaves still receive the frame. A subsequent bootstrap
    * or heartbeat round-trip will detect the divergence and either
-   * resync or disconnect the stuck leaf. See stability audit
-   * 2026-04-14.
+   * resync or disconnect the stuck leaf.
    */
   broadcast(frame: LinkFrame, excludeBot?: string): void {
     for (const [name, leaf] of this.leaves) {
@@ -346,9 +345,10 @@ export class BotLinkHub {
    * Register a relay that the hub itself originated (e.g. from a DCC .relay
    * command on this bot). The hub's routeRelayFrame only sees frames that
    * arrive from leaves, so hub-originated relays must be registered explicitly.
+   * Returns false when the active-relay cap is reached.
    */
-  registerRelay(handle: string, targetBot: string): void {
-    this.routes.registerHubRelay(handle, targetBot);
+  registerRelay(handle: string, targetBot: string): boolean {
+    return this.routes.registerHubRelay(handle, targetBot);
   }
 
   /** Remove a hub-originated relay (e.g. when the DCC user types .relay end). */
@@ -538,7 +538,7 @@ export class BotLinkHub {
       // if accept synchronously rejects (auth failure, duplicate
       // botname) the slot is still held, preventing the same IP from
       // immediately opening a second handshake before the first
-      // rejection propagates. See stability audit 2026-04-14.
+      // rejection propagates.
       finish('ok');
       try {
         this.acceptHandshake(protocol, frame, ip, whitelisted, nonce);
@@ -663,7 +663,7 @@ export class BotLinkHub {
     // moved on to steady state (asymmetric state is worse than no
     // state). On throw, we additionally send an ERROR frame with
     // code=SYNC_FAILED so the leaf's sync-complete listener sees a
-    // deterministic signal. See stability audit 2026-04-14.
+    // deterministic signal.
     protocol.send({ type: 'SYNC_START' });
     try {
       this.onSyncRequest?.(botname, (f) => protocol.send(f));

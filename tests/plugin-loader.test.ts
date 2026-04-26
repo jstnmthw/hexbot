@@ -1479,12 +1479,11 @@ describe('PluginLoader', () => {
     });
 
     it('should propagate teardown errors and leave plugin marked loaded (hard-stop)', async () => {
-      // Stability audit 2026-04-14: teardown failure must NOT silently
-      // drop the plugin from the loaded map — that papers over ghost
-      // state (listeners, timers, DB cursors) and the next reload would
-      // double-register them. Instead, throw from `unload()` and keep
-      // the plugin in place so operators must fix the teardown path or
-      // restart the bot.
+      // Teardown failure must NOT silently drop the plugin from the
+      // loaded map — that papers over ghost state (listeners, timers, DB
+      // cursors) and the next reload would double-register them. Instead,
+      // throw from `unload()` and keep the plugin in place so operators
+      // must fix the teardown path or restart the bot.
       const pluginPath = writePlugin(
         tempDir,
         'bad-teardown',

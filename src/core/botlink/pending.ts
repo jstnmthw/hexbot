@@ -18,7 +18,6 @@ interface PendingEntry<T> {
  * faster than their individual timeouts reclaim them. Above the cap,
  * `create()` rejects immediately with the timeout value so callers see
  * a predictable degradation instead of an unbounded memory footprint.
- * See stability audit 2026-04-14.
  */
 const DEFAULT_MAX_PENDING = 4096;
 
@@ -65,7 +64,7 @@ export class PendingRequestMap<T> {
     // Guard against unbounded growth when the remote peer stops
     // responding and every caller still schedules a new entry. After
     // the cap, resolve immediately — callers treat it the same as a
-    // natural timeout. See stability audit 2026-04-14.
+    // natural timeout.
     if (this.map.size >= this.maxPending) {
       this.droppedAtCap++;
       // Log on the first drop and then every 100th — a laggy peer can

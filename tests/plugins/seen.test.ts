@@ -67,12 +67,12 @@ describe('seen plugin', () => {
   let channelState: ChannelState;
 
   // Seed channel-state with every user present in every channel they're
-  // cited in. The cross-channel sighting oracle guard (audit 2026-04-24)
-  // refuses to reveal a sighting when the querier doesn't share the
-  // stored channel with the bot, so tests that expect a detail reply
-  // need both the target and the querier registered in the stored
-  // channel. `populateChannel` is the single seeding helper; tests
-  // call it before dispatching the `!seen` query.
+  // cited in. The cross-channel sighting oracle guard refuses to reveal
+  // a sighting when the querier doesn't share the stored channel with
+  // the bot, so tests that expect a detail reply need both the target
+  // and the querier registered in the stored channel. `populateChannel`
+  // is the single seeding helper; tests call it before dispatching the
+  // `!seen` query.
   function populateChannel(channel: string, users: string[]): void {
     channelState.injectChannelSync({
       channel,
@@ -179,11 +179,11 @@ describe('seen plugin', () => {
   });
 
   it('does NOT reveal a sighting from a channel the querier does not share', async () => {
-    // Cross-channel sighting oracle fix (audit 2026-04-24): if bob isn't
-    // in #private, querying `!seen alice` must not reveal that alice was
-    // active there. The reply collapses to the same "haven't seen" wording
-    // used for truly-unknown nicks so the querier can't distinguish
-    // "no record" from "record exists but hidden".
+    // Cross-channel sighting oracle fix: if bob isn't in #private, querying
+    // `!seen alice` must not reveal that alice was active there. The reply
+    // collapses to the same "haven't seen" wording used for truly-unknown
+    // nicks so the querier can't distinguish "no record" from "record
+    // exists but hidden".
     populateChannel('#private', ['alice']); // bob is NOT a member
     const msgCtx = makePubCtx('alice', 'secret channel chatter', '#private');
     await dispatcher.dispatch('pubm', msgCtx);
@@ -196,11 +196,11 @@ describe('seen plugin', () => {
   });
 
   it("does NOT store a `!seen foo` query as the querier's own sighting", async () => {
-    // Audit 2026-04-24: the `pubm *` bind previously recorded the
-    // querier's literal `!seen foo` line as their last-seen message,
-    // clobbering whatever they'd actually said last and leaking the
-    // target nick into the stored record. The trigger-prefix filter now
-    // strips these before they hit the KV store.
+    // The `pubm *` bind previously recorded the querier's literal
+    // `!seen foo` line as their last-seen message, clobbering whatever
+    // they'd actually said last and leaking the target nick into the
+    // stored record. The trigger-prefix filter now strips these before
+    // they hit the KV store.
     populateChannel('#test', ['querier']);
     const firstCtx = makePubCtx('querier', 'my real last line', '#test');
     await dispatcher.dispatch('pubm', firstCtx);
@@ -337,7 +337,7 @@ describe('seen plugin', () => {
   it('strips IRC formatting from targetNick in the not-found reply', async () => {
     // A query that embeds IRC color/reset codes must not echo them back
     // verbatim — otherwise an attacker can forge a channel-visible line
-    // that looks like the bot emitted extra content. Audit 2026-04-19.
+    // that looks like the bot emitted extra content.
     const spoofed = '\x0312,0spoof\x03';
     const ctx = makePubCtx('bob', `!seen ${spoofed}`);
     await dispatcher.dispatch('pub', ctx);
@@ -348,8 +348,11 @@ describe('seen plugin', () => {
     expect(response).toContain('spoof');
   });
 
-  it('should remove corrupt entries during cleanupStale', async () => {
-    // Insert a corrupt entry and a valid recent entry
+  it('removes corrupt entries when queried directly', async () => {
+    // Insert a corrupt entry and a valid recent entry. The !seen query
+    // path no longer runs a full cleanupStale sweep (the hourly time bind
+    // covers that), but a corrupt entry that's *queried* is still cleaned
+    // up via the per-record JSON.parse catch in the handler.
     db.set('seen', 'seen:badentry', 'NOT JSON');
     const validRecord = JSON.stringify({
       nick: 'gooduser',
@@ -359,13 +362,12 @@ describe('seen plugin', () => {
     });
     db.set('seen', 'seen:gooduser', validRecord);
 
-    // Trigger cleanupStale by issuing a !seen query
-    const ctx = makePubCtx('bob', '!seen gooduser');
+    // Querying the corrupt entry trips the catch that deletes it.
+    const ctx = makePubCtx('bob', '!seen badentry');
     await dispatcher.dispatch('pub', ctx);
 
-    // The corrupt entry should have been cleaned up
     expect(db.get('seen', 'seen:badentry')).toBeNull();
-    // The valid entry should still exist
+    // The unrelated valid entry must still be intact.
     expect(db.get('seen', 'seen:gooduser')).toBeTruthy();
   });
 

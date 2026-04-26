@@ -53,7 +53,7 @@ function fetchOptsFor(cfg: RssPluginConfig): FetchFeedOpts {
 /**
  * Narrow an unknown value to `Error` so we can read `.message` safely.
  * Strips control bytes to prevent IRC formatting / ANSI injection via a
- * persisted feed URL that surfaces in an error path. See audit 2026-04-19.
+ * persisted feed URL that surfaces in an error path.
  */
 function errorMessage(err: unknown): string {
   /* v8 ignore next -- defensive: tests always throw Error instances */
@@ -82,7 +82,6 @@ type RssCustomFields = Record<string, never>;
  * rather than a frozen load-time snapshot. The rss-parser instance
  * caches the timeout in its constructor, so sharing one across
  * polls meant a mid-session `.set timeout ...` would be ignored.
- * See stability audit 2026-04-14.
  */
 function makeParser(timeoutMs: number): Parser<RssCustomFields, RssCustomFields> {
   return new Parser<RssCustomFields, RssCustomFields>({ timeout: timeoutMs });
@@ -92,7 +91,7 @@ let parser: Parser<RssCustomFields, RssCustomFields>;
  * Module-level abort signal. Aborted in {@link teardown} so any in-flight
  * HTTP fetch or drip-fed announce loop that outlives the plugin module
  * (e.g. a 30s wall-clock timer still mid-flight) stops touching the
- * torn-down `api` reference. See audit findings W-RSS1/2/3.
+ * torn-down `api` reference.
  */
 let abortController: AbortController | null = null;
 
@@ -101,7 +100,7 @@ let abortController: AbortController | null = null;
  * longer than the 60s tick (slow upstream, large body, stuck DNS)
  * gets a second concurrent invocation on the next tick, racing on
  * setLastPoll and potentially double-announcing items. Keyed by
- * feed id. See stability audit 2026-04-14.
+ * feed id.
  */
 const activePolls = new Set<string>();
 
@@ -146,7 +145,7 @@ export async function init(api: PluginAPI): Promise<void> {
   //  2. Per-feed circuit breaker so a chronically failing feed (bad DNS,
   //     500 for a week) doesn't flood the log stream. After N
   //     consecutive failures, the next attempt is deferred with
-  //     exponential backoff. See stability audit 2026-04-14.
+  //     exponential backoff.
   api.bind('time', '-', '60', async () => {
     const now = Date.now();
     for (const feed of activeFeeds.values()) {

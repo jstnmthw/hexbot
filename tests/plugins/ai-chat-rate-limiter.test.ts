@@ -324,4 +324,26 @@ describe('RateLimiter', () => {
       }
     });
   });
+
+  describe('forgetUser', () => {
+    it('drops a single user bucket and lowercases the key', () => {
+      const rl = makeLimiter({ userBurst: 3 });
+      rl.record('Alice', 0);
+      rl.record('Bob', 0);
+
+      rl.forgetUser('Alice');
+      // After forgetUser, Alice's bucket is gone — a fresh check returns
+      // a full-burst allowance instead of the depleted one.
+      const aliceCheck = rl.check('Alice', 0);
+      expect(aliceCheck.allowed).toBe(true);
+      // Bob is unaffected.
+      const bobCheck = rl.check('Bob', 0);
+      expect(bobCheck.allowed).toBe(true);
+    });
+
+    it('is a no-op for an unknown user', () => {
+      const rl = makeLimiter({ userBurst: 3 });
+      expect(() => rl.forgetUser('ghost')).not.toThrow();
+    });
+  });
 });

@@ -136,7 +136,7 @@ export function loadCharacters(dir: string, log?: (msg: string) => void): Map<st
     try {
       const path = join(dir, file);
       // Reject symlinks outright — they can point outside the characters
-      // directory. Mirrors the games-loader pattern. See audit 2026-04-19.
+      // directory. Mirrors the games-loader pattern.
       const lstat = lstatSync(path);
       if (lstat.isSymbolicLink()) {
         log?.(`Skipping character file (symlink rejected): ${file}`);

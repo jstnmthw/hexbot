@@ -74,7 +74,7 @@ export interface MemoDeps {
    * Optional event bus for lifecycle hooks — wired so `attach()` can
    * prune `deliveryCooldown` when a user is removed. Without this, the
    * map accumulates entries for every admin that ever got a delivery
-   * notification. See audit finding W-CS1 (2026-04-14).
+   * notification.
    */
   eventBus?: BotEventBus;
   /**

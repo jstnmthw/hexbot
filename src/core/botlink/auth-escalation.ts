@@ -25,8 +25,7 @@ export interface AuthTracker {
  * `banCount` halves once per hour since the last failure. Without
  * decay, a shared-NAT IP that occasionally fumbles auth eventually
  * accumulates a permanently escalating ban duration even when the
- * underlying offenders have long since moved on. See stability audit
- * 2026-04-14.
+ * underlying offenders have long since moved on.
  */
 export const BAN_COUNT_DECAY_MS = 3_600_000; // 1 hour
 
@@ -37,8 +36,8 @@ export const BAN_COUNT_MAX = 8;
  * Decay `tracker.banCount` by one half-step per `BAN_COUNT_DECAY_MS`
  * elapsed since the last failure. Mutates the tracker in place and
  * returns the new `banCount`; callers that just want the math can
- * ignore the return value. See stability audit 2026-04-14 — a one-off
- * typo on a shared NAT IP shouldn't compound forever.
+ * ignore the return value — a one-off typo on a shared NAT IP shouldn't
+ * compound forever.
  */
 export function applyBanCountDecay(tracker: AuthTracker, now: number): number {
   if (tracker.banCount > 0) {

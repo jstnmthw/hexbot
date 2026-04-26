@@ -947,7 +947,7 @@ describe('Permissions', () => {
   });
 
   // -------------------------------------------------------------------------
-  // saveToDb: transactional per-record upsert (stability audit 2026-04-14)
+  // saveToDb: transactional per-record upsert
   // -------------------------------------------------------------------------
 
   describe('saveToDb: transactional per-record upsert', () => {

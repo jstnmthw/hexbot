@@ -5,6 +5,7 @@ import { type Interface as ReadlineInterface, createInterface } from 'node:readl
 
 import type { Bot } from './bot';
 import { tryAudit } from './core/audit';
+import { clearAuditTailForSession } from './core/commands/modlog-commands';
 import { buildReplStartupLine, buildReplStartupSummary } from './core/dcc/login-summary';
 import { Logger, type LoggerLike } from './logger';
 import { toEventObject } from './utils/irc-event';
@@ -82,8 +83,12 @@ export class BotREPL {
       { event: 'privmsg', fn: onPrivmsg },
     ];
 
-    // Route all logger output through print() so log lines don't collide with the prompt
+    // Route all logger output through print() so log lines don't collide with the prompt.
+    // The exit-time hook clears the global hook even if `stop()` is bypassed
+    // (e.g. process.exit() from a close-handler error before stop() runs)
+    // so a torn-down BotREPL graph doesn't survive via the static hook.
     Logger.setOutputHook((line: string) => this.print(line));
+    process.once('exit', () => Logger.setOutputHook(null));
 
     this.logger?.info('Interactive mode. Type .help for commands, .quit to exit.');
 
@@ -97,7 +102,7 @@ export class BotREPL {
       // unexpected rejections from deep within `handleLine` (which
       // would otherwise become unhandled-rejection fatal exits),
       // and `finally` re-prompts regardless of outcome so the REPL
-      // never hangs with no prompt. See stability audit 2026-04-14.
+      // never hangs with no prompt.
       this.handleLine(line)
         .catch((err) => {
           this.logger?.error('REPL handleLine rejected:', err);
@@ -136,6 +141,10 @@ export class BotREPL {
   /** Stop the REPL. Idempotent — safe to call from rl.on('close') and .quit. */
   stop(): void {
     Logger.setOutputHook(null);
+    // Drop any `.audit-tail` subscription this session installed before the
+    // REPL goes away — otherwise the listener holds a closure over
+    // `this.print` and stays live until process exit.
+    clearAuditTailForSession('repl');
     for (const { event, fn } of this.ircListeners) {
       this.bot.client.removeListener(event, fn);
     }

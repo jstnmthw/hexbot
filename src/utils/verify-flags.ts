@@ -22,7 +22,7 @@ export const FLAG_LEVEL: Record<string, number> = { n: 4, m: 3, o: 2, v: 1 };
  * Validate `identity.require_acc_for` at config load and warn on any entry
  * whose flag isn't in {@link FLAG_LEVEL}. An unknown flag silently defaults
  * to level 0, which disables the verification gate — exactly the thing an
- * operator was trying to enable. See stability audit 2026-04-14.
+ * operator was trying to enable.
  *
  * Returns the filtered list of recognized entries (unknown ones are
  * dropped) so callers can surface the real intent rather than the typo.

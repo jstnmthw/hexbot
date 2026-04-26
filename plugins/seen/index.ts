@@ -124,9 +124,10 @@ export function init(api: PluginAPI): void {
     api.db.set(`seen:${api.ircLower(ctx.nick)}`, record);
   });
 
-  // Respond to !seen queries
+  // Respond to !seen queries. The hourly sweep + per-record age check below
+  // make a query-time `cleanupStale` call redundant; an O(n) DB scan +
+  // JSON.parse on every `!seen` query is wasted work.
   api.bind('pub', '-', '!seen', (ctx) => {
-    cleanupStale(api, getMaxAgeMs());
     const targetNick = ctx.args.trim().split(/\s+/)[0];
     if (!targetNick) {
       ctx.reply('Usage: !seen <nick>');
@@ -219,8 +220,9 @@ export function teardown(): void {}
 
 /**
  * Drop every `seen:` KV entry older than `maxAgeMs` (and any entry whose
- * stored JSON no longer matches {@link isSeenRecord}). Run on a timer and
- * also at the start of each `!seen` query so a stale answer is impossible.
+ * stored JSON no longer matches {@link isSeenRecord}). Run hourly via the
+ * `time` bind; the per-record age check inside the `!seen` query path
+ * handles entries that aged past the cutoff between sweeps.
  */
 function cleanupStale(api: PluginAPI, maxAgeMs: number): void {
   const now = Date.now();

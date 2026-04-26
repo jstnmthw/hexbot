@@ -176,7 +176,7 @@ export class AmbientEngine {
         // Drop any question older than the most recent bot reply — the bot
         // already spoke after it, so it's effectively answered (correctly or
         // not). Without this, ambient fires on a question the bot has
-        // already addressed a turn ago. See audit persona-master-refactor.
+        // already addressed a turn ago.
         const state = this.social.getState(channelKey);
         const lastBotMsg = state?.lastBotMessage ?? 0;
         const freshReady = ready.filter((q) => q.at > lastBotMsg);

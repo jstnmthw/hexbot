@@ -5,8 +5,8 @@
 // Tests build their own config inline, so without a fixture every new
 // required field has to be threaded through ~50 load sites by hand.
 // Centralising that here means production can enforce the field strictly
-// (clean-cut, per audit 2026-04-24 CRITICAL ChanServ pin) while tests get
-// a safe default in one place.
+// (clean-cut, per the ChanServ-pin requirement) while tests get a safe
+// default in one place.
 //
 // Usage:
 //   await bot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());

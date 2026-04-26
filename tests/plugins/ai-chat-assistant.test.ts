@@ -119,7 +119,6 @@ describe('renderStableSystemPrompt', () => {
     expect(personaIdx).toBeGreaterThan(youAreIdx);
     expect(rulesIdx).toBeGreaterThan(personaIdx);
     // No markdown section headers — small models mirror them back verbatim.
-    // See audit persona-master-refactor-2026-04-19.
     expect(out).not.toContain('## Persona');
     expect(out).not.toContain('## Rules');
     expect(out).not.toContain('## Right now');

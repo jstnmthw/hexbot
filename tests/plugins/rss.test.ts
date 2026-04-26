@@ -444,11 +444,11 @@ describe('rss plugin — stripHtmlTags', () => {
   });
 
   it('decodes entities before stripping so escaped tags are treated as tags', () => {
-    // Audit 2026-04-24 asked for decode-first behavior so publishers
-    // can't smuggle `<script>` through as `&lt;script&gt;` and surface
-    // the bracket sequence raw on the wire. The decoded content is then
-    // tag-stripped just like literal HTML. (Informational only — no
-    // exploit on IRC, which doesn't render HTML — but consistent output.)
+    // Decode-first behavior so publishers can't smuggle `<script>` through
+    // as `&lt;script&gt;` and surface the bracket sequence raw on the wire.
+    // The decoded content is then tag-stripped just like literal HTML.
+    // (Informational only — no exploit on IRC, which doesn't render HTML —
+    // but consistent output.)
     expect(stripHtmlTags('&lt;b&gt;literal&lt;/b&gt;')).toBe('literal');
   });
 

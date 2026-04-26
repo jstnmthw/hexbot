@@ -152,15 +152,13 @@ const REGISTRATION_TIMEOUT_MS = 30_000;
 // `client.quit()` just queues a QUIT line — if the socket is already half-open
 // (SYN-ACK received but RST never arrives) the 'close' event never fires.
 // After this grace period we forcibly destroy the underlying socket so our
-// 'close' listener runs and the reconnect driver picks up. See stability
-// audit 2026-04-14.
+// 'close' listener runs and the reconnect driver picks up.
 const SOCKET_DESTROY_GRACE_MS = 5_000;
 
 // Wall-clock budget for draining queued mode/kick commands into the
 // irc-framework send buffer when a disconnect is in progress. Most queued
 // messages will evaporate with the socket, but a brief flush expresses
-// operator intent rather than silently dropping it. See stability audit
-// 2026-04-14.
+// operator intent rather than silently dropping it.
 const DISCONNECT_FLUSH_DEADLINE_MS = 100;
 
 /**
@@ -282,8 +280,7 @@ export function registerConnectionEvents(
     // the disconnect arm, a session that dropped mid-wait would keep the
     // promise hanging until the timeout elapsed, delaying the next
     // connection attempt by up to `timeoutMs`. Clamp `timeoutMs` to 60 s so
-    // a misconfig can't park a JOIN pass indefinitely. See stability audit
-    // 2026-04-21 and follow-up 2026-04-24.
+    // a misconfig can't park a JOIN pass indefinitely.
     const svcCfg = deps.config.services;
     if (svcCfg.identify_before_join) {
       const rawTimeout = svcCfg.identify_before_join_timeout_ms ?? 10_000;
@@ -350,7 +347,7 @@ export function registerConnectionEvents(
 
     // Clear the per-channel presence check interval too. Without this the
     // interval keeps firing "Not in configured channel X" during long
-    // rate-limited backoffs. See audit finding W-CL1 (2026-04-14).
+    // rate-limited backoffs.
     if (presenceTimer !== null) {
       clearInterval(presenceTimer);
       presenceTimer = null;
@@ -554,7 +551,7 @@ function hasGetCipher(value: unknown): value is { getCipher(): unknown } {
  * stops retrying it until the next reconnect (when state resets).
  * Without this, a K-lined or invite-only channel floods the server
  * with JOINs every 30s and risks a collateral K-line for the bot
- * itself. See stability audit 2026-04-14.
+ * itself.
  */
 function registerJoinErrorListeners(
   logger: LoggerLike,

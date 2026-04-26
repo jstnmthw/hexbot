@@ -383,7 +383,7 @@ describe('.flags owner escalation guard', () => {
   // fix, `ctx.source === 'botlink'` exempted the caller entirely, so a +m
   // master on any leaf could run `.flags self +n`, the hub executed it as
   // `botlink` source, and the master silently promoted to owner across the
-  // entire botnet. See audit 2026-04-19 (CRITICAL).
+  // entire botnet.
   // -------------------------------------------------------------------------
 
   it('botlink caller without +n is rejected when granting +n', async () => {

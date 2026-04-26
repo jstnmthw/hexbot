@@ -195,7 +195,7 @@ describe('topic plugin', () => {
     expect(warning).toBeDefined();
     // Warning now expresses the limit in bytes (UTF-8 byte length), not
     // UTF-16 code units, so multi-byte code points aren't silently
-    // over-permitted against a byte-counted server cap. See audit 2026-04-24.
+    // over-permitted against a byte-counted server cap.
     expect(warning!.message).toContain('bytes');
   });
 
@@ -321,7 +321,7 @@ describe('topic plugin', () => {
     it('non-op change after lock → bot restores enforced topic', async () => {
       // Bot must hold `+o` on the channel for the restore path to fire —
       // without ops the plugin now skips the restore to avoid burning the
-      // message-queue on a takeover. See audit 2026-04-24.
+      // message-queue on a takeover.
       giveBotOps(bot, '#test');
       setLiveTopic(bot, '#test', 'locked topic');
       simulatePrivmsg(bot, 'Admin', 'admin', 'admin.host', '#test', '!topic lock');
@@ -438,7 +438,7 @@ describe('topic plugin', () => {
     it('unauthorized topic change (different text) triggers one restore', async () => {
       // Bot must hold `+o` on the channel for the restore path to fire —
       // without ops the plugin now skips the restore to avoid burning the
-      // message-queue on a takeover. See audit 2026-04-24.
+      // message-queue on a takeover.
       giveBotOps(bot, '#test');
       bot.channelSettings.set('#test', 'topic_text', 'locked text');
       bot.channelSettings.set('#test', 'topic_lock', true);
@@ -466,7 +466,7 @@ describe('topic plugin', () => {
     it('unauthorized topic change with bot deopped → no restore', async () => {
       // Without ops, the restore path is skipped outright so a takeover
       // that deops the bot can't trigger the bot to flood its message
-      // queue with rejected TOPIC attempts. See audit 2026-04-24.
+      // queue with rejected TOPIC attempts.
       bot.channelSettings.set('#test', 'topic_text', 'locked text');
       bot.channelSettings.set('#test', 'topic_lock', true);
 

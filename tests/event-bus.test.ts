@@ -99,4 +99,35 @@ describe('BotEventBus', () => {
       expect(fn).not.toHaveBeenCalled();
     });
   });
+
+  describe('listener-count thresholds', () => {
+    it('warns once when crossing each configured threshold', () => {
+      const bus = new BotEventBus();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        // Add 16 listeners to clear both the 10 and 15 thresholds.
+        for (let i = 0; i < 16; i++) {
+          bus.on('bot:connected', () => {});
+        }
+        const messages = warn.mock.calls.map((c) => String(c[0]));
+        expect(messages.filter((m) => m.includes('threshold 10/20'))).toHaveLength(1);
+        expect(messages.filter((m) => m.includes('threshold 15/20'))).toHaveLength(1);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('does not warn when listener count stays below the lowest threshold', () => {
+      const bus = new BotEventBus();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        for (let i = 0; i < 9; i++) {
+          bus.on('bot:connected', () => {});
+        }
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
 });

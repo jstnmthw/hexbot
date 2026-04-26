@@ -1728,7 +1728,7 @@ describe('ChannelState', () => {
   });
 
   // -------------------------------------------------------------------------
-  // clearAllChannels — reconnect hygiene (mem-leak audit 2026-04-13)
+  // clearAllChannels — reconnect hygiene
   // -------------------------------------------------------------------------
 
   describe('clearAllChannels', () => {

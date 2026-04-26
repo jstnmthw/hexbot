@@ -28,7 +28,6 @@ export interface ServicesClient {
  * Four-state bot identity: 'unknown' at session start, 'pending' while
  * waiting for a NickServ ack, 'identified' once confirmed, 'unidentified'
  * once a "please identify" notice arrives without a successful ack following.
- * See stability audit 2026-04-21.
  */
 export type BotIdentifyState = 'unknown' | 'pending' | 'identified' | 'unidentified';
 
@@ -37,8 +36,7 @@ interface PendingVerify {
   /**
    * Share one underlying promise across every concurrent caller asking
    * about the same nick. Each `verifyUser()` call returns this promise
-   * directly instead of issuing its own ACC/STATUS round-trip. See
-   * stability audit 2026-04-14 (duplicate-verify leak + timer reset).
+   * directly instead of issuing its own ACC/STATUS round-trip.
    */
   promise: Promise<VerifyResult>;
   /** The single `resolve` for the shared promise. */
@@ -59,7 +57,6 @@ interface PendingVerify {
  * lagged services provider would otherwise let these pile up without
  * bound when every privileged dispatch triggers a new round-trip. Once
  * at the cap, new calls fail closed (verified:false) with a warning.
- * See stability audit 2026-04-14.
  */
 const MAX_PENDING_VERIFIES = 128;
 
@@ -78,7 +75,7 @@ export interface ServicesDeps {
    * The bot's configured primary nick. Used to detect the bot's own
    * account-notify (SASL success) and NickServ "please identify" notices.
    * Optional for backwards compatibility with tests that pre-date the
-   * identify-state tracking. See stability audit 2026-04-21.
+   * identify-state tracking.
    */
   botNick?: string;
 }
@@ -108,15 +105,14 @@ export class Services {
    * Running count of NickServ verifications that failed due to timeout
    * (as opposed to a real "not identified" response). Surfaced via
    * {@link getServicesTimeoutCount} so `.status` can show an operator
-   * that the services provider is lagging. See stability audit
-   * 2026-04-14.
+   * that the services provider is lagging.
    */
   private servicesTimeoutCount = 0;
   /** Count of pending verifies rejected because the cap was hit. */
   private pendingCapRejectionCount = 0;
 
   // -------------------------------------------------------------------------
-  // Bot identify state — see stability audit 2026-04-21
+  // Bot identify state
   // -------------------------------------------------------------------------
 
   /**
@@ -125,9 +121,8 @@ export class Services {
    *   pending → identified : "You are now identified" notice or account-notify
    *   unknown/pending → unidentified : "please identify" notice (no fallback possible)
    *   any → unknown : on disconnect (session reset)
-   * Used to skip NickServ verify calls that will never succeed (C-3 fix) and
-   * to surface `botIdentified` in `.status` (W-2 fix).
-   * See stability audit 2026-04-21.
+   * Used to skip NickServ verify calls that will never succeed and
+   * to surface `botIdentified` in `.status`.
    */
   private _botIdentifyState: BotIdentifyState = 'unknown';
 
@@ -141,7 +136,6 @@ export class Services {
    * Timestamp of the last `bot:connected` event. Used by {@link verifyUser}
    * to apply a longer NickServ timeout in the post-reconnect window, when
    * services may be catching up from a flood of reconnecting clients.
-   * See stability audit 2026-04-21 (W-3 fix).
    */
   private reconnectedAt: number | null = null;
 
@@ -205,7 +199,7 @@ export class Services {
     // IRCv3 account-notify: fires when the bot's own SASL authentication
     // succeeds (nick='*' pre-registration) or when a post-registration
     // account change is observed. Used to set _botIdentifyState without
-    // waiting for NickServ notices. See stability audit 2026-04-21.
+    // waiting for NickServ notices.
     this.listeners.on('account', (...args: unknown[]) => {
       this.onAccountNotify(toEventObject(args[0]));
     });
@@ -232,8 +226,7 @@ export class Services {
    * Abort every in-flight NickServ verify. Intended for the disconnect
    * path so a mid-verification socket drop fails the awaiting caller
    * immediately instead of waiting for the natural timeout and writing
-   * a misleading `nickserv-verify-timeout` audit row. See audit finding
-   * W-CL2 (2026-04-14).
+   * a misleading `nickserv-verify-timeout` audit row.
    */
   cancelPendingVerifies(reason: string): void {
     if (this.pending.size === 0) return;
@@ -267,7 +260,7 @@ export class Services {
    * in-flight promise — the old behavior canceled the existing
    * pending verification and started a fresh one on every duplicate,
    * restarting the timeout and piling up abandoned promises under
-   * dispatch pressure. See stability audit 2026-04-14.
+   * dispatch pressure.
    *
    * Fail-closed behavior: on timeout the promise resolves
    * `{verified:false, account:null}` and {@link servicesTimeoutCount}
@@ -285,7 +278,7 @@ export class Services {
     // C-3: if the bot is known-unidentified, NickServ will ignore STATUS/ACC
     // queries from us (Rizon/Anope silently drops them). Fail fast with a
     // structured reason so the caller sees a clean verified:false rather than
-    // a 5-second timeout. See stability audit 2026-04-21.
+    // a 5-second timeout.
     if (this._botIdentifyState === 'unidentified') {
       this.logger?.warn(
         `Skipping NickServ verify for ${nick} — bot is not identified (will retry once bot identifies)`,
@@ -296,7 +289,7 @@ export class Services {
     // W-3: use a longer timeout in the post-reconnect window. NickServ is
     // under heavy load when all reconnecting clients flood in simultaneously.
     // Apply within 30s of bot:connected; once outside the window, the normal
-    // 5s default is appropriate. See stability audit 2026-04-21.
+    // 5s default is appropriate.
     const RECONNECT_GRACE_WINDOW_MS = 30_000;
     const RECONNECT_GRACE_TIMEOUT_MS = 15_000;
     const inGraceWindow =
@@ -629,7 +622,6 @@ export class Services {
    * session (either via SASL account-notify or a "You are now identified"
    * notice). False while unknown or after a "please identify" prompt.
    * Surfaced via `.status` so operators can see the identify state at a glance.
-   * See stability audit 2026-04-21 (W-2 fix).
    */
   isBotIdentified(): boolean {
     return this._botIdentifyState === 'identified';
@@ -665,9 +657,19 @@ export class Services {
    * botNick before calling this — irc-bridge tracks the nick change via
    * its own 'nick' listener once the server confirms. After the nick change,
    * the normal NickServ "please identify" → fallback IDENTIFY path fires
-   * to re-establish identity. See stability audit 2026-04-21 (C-4 fix).
+   * to re-establish identity.
    */
   async ghostAndReclaim(nick: string, password: string): Promise<void> {
+    // Flush any in-flight resolver from a prior overlapping call. Without
+    // this, a second ghostAndReclaim() within 1.5s leaves the old
+    // setTimeout scheduled; when it fires it nulls out the *new* race's
+    // resolver, so the second reclaim waits the full 1.5s instead of
+    // unblocking on ack.
+    if (this.pendingGhostResolver) {
+      const prev = this.pendingGhostResolver;
+      this.pendingGhostResolver = null;
+      prev();
+    }
     this._identifyFallbackSent = false; // reset so the re-identify path can fire
     const target = this.getNickServTarget();
     this.client.say(target, `GHOST ${nick} ${password}`);
@@ -682,7 +684,7 @@ export class Services {
         if (done) return;
         done = true;
         clearTimeout(timer);
-        this.pendingGhostResolver = null;
+        if (this.pendingGhostResolver === finish) this.pendingGhostResolver = null;
         resolve();
       };
       this.pendingGhostResolver = finish;
@@ -709,7 +711,7 @@ export class Services {
    * Pre-registration: nick='*', account=<bot account name> (SASL success).
    * Post-registration: nick=<bot nick>, account=<account name>.
    * Fires `bot:identified` on the event bus when the bot's own identity is
-   * confirmed. See stability audit 2026-04-21.
+   * confirmed.
    */
   private onAccountNotify(event: Record<string, unknown>): void {
     if (!this.botNick) return; // botNick not configured — skip

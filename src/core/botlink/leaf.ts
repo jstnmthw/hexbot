@@ -127,7 +127,6 @@ export class BotLinkLeaf {
     // detaches the firing listener — the other closure would remain
     // attached for the lifetime of the socket, pinning `this` and a hub
     // reference even after a successful transition to the protocol layer.
-    // See memleak audit INFO note (2026-04-14).
     const onConnect = () => {
       socket.removeListener('error', onError);
       this.connecting = false;
@@ -325,7 +324,7 @@ export class BotLinkLeaf {
     // Handshake deadline — covers "no CHALLENGE", "no WELCOME", and the
     // hub-crashes-mid-handshake cases. Without this, a hub that dies
     // between accept() and HELLO_CHALLENGE leaves the leaf waiting for
-    // the kernel TCP timeout (~2.5 min). See stability audit 2026-04-14.
+    // the kernel TCP timeout (~2.5 min).
     const handshakeTimeoutMs = 15_000;
     let handshakeTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
       handshakeTimer = null;
@@ -407,7 +406,6 @@ export class BotLinkLeaf {
         this.protocol = null;
         // Always notify disconnect watchers — watchdogs and DCC sync
         // tracking depend on seeing this transition even on AUTH_FAILED.
-        // See stability audit 2026-04-14.
         this.onDisconnected?.(`handshake rejected: ${String(frame.code ?? 'unknown')}`);
         // Don't auto-reconnect on auth failure
         if (frame.code === 'AUTH_FAILED') return;
@@ -522,7 +520,7 @@ export class BotLinkLeaf {
     // when many leaves disconnect simultaneously (e.g. hub restart).
     // Without jitter, 20 leaves all fire a reconnect at exactly the same
     // base delay and the hub's own max_pending_handshakes guard auth-bans
-    // them. See stability audit 2026-04-14.
+    // them.
     const jitteredDelay = Math.max(
       1,
       Math.floor(this.reconnectDelay * (0.5 + 0.5 * Math.random())),

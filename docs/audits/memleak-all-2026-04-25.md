@@ -40,7 +40,7 @@ So the chanmod WARNING is downgraded to INFO; the contingent risk is closed.
 
 ### WARNING — plugin loader / dispatcher / event bus
 
-#### [ ] `BotEventBus.setMaxListeners(50)` masks accumulation across reloads
+#### [x] `BotEventBus.setMaxListeners(50)` masks accumulation across reloads — **RESOLVED**
 
 - **File:** `src/event-bus.ts:117-126`
 - **Category:** listener leak (defense-in-depth)
@@ -48,7 +48,7 @@ So the chanmod WARNING is downgraded to INFO; the contingent risk is closed.
 - **Description:** Cap raised from 10 to 50 with the comment "four-plus plugins routinely subscribe". Legitimate at steady state, but a per-reload listener leak (the kind W-PS2 was created to address) wouldn't warn until the **51st** stale listener accumulates. With 5 plugins × 5 reloads × 1 leaked listener each you reach 25 — invisible. ai-chat alone subscribes to `user:identified`/`user:deidentified`/`channel:modesReady` and can hit 50 within a single dev session of repeated `.reload`s if any wiring is wrong.
 - **Remediation:** Lower to 20; treat any warning as a real bug. Or instrument the bus to log per-event counts at thresholds (10/20/30) so operators see the trend before the cap fires.
 
-#### [ ] Bare `eventBus.on()` calls bypass `removeByOwner` safety net
+#### [x] Bare `eventBus.on()` calls bypass `removeByOwner` safety net — **RESOLVED**
 
 - **Files:** `src/bot.ts:387, 573`, `src/index.ts:112-113`
 - **Category:** listener leak (latent)
@@ -56,7 +56,7 @@ So the chanmod WARNING is downgraded to INFO; the contingent risk is closed.
 - **Description:** `wireDispatcher()` registers `bot:disconnected` directly; `attachBridge()` registers `bot:nick-collision`; `index.ts` registers `bot:connected`/`bot:disconnected` for heartbeat. Each fires once per process today (constructor-installed), so no live leak — but there is no symmetric `off()` and the closures capture `this` (entire `Bot` instance for the bot.ts ones).
 - **Remediation:** Migrate all bare `.on()` calls on the event bus to `trackListener('bot', ...)`; then `bot.shutdown()` can call `eventBus.removeByOwner('bot')` as a uniform safety net.
 
-#### [ ] Plugin-api-factory listener tracking maps populated _after_ `eventBus.on()`
+#### [x] Plugin-api-factory listener tracking maps populated _after_ `eventBus.on()` — **RESOLVED**
 
 - **File:** `src/plugin-api-factory.ts:701-722` (and four parallel on*/off* pairs)
 - **Category:** listener leak (latent)
@@ -68,7 +68,7 @@ So the chanmod WARNING is downgraded to INFO; the contingent risk is closed.
 
 - **Resolution:** Added `PluginLoader.unloadAll()` and called from `Bot.shutdown()` between `relay-orchestrator.stop` and `memo.detach`. Every loaded plugin's `teardown()` runs on process exit; per-plugin throws are logged and the loop continues so one bad teardown can't strand siblings.
 
-#### [ ] `EventDispatcher.binds[]` has no per-plugin cap (bind-storm risk)
+#### [x] `EventDispatcher.binds[]` has no per-plugin cap (bind-storm risk) — **RESOLVED**
 
 - **File:** `src/dispatcher.ts:259-268`
 - **Category:** unbounded collection (defense-in-depth)
@@ -79,7 +79,7 @@ So the chanmod WARNING is downgraded to INFO; the contingent risk is closed.
 
 - **Resolution:** The `importedOnce` Set was deleted alongside `importWithCacheBust` and `reload()` in the live-config refactor. Plain `import()` now resolves to the cached module on every `load()` of the same path — no per-load tracking needed, no leak vector remaining.
 
-#### [ ] Auto-disabled timer binds become zombie entries in `dispatcher.binds[]`
+#### [x] Auto-disabled timer binds become zombie entries in `dispatcher.binds[]` — **RESOLVED**
 
 - **File:** `src/dispatcher.ts:215`
 - **Category:** unbounded collection (small)
@@ -90,14 +90,14 @@ So the chanmod WARNING is downgraded to INFO; the contingent risk is closed.
 
 ### WARNING — IRC connection / services
 
-#### [ ] `bot:nick-collision` eventBus listener registered without paired `off()`
+#### [x] `bot:nick-collision` eventBus listener registered without paired `off()` — **RESOLVED**
 
 - **File:** `src/bot.ts:573`
 - **Category:** listener leak (latent)
 - **Description:** `attachBridge()` registers an inline arrow on `bot:nick-collision` and never removes it. Today `attachBridge()` runs once at construction, so no live leak. Closure captures `this`, `channelState`, `bridge`, `config`, `services`. No symmetric `off` in `Bot.stop()` — a future refactor that re-attaches the bridge silently leaks.
 - **Remediation:** Hoist to a named field (matching the `_onConnected`/`_onDisconnected` pattern in `services.ts:149-151`); add `eventBus.off('bot:nick-collision', this._onNickCollision)` to `Bot.stop()`.
 
-#### [ ] `pendingGhostResolver` overwritten without clearing prior pending resolver
+#### [x] `pendingGhostResolver` overwritten without clearing prior pending resolver — **RESOLVED**
 
 - **File:** `src/core/services.ts:670-693`
 - **Category:** closure capture / correctness bug
@@ -108,7 +108,7 @@ So the chanmod WARNING is downgraded to INFO; the contingent risk is closed.
 
 ### WARNING — networked subsystems
 
-#### [ ] `BotLinkRelayRouter.activeRelays` Map has no hard cap
+#### [x] `BotLinkRelayRouter.activeRelays` Map has no hard cap — **RESOLVED**
 
 - **File:** `src/core/botlink/relay-router.ts:87, 126, 250`
 - **Category:** unbounded collection
@@ -116,7 +116,7 @@ So the chanmod WARNING is downgraded to INFO; the contingent risk is closed.
 - **Description:** Sibling routing maps `cmdRoutes` and `protectRequests` enforce `MAX_PENDING_ROUTES = 4096`; `remotePartyUsers` enforces `MAX_REMOTE_PARTY_USERS = 512`. `activeRelays` only relies on the 1-hour `RELAY_TTL` sweep, which is itself heartbeat-driven and stops if all leaves disconnect.
 - **Remediation:** Add cap check in both `registerHubRelay` and the RELAY_REQUEST branch. Suggest `MAX_ACTIVE_RELAYS = 256`.
 
-#### [ ] DCC `mirrorTimestamps` rate-limit array is module-level state
+#### [x] DCC `mirrorTimestamps` rate-limit array is module-level state — **RESOLVED**
 
 - **File:** `src/core/dcc/irc-mirror.ts:22`
 - **Category:** reload residue
@@ -127,14 +127,14 @@ So the chanmod WARNING is downgraded to INFO; the contingent risk is closed.
 
 ### WARNING — REPL / logger
 
-#### [ ] `Logger.sinks` Set is module-static, never pruned across plugin reloads
+#### [x] `Logger.sinks` Set is module-static, never pruned across plugin reloads — **RESOLVED**
 
 - **File:** `src/logger.ts:162`
 - **Category:** reload residue
 - **Description:** Class-level `static sinks: Set<LogSink>` shared across the process. Plugins that register sinks in `init()` and forget `removeSink()` in `teardown()` leak a closure over the old module scope on every reload — not just the function but every variable it captures. Each subsequent log line iterates the entire set, multiplying per-log CPU by leak count.
 - **Remediation:** Add `Logger.sinkCount()` metric and a runtime warning when `sinks.size > 8`. Consider a named-sink registry (`addSink(name, sink)`) so the plugin loader can audit and force-remove on reload.
 
-#### [ ] REPL `Logger.setOutputHook` not cleared if shutdown throws before `stop()`
+#### [x] REPL `Logger.setOutputHook` not cleared if shutdown throws before `stop()` — **RESOLVED**
 
 - **File:** `src/repl.ts:86`
 - **Category:** closure capture
@@ -145,14 +145,14 @@ So the chanmod WARNING is downgraded to INFO; the contingent risk is closed.
 
 ### WARNING — command + audit infrastructure
 
-#### [ ] `.audit-tail` listener captures full `ctx` for the REPL session lifetime
+#### [x] `.audit-tail` listener captures full `ctx` for the REPL session lifetime — **RESOLVED**
 
 - **File:** `src/core/commands/modlog-commands.ts:529-534`
 - **Category:** closure capture
 - **Description:** `.audit-tail` registration creates `listener = (entry) => { if (matcher(entry)) ctx.reply(renderRow(entry)); }` and stores it in module-scope `tailListeners`. Closure captures `ctx` and `ctx.reply`. No automatic eviction on REPL detach — only `.audit-tail off` or `shutdownModLogCommands()` at process exit.
 - **Remediation:** Wire a `repl:detached` event from REPL teardown that calls `clearAuditTailForSession('repl')`. Optional: auto-`off` after N hours of no command activity.
 
-#### [ ] `.modlog` `pagers` Map accumulates `botlink:<nick>` entries between sweeps
+#### [x] `.modlog` `pagers` Map accumulates `botlink:<nick>` entries between sweeps — **RESOLVED**
 
 - **File:** `src/core/commands/modlog-commands.ts:78, 95-101, 103-109`
 - **Category:** unbounded collection (slow)
@@ -163,28 +163,28 @@ So the chanmod WARNING is downgraded to INFO; the contingent risk is closed.
 
 ### WARNING — plugins
 
-#### [ ] ai-chat: no `quit` bind; per-user state lingers after user leaves
+#### [x] ai-chat: no `quit` bind; per-user state lingers after user leaves — **RESOLVED**
 
 - **File:** `plugins/ai-chat/index.ts:551-564`
 - **Category:** unbounded collection (slow)
 - **Description:** Plugin only registers `part`/`kick` binds gated on `api.isBotNick(ctx.nick)` — they fire only when the BOT leaves. No `quit` bind. When an individual user QUITs/PARTs, none of `EngagementTracker.engaged[nick]`, `RateLimiter.userBuckets[nick]`, `SocialTracker.activeUsers[nick]`, or `SessionManager.sessions[nick|ch]` is proactively cleaned. Each has its own bounded eviction (5 min activity window, hard caps + LRU, idle-bucket eviction, soft/hard timeouts) so this is bounded — but per-user residue lingers minutes-to-hours, eating cap headroom.
 - **Remediation:** Add a `quit` bind that calls `engagementTracker?.endEngagement(channel, ctx.nick)` and `sessionManager?.endSession(ctx.nick, channel)` for every channel the bot shares with the quitting user. Add a non-bot `part`/`kick` branch for per-channel cleanup.
 
-#### [ ] ai-chat: `lastRateLimitOpNoticeAt` not cleared on bot leaves channel
+#### [x] ai-chat: `lastRateLimitOpNoticeAt` not cleared on bot leaves channel — **RESOLVED**
 
 - **File:** `plugins/ai-chat/index.ts:124, 551-564`
 - **Category:** unbounded collection
 - **Description:** Module-scope `Map<channel, number>` for per-channel op-notice debounce. Bot's own `part`/`kick` binds clear `socialTracker`, `contextManager`, `engagementTracker` — but not `lastRateLimitOpNoticeAt`. Only `teardown()` clears it. No hard cap, no idle eviction. On invite-spam-prone networks, grows by one entry per channel × every rate-limit incident, only reclaimed on plugin teardown.
 - **Remediation:** Add `lastRateLimitOpNoticeAt.delete(ctx.channel)` to both bot-leave branches alongside the existing `dropChannel` calls.
 
-#### [ ] ai-chat: per-channel collection caps not coordinated across trackers
+#### [x] ai-chat: per-channel collection caps not coordinated across trackers — **RESOLVED**
 
 - **Files:** `plugins/ai-chat/engagement-tracker.ts:18`, `plugins/ai-chat/social-tracker.ts:64`, `plugins/ai-chat/context-manager.ts`, `plugins/ai-chat/rate-limiter.ts`
 - **Category:** unbounded collection (slow)
 - **Description:** Each per-channel collection caps independently: `EngagementTracker.MAX_CHANNELS=256`, `SocialTracker.MAX_CHANNELS=256`, `ContextManager.channels` (no documented cap, only TTL-based pruning that deletes empty buffers), `RateLimiter.ambientChannelWindows` (no cap, per-access pruning leaves Map keys). Combined footprint scales with the union of channels each tracker has seen, not a single global set.
 - **Remediation:** Add `MAX_CHANNELS` cap with LRU eviction to `ContextManager.channels` and `RateLimiter.ambientChannelWindows`, OR wire `ContextManager.pruneAll()` to the existing 60s sweep that runs `expireInactive()`.
 
-#### [ ] seen plugin: per-nick (not per-channel) tracking with 10k cap
+#### [x] seen plugin: per-nick (not per-channel) tracking with 10k cap — **PARTIALLY RESOLVED** (redundant query-path sweep dropped; per-channel scoping deferred)
 
 - **File:** `plugins/seen/index.ts:75-102`
 - **Category:** unbounded collection (capped, but coarse)
@@ -264,30 +264,30 @@ These should be preserved when refactoring and used as templates for new code.
 
 ### Quick wins (<5 min each)
 
-- [ ] Add `lastRateLimitOpNoticeAt.delete(ctx.channel)` to ai-chat bot-leave handlers (`plugins/ai-chat/index.ts:551-564`).
-- [ ] Drop redundant `cleanupStale(api, maxAgeMs)` call from `plugins/seen/index.ts` `!seen` query path.
-- [ ] Add `pending.timer.unref?.()` after the `setTimeout` in `src/core/dcc/index.ts:1554-1559` for consistency with surrounding code.
-- [ ] Use `this.server.once('error', reject)` instead of `.on(...)` at `src/core/botlink/hub.ts:155`.
-- [ ] Pre-empt any in-flight `pendingGhostResolver` at the top of `Services.ghostAndReclaim()`.
-- [ ] Add `MAX_ACTIVE_RELAYS = 256` cap to `BotLinkRelayRouter.activeRelays` mirroring sibling caps.
+- [x] Add `lastRateLimitOpNoticeAt.delete(ctx.channel)` to ai-chat bot-leave handlers (`plugins/ai-chat/index.ts:551-564`).
+- [x] Drop redundant `cleanupStale(api, maxAgeMs)` call from `plugins/seen/index.ts` `!seen` query path.
+- [x] Add `pending.timer.unref?.()` after the `setTimeout` in `src/core/dcc/index.ts:1554-1559` for consistency with surrounding code.
+- [x] Use `this.server.once('error', reject)` instead of `.on(...)` at `src/core/botlink/hub.ts:155`.
+- [x] Pre-empt any in-flight `pendingGhostResolver` at the top of `Services.ghostAndReclaim()`.
+- [x] Add `MAX_ACTIVE_RELAYS = 256` cap to `BotLinkRelayRouter.activeRelays` mirroring sibling caps.
 
 ### Medium effort (≤30 min each)
 
-- [ ] Hoist `bot:nick-collision` handler in `src/bot.ts:573` to a named field; add `eventBus.off` to `Bot.stop()`.
-- [ ] Migrate the four bare `eventBus.on()` calls in `bot.ts` and `index.ts` to `trackListener('bot', ...)`.
-- [ ] Reorder `eventBus.on(...)` after tracking-map writes (or wrap in try/rollback) in `plugin-api-factory.ts:701-722` × 5 sites.
-- [ ] Add per-user `quit` bind (and non-bot `part`/`kick` branches) to `plugins/ai-chat/index.ts` for engagement / session / social-tracker / rate-limiter cleanup.
-- [ ] Lift `mirrorTimestamps` into `createMirrorRateLimiter()` factory; instantiate per-DCCManager.
-- [ ] Wire `repl:detached` event → `clearAuditTailForSession('repl')` in `modlog-commands.ts`.
-- [ ] Add periodic `pruneIdle` timer (or botlink-leaf-disconnect hook) for `.modlog` pagers in `modlog-commands.ts`.
-- [ ] Delete from `importedOnce` in `PluginLoader.unload()`; gate cache-bust on file mtime.
-- [ ] Splice auto-disabled timer binds from `dispatcher.binds[]` (or add `disabled: true` flag with `listBinds` filter).
+- [x] Hoist `bot:nick-collision` handler in `src/bot.ts:573` to a named field; add `eventBus.off` to `Bot.stop()`.
+- [x] Migrate the four bare `eventBus.on()` calls in `bot.ts` and `index.ts` to `trackListener('bot', ...)`.
+- [x] Reorder `eventBus.on(...)` after tracking-map writes (or wrap in try/rollback) in `plugin-api-factory.ts:701-722` × 5 sites.
+- [x] Add per-user `quit` bind (and non-bot `part`/`kick` branches) to `plugins/ai-chat/index.ts` for engagement / session / social-tracker / rate-limiter cleanup.
+- [x] Lift `mirrorTimestamps` into `createMirrorRateLimiter()` factory; instantiate per-DCCManager.
+- [x] Wire `repl:detached` event → `clearAuditTailForSession('repl')` in `modlog-commands.ts`.
+- [x] Add periodic `pruneIdle` timer (or botlink-leaf-disconnect hook) for `.modlog` pagers in `modlog-commands.ts`.
+- [x] ~~Delete from `importedOnce` in `PluginLoader.unload()`; gate cache-bust on file mtime.~~ N/A — `importedOnce` and the cache-busting `.reload` were deleted in the live-config refactor.
+- [x] Splice auto-disabled timer binds from `dispatcher.binds[]` (or add `disabled: true` flag with `listBinds` filter).
 
 ### Architectural (design changes)
 
-- [ ] Add `unloadAll()` to `PluginLoader`; call from `Bot.shutdown()`.
-- [ ] Lower `BotEventBus.setMaxListeners` from 50 to 20; instrument per-event counts at thresholds (10/20/30).
-- [ ] Add `MAX_CHANNELS` cap with LRU eviction to `ai-chat/context-manager.ts` and `ai-chat/rate-limiter.ts:ambientChannelWindows`. Or wire `ContextManager.pruneAll()` to the existing 60s sweep.
-- [ ] Add `Logger.sinkCount()` metric and a runtime warning at threshold; consider named-sink registry so the plugin loader can audit ownership.
-- [ ] Add per-plugin bind cap (1000 with warning at 500) to `EventDispatcher`.
-- [ ] Document `.reload` reload-counter strategy and consider per-plugin Worker threads for plugins that must reload often.
+- [x] Add `unloadAll()` to `PluginLoader`; call from `Bot.shutdown()`. (already RESOLVED above)
+- [x] Lower `BotEventBus.setMaxListeners` from 50 to 20; instrument per-event counts at thresholds (10/20/30).
+- [x] Add `MAX_CHANNELS` cap with LRU eviction to `ai-chat/context-manager.ts` and `ai-chat/rate-limiter.ts:ambientChannelWindows`. Or wire `ContextManager.pruneAll()` to the existing 60s sweep.
+- [x] Add `Logger.sinkCount()` metric and a runtime warning at threshold; consider named-sink registry so the plugin loader can audit ownership.
+- [x] Add per-plugin bind cap (1000 with warning at 500) to `EventDispatcher`.
+- [x] ~~Document `.reload` reload-counter strategy and consider per-plugin Worker threads for plugins that must reload often.~~ N/A — `.reload` was deleted in the live-config refactor.

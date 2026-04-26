@@ -48,8 +48,8 @@ describe('ContextManager per-entry char cap', () => {
 });
 
 describe('ContextManager byte-budget enforcement', () => {
-  // Audit 2026-04-19 — addMessage must evict oldest entries when cumulative
-  // bytes exceed maxTokens*4 (the char-per-token heuristic).
+  // addMessage must evict oldest entries when cumulative bytes exceed
+  // maxTokens*4 (the char-per-token heuristic).
   it('evicts oldest entries when cumulative bytes exceed maxTokens*4', () => {
     // maxTokens=20 → maxBytes=80. Messages of ~50 bytes each can't all fit.
     const { mgr } = make({ maxTokens: 20, maxMessages: 100 });

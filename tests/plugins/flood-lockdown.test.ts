@@ -1,5 +1,6 @@
-// Covers audit findings W-FL2 (dropChannel on bot part/kick) and W-FL3
-// (early-return in record() while a channel is already locked).
+// Covers two LockdownController behaviors:
+//   - dropChannel on bot part/kick
+//   - early-return in record() while a channel is already locked
 import { describe, expect, it, vi } from 'vitest';
 
 import { LockdownController } from '../../plugins/flood/lockdown';

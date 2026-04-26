@@ -1,6 +1,6 @@
-// Covers two audit findings on the flood plugin's EnforcementExecutor:
-//   - C2: MAX_OFFENCE_ENTRIES=2000 insertion-order LRU cap
-//   - W-FL5: `inFlight` Set + `drainPending()` awaited on teardown
+// Covers two behaviors on the flood plugin's EnforcementExecutor:
+//   - MAX_OFFENCE_ENTRIES=2000 insertion-order LRU cap
+//   - `inFlight` Set + `drainPending()` awaited on teardown
 import { describe, expect, it, vi } from 'vitest';
 
 import { EnforcementExecutor } from '../../plugins/flood/enforcement-executor';
@@ -81,7 +81,7 @@ describe('EnforcementExecutor offenceTracker cap (C2)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Same-burst dedup + terminal suppression (incident 2026-04-19)
+// Same-burst dedup + terminal suppression
 // ---------------------------------------------------------------------------
 
 describe('EnforcementExecutor same-burst dedup', () => {
@@ -337,7 +337,7 @@ describe('EnforcementExecutor liftExpiredBans (W-FL6)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tempban mask shape validation (audit 2026-04-19)
+// Tempban mask shape validation
 // ---------------------------------------------------------------------------
 
 describe('EnforcementExecutor tempban mask shape', () => {

@@ -62,6 +62,16 @@ const STALE_BUCKET_IDLE_MS = 3_600_000;
 // in small deployments where the natural cardinality stays well below this.
 const EVICTION_MIN_BUCKETS = 64;
 
+/**
+ * Hard cap on tracked ambient channels. Mirrors `ContextManager.MAX_CHANNELS`
+ * and `SocialTracker.MAX_CHANNELS` so the per-channel ai-chat maps scale
+ * together. Each window is at most ambientPerChannelPerHour entries
+ * (default 5), so the worst-case footprint is ~256 × 5 timestamps.
+ * On overflow the LRU channel is dropped — its window is either already
+ * expired or stale by definition.
+ */
+const MAX_AMBIENT_CHANNELS = 256;
+
 /** Layered rate limiter: per-user token bucket + RPM + RPD + ambient budgets. All state is in-memory. */
 export class RateLimiter {
   private userBuckets = new Map<string, UserBucket>();
@@ -199,7 +209,18 @@ export class RateLimiter {
     const chKey = channelKey.toLowerCase();
     let chWindow = this.ambientChannelWindows.get(chKey);
     if (!chWindow) {
+      // LRU eject when the cap is hit. Map iteration is insertion order,
+      // so the first key is the coldest write site. Active channels are
+      // promoted via `delete + set` on every record; cold ones drift to
+      // the head and get pushed out.
+      if (this.ambientChannelWindows.size >= MAX_AMBIENT_CHANNELS) {
+        const oldest = this.ambientChannelWindows.keys().next().value;
+        if (oldest !== undefined) this.ambientChannelWindows.delete(oldest);
+      }
       chWindow = [];
+      this.ambientChannelWindows.set(chKey, chWindow);
+    } else {
+      this.ambientChannelWindows.delete(chKey);
       this.ambientChannelWindows.set(chKey, chWindow);
     }
     chWindow.push(now);
@@ -213,6 +234,15 @@ export class RateLimiter {
     this.dayWindow = [];
     this.ambientChannelWindows.clear();
     this.ambientGlobalWindow = [];
+  }
+
+  /**
+   * Drop a single user's bucket. Wire to user QUIT so a nick that leaves
+   * the network releases its bucket immediately instead of waiting for the
+   * idle-bucket eviction. No-op if the user has never spoken.
+   */
+  forgetUser(userKey: string): void {
+    this.userBuckets.delete(userKey.toLowerCase());
   }
 
   // -------------------------------------------------------------------------

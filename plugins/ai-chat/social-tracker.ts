@@ -199,6 +199,19 @@ export class SocialTracker {
     this.channels.delete(channel.toLowerCase());
   }
 
+  /**
+   * Forget a single user's per-channel `activeUsers` entry. Wire to user
+   * QUIT/PART/KICK so the per-nick stats (lastSeen, messageCount) don't
+   * linger 5 minutes for the activity window to evict them. Per-channel
+   * timestamps and the persisted user-interaction row are unchanged — the
+   * former are anonymized by design, the latter is the long-term memory.
+   */
+  forgetUser(channel: string, nick: string): void {
+    const state = this.channels.get(channel.toLowerCase());
+    if (!state) return;
+    state.activeUsers.delete(nick.toLowerCase());
+  }
+
   // -------------------------------------------------------------------------
 
   private getOrCreate(channel: string): ChannelSocialState {

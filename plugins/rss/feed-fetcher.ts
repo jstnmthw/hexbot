@@ -155,7 +155,7 @@ export async function fetchFeedXml(url: string, opts: FetchFeedOpts): Promise<st
   // Track URLs we've already requested in this redirect chain. A deliberate
   // 301 loop (A → B → A → B ...) would otherwise burn the full MAX_REDIRECTS
   // budget for no new network fetches; refuse on revisit so the failure is
-  // deterministic. See audit 2026-04-24.
+  // deterministic.
   const visited = new Set<string>();
   for (let redirect = 0; redirect < MAX_REDIRECTS; redirect++) {
     if (opts.signal?.aborted) throw new Error('rss fetch aborted');
@@ -178,7 +178,7 @@ export async function fetchFeedXml(url: string, opts: FetchFeedOpts): Promise<st
     // set — the config flag is for operators who explicitly want an HTTP-only
     // feed, not for a server to silently downgrade an HTTPS fetch mid-chain.
     // A downgrade there lets a passive MITM on the redirected hop inject
-    // arbitrary feed XML. See audit 2026-04-24.
+    // arbitrary feed XML.
     if (previousProtocol === 'https:' && nextUrl.protocol === 'http:') {
       throw new Error(`refused https→http downgrade on redirect to ${nextUrl.toString()}`);
     }
@@ -294,7 +294,6 @@ function doRequest(
         // which let a misconfigured upstream funnel HTML responses into
         // the XML parser. A missing Content-Type is also rejected (prior
         // code short-circuited past the check when the header was absent).
-        // See audit 2026-04-24.
         const mediaType = contentType.split(';', 1)[0].trim();
         const allowedContentTypes = new Set([
           'application/rss+xml',

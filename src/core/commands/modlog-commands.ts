@@ -76,6 +76,15 @@ interface PagerState {
 }
 
 const pagers = new Map<string, PagerState>();
+/**
+ * Background sweep for stale pagers. Without this, `botlink:<nick>` keys
+ * (created when a remote operator runs `.modlog` over a relay) only get
+ * pruned on the next inline `pruneIdle()` from any caller. A quiet hub
+ * where one operator queries, then disconnects, leaves entries until the
+ * next `.modlog` from anyone. Mirrors the eager DCC/REPL `clearPagerForSession`
+ * cleanup.
+ */
+let pagerSweepTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
  * Tail listeners keyed by session. Module-scoped (not hidden inside
@@ -144,6 +153,10 @@ export function shutdownModLogCommands(): void {
     entry.eventBus.off('audit:log', entry.listener);
   }
   tailListeners.clear();
+  if (pagerSweepTimer) {
+    clearInterval(pagerSweepTimer);
+    pagerSweepTimer = null;
+  }
 }
 
 /** Test-only: drop every pager. */
@@ -421,6 +434,15 @@ interface RegisterDeps {
 export function registerModlogCommands(deps: RegisterDeps): void {
   const { handler, db, permissions, eventBus } = deps;
   if (!db) return;
+
+  // Periodic sweep so `botlink:<nick>` pagers from disconnected remote
+  // operators expire even when no one runs `.modlog` afterward. Half
+  // IDLE_TIMEOUT_MS keeps worst-case residency under one full timeout
+  // window. `.unref()` so the timer doesn't block process exit.
+  if (!pagerSweepTimer) {
+    pagerSweepTimer = setInterval(() => pruneIdle(), IDLE_TIMEOUT_MS / 2);
+    pagerSweepTimer.unref?.();
+  }
 
   handler.registerCommand(
     'modlog',

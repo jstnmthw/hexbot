@@ -61,11 +61,11 @@ const CHANNEL_WINDOW_MS = 5_000;
  * within this window update `lastSeen` but leave `count` alone, so one
  * flood event = one strike regardless of how many lines it contained.
  *
- * Tuned to 2s (see incident 2026-04-19): tight enough that a deliberate
- * re-flood after a kick escalates quickly, loose enough that a single
- * chatbot response overflowing across ~1s of stream doesn't multi-count.
- * Anything longer (5s, 10s) leaves too much room for a sustained flood
- * to hide inside "one burst".
+ * Tuned to 2s: tight enough that a deliberate re-flood after a kick
+ * escalates quickly, loose enough that a single chatbot response
+ * overflowing across ~1s of stream doesn't multi-count. Anything longer
+ * (5s, 10s) leaves too much room for a sustained flood to hide inside
+ * "one burst".
  */
 const SAME_BURST_MS = 2_000;
 
@@ -98,7 +98,7 @@ export class EnforcementExecutor {
    * trigger server-side rate-limiting or a collateral K-line for the
    * bot. Cap at `MAX_ACTIONS_PER_CHANNEL_WINDOW` within
    * `CHANNEL_WINDOW_MS`; additional actions are dropped with a log
-   * line. See stability audit 2026-04-14.
+   * line.
    */
   private readonly channelActionRate = new Map<string, { windowStart: number; count: number }>();
   /**
@@ -111,8 +111,7 @@ export class EnforcementExecutor {
   /**
    * Fire-and-forget enforcement actions currently awaiting completion.
    * `teardown()` awaits all of them before the plugin unloads so a
-   * pending ban/kick can't touch the torn-down api. See audit finding
-   * W-FL5 (2026-04-14).
+   * pending ban/kick can't touch the torn-down api.
    */
   private readonly inFlight = new Set<Promise<void>>();
 
@@ -133,7 +132,7 @@ export class EnforcementExecutor {
   /**
    * Consume a per-channel action slot. Returns false if the cap has
    * been hit within the current rolling window; caller must drop the
-   * action. See stability audit 2026-04-14.
+   * action.
    */
   private reserveChannelSlot(channel: string): boolean {
     const now = Date.now();
@@ -210,7 +209,7 @@ export class EnforcementExecutor {
     // drop any follow-up kick/tempban. Prevents a stray second KICK from
     // racing the +b of a tempban (which would let an autorejoining
     // target beat the ban). `warn` is never suppressed — it's harmless
-    // and the notice still conveys "you flooded". See incident 2026-04-19.
+    // and the notice still conveys "you flooded".
     if (action === 'kick' || action === 'tempban') {
       const targetKey = `${this.api.ircLower(channel)}:${this.api.ircLower(nick)}`;
       const last = this.recentTerminal.get(targetKey);
@@ -226,8 +225,7 @@ export class EnforcementExecutor {
     // Per-channel rate cap. Drop excess actions (don't buffer) — the
     // offence tracker ensures repeat offenders are still escalated
     // on their next flood event, and dropping the tail is safer than
-    // queueing 100 kicks that would get us K-lined. See stability
-    // audit 2026-04-14.
+    // queueing 100 kicks that would get us K-lined.
     if (!this.reserveChannelSlot(channel)) {
       this.api.warn(
         `Flood enforcement rate cap hit on ${channel} — dropping "${action}" for ${nick}`,
@@ -257,7 +255,7 @@ export class EnforcementExecutor {
    * sweep bind. Without the grace-period branch, a ban persists forever
    * if the bot permanently loses ops on the channel — the record would
    * grow the `ban:` KV space unboundedly and slow every `db.list('ban:')`
-   * scan. See audit finding W-FL6 (2026-04-14).
+   * scan.
    */
   liftExpiredBans(): void {
     const now = Date.now();
@@ -353,7 +351,7 @@ export class EnforcementExecutor {
   /**
    * Emit a mod_log row for the action. Without this, operators can't tell
    * a flood-originated kick/ban from a human-ordered one after the fact —
-   * `.modlog` would show only human actions. See audit 2026-04-19.
+   * `.modlog` would show only human actions.
    */
   private auditLog(
     action: 'flood-warn' | 'flood-kick' | 'flood-ban',
@@ -395,7 +393,6 @@ export class EnforcementExecutor {
  * RFC-compliant IRC server won't emit but an upstream bug or
  * non-compliant server could, and which would then be parsed by the
  * server as an extra MODE parameter when interpolated into a ban mask.
- * See audit 2026-04-19.
  *
  * Bracket-wrapped IPv6 literals (`[2001:db8::1]`) are stripped in
  * {@link buildFloodBanMask} before this regex runs — the shape must
@@ -409,7 +406,7 @@ const HOST_SHAPE_RE = /^[A-Za-z0-9.\-:/]+$/;
  * shape regex rejected it) would otherwise produce a ban mask that
  * exceeds the 512-byte IRC line limit when combined with the `MODE
  * #channel +b` framing, silently dropping the ban on the wire while the
- * record was still persisted. See audit 2026-04-24.
+ * record was still persisted.
  */
 const MAX_BAN_MASK_LEN = 256;
 
@@ -422,7 +419,7 @@ const MAX_BAN_MASK_LEN = 256;
  * character-literal, and the bracketed form would never match. Returns
  * null if the extracted host fails {@link HOST_SHAPE_RE} or the final
  * mask exceeds {@link MAX_BAN_MASK_LEN} — caller falls back to a safe
- * default (kick-only). See audit 2026-04-24.
+ * default (kick-only).
  */
 function buildFloodBanMask(hostmask: string): string | null {
   const atIdx = hostmask.lastIndexOf('@');

@@ -30,7 +30,7 @@ export interface BindEntry {
    * Consecutive timer-handler errors. Only used on `time` binds.
    * After {@link TIMER_FAILURE_THRESHOLD} consecutive throws, the
    * dispatcher auto-disables the interval so a broken plugin can't
-   * produce unbounded log spam. See stability audit 2026-04-14.
+   * produce unbounded log spam.
    */
   consecutiveFailures?: number;
 }
@@ -84,6 +84,19 @@ export interface BindFilter {
 /** Types where only one handler per mask is kept (last one wins). */
 const NON_STACKABLE_TYPES: ReadonlySet<BindType> = new Set(['pub', 'msg']);
 
+/**
+ * Per-plugin warning threshold for `binds[]` accumulation. The non-stackable
+ * filter for `pub`/`msg` already catches the most common runaway loop, but
+ * a buggy plugin that calls `api.bind()` from inside a `pubm` handler can
+ * still grow `binds[]` indefinitely. At 10k entries every dispatch becomes
+ * O(10k) wildcard work — throughput collapses long before OOM.
+ *
+ * Warning fires once per plugin at PLUGIN_BIND_WARN. Hard cap fires at
+ * PLUGIN_BIND_HARDCAP and refuses the registration.
+ */
+const PLUGIN_BIND_WARN = 500;
+const PLUGIN_BIND_HARDCAP = 1000;
+
 // ---------------------------------------------------------------------------
 // EventDispatcher
 // ---------------------------------------------------------------------------
@@ -95,6 +108,10 @@ export class EventDispatcher {
   private verification: VerificationProvider | null = null;
   private logger: LoggerLike | null;
   private casemapping: Casemapping = 'rfc1459';
+  /** Per-plugin bind counts — kept hot so the cap check is O(1). */
+  private bindsByPlugin: Map<string, number> = new Map();
+  /** Plugins for which we've already logged the soft-cap warning. */
+  private bindWarnFired: Set<string> = new Set();
   /**
    * Per-user input flood limiter. Owned by the dispatcher because flood
    * gating sits directly in front of `dispatch()` in the bridge's hot path,
@@ -126,8 +143,7 @@ export class EventDispatcher {
   /**
    * Drop all per-key rate-limit state. Called on `bot:disconnected` so a
    * user whose old-session key was flagged isn't instantly rate-limited
-   * on their first message after reconnect. See stability audit
-   * 2026-04-14.
+   * on their first message after reconnect.
    */
   clearFloodState(): void {
     this.floodLimiter.reset();
@@ -175,16 +191,42 @@ export class EventDispatcher {
       );
     }
 
+    // Per-plugin cap check before allocating the entry. Hard cap refuses
+    // the bind so a misbehaving plugin's `api.bind()` loop can't degrade
+    // dispatch throughput across the whole bot.
+    const currentForPlugin = this.bindsByPlugin.get(pluginId) ?? 0;
+    if (currentForPlugin >= PLUGIN_BIND_HARDCAP) {
+      this.logger?.error(
+        `Plugin "${pluginId}" hit bind cap (${PLUGIN_BIND_HARDCAP}) — refusing bind ${type} "${mask}". Suspect a runaway api.bind() loop.`,
+      );
+      return;
+    }
+    if (currentForPlugin >= PLUGIN_BIND_WARN && !this.bindWarnFired.has(pluginId)) {
+      this.bindWarnFired.add(pluginId);
+      this.logger?.warn(
+        `Plugin "${pluginId}" has ${currentForPlugin} binds (warn threshold ${PLUGIN_BIND_WARN}). Hard cap fires at ${PLUGIN_BIND_HARDCAP}.`,
+      );
+    }
+
     const entry: BindEntry = { type, flags, mask, handler, pluginId, hits: 0 };
 
     // Non-stackable: remove any existing bind on the same type + mask
     if (NON_STACKABLE_TYPES.has(type)) {
+      const before = this.binds.length;
       this.binds = this.binds.filter(
         (b) => !(b.type === type && caseCompare(b.mask, mask, this.casemapping)),
       );
+      // Decrement bindsByPlugin counts for any non-stackable replacements.
+      const removed = before - this.binds.length;
+      if (removed > 0) {
+        // The filtered binds may have belonged to *any* plugin — re-derive
+        // the counts from scratch so the per-plugin tally stays correct.
+        this.recountBindsByPlugin();
+      }
     }
 
     this.binds.push(entry);
+    this.bindsByPlugin.set(pluginId, (this.bindsByPlugin.get(pluginId) ?? 0) + 1);
 
     // Timer binds: set up an interval
     if (type === 'time') {
@@ -213,6 +255,14 @@ export class EventDispatcher {
             `Timer bind "${mask}s" for ${pluginId} auto-disabled after ${TIMER_FAILURE_THRESHOLD} consecutive failures. Reload the plugin to reset.`,
           );
           this.clearTimer(entry);
+          // Splice the auto-disabled bind out so it doesn't show up in
+          // `.binds` listings as a zombie with saturated consecutiveFailures.
+          // The interval is already cleared, so it's pure operator hygiene.
+          const idx = this.binds.indexOf(entry);
+          if (idx !== -1) {
+            this.binds.splice(idx, 1);
+            this.decBindCount(entry.pluginId);
+          }
         }
       };
       const onTimerSuccess = (): void => {
@@ -264,6 +314,7 @@ export class EventDispatcher {
       const entry = this.binds[idx];
       this.clearTimer(entry);
       this.binds.splice(idx, 1);
+      this.decBindCount(entry.pluginId);
     }
   }
 
@@ -278,6 +329,27 @@ export class EventDispatcher {
       }
     }
     this.binds = remaining;
+    this.bindsByPlugin.delete(pluginId);
+    this.bindWarnFired.delete(pluginId);
+  }
+
+  /** Decrement the per-plugin bind count, dropping the entry when it hits zero. */
+  private decBindCount(pluginId: string): void {
+    const next = (this.bindsByPlugin.get(pluginId) ?? 0) - 1;
+    if (next <= 0) {
+      this.bindsByPlugin.delete(pluginId);
+      this.bindWarnFired.delete(pluginId);
+    } else {
+      this.bindsByPlugin.set(pluginId, next);
+    }
+  }
+
+  /** Recompute `bindsByPlugin` from `this.binds`. Used on bulk operations. */
+  private recountBindsByPlugin(): void {
+    this.bindsByPlugin.clear();
+    for (const entry of this.binds) {
+      this.bindsByPlugin.set(entry.pluginId, (this.bindsByPlugin.get(entry.pluginId) ?? 0) + 1);
+    }
   }
 
   /**
@@ -296,7 +368,7 @@ export class EventDispatcher {
       // between the two checks) would either let an unprivileged user
       // bypass flags via a lost-race short-circuit, or send an ACC
       // round-trip on every anyone-allowed bind. Leave this sequence
-      // alone unless a test pins the new ordering. See audit 2026-04-19.
+      // alone unless a test pins the new ordering.
       if (!this.checkFlags(entry.flags, ctx)) {
         this.logger?.debug(
           `flag denied: ${ctx.nick}!${ctx.ident}@${ctx.hostname} → ${type}:${entry.mask} (requires ${entry.flags}, plugin=${entry.pluginId})`,

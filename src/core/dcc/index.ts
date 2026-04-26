@@ -35,6 +35,8 @@ import {
   shouldDeliverToSession,
 } from './console-flags';
 import {
+  type MirrorRateLimiter,
+  createMirrorRateLimiter,
   extractMirrorEvent as extractMirrorEventImpl,
   mirrorNotice as mirrorNoticeImpl,
   mirrorPrivmsg as mirrorPrivmsgImpl,
@@ -446,8 +448,7 @@ export class DCCSession implements DCCSessionEntry {
    * Named reference to the 'data' listener installed by
    * {@link attachLineLengthGuard}. Stored so {@link clearAllTimers} can
    * remove it explicitly — without this, the closure (which captures
-   * `this`) lives until the socket itself is destroyed. See audit
-   * finding W-DCC1 (2026-04-14).
+   * `this`) lives until the socket itself is destroyed.
    */
   private dataGuard: ((chunk: Buffer) => void) | null = null;
 
@@ -894,8 +895,7 @@ export class DCCSession implements DCCSessionEntry {
     if (!this.socket.destroyed) {
       // Wrap the farewell write — a concurrent `close` event between the
       // destroyed-check and the write can still throw EPIPE. We must
-      // always proceed to destroy() regardless. See stability audit
-      // 2026-04-14.
+      // always proceed to destroy() regardless.
       if (reason) {
         try {
           this.socket.write(`*** ${reason}\r\n`);
@@ -922,7 +922,7 @@ export class DCCSession implements DCCSessionEntry {
    * from the manager, announce departure on the party line, and eagerly
    * unsubscribe modlog pager / audit-tail handlers tied to this DCC
    * session (without the eager drop they linger for `IDLE_TIMEOUT_MS`
-   * after close — see audit findings W-CMD1/W-CMD2 from 2026-04-14).
+   * after close).
    *
    * Socket destruction stays in {@link close} because only that path
    * writes a farewell message and calls `destroy()` manually;
@@ -1011,13 +1011,20 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
    * to short-circuit double-attach — without this, a second `attach()`
    * call without an intervening `detach()` would overwrite
    * {@link ircListeners}, {@link eventBusListeners}, and
-   * {@link authSweepTimer}, leaking the original set. See audit finding
-   * W-DCC3 (2026-04-14).
+   * {@link authSweepTimer}, leaking the original set.
    */
   private attached = false;
 
   /** Failure tracker for the password prompt — exponential backoff on repeat. */
   readonly authTracker: DCCAuthTracker;
+
+  /**
+   * Per-manager 1-second sliding-window rate limiter for the IRC→DCC
+   * console mirror. Per-instance (vs. a module-level array) so two
+   * DCCManagers in the same process don't share a window and a future
+   * hot-reload of irc-mirror.ts can't orphan the old timestamp captures.
+   */
+  private readonly mirrorRateLimiter: MirrorRateLimiter = createMirrorRateLimiter();
 
   private getBootTs: (() => number) | null;
 
@@ -1185,7 +1192,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     //
     // Also drop the per-handle console-flag row from the store on
     // deletion — otherwise every removed user leaves a stale kv entry
-    // that accumulates forever. See stability audit 2026-04-14.
+    // that accumulates forever.
     if (this.eventBus) {
       const onPasswordChanged = (handle: string): void => {
         this.closeSessionsForHandle(handle, 'password rotated');
@@ -1294,12 +1301,12 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
    * `./irc-mirror` so the guard chain can be unit-tested in isolation.
    */
   mirrorNotice(raw: unknown): void {
-    mirrorNoticeImpl(this.services, (line) => this.announce(line), raw);
+    mirrorNoticeImpl(this.services, (line) => this.announce(line), raw, this.mirrorRateLimiter);
   }
 
   /** Forward a raw IRC PRIVMSG to all DCC sessions, skipping channel messages. */
   mirrorPrivmsg(raw: unknown): void {
-    mirrorPrivmsgImpl((line) => this.announce(line), raw);
+    mirrorPrivmsgImpl((line) => this.announce(line), raw, this.mirrorRateLimiter);
   }
 
   /**
@@ -1308,8 +1315,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
    * Per-session error boundary: if a session's socket is half-open
    * (or its writeLine throws for any other reason), mark the session
    * stale and close it, but always continue the loop so one broken
-   * session doesn't silence party-line chat for everyone. See
-   * stability audit 2026-04-14.
+   * session doesn't silence party-line chat for everyone.
    */
   broadcast(fromHandle: string, message: string): void {
     for (const session of this.sessionStore.values()) {
@@ -1331,8 +1337,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   /**
    * Send a message to all connected sessions.
    *
-   * Per-session isolation as in {@link broadcast} — see stability
-   * audit 2026-04-14.
+   * Per-session isolation as in {@link broadcast}.
    */
   announce(message: string): void {
     for (const session of this.sessionStore.values()) {
@@ -1419,7 +1424,6 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     // already has a zombie session occupying a slot, we need to evict it
     // first so the session-limit check sees the freed slot. Otherwise a
     // stuck socket permanently locks the user out at max_sessions=N.
-    // See stability audit 2026-04-14.
     if (!this.checkNotAlreadyConnected(nick)) return null;
     if (!this.checkSessionLimit(nick)) return null;
     return user;
@@ -1558,6 +1562,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
         this.logger?.info(`DCC offer to ${nick} timed out`);
       }, PENDING_TIMEOUT_MS),
     };
+    pending.timer.unref?.();
     this.pending.set(port, pending);
 
     server.once('connection', (socket: Socket) => {
@@ -1573,7 +1578,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
       clearTimeout(pending.timer);
       // Close the listener so its file descriptor is actually released —
       // without this the `server` object (and its FD) leaks on listen
-      // errors. See stability audit 2026-04-14.
+      // errors.
       try {
         server.close();
       } catch {

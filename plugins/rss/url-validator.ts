@@ -105,8 +105,7 @@ export async function validateFeedUrl(
     try {
       // Race DNS lookup against a 5s deadline — a slow resolver would
       // otherwise hang `!rss add` indefinitely, since Node's
-      // dns.lookup has no configurable timeout. See stability audit
-      // 2026-04-14.
+      // dns.lookup has no configurable timeout.
       const DNS_TIMEOUT_MS = 5_000;
       records = await Promise.race([
         dns.lookup(hostname, { all: true }),

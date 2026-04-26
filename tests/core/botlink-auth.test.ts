@@ -205,8 +205,8 @@ describe('auth brute-force protection', () => {
     await sendBadAuth(hub, ip, fakeTick);
     expect(bans).toEqual([1000, 2000, 4000]);
 
-    // Stability audit 2026-04-14: `banCount` is now hard-capped at
-    // 8 (and decays by one half-step per hour since last failure).
+    // `banCount` is now hard-capped at 8 (and decays by one half-step
+    // per hour since last failure).
     // With the test's baseBanMs=1000, the effective ceiling is
     // 1000 * 2^8 = 256_000 ms — NOT the absolute 24h ceiling from
     // the MAX_BAN_MS safety rail. Both caps coexist: banCount

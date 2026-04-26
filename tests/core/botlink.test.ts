@@ -3979,7 +3979,86 @@ describe('BotLinkHub BSAY routing', () => {
 });
 
 // ---------------------------------------------------------------------------
-// BotLinkHub stale relay/party TTL sweep (mem-leak audit 2026-04-13)
+// BotLinkHub activeRelays cap
+// ---------------------------------------------------------------------------
+
+describe('BotLinkRelayRouter activeRelays cap', () => {
+  it('rejects new hub-originated relays past the cap and accepts updates to existing handles', () => {
+    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const routes = hub.routes;
+
+    for (let i = 0; i < 256; i++) {
+      expect(routes.registerHubRelay(`h${i}`, 'leaf')).toBe(true);
+    }
+    expect(routes.activeRelays.size).toBe(256);
+
+    expect(routes.registerHubRelay('overflow', 'leaf')).toBe(false);
+    expect(routes.activeRelays.has('overflow')).toBe(false);
+
+    // Updating an existing handle stays under the cap and is allowed.
+    expect(routes.registerHubRelay('h0', 'newleaf')).toBe(true);
+    expect(routes.activeRelays.get('h0')?.targetBot).toBe('newleaf');
+
+    hub.close();
+  });
+
+  it('replies RELAY_END to a leaf RELAY_REQUEST when the cap is full', () => {
+    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    const routes = hub.routes;
+
+    // Fill the cap and seed a remote-party session so the routing path
+    // doesn't bail on the "no active DCC party session" gate first.
+    for (let i = 0; i < 256; i++) {
+      routes.activeRelays.set(`existing-${i}`, {
+        originBot: 'leaf-a',
+        targetBot: 'leaf-b',
+        createdAt: Date.now(),
+      });
+    }
+    routes.remotePartyUsers.set('alice@leaf-a', {
+      handle: 'alice',
+      nick: 'alice',
+      botname: 'leaf-a',
+      connectedAt: Date.now(),
+      idle: 0,
+    });
+
+    // Capture the RELAY_END routed back to the requesting leaf, and
+    // pretend the target leaf is connected so the routing path advances
+    // past the "Bot not connected" gate to the cap check.
+    const sent: Array<{ botname: string; frame: { type?: string; reason?: string } }> = [];
+    const deps = (
+      routes as unknown as {
+        deps: {
+          send: (b: string, f: unknown) => boolean;
+          hasLeaf: (b: string) => boolean;
+        };
+      }
+    ).deps;
+    deps.send = (botname, frame) => {
+      sent.push({ botname, frame: frame as { type?: string; reason?: string } });
+      return true;
+    };
+    deps.hasLeaf = () => true;
+
+    routes.routeRelayFrame('leaf-a', {
+      type: 'RELAY_REQUEST',
+      handle: 'alice',
+      fromBot: 'leaf-a',
+      toBot: 'leaf-b',
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].frame.type).toBe('RELAY_END');
+    expect(sent[0].frame.reason).toMatch(/Hub relay table full/);
+    expect(routes.activeRelays.has('alice')).toBe(false);
+
+    hub.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BotLinkHub stale relay/party TTL sweep
 // ---------------------------------------------------------------------------
 
 describe('BotLinkHub sweepStaleRoutes — relay & party TTL', () => {

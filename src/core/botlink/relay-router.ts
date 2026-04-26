@@ -62,9 +62,17 @@ const MAX_PENDING_ROUTES = 4096;
  * Cap on the remote party-user table. The 7-day PARTY_TTL means a leaf that
  * floods PARTY_JOIN frames can grow this map arbitrarily between sweeps.
  * Dropping new joins past the cap (with a warn) bounds worst-case growth.
- * See memleak audit 2026-04-14 INFO note.
  */
 const MAX_REMOTE_PARTY_USERS = 512;
+
+/**
+ * Cap on concurrent active relay sessions. Sibling routing maps already
+ * cap at 4096 (CMD/PROTECT requests) and 512 (remote party users); without
+ * this, `activeRelays` only relies on the 1-hour RELAY_TTL sweep, which is
+ * heartbeat-driven and stops if all leaves disconnect. Hitting the cap
+ * means either a leaf is misbehaving or the sweeper has stalled.
+ */
+const MAX_ACTIVE_RELAYS = 256;
 
 export interface RelayRouterDeps {
   botname: string;
@@ -122,12 +130,19 @@ export class BotLinkRelayRouter {
   }
 
   /** Register a hub-originated relay (e.g. from a local DCC `.relay` command). */
-  registerHubRelay(handle: string, targetBot: string): void {
+  registerHubRelay(handle: string, targetBot: string): boolean {
+    if (!this.activeRelays.has(handle) && this.activeRelays.size >= MAX_ACTIVE_RELAYS) {
+      this.deps.logger?.warn(
+        `[botlink-router] dropping hub relay ${handle}->${targetBot}: activeRelays at cap (${MAX_ACTIVE_RELAYS})`,
+      );
+      return false;
+    }
     this.activeRelays.set(handle, {
       originBot: this.deps.botname,
       targetBot,
       createdAt: Date.now(),
     });
+    return true;
   }
 
   /** Remove a hub-originated relay. */
@@ -244,6 +259,17 @@ export class BotLinkRelayRouter {
           type: 'RELAY_END',
           handle,
           reason: `No active DCC party session for "${handle}" on ${fromBot}`,
+        });
+        return;
+      }
+      if (!this.activeRelays.has(handle) && this.activeRelays.size >= MAX_ACTIVE_RELAYS) {
+        this.deps.logger?.warn(
+          `[botlink-router] dropping RELAY_REQUEST from "${fromBot}" handle "${handle}": activeRelays at cap (${MAX_ACTIVE_RELAYS})`,
+        );
+        this.sendToBot(fromBot, {
+          type: 'RELAY_END',
+          handle,
+          reason: `Hub relay table full (cap ${MAX_ACTIVE_RELAYS})`,
         });
         return;
       }

@@ -5,8 +5,7 @@
 // window elapses. The delay doubles on every subsequent failure, capped
 // at CIRCUIT_BREAK_MAX_MS. The first break triggers a one-shot operator
 // warn so a buried log line doesn't get missed; subsequent breaks stay
-// quiet until recordPollSuccess clears the state. See stability audit
-// 2026-04-14.
+// quiet until recordPollSuccess clears the state.
 import type { PluginAPI } from '../../src/types';
 
 /** Consecutive failures before the breaker opens. 5 absorbs short outages

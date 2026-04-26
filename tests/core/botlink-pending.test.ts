@@ -1,6 +1,6 @@
-// Covers the stability audit 2026-04-14 fix for botlink pending
-// relay growth: `PendingRequestMap` now enforces a MAX_PENDING cap and
-// resolves overflow calls with the caller-supplied fallback value.
+// Covers the botlink pending-relay growth fix: `PendingRequestMap`
+// enforces a MAX_PENDING cap and resolves overflow calls with the
+// caller-supplied fallback value.
 import { describe, expect, it } from 'vitest';
 
 import { PendingRequestMap } from '../../src/core/botlink/pending';

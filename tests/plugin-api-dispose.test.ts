@@ -1,7 +1,7 @@
-// Targets audit finding W-PS1: after `dispose()` is called on a plugin
-// API handle, every method (top-level and sub-API namespace) must become a
-// no-op. The test also covers `offModesReady` / `offPermissionsChanged`
-// from W-PS2 since they share a factory path.
+// After `dispose()` is called on a plugin API handle, every method
+// (top-level and sub-API namespace) must become a no-op. The test also
+// covers `offModesReady` / `offPermissionsChanged` since they share a
+// factory path.
 import { describe, expect, it, vi } from 'vitest';
 
 import { BotEventBus } from '../src/event-bus';

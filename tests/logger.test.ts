@@ -504,4 +504,34 @@ describe('Logger', () => {
       expect(levels).toEqual(['warn', 'error']);
     });
   });
+
+  describe('sinkCount + threshold warning', () => {
+    it('warns exactly once when sink count crosses the threshold and re-arms after drop', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        // Threshold is 8 — push past it.
+        const sinks: LogSink[] = [];
+        for (let i = 0; i < 10; i++) {
+          const s: LogSink = () => {};
+          sinks.push(s);
+          Logger.addSink(s);
+        }
+        expect(Logger.sinkCount()).toBeGreaterThan(8);
+        // One warning fires once and stays latched while we're over.
+        const overWarnings = warnSpy.mock.calls.filter((c) => String(c[0]).includes('sink count'));
+        expect(overWarnings).toHaveLength(1);
+
+        // Drop back under the threshold so the latch clears, then climb again.
+        for (const s of sinks) Logger.removeSink(s);
+        for (let i = 0; i < 10; i++) {
+          const s: LogSink = () => {};
+          Logger.addSink(s);
+        }
+        const totalWarnings = warnSpy.mock.calls.filter((c) => String(c[0]).includes('sink count'));
+        expect(totalWarnings.length).toBeGreaterThanOrEqual(2);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+  });
 });

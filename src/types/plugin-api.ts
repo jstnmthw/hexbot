@@ -85,7 +85,6 @@ export interface PluginServices {
    * True if the bot's own NickServ identity has been confirmed for the
    * current session (SASL account-notify or "You are now identified" notice).
    * False while unknown or after a "please identify" prompt.
-   * See stability audit 2026-04-21.
    */
   isBotIdentified(): boolean;
 }
@@ -291,7 +290,7 @@ export interface PluginAPI {
    * confirmed for the current session — either via IRCv3 account-notify (SASL
    * success) or a NickServ "You are now identified" notice (password IDENTIFY
    * fallback). Use this to trigger ChanServ re-probes after a dirty reconnect.
-   * Auto-cleaned on plugin unload. See stability audit 2026-04-21.
+   * Auto-cleaned on plugin unload.
    */
   onBotIdentified(callback: () => void): void;
   /** Remove a callback previously registered with {@link onBotIdentified}. No-op if not registered. */
@@ -389,7 +388,7 @@ export interface PluginAPI {
    * one.
    *
    * The factory forces `source = 'plugin'` and `plugin = <pluginId>` — only
-   * `by` varies with `ctx.nick`. See audit 2026-04-24.
+   * `by` varies with `ctx.nick`.
    *
    * @example
    * api.bind('pub', 'o', '!op', (ctx) => {
@@ -621,7 +620,7 @@ export interface HelpEntry {
  * `tls_cert` / `tls_key` (CertFP key paths) and any other filesystem/secret
  * material are deliberately excluded. `channels` is narrowed to `readonly
  * string[]` — the factory flattens `{name, key}` entries so plugins never
- * see channel keys. See audit 2026-04-24.
+ * see channel keys.
  */
 export interface PluginIrcConfig {
   readonly host: IrcConfig['host'];
@@ -638,7 +637,7 @@ export interface PluginIrcConfig {
  *
  * Owner handle / hostmask / password are NOT exposed — plugins have no
  * legitimate need to read them and the permissions API is the supported
- * path for any owner-related check. See audit 2026-04-24.
+ * path for any owner-related check.
  */
 export interface PluginBotConfig {
   readonly irc: PluginIrcConfig;

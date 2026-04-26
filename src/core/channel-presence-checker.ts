@@ -64,8 +64,7 @@ export interface ChannelPresenceCheckerDeps {
  * issues a fresh JOIN once the backoff tier has elapsed. This avoids
  * hammering a server with JOINs that can never succeed (flood ban, +i,
  * +k, +r) while still giving time-limited bans a chance to recover
- * without operator intervention. See stability audit 2026-04-14 and
- * bounded-retry design 2026-04-19.
+ * without operator intervention.
  *
  * The returned handle must be cleared by the caller on disconnect.
  */

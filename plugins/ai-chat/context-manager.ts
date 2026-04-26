@@ -58,6 +58,16 @@ const TRUNCATION_MARKER = '...';
 const CHARS_PER_TOKEN = 4;
 
 /**
+ * Hard cap on tracked channels. Mirrors `SocialTracker.MAX_CHANNELS` and
+ * `EngagementTracker.MAX_CHANNELS` so the three ai-chat per-channel maps
+ * scale together rather than each accumulating channels independently.
+ * On overflow the least-recently-touched channel buffer is dropped — its
+ * messages were either already aged past TTL or sit on the cold side of
+ * the working set.
+ */
+const MAX_CHANNELS = 256;
+
+/**
  * Per-channel sliding-window message buffers.
  *
  * Serializes entries into an AIMessage[] with role 'user' for humans and
@@ -103,7 +113,19 @@ export class ContextManager {
 
     let buf = this.channels.get(key);
     if (!buf) {
+      // Eject the LRU channel before inserting a new one. Map iteration
+      // order is insertion order, so deleting the first key drops the
+      // oldest write. We refresh insertion order on every active channel
+      // by `delete + set` further down on the same code path.
+      if (this.channels.size >= MAX_CHANNELS) {
+        const oldest = this.channels.keys().next().value;
+        if (oldest !== undefined) this.channels.delete(oldest);
+      }
       buf = [];
+      this.channels.set(key, buf);
+    } else {
+      // Promote-on-touch so the LRU eviction targets cold channels.
+      this.channels.delete(key);
       this.channels.set(key, buf);
     }
     buf.push(entry);
@@ -126,7 +148,7 @@ export class ContextManager {
     // serialized context past the configured maxTokens budget, inflating
     // single-call cost. Cap cumulative bytes at maxTokens*4 (the chars-per-
     // token heuristic used at serialize time) and evict oldest entries
-    // until the buffer fits. See audit 2026-04-19.
+    // until the buffer fits.
     const maxBytes = this.config.maxTokens * CHARS_PER_TOKEN;
     let total = 0;
     for (const e of buf) total += e.nick.length + e.text.length + 2;

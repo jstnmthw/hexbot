@@ -59,7 +59,7 @@ export class AdminListStore<T> {
    * List all items, optionally filtered by key prefix. Rows whose
    * serialized value fails to deserialize (corrupted write, manual edit,
    * malformed legacy row) are skipped with a warning rather than taking
-   * down the whole listing — see stability audit 2026-04-14.
+   * down the whole listing.
    */
   list(prefix?: string): T[] {
     const rows = this.db.list(this.namespace, prefix);

@@ -84,8 +84,7 @@ const configPath = parseConfigArg(args);
 //
 // Guard the parse: a malformed package.json during development (merge
 // conflict marker, truncated write) should produce a clear error
-// message, not a cryptic SyntaxError with no context. See stability
-// audit 2026-04-14.
+// message, not a cryptic SyntaxError with no context.
 let pkgVersion = '0.0.0';
 try {
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')) as {
@@ -108,9 +107,11 @@ async function main(): Promise<void> {
   bot = new Bot(configPath);
 
   // Wire healthcheck heartbeat to connection events before start()
-  // so the initial bot:connected is not missed.
-  bot.eventBus.on('bot:connected', startHeartbeat);
-  bot.eventBus.on('bot:disconnected', stopHeartbeat);
+  // so the initial bot:connected is not missed. Track under the 'bot'
+  // owner so shutdown's removeByOwner unwires us — the heartbeat
+  // closures live for the bot's lifetime by design.
+  bot.eventBus.trackListener('bot', 'bot:connected', startHeartbeat);
+  bot.eventBus.trackListener('bot', 'bot:disconnected', stopHeartbeat);
 
   await bot.start();
 

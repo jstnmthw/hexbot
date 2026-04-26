@@ -82,7 +82,7 @@ interface LoadedPlugin {
    * Neutralise the plugin's api handle — every method becomes a no-op.
    * Called after teardown so a stale closure retaining the api can't
    * fan out to the dispatcher, database, or IRC client on the next
-   * reload. See audit finding W-PS1 (2026-04-14).
+   * reload.
    */
   disposeApi: () => void;
   /** True if teardown() threw an error — resources may not have been released cleanly. */
@@ -374,14 +374,13 @@ export class PluginLoader {
 
     let mod: Record<string, unknown>;
     try {
-      // Plain ESM import — no cache-busting query string. The 2026-04-25
-      // memleak audit's CRITICAL traced to `import('?t=<timestamp>')`
-      // cycling: Node's ESM loader keys its registry by full URL with no
-      // eviction API, so every cache-busted re-import minted a permanent
-      // module-graph entry. Killing that path at the source is the
-      // resolution: a second `load()` of the same plugin path resolves
-      // to the same cached module, which is exactly what an unload→load
-      // cycle wants.
+      // Plain ESM import — no cache-busting query string. The cache-busting
+      // path traced to `import('?t=<timestamp>')` cycling: Node's ESM loader
+      // keys its registry by full URL with no eviction API, so every
+      // cache-busted re-import minted a permanent module-graph entry.
+      // Killing that path at the source is the resolution: a second `load()`
+      // of the same plugin path resolves to the same cached module, which is
+      // exactly what an unload→load cycle wants.
       mod = (await import(pathToFileURL(absPath).href)) as Record<string, unknown>;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -459,8 +458,7 @@ export class PluginLoader {
       // Clean up partial init: drain any teardown the plugin registered.
       // A teardown throw during init-failure recovery is itself significant
       // (the plugin may leave listeners or resources dangling) — log it
-      // loudly rather than swallowing silently. See stability audit
-      // 2026-04-14.
+      // loudly rather than swallowing silently.
       if (mod.teardown) {
         try {
           mod.teardown();
@@ -499,7 +497,7 @@ export class PluginLoader {
    *   loaded map so operators can retry teardown or restart the bot.
    *   Silently dropping a plugin whose teardown failed leaves ghost
    *   state (listeners, timers, DB cursors) that the next reload would
-   *   then duplicate. See stability audit 2026-04-14.
+   *   then duplicate.
    */
   async unload(pluginName: string): Promise<void> {
     const plugin = this.loaded.get(pluginName);
@@ -582,8 +580,7 @@ export class PluginLoader {
    * Drop every resource a plugin registered against core subsystems —
    * binds, help entries, channel settings, event-bus listeners, and the
    * scoped api handle. Used by both `load()`'s init-catch path and
-   * `unload()` so the two cleanup recipes can never drift apart. See
-   * audit finding W-PS3 (2026-04-14).
+   * `unload()` so the two cleanup recipes can never drift apart.
    */
   private cleanupPluginResources(pluginName: string, disposeApi: () => void): void {
     // Neutralise the plugin's api handle first so no downstream cleanup
@@ -621,7 +618,7 @@ export class PluginLoader {
     // off* methods can look them up by callback identity. See W-PS2.
     //
     // Per-entry try/catch: a single throw from `off()` must not leave the
-    // remaining listeners attached. See stability audit 2026-04-14.
+    // remaining listeners attached.
     const modesListeners = this.modesReadyListeners.get(pluginName);
     if (modesListeners) {
       for (const fn of modesListeners) {
@@ -640,7 +637,6 @@ export class PluginLoader {
     // Drain the per-plugin `onPermissionsChanged` listeners. One wrapper
     // per callback is fanned across three events. Per-entry try/catch
     // per event so a single off() throw doesn't leave siblings attached.
-    // See stability audit 2026-04-14.
     const permsListeners = this.permissionsChangedListeners.get(pluginName);
     if (permsListeners) {
       const tryOff = (ev: string, fn: (handle: string) => void): void => {

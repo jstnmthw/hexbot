@@ -47,7 +47,7 @@ export class ListenerGroup {
    *
    * Per-entry try/catch — a single throw on `off()` would otherwise leave
    * every remaining listener attached, racing with fresh listeners on the
-   * next reconnect. See stability audit 2026-04-14.
+   * next reconnect.
    */
   removeAll(): void {
     for (const { event, fn } of this.entries) {

@@ -25,7 +25,6 @@ interface TrackerEntry {
  * After this long without a failure, `banCount` halves on the next
  * read. A legitimate user who occasionally typos their password
  * should not end up with a permanently escalating lockout duration.
- * See stability audit 2026-04-14.
  */
 const BAN_COUNT_DECAY_MS = 3_600_000; // 1 hour
 
@@ -47,8 +46,7 @@ export class DCCAuthTracker {
    * Hard cap on distinct tracker entries. A brute-force attacker cycling
    * identities can otherwise grow the map arbitrarily between 24h-based
    * sweeps. When {@link recordFailure} is about to insert a new entry
-   * past this cap, the oldest-by-`firstFailure` entry is evicted. See
-   * audit finding W-DCC4 (2026-04-14).
+   * past this cap, the oldest-by-`firstFailure` entry is evicted.
    */
   readonly maxEntries: number;
 
@@ -109,7 +107,6 @@ export class DCCAuthTracker {
     // Decay `banCount` before using it: halve once per hour since the
     // last failure. A legitimate operator who typos once every few
     // weeks should see the base lockout, not an escalating one.
-    // See stability audit 2026-04-14.
     this.decayBanCount(tracker, now);
     // Sliding-window reset semantics: we only reset on *new* failures that
     // arrive after the window has elapsed, rather than sweeping windows on a
@@ -141,8 +138,7 @@ export class DCCAuthTracker {
    * Record a successful attempt — zeroes the failure counter and
    * decays `banCount` by one step. A legitimate user who finally
    * gets their password right shouldn't carry the escalation weight
-   * of every previous typo indefinitely. See stability audit
-   * 2026-04-14.
+   * of every previous typo indefinitely.
    */
   recordSuccess(key: string): void {
     const tracker = this.trackers.get(key);

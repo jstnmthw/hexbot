@@ -109,8 +109,7 @@ export class FloodLimiter {
   /**
    * Drop all per-key rate-limit state. Called on `bot:disconnected` so a
    * user whose old-session key was flagged isn't instantly rate-limited
-   * on their first message after reconnect. See stability audit
-   * 2026-04-14.
+   * on their first message after reconnect.
    */
   reset(): void {
     this.pubFlood.reset();

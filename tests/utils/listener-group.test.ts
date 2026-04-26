@@ -1,7 +1,7 @@
-// Covers stability audit 2026-04-14: `ListenerGroup.removeAll()` must
-// not abort on the first throw from `off()` — otherwise a single bad
-// listener leaves every subsequent listener attached, racing with fresh
-// listeners from the next reconnect cycle.
+// `ListenerGroup.removeAll()` must not abort on the first throw from
+// `off()` — otherwise a single bad listener leaves every subsequent
+// listener attached, racing with fresh listeners from the next reconnect
+// cycle.
 import { describe, expect, it, vi } from 'vitest';
 
 import { ListenerGroup } from '../../src/utils/listener-group';
