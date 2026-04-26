@@ -250,17 +250,19 @@ export class PluginLoader {
     }
 
     // Register `core.plugins.<id>.enabled` for every discovered plugin
-    // before any load happens. Once registered, the seed-from-json walker
-    // is the right path for picking up plugins.json's `enabled` flag —
-    // but seed-from-json is keyed off registered defs and we know the
-    // plugin set only here, so we register first, then run a pinpoint
-    // seed for each. Bot's onChange handler (Phase 9) routes future
+    // before any load happens. Bot's onChange handler routes future
     // operator `.set core plugins.<id>.enabled` writes to load/unload.
+    //
+    // Seeding plugins.json values into KV is deferred to AFTER the main
+    // load loop completes — see the post-load seed block below. Calling
+    // `coreSettings.set(...)` here would synchronously fan out to the
+    // bot's onChange listener, which fires `applyPluginEnabled()`
+    // fire-and-forget, racing the awaited load loop and producing
+    // "Plugin X is already loaded" errors on first boot.
     if (this.coreSettings) {
       for (const name of pluginNames) {
         // Default to true: a plugin discovered on disk is enabled by
         // default unless plugins.json or the operator says otherwise.
-        // The seed below pulls the operator's preference in.
         this.coreSettings.register('bot', [
           {
             key: `plugins.${name}.enabled`,
@@ -270,28 +272,22 @@ export class PluginLoader {
             reloadClass: 'live',
           },
         ]);
-        // Seed from plugins.json on first boot. `enabled` defaults to
-        // `true` if the operator hasn't expressed an opinion at all
-        // (matches the pre-refactor "auto-discovered plugins are loaded
-        // unless plugins.json explicitly disables them" behaviour).
-        if (!this.coreSettings.isSet('', `plugins.${name}.enabled`)) {
-          const cfg = pluginsConfig[name];
-          const seedValue = cfg ? cfg.enabled !== false : true;
-          this.coreSettings.set('', `plugins.${name}.enabled`, seedValue);
-        }
       }
     }
 
     const results: LoadResult[] = [];
 
     for (const name of pluginNames) {
-      // KV-canonical: enabled state lives on `core.plugins.<id>.enabled`.
-      // `plugins.json[name].enabled` was already folded in by the
-      // seed-from-json step above on first boot; on subsequent boots KV
-      // wins (operator's `.set core plugins.<id>.enabled` persists).
-      const enabled = this.coreSettings
-        ? this.coreSettings.getFlag('', `plugins.${name}.enabled`)
-        : pluginsConfig[name]?.enabled !== false;
+      // KV-canonical when set; otherwise fall back to plugins.json so
+      // first-boot honours `enabled: false`. The post-load block writes
+      // this effective value back into KV so subsequent boots take the
+      // KV branch directly.
+      let enabled: boolean;
+      if (this.coreSettings && this.coreSettings.isSet('', `plugins.${name}.enabled`)) {
+        enabled = this.coreSettings.getFlag('', `plugins.${name}.enabled`);
+      } else {
+        enabled = pluginsConfig[name]?.enabled !== false;
+      }
       if (!enabled) {
         this.logger?.debug(`Skipping disabled plugin: ${name}`);
         continue;
@@ -300,6 +296,20 @@ export class PluginLoader {
       const pluginPath = join(this.pluginDir, name, 'dist', 'index.js');
       const result = await this.load(pluginPath, pluginsConfig);
       results.push(result);
+    }
+
+    // Persist the effective enabled state to KV for plugins that don't
+    // already have one. Firing the onChange listener here is safe — each
+    // plugin is already in its target state, so applyPluginEnabled() is
+    // idempotent.
+    if (this.coreSettings) {
+      for (const name of pluginNames) {
+        if (!this.coreSettings.isSet('', `plugins.${name}.enabled`)) {
+          const cfg = pluginsConfig[name];
+          const seedValue = cfg ? cfg.enabled !== false : true;
+          this.coreSettings.set('', `plugins.${name}.enabled`, seedValue);
+        }
+      }
     }
 
     for (const r of results) {

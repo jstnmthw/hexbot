@@ -12,7 +12,7 @@
           "id": "hackernews",
           "url": "https://news.ycombinator.com/rss",
           "name": "Hacker News",
-          "channels": ["#tech"],
+          "channels": ["#mychannel"],
           "interval": 900
         }
       ]
