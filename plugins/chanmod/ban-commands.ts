@@ -79,6 +79,7 @@ export function registerBanCommands(api: PluginAPI, config: ChanmodConfig): void
 
   api.bind('pub', '+o', '!ban', (ctx) => {
     const { channel } = ctx;
+    if (!channel) return;
     if (!botHasOps(api, channel)) {
       ctx.reply('I am not opped in this channel.');
       return;
@@ -213,6 +214,7 @@ export function registerBanCommands(api: PluginAPI, config: ChanmodConfig): void
 
   api.bind('pub', '+o', '!unban', (ctx) => {
     const { channel } = ctx;
+    if (!channel) return;
     if (!botHasOps(api, channel)) {
       ctx.reply('I am not opped in this channel.');
       return;
@@ -275,6 +277,7 @@ export function registerBanCommands(api: PluginAPI, config: ChanmodConfig): void
 
   api.bind('pub', '+o', '!kickban', (ctx) => {
     const { channel } = ctx;
+    if (!channel) return;
     if (!botHasOps(api, channel)) {
       ctx.reply('I am not opped in this channel.');
       return;
@@ -318,6 +321,7 @@ export function registerBanCommands(api: PluginAPI, config: ChanmodConfig): void
   api.bind('pub', '+o', '!bans', (ctx) => {
     const { channel } = ctx;
     const targetChannel = ctx.args.trim() || channel;
+    if (!targetChannel) return;
     const bans = api.banStore.getChannelBans(targetChannel);
     if (bans.length === 0) {
       ctx.reply(`No tracked bans for ${targetChannel}.`);

@@ -45,6 +45,7 @@ function createModeCommandHandler(
 ): (ctx: ChannelHandlerContext) => void {
   return (ctx: ChannelHandlerContext): void => {
     const { channel } = ctx;
+    if (!channel) return;
     const target = ctx.args.trim() || ctx.nick;
     if (!isValidNick(target)) {
       ctx.reply('Invalid nick.');
@@ -229,6 +230,7 @@ export function setupCommands(
 
   api.bind('pub', '+o', '!kick', (ctx) => {
     const { channel } = ctx;
+    if (!channel) return;
     if (!botHasOps(api, channel)) {
       ctx.reply('I am not opped in this channel.');
       return;
