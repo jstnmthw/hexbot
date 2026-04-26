@@ -181,14 +181,36 @@ function makeMockAPI(db: BotDatabase, config: Record<string, unknown> = {}): Moc
     db: pluginDb,
     banStore: {} as never,
     botConfig: {} as never,
-    config,
     getServerSupports: () => ({}),
     ircLower: (text: string) => text.toLowerCase(),
     buildHostmask: (s) => `${s.nick}!${s.ident}@${s.hostname}`,
     isBotNick: () => false,
     channelSettings: {} as never,
     coreSettings: {} as never,
-    settings: {} as never,
+    settings: (() => {
+      // Drive `api.settings.get*()` from the test's `config` map. Stores
+      // simulate the loader's seed-from-bootconfig step so the plugin's
+      // intOr / getFlag reads see the test values without needing a real
+      // SettingsRegistry.
+      const store: Record<string, unknown> = { ...config };
+      return {
+        register: () => {},
+        get: (key) => (store[key] as never) ?? '',
+        getFlag: (key) => Boolean(store[key]),
+        getString: (key) => (typeof store[key] === 'string' ? (store[key] as string) : ''),
+        getInt: (key) => (typeof store[key] === 'number' ? (store[key] as number) : 0),
+        set: (key, value) => {
+          store[key] = value;
+        },
+        unset: (key) => {
+          delete store[key];
+        },
+        isSet: (key) => key in store,
+        onChange: () => {},
+        offChange: () => {},
+        bootConfig: Object.freeze({ ...config }),
+      };
+    })(),
     registerHelp(_entries: HelpEntry[]) {},
     getHelpEntries: () => [],
     stripFormatting: (text: string) => text,

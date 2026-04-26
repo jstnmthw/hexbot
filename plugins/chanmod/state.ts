@@ -1,5 +1,5 @@
 // chanmod — shared state types and config interface
-import type { PluginAPI } from '../../src/types';
+import type { PluginAPI, PluginSettingDef } from '../../src/types';
 
 // ---------------------------------------------------------------------------
 // Shared mutable state (created fresh on each init, passed to all modules)
@@ -314,153 +314,413 @@ export interface ChanmodConfig {
   invite: boolean;
 }
 
-/** Read a boolean config value, validating the stored JSON value really is a boolean. */
-function cfgBool(
-  c: Record<string, unknown>,
-  key: string,
-  fallback: boolean,
-  log: (msg: string) => void,
-): boolean {
-  const val = c[key];
-  if (val === undefined) return fallback;
-  if (typeof val === 'boolean') return val;
-  log(`Invalid ${key}: ${JSON.stringify(val)} — expected boolean, using default ${fallback}`);
-  return fallback;
+/**
+ * Read a string-array setting that's stored as a comma-separated string
+ * via the typed-settings registry. Empty entries are dropped; whitespace
+ * around tokens is trimmed.
+ */
+function readStringArray(api: PluginAPI, key: string, fallback: string[]): string[] {
+  if (!api.settings.isSet(key)) return fallback;
+  const raw = api.settings.getString(key);
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 }
 
-/** Read a string config value, validating the stored JSON value really is a string. */
-function cfgString(
-  c: Record<string, unknown>,
-  key: string,
-  fallback: string,
-  log: (msg: string) => void,
-): string {
-  const val = c[key];
-  if (val === undefined) return fallback;
-  if (typeof val === 'string') return val;
-  log(`Invalid ${key}: ${JSON.stringify(val)} — expected string, using default`);
-  return fallback;
+/** Read a string-typed setting with fallback, treating "" as unset. */
+function readStringOr(api: PluginAPI, key: string, fallback: string): string {
+  const v = api.settings.getString(key);
+  return v ? v : fallback;
 }
 
-/** Read a string-array config value, validating each entry. */
-function cfgStringArray(
-  c: Record<string, unknown>,
-  key: string,
-  fallback: string[],
-  log: (msg: string) => void,
-): string[] {
-  const val = c[key];
-  if (val === undefined) return fallback;
-  if (Array.isArray(val) && val.every((v): v is string => typeof v === 'string')) return val;
-  log(`Invalid ${key}: ${JSON.stringify(val)} — expected string[], using default`);
-  return fallback;
-}
-
-/** Read a numeric config value, validating it is a finite non-negative number. */
-function cfgNum(
-  c: Record<string, unknown>,
-  key: string,
-  fallback: number,
-  log: (msg: string) => void,
-): number {
-  const val = c[key];
-  if (val === undefined) return fallback;
-  const n = typeof val === 'number' ? val : Number(val);
-  if (!Number.isFinite(n) || n < 0) {
-    log(`Invalid ${key}: ${JSON.stringify(val)} — using default ${fallback}`);
-    return fallback;
-  }
-  return n;
-}
-
-/** Read a string config value constrained to a set of allowed values. */
-function cfgEnum<T extends string>(
-  c: Record<string, unknown>,
+/** Read an enum-typed string setting; fall back when the stored value is invalid. */
+function readEnum<T extends string>(
+  api: PluginAPI,
   key: string,
   allowed: readonly T[],
   fallback: T,
-  log: (msg: string) => void,
 ): T {
-  const val = c[key];
-  if (val === undefined) return fallback;
-  if (typeof val === 'string' && (allowed as readonly string[]).includes(val)) {
-    // Safe: the `includes` guard above proves `val` is one of the `T` literals.
-    return val as T;
-  }
-  log(`Invalid ${key}: ${JSON.stringify(val)} — using default "${fallback}"`);
-  return fallback;
+  const v = api.settings.getString(key);
+  return (allowed as readonly string[]).includes(v) ? (v as T) : fallback;
 }
 
 /**
- * Read and validate the chanmod plugin config from `api.config`. Each
- * field is type-checked via the `cfg*` helpers; invalid values fall back
- * to the documented default and emit a `[chanmod]` warning. Throws when
- * `services_host_pattern` is unset/blank — see the throw-site comment.
+ * Typed setting definitions for the chanmod plugin scope. Operators
+ * mutate these via `.set chanmod <key> <value>`; the loader seeds them
+ * from plugins.json on first boot. Settings whose values are read once
+ * at init() are effectively `restart`-class — operators must `.restart`
+ * (or the plugin must reload) for changes to take effect.
+ */
+export const CHANMOD_SETTING_DEFS: PluginSettingDef[] = [
+  // Auto-op
+  { key: 'auto_op', type: 'flag', default: true, description: 'Auto-op flagged users on join' },
+  {
+    key: 'op_flags',
+    type: 'string',
+    default: 'n,m,o',
+    description: 'Comma-separated flags eligible for auto-op',
+  },
+  {
+    key: 'halfop_flags',
+    type: 'string',
+    default: '',
+    description: 'Comma-separated flags eligible for auto-halfop',
+  },
+  {
+    key: 'voice_flags',
+    type: 'string',
+    default: 'v',
+    description: 'Comma-separated flags eligible for auto-voice',
+  },
+  {
+    key: 'notify_on_fail',
+    type: 'flag',
+    default: false,
+    description: 'Notice the target on auto-op failure',
+  },
+  // Mode enforcement
+  {
+    key: 'enforce_modes',
+    type: 'flag',
+    default: false,
+    description: 'Re-apply channel mode string when removed',
+  },
+  {
+    key: 'enforce_delay_ms',
+    type: 'int',
+    default: 500,
+    description: 'Delay before re-applying enforced modes (ms)',
+  },
+  {
+    key: 'nodesynch_nicks',
+    type: 'string',
+    default: 'ChanServ',
+    description: 'Comma-separated nicks whose mode changes are exempt from enforcement',
+  },
+  {
+    key: 'enforce_channel_modes',
+    type: 'string',
+    default: '',
+    description: 'Mode string to enforce (e.g. "+nt-s"); per-channel override via channelSettings',
+  },
+  {
+    key: 'enforce_channel_key',
+    type: 'string',
+    default: '',
+    description: 'Channel key (+k) to enforce; per-channel override via channelSettings',
+  },
+  {
+    key: 'enforce_channel_limit',
+    type: 'int',
+    default: 0,
+    description: 'Channel user limit (+l) to enforce; per-channel override via channelSettings',
+  },
+  // Cycle
+  {
+    key: 'cycle_on_deop',
+    type: 'flag',
+    default: false,
+    description: 'Cycle the channel after losing ops to regain via NickServ/ChanServ',
+  },
+  {
+    key: 'cycle_delay_ms',
+    type: 'int',
+    default: 5000,
+    description: 'Delay before cycling after deop (ms)',
+  },
+  // Bans / kick
+  {
+    key: 'default_kick_reason',
+    type: 'string',
+    default: 'Requested',
+    description: 'Default kick reason when none provided',
+  },
+  {
+    key: 'default_ban_duration',
+    type: 'int',
+    default: 120,
+    description: 'Default tempban duration (minutes)',
+  },
+  {
+    key: 'default_ban_type',
+    type: 'int',
+    default: 3,
+    description:
+      'Default ban-mask construction type (1=*!*@host, 2=*!ident@host, 3=*!*@*.tld, etc.)',
+  },
+  // Protection
+  {
+    key: 'rejoin_on_kick',
+    type: 'flag',
+    default: true,
+    description: 'Rejoin the channel after being kicked',
+  },
+  {
+    key: 'rejoin_delay_ms',
+    type: 'int',
+    default: 5000,
+    description: 'Delay before rejoining after kick (ms)',
+  },
+  {
+    key: 'max_rejoin_attempts',
+    type: 'int',
+    default: 3,
+    description: 'Maximum rejoin attempts within the rejoin window before giving up',
+  },
+  {
+    key: 'rejoin_attempt_window_ms',
+    type: 'int',
+    default: 300_000,
+    description: 'Rolling window for the rejoin-attempt counter (ms)',
+  },
+  {
+    key: 'revenge_on_kick',
+    type: 'flag',
+    default: false,
+    description: 'Punish whoever kicks the bot (action set by revenge_action)',
+  },
+  {
+    key: 'revenge_action',
+    type: 'string',
+    default: 'deop',
+    description: 'Revenge action against the kicker',
+    allowedValues: ['deop', 'kick', 'kickban'],
+  },
+  {
+    key: 'revenge_delay_ms',
+    type: 'int',
+    default: 3000,
+    description: 'Delay before applying revenge action (ms)',
+  },
+  {
+    key: 'revenge_kick_reason',
+    type: 'string',
+    default: "Don't kick me.",
+    description: 'Revenge-kick reason text',
+  },
+  {
+    key: 'revenge_exempt_flags',
+    type: 'string',
+    default: 'nm',
+    description: 'Flags exempt from revenge (e.g. owners and masters)',
+  },
+  {
+    key: 'bitch',
+    type: 'flag',
+    default: false,
+    description: 'Deop any user who receives +o without the required op flag',
+  },
+  {
+    key: 'punish_deop',
+    type: 'flag',
+    default: false,
+    description: 'Punish users who deop a flagged op',
+  },
+  {
+    key: 'punish_action',
+    type: 'string',
+    default: 'kick',
+    description: 'Punishment action for unauthorized deops',
+    allowedValues: ['kick', 'kickban'],
+  },
+  {
+    key: 'punish_kick_reason',
+    type: 'string',
+    default: "Don't deop my friends.",
+    description: 'Punish-kick reason text',
+  },
+  {
+    key: 'enforcebans',
+    type: 'flag',
+    default: false,
+    description: 'Kick users who match a new ban mask',
+  },
+  {
+    key: 'nick_recovery',
+    type: 'flag',
+    default: true,
+    description: 'Try to reclaim the configured nick on collision',
+  },
+  {
+    key: 'nick_recovery_ghost',
+    type: 'flag',
+    default: false,
+    description: 'Use NickServ GHOST during nick recovery (requires nick_recovery_password)',
+  },
+  {
+    key: 'stopnethack_mode',
+    type: 'int',
+    default: 0,
+    description: 'StopNetHack mitigation mode (0 = off, 1 = mark, 2 = mark+ban)',
+  },
+  {
+    key: 'split_timeout_ms',
+    type: 'int',
+    default: 300_000,
+    description: 'Maximum netsplit duration before snapshotted op state is dropped (ms)',
+  },
+  {
+    key: 'chanserv_nick',
+    type: 'string',
+    default: 'ChanServ',
+    description: 'ChanServ service nick',
+  },
+  {
+    key: 'chanserv_op_delay_ms',
+    type: 'int',
+    default: 1000,
+    description: 'Delay before requesting ChanServ ops on join (ms)',
+  },
+  {
+    key: 'chanserv_services_type',
+    type: 'string',
+    default: '',
+    description: 'ChanServ services flavor (atheme | anope); empty = derive from services.type',
+    allowedValues: ['atheme', 'anope', ''],
+  },
+  {
+    key: 'services_host_pattern',
+    type: 'string',
+    default: '',
+    description: 'Wildcard pattern for ChanServ host (e.g. services.*, *.libera.chat) — REQUIRED',
+  },
+  {
+    key: 'chanserv_unban_retry_ms',
+    type: 'int',
+    default: 2000,
+    description: 'Delay between ChanServ UNBAN retries (ms)',
+  },
+  {
+    key: 'chanserv_unban_max_retries',
+    type: 'int',
+    default: 3,
+    description: 'Maximum ChanServ UNBAN retries before giving up',
+  },
+  {
+    key: 'chanserv_recover_cooldown_ms',
+    type: 'int',
+    default: 60_000,
+    description: 'Minimum interval between ChanServ RECOVER attempts on the same channel (ms)',
+  },
+  {
+    key: 'anope_recover_step_delay_ms',
+    type: 'int',
+    default: 200,
+    description: 'Delay between Anope multi-step RECOVER commands (ms)',
+  },
+  {
+    key: 'takeover_window_ms',
+    type: 'int',
+    default: 30_000,
+    description: 'Sliding window for takeover threat-score accumulation (ms)',
+  },
+  {
+    key: 'takeover_level_1_threshold',
+    type: 'int',
+    default: 3,
+    description: 'Threat score threshold to enter level 1',
+  },
+  {
+    key: 'takeover_level_2_threshold',
+    type: 'int',
+    default: 6,
+    description: 'Threat score threshold to enter level 2',
+  },
+  {
+    key: 'takeover_level_3_threshold',
+    type: 'int',
+    default: 10,
+    description: 'Threat score threshold to enter level 3',
+  },
+  {
+    key: 'takeover_response_delay_ms',
+    type: 'int',
+    default: 0,
+    description: 'Delay before responding to a takeover threat tier (ms)',
+  },
+  {
+    key: 'invite',
+    type: 'flag',
+    default: false,
+    description: 'Accept invites from ops/masters and join the invited channel',
+  },
+];
+
+/**
+ * Read and validate the chanmod plugin config via the plugin's
+ * `api.settings` registry. Each field is read through a typed accessor
+ * (`api.settings.getInt` / `getString` / etc); enum and string-array
+ * keys go through `readEnum` / `readStringArray` for shape validation.
+ * Throws when `services_host_pattern` is unset/blank — see the
+ * throw-site comment.
  */
 export function readConfig(api: PluginAPI): ChanmodConfig {
-  const c = api.config;
-  const log = (msg: string) => api.log(msg);
+  const log = (msg: string): void => api.log(msg);
 
   const config: ChanmodConfig = {
-    auto_op: cfgBool(c, 'auto_op', true, log),
-    op_flags: cfgStringArray(c, 'op_flags', ['n', 'm', 'o'], log),
-    halfop_flags: cfgStringArray(c, 'halfop_flags', [], log),
-    voice_flags: cfgStringArray(c, 'voice_flags', ['v'], log),
-    notify_on_fail: cfgBool(c, 'notify_on_fail', false, log),
-    enforce_modes: cfgBool(c, 'enforce_modes', false, log),
-    enforce_delay_ms: cfgNum(c, 'enforce_delay_ms', 500, log),
-    nodesynch_nicks: cfgStringArray(c, 'nodesynch_nicks', ['ChanServ'], log),
-    enforce_channel_modes: cfgString(c, 'enforce_channel_modes', '', log),
-    enforce_channel_key: cfgString(c, 'enforce_channel_key', '', log),
-    enforce_channel_limit: cfgNum(c, 'enforce_channel_limit', 0, log),
-    cycle_on_deop: cfgBool(c, 'cycle_on_deop', false, log),
-    cycle_delay_ms: cfgNum(c, 'cycle_delay_ms', 5000, log),
-    default_kick_reason: cfgString(c, 'default_kick_reason', 'Requested', log),
-    default_ban_duration: cfgNum(c, 'default_ban_duration', 120, log),
-    default_ban_type: cfgNum(c, 'default_ban_type', 3, log),
-    rejoin_on_kick: cfgBool(c, 'rejoin_on_kick', true, log),
-    rejoin_delay_ms: cfgNum(c, 'rejoin_delay_ms', 5000, log),
-    max_rejoin_attempts: cfgNum(c, 'max_rejoin_attempts', 3, log),
-    rejoin_attempt_window_ms: cfgNum(c, 'rejoin_attempt_window_ms', 300_000, log),
-    revenge_on_kick: cfgBool(c, 'revenge_on_kick', false, log),
-    revenge_action: cfgEnum(c, 'revenge_action', ['deop', 'kick', 'kickban'], 'deop', log),
-    revenge_delay_ms: cfgNum(c, 'revenge_delay_ms', 3000, log),
-    revenge_kick_reason: cfgString(c, 'revenge_kick_reason', "Don't kick me.", log),
-    revenge_exempt_flags: cfgString(c, 'revenge_exempt_flags', 'nm', log),
-    bitch: cfgBool(c, 'bitch', false, log),
-    punish_deop: cfgBool(c, 'punish_deop', false, log),
-    punish_action: cfgEnum(c, 'punish_action', ['kick', 'kickban'], 'kick', log),
-    punish_kick_reason: cfgString(c, 'punish_kick_reason', "Don't deop my friends.", log),
-    enforcebans: cfgBool(c, 'enforcebans', false, log),
-    nick_recovery: cfgBool(c, 'nick_recovery', true, log),
-    nick_recovery_ghost: cfgBool(c, 'nick_recovery_ghost', false, log),
+    auto_op: api.settings.getFlag('auto_op'),
+    op_flags: readStringArray(api, 'op_flags', ['n', 'm', 'o']),
+    halfop_flags: readStringArray(api, 'halfop_flags', []),
+    voice_flags: readStringArray(api, 'voice_flags', ['v']),
+    notify_on_fail: api.settings.getFlag('notify_on_fail'),
+    enforce_modes: api.settings.getFlag('enforce_modes'),
+    enforce_delay_ms: api.settings.getInt('enforce_delay_ms') || 500,
+    nodesynch_nicks: readStringArray(api, 'nodesynch_nicks', ['ChanServ']),
+    enforce_channel_modes: api.settings.getString('enforce_channel_modes'),
+    enforce_channel_key: api.settings.getString('enforce_channel_key'),
+    enforce_channel_limit: api.settings.getInt('enforce_channel_limit'),
+    cycle_on_deop: api.settings.getFlag('cycle_on_deop'),
+    cycle_delay_ms: api.settings.getInt('cycle_delay_ms') || 5000,
+    default_kick_reason: readStringOr(api, 'default_kick_reason', 'Requested'),
+    default_ban_duration: api.settings.getInt('default_ban_duration') || 120,
+    default_ban_type: api.settings.getInt('default_ban_type') || 3,
+    rejoin_on_kick: api.settings.isSet('rejoin_on_kick')
+      ? api.settings.getFlag('rejoin_on_kick')
+      : true,
+    rejoin_delay_ms: api.settings.getInt('rejoin_delay_ms') || 5000,
+    max_rejoin_attempts: api.settings.getInt('max_rejoin_attempts') || 3,
+    rejoin_attempt_window_ms: api.settings.getInt('rejoin_attempt_window_ms') || 300_000,
+    revenge_on_kick: api.settings.getFlag('revenge_on_kick'),
+    revenge_action: readEnum(api, 'revenge_action', ['deop', 'kick', 'kickban'] as const, 'deop'),
+    revenge_delay_ms: api.settings.getInt('revenge_delay_ms') || 3000,
+    revenge_kick_reason: readStringOr(api, 'revenge_kick_reason', "Don't kick me."),
+    revenge_exempt_flags: readStringOr(api, 'revenge_exempt_flags', 'nm'),
+    bitch: api.settings.getFlag('bitch'),
+    punish_deop: api.settings.getFlag('punish_deop'),
+    punish_action: readEnum(api, 'punish_action', ['kick', 'kickban'] as const, 'kick'),
+    punish_kick_reason: readStringOr(api, 'punish_kick_reason', "Don't deop my friends."),
+    enforcebans: api.settings.getFlag('enforcebans'),
+    nick_recovery: api.settings.isSet('nick_recovery')
+      ? api.settings.getFlag('nick_recovery')
+      : true,
+    nick_recovery_ghost: api.settings.getFlag('nick_recovery_ghost'),
     // Password read from bot.json (not plugins.json) per SECURITY.md §6
     nick_recovery_password: api.botConfig.chanmod?.nick_recovery_password ?? '',
-    stopnethack_mode: cfgNum(c, 'stopnethack_mode', 0, log),
-    split_timeout_ms: cfgNum(c, 'split_timeout_ms', 300_000, log),
-    chanserv_nick: cfgString(c, 'chanserv_nick', 'ChanServ', log),
-    chanserv_op_delay_ms: cfgNum(c, 'chanserv_op_delay_ms', 1000, log),
-    chanserv_services_type: cfgEnum(
-      c,
-      'chanserv_services_type',
-      ['atheme', 'anope'],
-      api.botConfig.services.type === 'anope' ? 'anope' : 'atheme',
-      log,
-    ),
+    stopnethack_mode: api.settings.getInt('stopnethack_mode'),
+    split_timeout_ms: api.settings.getInt('split_timeout_ms') || 300_000,
+    chanserv_nick: readStringOr(api, 'chanserv_nick', 'ChanServ'),
+    chanserv_op_delay_ms: api.settings.getInt('chanserv_op_delay_ms') || 1000,
+    chanserv_services_type: (() => {
+      const raw = api.settings.getString('chanserv_services_type');
+      if (raw === 'atheme' || raw === 'anope') return raw;
+      return api.botConfig.services.type === 'anope' ? 'anope' : 'atheme';
+    })(),
     // services_host_pattern is REQUIRED — the loader throws below if it
     // is missing/empty so operators cannot silently run without the
     // ChanServ impostor guard.
-    services_host_pattern: cfgString(c, 'services_host_pattern', '', log),
-    chanserv_unban_retry_ms: cfgNum(c, 'chanserv_unban_retry_ms', 2000, log),
-    chanserv_unban_max_retries: cfgNum(c, 'chanserv_unban_max_retries', 3, log),
-    chanserv_recover_cooldown_ms: cfgNum(c, 'chanserv_recover_cooldown_ms', 60_000, log),
-    anope_recover_step_delay_ms: cfgNum(c, 'anope_recover_step_delay_ms', 200, log),
-    takeover_window_ms: cfgNum(c, 'takeover_window_ms', 30_000, log),
-    takeover_level_1_threshold: cfgNum(c, 'takeover_level_1_threshold', 3, log),
-    takeover_level_2_threshold: cfgNum(c, 'takeover_level_2_threshold', 6, log),
-    takeover_level_3_threshold: cfgNum(c, 'takeover_level_3_threshold', 10, log),
-    takeover_response_delay_ms: cfgNum(c, 'takeover_response_delay_ms', 0, log),
-    invite: cfgBool(c, 'invite', false, log),
+    services_host_pattern: api.settings.getString('services_host_pattern'),
+    chanserv_unban_retry_ms: api.settings.getInt('chanserv_unban_retry_ms') || 2000,
+    chanserv_unban_max_retries: api.settings.getInt('chanserv_unban_max_retries') || 3,
+    chanserv_recover_cooldown_ms: api.settings.getInt('chanserv_recover_cooldown_ms') || 60_000,
+    anope_recover_step_delay_ms: api.settings.getInt('anope_recover_step_delay_ms') || 200,
+    takeover_window_ms: api.settings.getInt('takeover_window_ms') || 30_000,
+    takeover_level_1_threshold: api.settings.getInt('takeover_level_1_threshold') || 3,
+    takeover_level_2_threshold: api.settings.getInt('takeover_level_2_threshold') || 6,
+    takeover_level_3_threshold: api.settings.getInt('takeover_level_3_threshold') || 10,
+    takeover_response_delay_ms: api.settings.getInt('takeover_response_delay_ms'),
+    invite: api.settings.getFlag('invite'),
   };
 
   // services_host_pattern is load-bearing for the ChanServ-impostor

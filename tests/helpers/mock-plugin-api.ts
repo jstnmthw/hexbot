@@ -91,7 +91,6 @@ export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginA
       services: { type: 'none' as const, nickserv: 'NickServ', sasl: false },
       logging: { level: 'info' as const, mod_actions: false },
     },
-    config: {},
     getServerSupports: vi.fn().mockReturnValue({}),
     ircLower: (s: string) => s.toLowerCase(),
     buildHostmask: (source: { nick: string; ident: string; hostname: string }) =>
@@ -127,6 +126,7 @@ export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginA
       isSet: vi.fn().mockReturnValue(false),
       onChange: noop,
       offChange: noop,
+      bootConfig: Object.freeze({}),
     },
     registerHelp: noop,
     getHelpEntries: vi.fn().mockReturnValue([]),

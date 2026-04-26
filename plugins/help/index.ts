@@ -38,11 +38,12 @@ const DEFAULT_COOLDOWN_MS = 30_000;
 const COOLDOWN_MAP_SWEEP_THRESHOLD = 1000;
 
 /**
- * Plugin entry point. Reads `cooldown_ms`, `reply_type`, `compact_index`,
- * `header`, and `footer` from `api.config`, then binds `pub`/`msg` handlers
- * for `!help` plus a periodic `time` bind for cooldown-map sweeps. All
- * mutable state (the cooldown map) is scoped inside this function so a
- * plugin reload doesn't leak the previous module's map.
+ * Plugin entry point. Registers `cooldown_ms`, `reply_type`,
+ * `compact_index`, `header`, and `footer` via `api.settings`, then binds
+ * `pub`/`msg` handlers for `!help` plus a periodic `time` bind for
+ * cooldown-map sweeps. All mutable state (the cooldown map) is scoped
+ * inside this function so a plugin reload doesn't leak the previous
+ * module's map.
  */
 export function init(api: PluginAPI): void {
   // Per-nick cooldown map scoped inside `init()`. A module-level Map
@@ -50,17 +51,52 @@ export function init(api: PluginAPI): void {
   // ensures GC collects it.
   const cooldowns = new Map<string, number>();
 
-  const rawCooldown = api.config.cooldown_ms;
-  const cooldownMs = typeof rawCooldown === 'number' ? rawCooldown : DEFAULT_COOLDOWN_MS;
-  const rawReplyType = api.config.reply_type;
+  api.settings.register([
+    {
+      key: 'cooldown_ms',
+      type: 'int',
+      default: DEFAULT_COOLDOWN_MS,
+      description: 'Per-user cooldown between !help index requests (ms)',
+    },
+    {
+      key: 'reply_type',
+      type: 'string',
+      default: 'notice',
+      description: 'Where to send replies: notice (PM), privmsg (PM), channel_notice (in-channel)',
+      allowedValues: ['notice', 'privmsg', 'channel_notice'],
+    },
+    {
+      key: 'compact_index',
+      type: 'flag',
+      default: true,
+      description: 'Compact one-line-per-category index (false = verbose listing)',
+    },
+    {
+      key: 'header',
+      type: 'string',
+      default: 'HexBot Commands',
+      description: 'Header line for the help index',
+    },
+    {
+      key: 'footer',
+      type: 'string',
+      default: '*** End of Help ***',
+      description: 'Footer line for the verbose help index',
+    },
+  ]);
+
+  // Snapshot the cooldown / reply mode at init so the cooldown map and
+  // sweep tick agree on the same window for the life of this load. The
+  // `header` / `footer` / `compact_index` reads happen per-request so a
+  // `.set help compact_index false` takes effect on the next !help.
+  // `cooldown_ms` honours an explicit `0` (cooldown disabled) — `||` would
+  // collapse 0 onto the default and silently re-enable the gate.
+  const cooldownMs = api.settings.isSet('cooldown_ms')
+    ? api.settings.getInt('cooldown_ms')
+    : DEFAULT_COOLDOWN_MS;
+  const rawReplyType = api.settings.getString('reply_type');
   const replyType: ReplyType =
     rawReplyType === 'privmsg' || rawReplyType === 'channel_notice' ? rawReplyType : 'notice';
-  const rawCompact = api.config.compact_index;
-  const compactIndex = typeof rawCompact === 'boolean' ? rawCompact : true;
-  const rawHeader = api.config.header;
-  const header = typeof rawHeader === 'string' ? rawHeader : 'HexBot Commands';
-  const rawFooter = api.config.footer;
-  const footer = typeof rawFooter === 'string' ? rawFooter : '*** End of Help ***';
 
   /**
    * Send a message to the appropriate target based on reply_type.
@@ -172,6 +208,9 @@ export function init(api: PluginAPI): void {
       groups.set(cat, list);
     }
 
+    const compactIndex = api.settings.getFlag('compact_index');
+    const header = api.settings.getString('header') || 'HexBot Commands';
+
     if (compactIndex) {
       // Compact index: one intro line + one line per category
       send(ctx, `\x02${header}\x02 — !help <category> or !help <command>`);
@@ -188,7 +227,7 @@ export function init(api: PluginAPI): void {
           send(ctx, `  ${boldTrigger(entry.usage)} — ${entry.description}`);
         }
       }
-      send(ctx, footer);
+      send(ctx, api.settings.getString('footer') || '*** End of Help ***');
     }
   }
 

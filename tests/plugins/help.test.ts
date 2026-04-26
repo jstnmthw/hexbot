@@ -3,6 +3,7 @@ import { type Mock, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { HelpRegistry } from '../../src/core/help-registry';
 import { Permissions } from '../../src/core/permissions';
+import { SettingsRegistry } from '../../src/core/settings-registry';
 import { BotDatabase } from '../../src/database';
 import { EventDispatcher } from '../../src/dispatcher';
 import { BotEventBus } from '../../src/event-bus';
@@ -86,6 +87,13 @@ describe('help plugin', () => {
     mockNotice = vi.fn<(target: string, message: string) => void>();
     mockSay = vi.fn<(target: string, message: string) => void>();
 
+    const coreSettings = new SettingsRegistry({
+      scope: 'core',
+      namespace: 'core',
+      db,
+      auditActions: { set: 'coreset-set', unset: 'coreset-unset' },
+    });
+    const pluginSettings = new Map<string, SettingsRegistry>();
     loader = new PluginLoader({
       pluginDir: resolve('./plugins'),
       dispatcher,
@@ -100,6 +108,8 @@ describe('help plugin', () => {
         ctcpResponse: vi.fn(),
       } as IRCClientForPlugins,
       helpRegistry,
+      coreSettings,
+      pluginSettings,
     });
 
     const result = await loader.load(resolve('./plugins/help/index.ts'), pluginsConfig);

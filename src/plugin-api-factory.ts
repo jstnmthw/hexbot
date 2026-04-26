@@ -15,6 +15,7 @@ import { patternSpecificity } from './core/hostmask-matcher';
 import type { IRCCommands } from './core/irc-commands';
 import type { MessageQueue } from './core/message-queue';
 import type { Permissions } from './core/permissions';
+import { coerceFromJson, pickByDottedPath } from './core/seed-from-json';
 import type { Services } from './core/services';
 import type { SettingsRegistry } from './core/settings-registry';
 import type { BotDatabase } from './database';
@@ -299,7 +300,6 @@ export function createPluginApi(
     banStore: createPluginBanStoreApi(deps.banStore),
     // pluginBotConfig is already individually-frozen (outer + each sub-object) above.
     botConfig: pluginBotConfig,
-    config: Object.freeze({ ...config }),
     getServerSupports(): Record<string, string> {
       return getServerSupports();
     },
@@ -322,7 +322,7 @@ export function createPluginApi(
     },
     channelSettings: createPluginChannelSettingsApi(deps.channelSettings, pluginId),
     coreSettings: createPluginCoreSettingsView(deps.coreSettings, pluginId),
-    settings: createPluginSettingsApi(deps.pluginSettings, pluginId),
+    settings: createPluginSettingsApi(deps.pluginSettings, pluginId, config),
     ...createPluginHelpApi(deps.helpRegistry, pluginId),
     stripFormatting(text: string): string {
       return stripFormatting(text);
@@ -1000,7 +1000,9 @@ function createPluginCoreSettingsView(
 function createPluginSettingsApi(
   registry: SettingsRegistry | null,
   pluginId: string,
+  jsonConfig: Record<string, unknown>,
 ): PluginSettings {
+  const frozenBootConfig = Object.freeze({ ...jsonConfig });
   if (!registry) {
     return Object.freeze({
       register(): void {},
@@ -1023,11 +1025,27 @@ function createPluginSettingsApi(
       },
       onChange(): void {},
       offChange(): void {},
+      bootConfig: frozenBootConfig,
     });
   }
   return Object.freeze({
     register(defs: PluginSettingDef[]): void {
       registry.register(pluginId, defs);
+      // Seed each newly-registered key from the merged plugins.json /
+      // config.json bag so the plugin's own `api.settings.get*()` reads
+      // immediately after registration return the operator's intended
+      // value. Boot-only semantics: KV-set values win over JSON, so a
+      // routine restart never clobbers `.set <plugin> <key>` writes.
+      for (const def of defs) {
+        if (registry.isSet('', def.key)) continue;
+        const seed = pickByDottedPath(jsonConfig, def.key);
+        if (seed === undefined) continue;
+        const coerced = coerceFromJson(
+          { ...def, owner: pluginId, reloadClass: def.reloadClass ?? 'live' },
+          seed,
+        );
+        if (coerced !== null) registry.set('', def.key, coerced);
+      }
     },
     get(key: string): ChannelSettingValue {
       return registry.get('', key);
@@ -1056,6 +1074,7 @@ function createPluginSettingsApi(
     offChange(_callback: SettingsChangeCallback): void {
       registry.offChange(pluginId);
     },
+    bootConfig: frozenBootConfig,
   });
 }
 

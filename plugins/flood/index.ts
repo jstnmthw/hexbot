@@ -95,22 +95,35 @@ let lockdown: LockdownController;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Read a numeric config value with fallback. */
+/** Read a numeric setting with fallback. Live (re-read on every init); the
+ *  cfg snapshot below is what handlers consume so windowed math stays stable. */
 function cfgNum(key: string, fallback: number): number {
-  const v = api.config[key];
-  return typeof v === 'number' ? v : fallback;
+  const v = api.settings.getInt(key);
+  return v === 0 && !api.settings.isSet(key) ? fallback : v;
 }
 
-/** Read a boolean config value with fallback. */
+/** Read a boolean setting with fallback. */
 function cfgBool(key: string, fallback: boolean): boolean {
-  const v = api.config[key];
-  return typeof v === 'boolean' ? v : fallback;
+  if (!api.settings.isSet(key)) return fallback;
+  return api.settings.getFlag(key);
 }
 
-/** Read a string config value with fallback. */
+/** Read a string setting with fallback. */
 function cfgStr(key: string, fallback: string): string {
-  const v = api.config[key];
-  return typeof v === 'string' ? v : fallback;
+  const v = api.settings.getString(key);
+  return v ? v : fallback;
+}
+
+/**
+ * Parse the comma-separated `actions` ladder from the plugin scope. Empty
+ * tokens are dropped; operators can write `.set flood actions warn,kick,tempban`.
+ */
+function cfgActions(): string[] {
+  const raw = api.settings.getString('actions') || 'warn,kick,tempban';
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 }
 
 /**
@@ -290,6 +303,106 @@ function handleNickFlood(ctx: NickContext): void {
 export function init(pluginApi: PluginAPI): void {
   api = pluginApi;
 
+  api.settings.register([
+    {
+      key: 'msg_threshold',
+      type: 'int',
+      default: 5,
+      description: 'Messages from one user within msg_window_secs that trips a flood',
+    },
+    {
+      key: 'msg_window_secs',
+      type: 'int',
+      default: 3,
+      description: 'Window size for the per-user message-flood detector (seconds)',
+    },
+    {
+      key: 'join_threshold',
+      type: 'int',
+      default: 3,
+      description: 'Join events from one user within join_window_secs that trips a flood',
+    },
+    {
+      key: 'join_window_secs',
+      type: 'int',
+      default: 60,
+      description: 'Window size for the per-user join-flood detector (seconds)',
+    },
+    {
+      key: 'part_threshold',
+      type: 'int',
+      default: 3,
+      description: 'Part events from one user within part_window_secs that trips a flood',
+    },
+    {
+      key: 'part_window_secs',
+      type: 'int',
+      default: 60,
+      description: 'Window size for the per-user part-flood detector (seconds)',
+    },
+    {
+      key: 'nick_threshold',
+      type: 'int',
+      default: 3,
+      description: 'Nick changes from one user within nick_window_secs that trips a flood',
+    },
+    {
+      key: 'nick_window_secs',
+      type: 'int',
+      default: 60,
+      description: 'Window size for the per-user nick-flood detector (seconds)',
+    },
+    {
+      key: 'ban_duration_minutes',
+      type: 'int',
+      default: 10,
+      description: 'Tempban duration applied at the tempban escalation step (minutes)',
+    },
+    {
+      key: 'ignore_ops',
+      type: 'flag',
+      default: true,
+      description: 'Skip enforcement against users with privileged flags (n/m/o)',
+    },
+    {
+      key: 'actions',
+      type: 'string',
+      default: 'warn,kick,tempban',
+      description: 'Comma-separated escalation ladder (e.g. "warn,kick,tempban")',
+    },
+    {
+      key: 'offence_window_ms',
+      type: 'int',
+      default: 300_000,
+      description: 'Window for tracking repeat offences before the ladder resets (ms)',
+    },
+    {
+      key: 'flood_lock_count',
+      type: 'int',
+      default: 3,
+      description: 'Distinct flooders within flood_lock_window that trigger channel lockdown',
+    },
+    {
+      key: 'flood_lock_window',
+      type: 'int',
+      default: 60,
+      description: 'Window for the channel-lockdown distinct-flooder counter (seconds)',
+    },
+    {
+      key: 'flood_lock_duration',
+      type: 'int',
+      default: 60,
+      description: 'How long a channel stays in lockdown before unlock (seconds)',
+    },
+    {
+      key: 'flood_lock_mode',
+      type: 'string',
+      default: 'R',
+      description: 'Default channel mode for lockdown (R = registered-only, i = invite-only)',
+      allowedValues: ['R', 'i'],
+    },
+  ]);
+
   // Window must be > 0 — a zero-window sweep is a silent no-op (see audit
   // W-FL1). Warn and clamp to the documented default instead of crashing
   // the plugin load.
@@ -323,16 +436,7 @@ export function init(pluginApi: PluginAPI): void {
     nickWindowMs: nickWindowSecs * 1000,
     banDurationMinutes: cfgNum('ban_duration_minutes', 10),
     ignoreOps: cfgBool('ignore_ops', true),
-    actions: (() => {
-      const a = api.config.actions;
-      return Array.isArray(a) && a.every((x): x is string => typeof x === 'string')
-        ? a
-        : /* v8 ignore next -- defensive fallback, tests always pass valid actions */ [
-            'warn',
-            'kick',
-            'tempban',
-          ];
-    })(),
+    actions: cfgActions(),
     offenceWindowMs: cfgNum('offence_window_ms', 300_000),
     lockCount: cfgNum('flood_lock_count', 3),
     lockWindowMs: lockWindowSecs * 1000,

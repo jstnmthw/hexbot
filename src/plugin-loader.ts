@@ -447,7 +447,9 @@ export class PluginLoader {
     const channelScope = pluginsConfig?.[pluginName]?.channels;
     const { api, dispose: disposeApi } = this.createPluginApi(pluginName, config, channelScope);
 
-    // Call init()
+    // Call init(). The api factory's `api.settings.register(...)` wrapper
+    // handles JSON seeding on each registration call — by the time init()
+    // calls `api.settings.get*()`, the seed-from-config has already run.
     try {
       const result = mod.init(api, deps);
       if (result instanceof Promise) {

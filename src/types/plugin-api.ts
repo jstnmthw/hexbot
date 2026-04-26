@@ -311,9 +311,6 @@ export interface PluginAPI {
   // Bot config (read-only, password redacted)
   botConfig: PluginBotConfig;
 
-  // Config (from plugins.json overrides, falling back to plugin's config.json)
-  config: Record<string, unknown>;
-
   // Server capabilities (from ISUPPORT)
   getServerSupports(): Record<string, string>;
 
@@ -593,6 +590,15 @@ export interface PluginSettings {
   onChange(callback: SettingsChangeCallback): void;
   /** Remove the registered callback. No-op when not registered. */
   offChange(callback: SettingsChangeCallback): void;
+  /**
+   * Frozen snapshot of the merged `plugins.json` / `config.json` bag the
+   * loader handed this plugin at load time. Escape hatch for plugins with
+   * deeply-nested config that doesn't flatten cleanly to typed settings
+   * (e.g. `ai-chat.channel_characters`, `rss.feeds`). For new keys prefer
+   * the typed `register()` + `get*()` path so operators can `.set` them
+   * live.
+   */
+  readonly bootConfig: Readonly<Record<string, unknown>>;
 }
 
 // ---------------------------------------------------------------------------

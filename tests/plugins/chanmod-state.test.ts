@@ -1,21 +1,61 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  type ChanmodConfig,
+  CHANMOD_SETTING_DEFS,
   createState,
   pruneExpiredState,
   readConfig,
 } from '../../plugins/chanmod/state';
-import type { PluginAPI } from '../../src/types';
+import { coerceFromJson } from '../../src/core/seed-from-json';
+import { SettingsRegistry } from '../../src/core/settings-registry';
+import { BotDatabase } from '../../src/database';
+import type { PluginAPI, PluginSettings } from '../../src/types';
 
 /**
- * Build the smallest PluginAPI shim readConfig() touches: api.config (raw
- * plugin config), api.botConfig.services.type, api.botConfig.chanmod, and
- * api.log() so we can capture validation warnings.
+ * Build a minimal PluginAPI whose `settings` is a real SettingsRegistry
+ * fed with the test's plugin config bag (post-coercion, same path the
+ * plugin loader uses). `botConfig.services.type` and `botConfig.chanmod`
+ * are stubbed so readConfig() can read the chanserv-services derivation
+ * and nick-recovery password defaults.
  */
 function makeConfigApi(pluginConfig: Record<string, unknown>, logs: string[]): PluginAPI {
+  const db = new BotDatabase(':memory:');
+  db.open();
+  const registry = new SettingsRegistry({
+    scope: 'plugin',
+    namespace: 'plugin:chanmod',
+    db,
+    auditActions: { set: 'pluginset-set', unset: 'pluginset-unset' },
+  });
+  registry.register('chanmod', CHANMOD_SETTING_DEFS);
+  for (const def of CHANMOD_SETTING_DEFS) {
+    const seed = pluginConfig[def.key];
+    if (seed === undefined) continue;
+    const coerced = coerceFromJson(
+      { ...def, owner: 'chanmod', reloadClass: def.reloadClass ?? 'live' },
+      seed,
+    );
+    if (coerced !== null) registry.set('', def.key, coerced);
+  }
+  const settings: PluginSettings = {
+    register: () => {},
+    get: (key) => registry.get('', key),
+    getFlag: (key) => registry.getFlag('', key),
+    getString: (key) => registry.getString('', key),
+    getInt: (key) => registry.getInt('', key),
+    set: (key, value) => {
+      registry.set('', key, value);
+    },
+    unset: (key) => {
+      registry.unset('', key);
+    },
+    isSet: (key) => registry.isSet('', key),
+    onChange: () => {},
+    offChange: () => {},
+    bootConfig: Object.freeze({ ...pluginConfig }),
+  };
   return {
-    config: pluginConfig,
+    settings,
     botConfig: {
       services: { type: 'atheme' },
       chanmod: { nick_recovery_password: '' },
@@ -129,39 +169,13 @@ describe('chanmod state', () => {
   });
 
   // -------------------------------------------------------------------------
-  // readConfig() validation paths — exercise the cfgString and cfgStringArray
-  // "wrong type" branches so a typo in plugins.json produces a warning and
-  // falls back to the default rather than silently propagating bad data.
+  // readConfig() — post-migration the typed-settings registry handles
+  // coercion and rejection at seed time, so the only remaining
+  // chanmod-side validation is the load-bearing services_host_pattern
+  // pin (the ChanServ-impostor guard).
   // -------------------------------------------------------------------------
 
-  describe('readConfig() type validation', () => {
-    it('warns and falls back when a string config is given a non-string', () => {
-      const logs: string[] = [];
-      const api = makeConfigApi(
-        { chanserv_nick: 12345, services_host_pattern: 'services.*' },
-        logs,
-      );
-      const cfg: ChanmodConfig = readConfig(api);
-      // Default for chanserv_nick is "ChanServ" — fallback should win.
-      expect(cfg.chanserv_nick).toBe('ChanServ');
-      expect(logs.some((m) => m.includes('Invalid chanserv_nick'))).toBe(true);
-      expect(logs.some((m) => m.includes('expected string'))).toBe(true);
-    });
-
-    it('warns and falls back when a string-array config is not an array of strings', () => {
-      const logs: string[] = [];
-      // Mixed-type array: must be rejected by the every(string) guard.
-      const api = makeConfigApi(
-        { op_flags: ['n', 42, 'o'], services_host_pattern: 'services.*' },
-        logs,
-      );
-      const cfg: ChanmodConfig = readConfig(api);
-      // Default for op_flags is ['n', 'm', 'o'] — fallback should win.
-      expect(cfg.op_flags).toEqual(['n', 'm', 'o']);
-      expect(logs.some((m) => m.includes('Invalid op_flags'))).toBe(true);
-      expect(logs.some((m) => m.includes('expected string[]'))).toBe(true);
-    });
-
+  describe('readConfig() validation', () => {
     it('throws when services_host_pattern is missing — the CRITICAL ChanServ pin guard is load-bearing', () => {
       const logs: string[] = [];
       const api = makeConfigApi({}, logs);
@@ -174,21 +188,61 @@ describe('chanmod state', () => {
       expect(() => readConfig(api)).toThrow(/services_host_pattern is required/);
     });
 
-    it('warns once per offending key, not for valid neighbours', () => {
+    it('drops a non-coercible setting and falls back to the registered default', () => {
       const logs: string[] = [];
+      // chanserv_nick is `string`-typed; an object value is structurally
+      // incompatible (coerceFromJson returns null) and the registered
+      // default ('ChanServ') wins. Scalar numbers stringify cleanly so
+      // they're not the right test target here.
       const api = makeConfigApi(
-        {
-          chanserv_nick: { wrong: 'shape' },
-          op_flags: ['n', 'm'],
-          services_host_pattern: 'services.*',
-        },
+        { chanserv_nick: { not: 'a string' }, services_host_pattern: 'services.*' },
         logs,
       );
-      readConfig(api);
-      // Only chanserv_nick should warn — op_flags is a valid string array.
-      const offending = logs.filter((m) => m.includes('Invalid'));
-      expect(offending).toHaveLength(1);
-      expect(offending[0]).toContain('chanserv_nick');
+      const cfg = readConfig(api);
+      expect(cfg.chanserv_nick).toBe('ChanServ');
+    });
+
+    it('drops a non-coercible string-array entry to the registered default', () => {
+      const logs: string[] = [];
+      // Mixed-type array: rejected by coerceFromJson's "every(string)"
+      // guard for string-typed defs. Default ['n','m','o'] wins.
+      const api = makeConfigApi(
+        { op_flags: ['n', 42, 'o'], services_host_pattern: 'services.*' },
+        logs,
+      );
+      const cfg = readConfig(api);
+      expect(cfg.op_flags).toEqual(['n', 'm', 'o']);
+    });
+
+    it('readStringArray returns [] for an explicit empty-string setting', () => {
+      const logs: string[] = [];
+      // Operator wrote `.set chanmod halfop_flags ""` — the seed path
+      // stores an empty string, and readStringArray's `!raw` branch
+      // collapses it to an empty list (not the registered default).
+      const api = makeConfigApi({ halfop_flags: '', services_host_pattern: 'services.*' }, logs);
+      const cfg = readConfig(api);
+      expect(cfg.halfop_flags).toEqual([]);
+    });
+
+    it('readStringOr falls back when the stored string is empty', () => {
+      const logs: string[] = [];
+      // Empty string seeds successfully but readStringOr treats it as
+      // "no operator value" and yields the documented default.
+      const api = makeConfigApi(
+        { default_kick_reason: '', services_host_pattern: 'services.*' },
+        logs,
+      );
+      const cfg = readConfig(api);
+      expect(cfg.default_kick_reason).toBe('Requested');
+    });
+
+    it('chanserv_services_type derives from botConfig.services.type when JSON omits it', () => {
+      const logs: string[] = [];
+      const api = makeConfigApi({ services_host_pattern: 'services.*' }, logs);
+      const cfg = readConfig(api);
+      // makeConfigApi stubs services.type=atheme, so the derived value
+      // matches and the JSON-side empty default doesn't overwrite it.
+      expect(cfg.chanserv_services_type).toBe('atheme');
     });
   });
 });

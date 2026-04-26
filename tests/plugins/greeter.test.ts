@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { meetsMinFlag } from '../../plugins/greeter/index';
 import { ChannelSettings } from '../../src/core/channel-settings';
 import { Permissions } from '../../src/core/permissions';
+import { SettingsRegistry } from '../../src/core/settings-registry';
 import { BotDatabase } from '../../src/database';
 import { EventDispatcher } from '../../src/dispatcher';
 import { BotEventBus } from '../../src/event-bus';
@@ -83,6 +84,13 @@ describe('greeter plugin', () => {
     permissions = new Permissions(db);
 
     const channelSettings = new ChannelSettings(db);
+    const coreSettings = new SettingsRegistry({
+      scope: 'core',
+      namespace: 'core',
+      db,
+      auditActions: { set: 'coreset-set', unset: 'coreset-unset' },
+    });
+    const pluginSettings = new Map<string, SettingsRegistry>();
 
     loader = new PluginLoader({
       pluginDir: resolve('./plugins'),
@@ -93,6 +101,8 @@ describe('greeter plugin', () => {
       botConfig: MINIMAL_BOT_CONFIG,
       ircClient: ircClient ? { ...ircClient, action: vi.fn(), ctcpResponse: vi.fn() } : null,
       channelSettings,
+      coreSettings,
+      pluginSettings,
     });
 
     const result = await loader.load(resolve('./plugins/greeter/index.ts'), pluginsConfig);

@@ -111,11 +111,21 @@ export function coerceFromJson(def: SettingEntry, jsonValue: unknown): ChannelSe
       return null;
     case 'string':
       // Stringify scalars (number/boolean) so simple JSON expressions
-      // like `"port": 6697` populate a string-typed key. Arrays/objects
-      // are too structured to flatten safely; skip them.
+      // like `"port": 6697` populate a string-typed key. Arrays of
+      // primitives are joined with `,` so legacy plugin configs with
+      // `["warn","kick","tempban"]` shape map cleanly onto the
+      // comma-separated string form the plugin reads back. Object
+      // values are too structured to flatten safely; skip them.
       if (typeof jsonValue === 'string') return jsonValue;
       if (typeof jsonValue === 'number' || typeof jsonValue === 'boolean') {
         return String(jsonValue);
+      }
+      if (Array.isArray(jsonValue)) {
+        if (jsonValue.every((v) => typeof v === 'string')) return jsonValue.join(',');
+        if (jsonValue.every((v) => typeof v === 'number' || typeof v === 'boolean')) {
+          return jsonValue.map((v) => String(v)).join(',');
+        }
+        return null;
       }
       return null;
   }

@@ -1,88 +1,112 @@
 import { type Mock, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { readConfig } from '../../plugins/chanmod/state';
+import { CHANMOD_SETTING_DEFS, readConfig } from '../../plugins/chanmod/state';
 import { type CommandContext, CommandHandler } from '../../src/command-handler';
 import { ChannelSettings } from '../../src/core/channel-settings';
 import { registerChannelCommands } from '../../src/core/commands/channel-commands';
+import { coerceFromJson } from '../../src/core/seed-from-json';
+import { SettingsRegistry } from '../../src/core/settings-registry';
 import { BotDatabase } from '../../src/database';
+import type { PluginAPI, PluginSettings } from '../../src/types';
 import { createMockPluginAPI } from '../helpers/mock-plugin-api';
 
 // ---------------------------------------------------------------------------
-// readConfig() — numeric and enum validation
+// readConfig() — validation under the typed-settings backend
 // ---------------------------------------------------------------------------
 
 describe('readConfig — config validation', () => {
-  function makeApi(configOverrides: Record<string, unknown> = {}) {
+  /**
+   * Build a mock PluginAPI whose `settings` is backed by a real
+   * SettingsRegistry + in-memory DB so readConfig sees realistic
+   * coercion + isSet behavior. `bootConfig` is fed through
+   * `coerceFromJson` (the same path the plugin loader uses), so JSON
+   * values that fail type coercion are dropped just like in production.
+   */
+  function makeApi(configOverrides: Record<string, unknown> = {}): {
+    api: PluginAPI;
+    log: Mock;
+  } {
     const log = vi.fn();
-    // services_host_pattern is required by readConfig (ChanServ pin). Fill
-    // it in so validation tests aren't blocked on the unrelated hard-fail;
-    // tests that specifically exercise the missing-pattern path live in
-    // chanmod-state.test.ts.
-    const api = createMockPluginAPI({
-      config: { services_host_pattern: 'services.*', ...configOverrides },
-      log,
+    const db = new BotDatabase(':memory:');
+    db.open();
+    const registry = new SettingsRegistry({
+      scope: 'plugin',
+      namespace: 'plugin:chanmod',
+      db,
+      auditActions: { set: 'pluginset-set', unset: 'pluginset-unset' },
     });
+    registry.register('chanmod', CHANMOD_SETTING_DEFS);
+    const merged: Record<string, unknown> = {
+      services_host_pattern: 'services.*',
+      ...configOverrides,
+    };
+    for (const def of CHANMOD_SETTING_DEFS) {
+      const seed = merged[def.key];
+      if (seed === undefined) continue;
+      const coerced = coerceFromJson(
+        { ...def, owner: 'chanmod', reloadClass: def.reloadClass ?? 'live' },
+        seed,
+      );
+      if (coerced !== null) registry.set('', def.key, coerced);
+    }
+    const settings: PluginSettings = {
+      register: () => {},
+      get: (key) => registry.get('', key),
+      getFlag: (key) => registry.getFlag('', key),
+      getString: (key) => registry.getString('', key),
+      getInt: (key) => registry.getInt('', key),
+      set: (key, value) => {
+        registry.set('', key, value);
+      },
+      unset: (key) => {
+        registry.unset('', key);
+      },
+      isSet: (key) => registry.isSet('', key),
+      onChange: () => {},
+      offChange: () => {},
+      bootConfig: Object.freeze({ ...merged }),
+    };
+    const api = createMockPluginAPI({ settings, log });
     return { api, log };
   }
 
   describe('numeric fields', () => {
     it('accepts valid positive numbers', () => {
-      const { api, log } = makeApi({ enforce_delay_ms: 1000, takeover_window_ms: 60000 });
+      const { api } = makeApi({ enforce_delay_ms: 1000, takeover_window_ms: 60000 });
       const config = readConfig(api);
       expect(config.enforce_delay_ms).toBe(1000);
       expect(config.takeover_window_ms).toBe(60000);
-      expect(log).not.toHaveBeenCalled();
     });
 
     it('accepts zero as valid', () => {
-      const { api, log } = makeApi({ takeover_response_delay_ms: 0 });
+      const { api } = makeApi({ takeover_response_delay_ms: 0 });
       const config = readConfig(api);
       expect(config.takeover_response_delay_ms).toBe(0);
-      expect(log).not.toHaveBeenCalled();
     });
 
-    it('rejects string values and falls back to default', () => {
-      const { api, log } = makeApi({ takeover_window_ms: 'banana' });
+    it('drops non-coercible values via the JSON-seed path', () => {
+      // String "banana" can coerce to a string-typed setting but not an
+      // int-typed one. The seed walker silently skips it; readConfig
+      // returns the registered default (30_000).
+      const { api } = makeApi({ takeover_window_ms: 'banana' });
       const config = readConfig(api);
       expect(config.takeover_window_ms).toBe(30_000);
-      expect(log).toHaveBeenCalledWith(expect.stringContaining('Invalid takeover_window_ms'));
-      expect(log).toHaveBeenCalledWith(expect.stringContaining('"banana"'));
     });
 
-    it('rejects negative numbers and falls back to default', () => {
-      const { api, log } = makeApi({ chanserv_unban_retry_ms: -5000 });
-      const config = readConfig(api);
-      expect(config.chanserv_unban_retry_ms).toBe(2000);
-      expect(log).toHaveBeenCalledWith(expect.stringContaining('Invalid chanserv_unban_retry_ms'));
-    });
-
-    it('rejects NaN and falls back to default', () => {
-      const { api, log } = makeApi({ anope_recover_step_delay_ms: NaN });
-      const config = readConfig(api);
-      expect(config.anope_recover_step_delay_ms).toBe(200);
-      expect(log).toHaveBeenCalledWith(
-        expect.stringContaining('Invalid anope_recover_step_delay_ms'),
-      );
-    });
-
-    it('rejects Infinity and falls back to default', () => {
-      const { api, log } = makeApi({ enforce_delay_ms: Infinity });
+    it('numeric strings are dropped (only Int-shaped JSON seeds an int setting)', () => {
+      // Pre-migration the validator coerced "1500" → 1500. The typed
+      // registry's coerceFromJson is stricter — only number-typed JSON
+      // values seed int settings — so a numeric string is dropped and
+      // the default (500) wins.
+      const { api } = makeApi({ enforce_delay_ms: '1500' });
       const config = readConfig(api);
       expect(config.enforce_delay_ms).toBe(500);
-      expect(log).toHaveBeenCalledWith(expect.stringContaining('Invalid enforce_delay_ms'));
-    });
-
-    it('coerces numeric strings to numbers', () => {
-      const { api, log } = makeApi({ enforce_delay_ms: '1500' });
-      const config = readConfig(api);
-      expect(config.enforce_delay_ms).toBe(1500);
-      expect(log).not.toHaveBeenCalled();
     });
   });
 
   describe('enum fields', () => {
     it('accepts valid enum values', () => {
-      const { api, log } = makeApi({
+      const { api } = makeApi({
         revenge_action: 'kickban',
         punish_action: 'kickban',
         chanserv_services_type: 'anope',
@@ -91,41 +115,30 @@ describe('readConfig — config validation', () => {
       expect(config.revenge_action).toBe('kickban');
       expect(config.punish_action).toBe('kickban');
       expect(config.chanserv_services_type).toBe('anope');
-      expect(log).not.toHaveBeenCalled();
     });
 
     it('rejects invalid revenge_action and falls back to default', () => {
-      const { api, log } = makeApi({ revenge_action: 'nuke' });
+      const { api } = makeApi({ revenge_action: 'nuke' });
       const config = readConfig(api);
       expect(config.revenge_action).toBe('deop');
-      expect(log).toHaveBeenCalledWith(expect.stringContaining('Invalid revenge_action'));
     });
 
     it('rejects invalid punish_action and falls back to default', () => {
-      const { api, log } = makeApi({ punish_action: 'destroy' });
+      const { api } = makeApi({ punish_action: 'destroy' });
       const config = readConfig(api);
       expect(config.punish_action).toBe('kick');
-      expect(log).toHaveBeenCalledWith(expect.stringContaining('Invalid punish_action'));
     });
 
     it('rejects invalid chanserv_services_type and falls back to default', () => {
-      const { api, log } = makeApi({ chanserv_services_type: 'dalnet' });
+      const { api } = makeApi({ chanserv_services_type: 'dalnet' });
       const config = readConfig(api);
       expect(config.chanserv_services_type).toBe('atheme');
-      expect(log).toHaveBeenCalledWith(expect.stringContaining('Invalid chanserv_services_type'));
-    });
-
-    it('rejects non-string enum values', () => {
-      const { api, log } = makeApi({ revenge_action: 42 });
-      const config = readConfig(api);
-      expect(config.revenge_action).toBe('deop');
-      expect(log).toHaveBeenCalledWith(expect.stringContaining('Invalid revenge_action'));
     });
   });
 
   describe('threshold ordering', () => {
     it('accepts properly ordered thresholds', () => {
-      const { api, log } = makeApi({
+      const { api } = makeApi({
         takeover_level_1_threshold: 5,
         takeover_level_2_threshold: 10,
         takeover_level_3_threshold: 15,
@@ -134,7 +147,6 @@ describe('readConfig — config validation', () => {
       expect(config.takeover_level_1_threshold).toBe(5);
       expect(config.takeover_level_2_threshold).toBe(10);
       expect(config.takeover_level_3_threshold).toBe(15);
-      expect(log).not.toHaveBeenCalled();
     });
 
     it('resets all thresholds when level_1 >= level_2', () => {
@@ -164,7 +176,7 @@ describe('readConfig — config validation', () => {
     });
 
     it('resets all thresholds when levels are equal', () => {
-      const { api, log: _log } = makeApi({
+      const { api } = makeApi({
         takeover_level_1_threshold: 5,
         takeover_level_2_threshold: 5,
         takeover_level_3_threshold: 5,
@@ -173,21 +185,6 @@ describe('readConfig — config validation', () => {
       expect(config.takeover_level_1_threshold).toBe(3);
       expect(config.takeover_level_2_threshold).toBe(6);
       expect(config.takeover_level_3_threshold).toBe(10);
-    });
-  });
-
-  describe('multiple invalid values', () => {
-    it('logs a warning for each invalid field', () => {
-      const { api, log } = makeApi({
-        enforce_delay_ms: 'bad',
-        revenge_action: 'invalid',
-        takeover_window_ms: -1,
-      });
-      const config = readConfig(api);
-      expect(config.enforce_delay_ms).toBe(500);
-      expect(config.revenge_action).toBe('deop');
-      expect(config.takeover_window_ms).toBe(30_000);
-      expect(log).toHaveBeenCalledTimes(3);
     });
   });
 });

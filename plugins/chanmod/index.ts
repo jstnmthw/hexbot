@@ -21,6 +21,7 @@ import { setupModeEnforce } from './mode-enforce';
 import { setupProtection } from './protection';
 import { ProtectionChain, toBackendAccess } from './protection-backend';
 import {
+  CHANMOD_SETTING_DEFS,
   PENDING_STATE_TTL_MS,
   clearSharedState,
   createState,
@@ -61,18 +62,16 @@ export function init(api: PluginAPI): void {
   // would re-run stale closures against disposed state.
   teardowns = [];
 
+  // Register typed setting defs first so the loader's post-init seed
+  // pulls plugins.json values into KV. `readConfig` then reads from the
+  // KV-backed registry and returns the snapshot the rest of init() consumes.
+  api.settings.register(CHANMOD_SETTING_DEFS);
+
   const config = readConfig(api);
   const state = createState();
 
   // Migrate any bans from old plugin namespace to core _bans namespace
   migrateBansToCore(api);
-
-  // Deprecation notice for removed chanserv_op config key
-  if (api.config.chanserv_op !== undefined) {
-    api.warn(
-      'chanserv_op config key is removed — ChanServ re-op is now automatic when chanserv_access >= op. You can delete this key from plugins.json.',
-    );
-  }
 
   // --- Protection backend setup ---
   const chain = new ProtectionChain(api);
@@ -111,7 +110,7 @@ export function init(api: PluginAPI): void {
   // Wire ChanServ notice handler — routes FLAGS/ACCESS responses to the backend
   teardowns.push(setupChanServNotice({ api, config, backend: concreteBackend, probeState }));
 
-  // Register per-channel settings (defaults come from api.config so global config still works)
+  // Register per-channel settings (defaults come from the plugin-scope config)
   api.channelSettings.register([
     {
       key: 'bitch',

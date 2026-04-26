@@ -132,4 +132,46 @@ describe('seedFromJson', () => {
     expect(counts.skipped).toBe(4);
     expect(counts.seeded).toBe(0);
   });
+
+  it('flattens a string array into a comma-joined string for string-typed defs', () => {
+    // Legacy plugin configs ship `["warn","kick","tempban"]` shapes;
+    // coerceFromJson joins them with `,` so they seed cleanly into the
+    // string-typed setting the migrated plugin reads.
+    const counts = seedFromJson(reg, { logging: { level: ['debug', 'info', 'warn'] } });
+    expect(counts.seeded).toBe(1);
+    expect(reg.getString('', 'logging.level')).toBe('debug,info,warn');
+  });
+
+  it('flattens a numeric array into a comma-joined string for string-typed defs', () => {
+    const counts = seedFromJson(reg, { logging: { level: [1, 2, 3] } });
+    expect(counts.seeded).toBe(1);
+    expect(reg.getString('', 'logging.level')).toBe('1,2,3');
+  });
+
+  it('rejects a mixed-type array (object entries) and skips the key', () => {
+    const counts = seedFromJson(reg, { logging: { level: ['ok', { bad: true }] } });
+    expect(counts.seeded).toBe(0);
+    expect(counts.skipped).toBeGreaterThan(0);
+    expect(reg.isSet('', 'logging.level')).toBe(false);
+  });
+
+  it('stringifies a number JSON value for a string-typed def', () => {
+    // `coerceFromJson` coerces `number → String(number)` so a JSON
+    // expression like `"port": 6697` populates a string-typed key.
+    const counts = seedFromJson(reg, { logging: { level: 6697 } });
+    expect(counts.seeded).toBe(1);
+    expect(reg.getString('', 'logging.level')).toBe('6697');
+  });
+
+  it('seedOnly counts a KV-already-set key as unchanged and skips the write', () => {
+    // Pre-seed the value, then run with seedOnly: true. The walker
+    // sees `wasSet === true` and short-circuits to `unchanged++`
+    // without consulting the JSON value at all.
+    reg.set('', 'logging.level', 'trace');
+    const counts = seedFromJson(reg, { logging: { level: 'debug' } }, { seedOnly: true });
+    expect(counts.unchanged).toBe(1);
+    expect(counts.updated).toBe(0);
+    // KV value is preserved — JSON did NOT overwrite it.
+    expect(reg.getString('', 'logging.level')).toBe('trace');
+  });
 });

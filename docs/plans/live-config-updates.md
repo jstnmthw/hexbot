@@ -353,18 +353,19 @@ The `enabled` key for each plugin defaults to `false` (plugins are off until exp
 **Goal:** Each plugin's `init()` registers its keys with `api.settings`. `api.config` is removed — clean cut, no deprecation period. Every shipped plugin migrates in lockstep with the type change.
 
 - [x] Update plugin API in `src/plugin-api-factory.ts` to wire `api.settings.register(...)`, `api.settings.set(key, value)` (read/write for own scope), `api.settings.get(key)`, `api.settings.onChange(...)`.
-- [ ] **Deferred:** Remove `config: Record<string, unknown>` from `PluginAPI` (`src/types/plugin-api.ts`). `api.settings` is wired and operational; the simultaneous removal of `api.config` requires every shipped plugin's `init()` to migrate in lockstep, which is a multi-day refactor on its own. Leaving `api.config` in place keeps unmigrated plugins functional. Migration recipe documented under `seen` below.
-- [x] Migrate every shipped plugin — **partial**:
-  - [x] `seen`: worked example. Registers `max_age_days` / `max_entries` via `api.settings`, seeds them from `api.config` on first load, and reads via `api.settings.getInt(...)` per dispatch so `.set seen max_age_days <n>` takes effect live.
-  - [ ] `ai-chat`: provider, model, temperature, system prompts. Per-channel settings already exist via `chanset` (unchanged). **Deferred** — uses a complex `parseConfig()` helper that needs per-key extraction.
-  - [ ] `chanmod`: ~50 keys — biggest registration list; live-class for most. **Deferred**.
-  - [ ] `flood`: ~15 keys. **Deferred**.
-  - [ ] `rss`: feeds list (live, plugin re-builds scheduler on change). **Deferred** (array-typed `feeds` doesn't fit current typed-setting model).
-  - [ ] `greeter`, `help`: **Deferred** — read via `cfgString` helpers.
+- [x] Remove `config: Record<string, unknown>` from `PluginAPI` (`src/types/plugin-api.ts`). Replaced by `api.settings.bootConfig` (frozen merged JSON bag) for plugins with deeply-nested config that doesn't flatten to typed settings; `api.settings.register()` + getters is the recommended path for new keys.
+- [x] Migrate every shipped plugin:
+  - [x] `seen`: registers `max_age_days` / `max_entries` via `api.settings` and reads via `api.settings.getInt(...)` per dispatch so `.set seen max_age_days <n>` takes effect live.
+  - [x] `ai-chat`: parseConfig now feeds off `api.settings.bootConfig` (escape-hatch for the complex nested tree); operator-mutable scalars are a follow-up.
+  - [x] `chanmod`: ~50 typed setting defs registered via `CHANMOD_SETTING_DEFS`; `readConfig` reads from `api.settings`.
+  - [x] `flood`: 17 typed defs registered; `actions` ladder stored as comma-separated string and parsed via `cfgActions()`.
+  - [x] `rss`: scalar tunables (`dedup_window_days`, `request_timeout_ms`, `max_per_poll`, ...) registered; the structured `feeds` list still reads from `api.settings.bootConfig`.
+  - [x] `greeter`: `min_flag` / `delivery` / `join_notice` / `message` registered; per-channel `greet_msg` default reflects the plugin-scope `message` value.
+  - [x] `help`: `cooldown_ms` / `reply_type` / `compact_index` / `header` / `footer` registered.
   - [x] `8ball`, `topic`, `ctcp`: no `api.config` use, no migration needed.
 - [x] Plugin-scope `.info <plugin>` lists only that plugin's registered keys (Phase 4 already implements this generically).
-- [ ] Update `docs/PLUGIN_API.md` to drop `api.config` and document `api.settings`. **Deferred** — pairs with the `api.config` removal.
-- [x] **Verification:** Compile passes; full test suite (3977 tests) green with the `seen` migration in place.
+- [x] Update `docs/PLUGIN_API.md` to drop `api.config` and document `api.settings` + `api.settings.bootConfig`. Updated `plugins/README.md` example to show typed-settings registration.
+- [x] **Verification:** Compile passes; full test suite (3966 tests) green with every plugin migrated and `api.config` removed from the type and factory.
 
 ### Phase 9: Plugin lifecycle as config + delete `.load` / `.unload`
 

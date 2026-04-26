@@ -761,9 +761,9 @@ describe('PluginLoader', () => {
         export const version = '1.0.0';
         export const description = '';
         export function init(api) {
-          api.db.set('cfg-greeting', String(api.config.greeting ?? ''));
-          api.db.set('cfg-color', String(api.config.color ?? ''));
-          api.db.set('cfg-extra', String(api.config.extra ?? ''));
+          api.db.set('cfg-greeting', String(api.settings.bootConfig.greeting ?? ''));
+          api.db.set('cfg-color', String(api.settings.bootConfig.color ?? ''));
+          api.db.set('cfg-extra', String(api.settings.bootConfig.extra ?? ''));
         }
       `,
       );
@@ -808,9 +808,9 @@ describe('PluginLoader', () => {
           export const version = '1.0.0';
           export const description = '';
           export function init(api) {
-            api.db.set('api_key', String(api.config.api_key ?? ''));
-            api.db.set('api_key_env', String(api.config.api_key_env ?? ''));
-            api.db.set('endpoint', String(api.config.endpoint ?? ''));
+            api.db.set('api_key', String(api.settings.bootConfig.api_key ?? ''));
+            api.db.set('api_key_env', String(api.settings.bootConfig.api_key_env ?? ''));
+            api.db.set('endpoint', String(api.settings.bootConfig.endpoint ?? ''));
           }
         `,
         );
@@ -1251,7 +1251,7 @@ describe('PluginLoader', () => {
 
       const api = getTestPluginApi();
 
-      expect(api.config.key1).toBe('val1');
+      expect(api.settings.bootConfig.key1).toBe('val1');
     });
 
     it('should handle invalid config.json gracefully', async () => {
@@ -1296,7 +1296,7 @@ describe('PluginLoader', () => {
       const api = getTestPluginApi();
 
       // Config should be an empty (frozen) object
-      expect(Object.keys(api.config)).toHaveLength(0);
+      expect(Object.keys(api.settings.bootConfig)).toHaveLength(0);
     });
   });
 

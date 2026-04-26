@@ -284,7 +284,7 @@ function activeCharacter(
 // ---------------------------------------------------------------------------
 
 export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
-  const cfg = parseConfig(api.config, (msg) => api.warn(msg));
+  const cfg = parseConfig(api.settings.bootConfig, (msg) => api.warn(msg));
   // `deps` is typed as unknown at the plugin-loader boundary (the loader
   // forwards whatever the caller passed without inspecting it). Cast to the
   // narrow AIChatDeps here — the loader is the only caller that supplies a

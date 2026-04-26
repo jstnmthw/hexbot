@@ -248,22 +248,60 @@ export function teardown(): void {
 // ---------------------------------------------------------------------------
 
 /** Read the operator config and apply per-key fallbacks. Invalid feed
- *  entries are silently dropped via {@link isFeedConfig}. */
+ *  entries are silently dropped via {@link isFeedConfig}. The `feeds`
+ *  array stays in `bootConfig` (deeply-structured per-feed records);
+ *  scalar tunables move to typed `api.settings` so operators can change
+ *  them via `.set rss <key> <value>` without restarting. */
 function loadConfig(api: PluginAPI): RssPluginConfig {
-  const c = api.config;
-  const rawFeeds = c.feeds;
+  api.settings.register([
+    {
+      key: 'dedup_window_days',
+      type: 'int',
+      default: 30,
+      description: 'Drop dedup entries older than this many days',
+    },
+    {
+      key: 'max_title_length',
+      type: 'int',
+      default: 300,
+      description: 'Truncate feed item titles after this many characters',
+    },
+    {
+      key: 'request_timeout_ms',
+      type: 'int',
+      default: 10_000,
+      description: 'HTTP timeout for a single feed fetch (ms)',
+    },
+    {
+      key: 'max_per_poll',
+      type: 'int',
+      default: 5,
+      description: 'Maximum new items announced per feed per poll',
+    },
+    {
+      key: 'max_feed_bytes',
+      type: 'int',
+      default: 5 * 1024 * 1024,
+      description: 'Maximum feed body size accepted (bytes)',
+    },
+    {
+      key: 'allow_http',
+      type: 'flag',
+      default: false,
+      description: 'Permit unencrypted http:// feed URLs (https-only when false)',
+    },
+  ]);
+  const rawFeeds = api.settings.bootConfig.feeds;
   const feeds: FeedConfig[] = Array.isArray(rawFeeds) ? rawFeeds.filter(isFeedConfig) : [];
-  const numOrDefault = (key: string, fallback: number): number => {
-    const v = c[key];
-    return typeof v === 'number' ? v : fallback;
-  };
+  const intOr = (key: string, fallback: number): number =>
+    api.settings.isSet(key) ? api.settings.getInt(key) : fallback;
   return {
     feeds,
-    dedup_window_days: numOrDefault('dedup_window_days', 30),
-    max_title_length: numOrDefault('max_title_length', 300),
-    request_timeout_ms: numOrDefault('request_timeout_ms', 10000),
-    max_per_poll: numOrDefault('max_per_poll', 5),
-    max_feed_bytes: numOrDefault('max_feed_bytes', 5 * 1024 * 1024),
-    allow_http: c.allow_http === true,
+    dedup_window_days: intOr('dedup_window_days', 30),
+    max_title_length: intOr('max_title_length', 300),
+    request_timeout_ms: intOr('request_timeout_ms', 10_000),
+    max_per_poll: intOr('max_per_poll', 5),
+    max_feed_bytes: intOr('max_feed_bytes', 5 * 1024 * 1024),
+    allow_http: api.settings.getFlag('allow_http'),
   };
 }

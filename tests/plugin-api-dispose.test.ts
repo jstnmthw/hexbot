@@ -4,6 +4,8 @@
 // factory path.
 import { describe, expect, it, vi } from 'vitest';
 
+import { SettingsRegistry } from '../src/core/settings-registry';
+import { BotDatabase } from '../src/database';
 import { BotEventBus } from '../src/event-bus';
 import { type PluginApiDeps, createPluginApi } from '../src/plugin-api-factory';
 
@@ -107,7 +109,7 @@ describe('plugin-api dispose (W-PS1)', () => {
     expect(api.db.get('k')).toBeUndefined();
   });
 
-  it('config and botConfig data objects are still readable after dispose', () => {
+  it('settings.bootConfig and botConfig data objects are still readable after dispose', () => {
     const deps = makeDeps();
     const { api, dispose } = createPluginApi(deps, 'demo', { foo: 'bar' });
 
@@ -116,7 +118,7 @@ describe('plugin-api dispose (W-PS1)', () => {
     // Data-only keys pass through unchanged — plugins reading config after
     // teardown (e.g. a stale log line) must not crash.
     expect(api.pluginId).toBe('demo');
-    expect(api.config).toEqual({ foo: 'bar' });
+    expect(api.settings.bootConfig).toEqual({ foo: 'bar' });
     expect(api.botConfig.irc.nick).toBe('hexbot');
   });
 
@@ -193,5 +195,114 @@ describe('onPermissionsChanged / offPermissionsChanged (W-PS2)', () => {
     api.onPermissionsChanged(cb);
     deps.eventBus.emit('user:added', 'alice');
     expect(cb).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('api.settings register-time JSON seed', () => {
+  // The factory's `register()` wrapper seeds each newly-registered key
+  // from the merged plugins.json/config.json bag handed to
+  // createPluginApi. These tests pin every branch of that path so the
+  // happy path, the "value already set" skip, the "missing in JSON"
+  // skip, and the "non-coercible JSON" skip are all exercised.
+  function makeDepsWithRegistry(db: BotDatabase): { deps: PluginApiDeps; reg: SettingsRegistry } {
+    const reg = new SettingsRegistry({
+      scope: 'plugin',
+      namespace: 'plugin:demo',
+      db,
+      auditActions: { set: 'pluginset-set', unset: 'pluginset-unset' },
+    });
+    const deps = makeDeps();
+    deps.db = db;
+    deps.pluginSettings = reg;
+    return { deps, reg };
+  }
+
+  it('seeds an int-typed setting from the JSON bag at register() time', () => {
+    const db = new BotDatabase(':memory:');
+    db.open();
+    try {
+      const { deps, reg } = makeDepsWithRegistry(db);
+      const { api } = createPluginApi(deps, 'demo', { rate: 42 });
+      api.settings.register([{ key: 'rate', type: 'int', default: 0, description: 'Rate' }]);
+      expect(reg.getInt('', 'rate')).toBe(42);
+      expect(api.settings.getInt('rate')).toBe(42);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('does NOT overwrite a KV-already-set value when register() runs', () => {
+    const db = new BotDatabase(':memory:');
+    db.open();
+    try {
+      const { deps, reg } = makeDepsWithRegistry(db);
+      // Pre-seed via a prior load — operator's `.set` survived.
+      reg.register('demo', [{ key: 'rate', type: 'int', default: 0, description: 'Rate' }]);
+      reg.set('', 'rate', 7);
+      const { api } = createPluginApi(deps, 'demo', { rate: 999 });
+      api.settings.register([{ key: 'rate', type: 'int', default: 0, description: 'Rate' }]);
+      expect(api.settings.getInt('rate')).toBe(7);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('skips keys missing from the JSON bag (default reads as registered)', () => {
+    const db = new BotDatabase(':memory:');
+    db.open();
+    try {
+      const { deps } = makeDepsWithRegistry(db);
+      const { api } = createPluginApi(deps, 'demo', {});
+      api.settings.register([{ key: 'rate', type: 'int', default: 5, description: 'Rate' }]);
+      expect(api.settings.isSet('rate')).toBe(false);
+      expect(api.settings.getInt('rate')).toBe(5);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('drops a non-coercible JSON value (object on string-typed def)', () => {
+    const db = new BotDatabase(':memory:');
+    db.open();
+    try {
+      const { deps } = makeDepsWithRegistry(db);
+      const { api } = createPluginApi(deps, 'demo', { name: { not: 'a string' } });
+      api.settings.register([
+        { key: 'name', type: 'string', default: 'fallback', description: 'Name' },
+      ]);
+      expect(api.settings.isSet('name')).toBe(false);
+      expect(api.settings.getString('name')).toBe('fallback');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('exposes bootConfig as a frozen snapshot of the merged JSON bag', () => {
+    const db = new BotDatabase(':memory:');
+    db.open();
+    try {
+      const { deps } = makeDepsWithRegistry(db);
+      const { api } = createPluginApi(deps, 'demo', { foo: 'bar', nested: { k: 1 } });
+      expect(api.settings.bootConfig).toEqual({ foo: 'bar', nested: { k: 1 } });
+      expect(Object.isFrozen(api.settings.bootConfig)).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('falls back to the no-registry stub when pluginSettings is null', () => {
+    const deps = makeDeps();
+    const { api } = createPluginApi(deps, 'demo', { foo: 'bar' });
+    // No throws on any operation; reads return inert defaults.
+    api.settings.register([{ key: 'x', type: 'int', default: 0, description: 'x' }]);
+    expect(api.settings.getInt('x')).toBe(0);
+    expect(api.settings.getString('x')).toBe('');
+    expect(api.settings.getFlag('x')).toBe(false);
+    expect(api.settings.isSet('x')).toBe(false);
+    expect(api.settings.bootConfig).toEqual({ foo: 'bar' });
+    api.settings.set('x', 1);
+    api.settings.unset('x');
+    api.settings.onChange(() => {});
+    api.settings.offChange(() => {});
   });
 });

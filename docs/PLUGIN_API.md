@@ -69,26 +69,37 @@ All properties on the API object are frozen. Plugins cannot modify the API or it
 
 The plugin's registered name. Matches the `name` export.
 
-#### `config: Record<string, unknown>`
+#### `settings: PluginSettings`
 
-The merged config for this plugin. Values come from the plugin's own `config.json` defaults, overridden by the `config` key in `config/plugins.json`.
+The plugin's typed live-config registry. Operators mutate values via `.set <plugin> <key> <value>`; the plugin reads them via typed accessors. Replaces the old `api.config` field — every plugin declares its keys with `register([...])` and reads back via `getString` / `getInt` / `getFlag`.
 
 ```typescript
-// plugins.json
-{
-  "my-plugin": {
-    "enabled": true,
-    "config": {
-      "greeting": "Hello!"
-    }
-  }
-}
-
 // In init():
-const greeting = (api.config.greeting as string) ?? 'Hi';
+api.settings.register([
+  { key: 'greeting', type: 'string', default: 'Hi', description: 'Greeting prefix' },
+  { key: 'cooldown_ms', type: 'int', default: 30_000, description: 'Per-user cooldown' },
+]);
+const greeting = api.settings.getString('greeting');
 ```
 
-**Secrets via `_env` fields.** Any config field named `<name>_env: "VAR_NAME"` is resolved from `process.env` before the plugin sees its config. The resolved value appears at `<name>`, and the `_env` key is removed. This works in both the plugin's own `config.json` and in `plugins.json` overrides.
+The plugin loader seeds each registered key from `plugins.json` (or the plugin's own `config.json` defaults) on first boot. After that, KV is canonical — operator `.set` writes survive process restarts; routine restarts never clobber them. JSON edits are pulled in on demand via `.rehash`.
+
+| Method            | Returns                             | Notes                                                         |
+| ----------------- | ----------------------------------- | ------------------------------------------------------------- |
+| `register(defs)`  | `void`                              | Declare typed defs. Idempotent re-registration is fine.       |
+| `get(key)`        | `boolean \| string \| number`       | Untyped union; prefer the typed getters below.                |
+| `getString(key)`  | `string`                            | Returns `''` when unset and the def is missing or non-string. |
+| `getInt(key)`     | `number`                            | Returns `0` when unset.                                       |
+| `getFlag(key)`    | `boolean`                           | Returns `false` when unset.                                   |
+| `set(key, value)` | `void`                              | Plugin self-write. Same store operators reach via `.set`.     |
+| `unset(key)`      | `void`                              | Reverts reads to the registered default.                      |
+| `isSet(key)`      | `boolean`                           | True when an explicit value is stored.                        |
+| `onChange(cb)`    | `void`                              | Auto-cleaned on plugin unload.                                |
+| `bootConfig`      | `Readonly<Record<string, unknown>>` | Frozen merged JSON bag — escape hatch for nested config.      |
+
+**`bootConfig`** is the frozen merged `plugins.json` / `config.json` bag the loader handed this plugin at load time. Use it for deeply-nested config that doesn't flatten cleanly to typed settings (e.g. `ai-chat.channel_characters`, `rss.feeds`). For new keys, prefer `register()` + `get*()` so operators can `.set` them live.
+
+**Secrets via `_env` fields.** Any config field named `<name>_env: "VAR_NAME"` is resolved from `process.env` before the plugin sees its config (or its `bootConfig` snapshot). The resolved value appears at `<name>` and the `_env` key is removed. This works in both the plugin's own `config.json` and in `plugins.json` overrides.
 
 ```json
 // plugins/my-plugin/config.json
@@ -100,7 +111,11 @@ const greeting = (api.config.greeting as string) ?? 'Hi';
 
 ```typescript
 // In init():
-const apiKey = api.config.api_key as string | undefined;
+api.settings.register([
+  { key: 'api_key', type: 'string', default: '', description: 'Provider API key' },
+  { key: 'endpoint', type: 'string', default: '', description: 'Provider endpoint' },
+]);
+const apiKey = api.settings.getString('api_key');
 if (!apiKey) {
   throw new Error('MY_PLUGIN_API_KEY env var is required');
 }

@@ -163,11 +163,21 @@ To restrict a plugin to specific channels, add a `channels` array:
 
 When `channels` is omitted, the plugin operates in all channels. Non-channel events (PMs, timers) always fire regardless of scope.
 
-Access merged config in `init()`:
+Access typed config in `init()` — register defs, then read via the typed getters. Operators mutate values via `.set <plugin> <key> <value>`; the `plugins.json` bag seeds the registry on first boot.
 
 ```typescript
-const cooldown = (api.config.cooldown_seconds as number) ?? 30;
+api.settings.register([
+  {
+    key: 'cooldown_seconds',
+    type: 'int',
+    default: 30,
+    description: 'Per-user cooldown between commands',
+  },
+]);
+const cooldown = api.settings.getInt('cooldown_seconds');
 ```
+
+For deeply-nested config that doesn't flatten cleanly into typed settings, use `api.settings.bootConfig` — the frozen merged JSON bag from `plugins.json` / `config.json`.
 
 ### Persistent storage
 
@@ -247,15 +257,15 @@ api.error('Failed to fetch data');
 api.debug('Raw response:', data); // only at debug level
 ```
 
-### Hot reloading
+### Plugin lifecycle
 
-Plugins can be reloaded at runtime (`.reload my-plugin`). Design for this:
+Plugins enable/disable via `.set core plugins.<id>.enabled true/false` — load on enable, unload on disable. Operators picking up plugin code edits use `.restart` for a clean process restart (no module-graph residue). The old `.reload` command is gone — Node's ESM loader has no eviction API and the cache-busting workaround leaked one module graph per reload.
 
-- Use `api.db` for state that should survive reloads, not module-level variables
-- Clean up non-bind resources (connections, file handles) in `teardown()`
+- Use `api.db` for state that should survive load/unload cycles, not module-level variables
+- Clean up non-bind resources (connections, file handles, timers) in `teardown()`
 - Binds are removed automatically
 
-Multi-file plugins are fully supported — the loader recursively discovers all `.ts` files local to the plugin directory and cache-busts each one on reload. Import sibling modules with relative paths:
+Multi-file plugins are fully supported — import sibling modules with relative paths:
 
 ```typescript
 // plugins/my-plugin/index.ts
@@ -272,8 +282,12 @@ export const version = '1.0.0';
 export const description = 'Roll dice with !roll NdS syntax';
 
 export function init(api: PluginAPI): void {
-  const maxDice = (api.config.max_dice as number) ?? 20;
-  const maxSides = (api.config.max_sides as number) ?? 100;
+  api.settings.register([
+    { key: 'max_dice', type: 'int', default: 20, description: 'Maximum dice per roll' },
+    { key: 'max_sides', type: 'int', default: 100, description: 'Maximum sides per die' },
+  ]);
+  const maxDice = api.settings.getInt('max_dice') || 20;
+  const maxSides = api.settings.getInt('max_sides') || 100;
 
   api.bind('pub', '-', '!roll', (ctx) => {
     const input = ctx.args.trim() || '1d6';

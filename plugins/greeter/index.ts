@@ -24,12 +24,6 @@ function greetKey(handle: string): string {
   return `greet:${handle}`;
 }
 
-/** Read a string-typed config entry, returning `fallback` when absent or wrong-typed. */
-function cfgString(config: Record<string, unknown>, key: string, fallback: string): string {
-  const v = config[key];
-  return typeof v === 'string' ? v : fallback;
-}
-
 /**
  * Returns true if the user record has at least the privilege level of minFlag,
  * using the n > m > o > v hierarchy.
@@ -95,9 +89,43 @@ export function init(api: PluginAPI): void {
     },
   ]);
 
-  const minFlag = cfgString(api.config, 'min_flag', 'v');
-  const delivery = cfgString(api.config, 'delivery', 'say');
-  const joinNotice = cfgString(api.config, 'join_notice', '');
+  api.settings.register([
+    {
+      key: 'min_flag',
+      type: 'string',
+      default: 'v',
+      description: 'Minimum flag required to set/del a custom greet (n>m>o>v)',
+      allowedValues: ['n', 'm', 'o', 'v'],
+    },
+    {
+      key: 'delivery',
+      type: 'string',
+      default: 'say',
+      description: 'How to deliver join greetings: say (PRIVMSG to channel) or channel_notice',
+      allowedValues: ['say', 'channel_notice'],
+    },
+    {
+      key: 'join_notice',
+      type: 'string',
+      default: '',
+      description: 'Optional NOTICE sent privately to the joining nick (empty = no notice)',
+    },
+    {
+      key: 'message',
+      type: 'string',
+      default: 'Welcome to {channel}, {nick}!',
+      description: 'Default join greeting (used as default for the per-channel greet_msg setting)',
+    },
+  ]);
+
+  // Snapshot at init: these affect handler dispatch (which API call is made
+  // and which permission gate triggers); changing them mid-process needs a
+  // .restart for clarity. The per-greet message text is read live below
+  // through channelSettings.getString — that path picks up `.set` writes
+  // immediately.
+  const minFlag = api.settings.getString('min_flag') || 'v';
+  const delivery = api.settings.getString('delivery') || 'say';
+  const joinNotice = api.settings.getString('join_notice');
 
   // Per-channel join-rate tracking to debounce netsplit rejoin
   // floods. Without this, a heal with 50+ simultaneous rejoins
@@ -140,12 +168,14 @@ export function init(api: PluginAPI): void {
     return false;
   };
 
-  // Register per-channel greeting setting; default reflects the global config value
+  // Register per-channel greeting setting; default reflects the plugin-scope
+  // `message` value so a `.set greeter message <text>` cascades into the
+  // default for any channel that hasn't pinned its own greet_msg.
   api.channelSettings.register([
     {
       key: 'greet_msg',
       type: 'string',
-      default: cfgString(api.config, 'message', 'Welcome to {channel}, {nick}!'),
+      default: api.settings.getString('message') || 'Welcome to {channel}, {nick}!',
       description: 'Per-channel join greeting ({channel} and {nick} substituted)',
     },
   ]);

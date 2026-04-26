@@ -60,9 +60,9 @@ export function init(api: PluginAPI): void {
   ]);
 
   // Live config: operators can `.set seen max_age_days <n>` to retune
-  // retention without a restart. Backward compat with the legacy
-  // plugins.json `config.max_age_days` is preserved by `api.config`'s
-  // seed of the registry on first load — see plugin-api-factory.
+  // retention without a restart. The plugin-loader seeds plugins.json
+  // values into the registry post-init, so plugin code only declares
+  // the typed defs — no per-key seed boilerplate.
   api.settings.register([
     {
       key: 'max_age_days',
@@ -77,12 +77,6 @@ export function init(api: PluginAPI): void {
       description: 'Hard cap on stored seen records (oldest evicted first)',
     },
   ]);
-  const seedFromConfig = (key: 'max_age_days' | 'max_entries'): void => {
-    const v = api.config[key];
-    if (typeof v === 'number' && !api.settings.isSet(key)) api.settings.set(key, v);
-  };
-  seedFromConfig('max_age_days');
-  seedFromConfig('max_entries');
   // Live reads: every handler invocation pulls the current values from
   // the registry, so an operator `.set seen max_age_days 30` takes
   // effect immediately without an unload/load cycle.

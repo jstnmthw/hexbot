@@ -12,6 +12,7 @@ import { registerPluginCommands } from '../../src/core/commands/plugin-commands'
 import { IRCCommands } from '../../src/core/irc-commands';
 import { Permissions } from '../../src/core/permissions';
 import { Services } from '../../src/core/services';
+import { SettingsRegistry } from '../../src/core/settings-registry';
 import { BotDatabase } from '../../src/database';
 import { EventDispatcher } from '../../src/dispatcher';
 import { BotEventBus } from '../../src/event-bus';
@@ -124,6 +125,17 @@ export function createMockBot(options?: { botNick?: string; currentNick?: string
 
   const channelSettings = new ChannelSettings(db, logger.child('channel-settings'));
   const banStore = new BanStore(db, (s) => s.toLowerCase());
+  // Plugin-loader needs the same scope-registry plumbing the production
+  // Bot does so plugins migrating to api.settings.register/get see live
+  // values backed by the in-memory DB.
+  const coreSettings = new SettingsRegistry({
+    scope: 'core',
+    namespace: 'core',
+    db,
+    logger: logger.child('core-settings'),
+    auditActions: { set: 'coreset-set', unset: 'coreset-unset' },
+  });
+  const pluginSettings = new Map<string, SettingsRegistry>();
 
   const pluginLoader = new PluginLoader({
     pluginDir: './plugins',
@@ -137,6 +149,8 @@ export function createMockBot(options?: { botNick?: string; currentNick?: string
     ircCommands,
     services,
     channelSettings,
+    coreSettings,
+    pluginSettings,
     banStore,
     logger,
   });
