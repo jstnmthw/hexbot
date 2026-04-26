@@ -743,10 +743,11 @@ describe('help plugin', () => {
       ]);
     }
 
-    it('folds set:* categories into one line per scope with summary + key count', async () => {
+    it('!help corpus excludes settings entries even for privileged users (prefix isolation)', async () => {
       await loadHelp({ help: { enabled: true, config: { cooldown_ms: 0 } } });
-      // Bare index path needs the operator flag so settings entries pass
-      // the per-entry permission filter.
+      // Even with the operator flag, `.set ...` entries don't surface in
+      // the channel-facing `!help` index — they belong to the admin
+      // `.help` corpus served by the core dot-command path.
       permissions.addUser('admin', 'user1!user@host.com', 'n', 'test');
       permissions.loadFromDb();
 
@@ -762,13 +763,10 @@ describe('help plugin', () => {
       await dispatcher.dispatch('pub', ctx);
 
       const messages = mockNotice.mock.calls.map((c) => c[1]);
-      // Header pseudo-category should appear.
-      expect(messages.some((m) => m.includes('\x02[settings]\x02'))).toBe(true);
-      // One folded line per scope with key count + summary.
-      expect(messages.some((m) => m.includes('\x02core\x02') && m.includes('(2 keys)'))).toBe(true);
-      expect(messages.some((m) => m.includes('Bot-wide singletons'))).toBe(true);
-      expect(messages.some((m) => m.includes('\x02rss\x02') && m.includes('(1 key)'))).toBe(true);
-      // The per-key entries should NOT appear inline in the bare index.
+      // No settings-scope content surfaces under `!help`.
+      expect(messages.some((m) => m.includes('[settings]'))).toBe(false);
+      expect(messages.some((m) => m.includes('Bot-wide singletons'))).toBe(false);
+      expect(messages.some((m) => m.includes('RSS feed announcer'))).toBe(false);
       expect(messages.some((m) => m.includes('logging.level'))).toBe(false);
       expect(messages.some((m) => m.includes('dedup_window_days'))).toBe(false);
     });

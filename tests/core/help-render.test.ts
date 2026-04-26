@@ -112,20 +112,20 @@ describe('lookup', () => {
 
   it('returns command when the query matches an entry exactly', () => {
     const reg = setup();
-    const result = lookup(reg, '!8ball', makeCtx(), null);
+    const result = lookup(reg, '!8ball', makeCtx(), null, '!');
     expect(result.kind).toBe('command');
     if (result.kind === 'command') expect(result.entry.command).toBe('!8ball');
   });
 
   it('strips the leading prefix and case-folds the query', () => {
     const reg = setup();
-    const result = lookup(reg, '8BALL', makeCtx(), null);
+    const result = lookup(reg, '8BALL', makeCtx(), null, '!');
     expect(result.kind).toBe('command');
   });
 
   it('returns category when the query matches a category label', () => {
     const reg = setup();
-    const result = lookup(reg, 'fun', makeCtx(), null);
+    const result = lookup(reg, 'fun', makeCtx(), null, '!');
     expect(result.kind).toBe('category');
     if (result.kind === 'category') {
       expect(result.category).toBe('fun');
@@ -135,7 +135,7 @@ describe('lookup', () => {
 
   it('pivots a scope-header command into a scope view (lists the scope keys)', () => {
     const reg = setup();
-    const result = lookup(reg, '.set core', makeCtx(), null);
+    const result = lookup(reg, '.set core', makeCtx(), null, '.');
     expect(result.kind).toBe('scope');
     if (result.kind === 'scope') {
       expect(result.scope).toBe('core');
@@ -146,7 +146,7 @@ describe('lookup', () => {
 
   it('treats a `set:*` category lookup as a scope view', () => {
     const reg = setup();
-    const result = lookup(reg, 'set:core', makeCtx(), null);
+    const result = lookup(reg, 'set:core', makeCtx(), null, '.');
     expect(result.kind).toBe('scope');
     if (result.kind === 'scope') {
       expect(result.scope).toBe('core');
@@ -156,19 +156,19 @@ describe('lookup', () => {
   it('returns denied when the matched command flags out the caller', () => {
     const reg = setup();
     const perms: RenderPermissions = { checkFlags: vi.fn().mockReturnValue(false) };
-    const result = lookup(reg, '!op', makeCtx(), perms);
+    const result = lookup(reg, '!op', makeCtx(), perms, '!');
     expect(result.kind).toBe('denied');
   });
 
   it('returns none for unknown queries', () => {
     const reg = setup();
-    const result = lookup(reg, 'nosuch', makeCtx(), null);
+    const result = lookup(reg, 'nosuch', makeCtx(), null, '!');
     expect(result.kind).toBe('none');
   });
 
   it('resolves a deep sub-help command (.set core logging.level)', () => {
     const reg = setup();
-    const result = lookup(reg, '.set core logging.level', makeCtx(), null);
+    const result = lookup(reg, '.set core logging.level', makeCtx(), null, '.');
     expect(result.kind).toBe('command');
     if (result.kind === 'command') {
       expect(result.entry.command).toBe('.set core logging.level');
@@ -177,8 +177,8 @@ describe('lookup', () => {
 
   it('returns none for an empty / whitespace-only query', () => {
     const reg = setup();
-    expect(lookup(reg, '   ', makeCtx(), null).kind).toBe('none');
-    expect(lookup(reg, '', makeCtx(), null).kind).toBe('none');
+    expect(lookup(reg, '   ', makeCtx(), null, '!').kind).toBe('none');
+    expect(lookup(reg, '', makeCtx(), null, '!').kind).toBe('none');
   });
 
   it('falls back to denied when the scope-pivot visible filter empties out', () => {
@@ -188,7 +188,81 @@ describe('lookup', () => {
     const reg = new HelpRegistry();
     reg.register('bot', [{ ...SCOPE_HEADER, flags: 'n' }]);
     const perms: RenderPermissions = { checkFlags: vi.fn().mockReturnValue(false) };
-    expect(lookup(reg, '.set core', makeCtx(), perms).kind).toBe('denied');
+    expect(lookup(reg, '.set core', makeCtx(), perms, '.').kind).toBe('denied');
+  });
+
+  // Prefix isolation — `.help` (REPL/admin) and `!help` (channel) surface
+  // different corpora even when categories overlap.
+  describe('prefix isolation', () => {
+    function setupCrossPrefix(): HelpRegistry {
+      // Same-named ban command on both surfaces (mirrors the real
+      // core `.ban` + chanmod `!ban` coexistence).
+      const dotBan: HelpEntry = {
+        command: '.ban',
+        flags: '+o',
+        usage: '.ban [#channel] <mask> [duration]',
+        description: 'Admin ban',
+        category: 'moderation',
+      };
+      const bangBan: HelpEntry = {
+        command: '!ban',
+        flags: 'o',
+        usage: '!ban <nick|mask>',
+        description: 'Channel ban',
+        category: 'moderation',
+      };
+      const reg = new HelpRegistry();
+      reg.register('core', [dotBan]);
+      reg.register('chanmod', [bangBan]);
+      return reg;
+    }
+
+    it('bare query under prefix . resolves to the dot-variant', () => {
+      const reg = setupCrossPrefix();
+      const result = lookup(reg, 'ban', makeCtx(), null, '.');
+      expect(result.kind).toBe('command');
+      if (result.kind === 'command') expect(result.entry.command).toBe('.ban');
+    });
+
+    it('bare query under prefix ! resolves to the bang-variant', () => {
+      const reg = setupCrossPrefix();
+      const result = lookup(reg, 'ban', makeCtx(), null, '!');
+      expect(result.kind).toBe('command');
+      if (result.kind === 'command') expect(result.entry.command).toBe('!ban');
+    });
+
+    it('explicit-prefix query rejects the wrong prefix surface', () => {
+      const reg = setupCrossPrefix();
+      // `.help !ban` from REPL — no result (channel command not invocable from REPL).
+      const fromRepl = lookup(reg, '!ban', makeCtx(), null, '.');
+      expect(fromRepl.kind).toBe('none');
+      // `!help .ban` from channel — same.
+      const fromChan = lookup(reg, '.ban', makeCtx(), null, '!');
+      expect(fromChan.kind).toBe('none');
+    });
+
+    it('category listing filters to entries matching the active prefix', () => {
+      const reg = setupCrossPrefix();
+      const dotResult = lookup(reg, 'moderation', makeCtx(), null, '.');
+      expect(dotResult.kind).toBe('category');
+      if (dotResult.kind === 'category') {
+        expect(dotResult.entries.map((e) => e.command)).toEqual(['.ban']);
+      }
+      const bangResult = lookup(reg, 'moderation', makeCtx(), null, '!');
+      expect(bangResult.kind).toBe('category');
+      if (bangResult.kind === 'category') {
+        expect(bangResult.entries.map((e) => e.command)).toEqual(['!ban']);
+      }
+    });
+
+    it('settings scope is invisible under the bang prefix', () => {
+      const reg = new HelpRegistry();
+      reg.register('bot', [SCOPE_HEADER, SCOPE_KEY_ENTRY]);
+      // `.set core` surfaces under `.` (admin); under `!` it disappears.
+      expect(lookup(reg, '.set core', makeCtx(), null, '.').kind).toBe('scope');
+      expect(lookup(reg, '.set core', makeCtx(), null, '!').kind).toBe('none');
+      expect(lookup(reg, 'set:core', makeCtx(), null, '!').kind).toBe('none');
+    });
   });
 });
 

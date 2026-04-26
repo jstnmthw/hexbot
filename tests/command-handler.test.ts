@@ -521,12 +521,14 @@ describe('CommandHandler', () => {
     it('routes .help <plugin-cmd> through the shared corpus to render the plugin entry', async () => {
       const registry = new HelpRegistry();
       const handler = new CommandHandler(null, '.', registry);
-      // Simulate a plugin entry living in the shared corpus
+      // Plugin registers a dot-prefix entry — .help only surfaces its
+      // own prefix's corpus, so an admin-side plugin command is reached
+      // via `.foo` rather than `!foo`.
       registry.register('rss', [
         {
-          command: '!rss',
+          command: '.rss',
           flags: '-',
-          usage: '!rss <feed>',
+          usage: '.rss <feed>',
           description: 'Subscribe to an RSS feed',
           category: 'feeds',
         },
@@ -535,8 +537,27 @@ describe('CommandHandler', () => {
       await handler.execute('.help rss', ctx);
 
       const out = ctx.reply.mock.calls[0][0];
-      expect(out).toContain('!rss');
+      expect(out).toContain('.rss');
       expect(out).toContain('Subscribe to an RSS feed');
+    });
+
+    it('does not surface bang-prefix plugin entries via .help (corpus isolation)', async () => {
+      const registry = new HelpRegistry();
+      const handler = new CommandHandler(null, '.', registry);
+      registry.register('chanmod', [
+        {
+          command: '!ban',
+          flags: 'o',
+          usage: '!ban <nick|mask>',
+          description: 'Channel ban',
+          category: 'moderation',
+        },
+      ]);
+      const ctx = makeCtx();
+      await handler.execute('.help ban', ctx);
+
+      const out = ctx.reply.mock.calls[0][0];
+      expect(out).toContain('No help for "ban"');
     });
 
     it('routes .help set <scope> through the scope renderer (lists keys)', async () => {

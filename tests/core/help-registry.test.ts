@@ -135,15 +135,45 @@ describe('HelpRegistry', () => {
     expect(all[0]).toMatchObject(updated);
   });
 
-  it('upsert is case- and prefix-insensitive on the command name', () => {
+  it('upsert is case-insensitive on the command name', () => {
     const reg = new HelpRegistry();
     reg.register('chanmod', [entryA]);
-    const aliased: HelpEntry = { ...entryA, command: 'OP', description: 'Aliased' };
+    const aliased: HelpEntry = { ...entryA, command: '!OP', description: 'Aliased' };
     reg.register('chanmod', [aliased]);
 
     const all = reg.getAll();
     expect(all).toHaveLength(1);
     expect(all[0]).toMatchObject({ description: 'Aliased' });
+  });
+
+  it('different prefixes (.ban vs !ban) are tracked as distinct entries, not a collision', () => {
+    const logger = makeLogger();
+    const reg = new HelpRegistry(logger);
+    const dotBan: HelpEntry = {
+      command: '.ban',
+      flags: '+o',
+      usage: '.ban [#channel] <mask> [duration]',
+      description: 'Admin ban (dot-command)',
+      category: 'moderation',
+    };
+    const bangBan: HelpEntry = {
+      command: '!ban',
+      flags: 'o',
+      usage: '!ban <nick|mask> [minutes]',
+      description: 'Channel ban (bang-command)',
+      category: 'moderation',
+    };
+    reg.register('core', [dotBan]);
+    reg.register('chanmod', [bangBan]);
+
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(reg.getAll()).toHaveLength(2);
+    // Strict prefix match wins — each query returns its prefix's variant.
+    expect(reg.get('.ban')).toMatchObject(dotBan);
+    expect(reg.get('!ban')).toMatchObject(bangBan);
+    // Bare query falls through to the fuzzy fallback; first registered
+    // (core's `.ban`) wins.
+    expect(reg.get('ban')).toMatchObject(dotBan);
   });
 
   it('getAll() returns empty array when no entries are registered', () => {

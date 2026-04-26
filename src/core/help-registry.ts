@@ -4,17 +4,28 @@ import type { LoggerLike } from '../logger';
 import type { HelpEntry } from '../types';
 
 /**
- * Normalize a command name for case-insensitive, prefix-agnostic lookup.
- * Strips both `!` (plugin commands) and `.` (core dot-commands) so the
- * shared corpus can be queried by either trigger style.
+ * Strict storage/identity key — case-folded but prefix-preserving so
+ * `.ban` (core dot-command) and `!ban` (channel bang-command) are
+ * tracked as distinct entries that share a fuzzy alias for bare-name
+ * lookups. Two registrations collide only when their strict keys match
+ * (same prefix, same name, same case-fold).
  */
-function normalizeCommand(command: string): string {
+function strictKey(command: string): string {
+  return command.toLowerCase();
+}
+
+/**
+ * Fuzzy lookup key — strips the leading `!` or `.` and case-folds. Used
+ * by `get()` as a fallback so `!help ban` resolves to whichever prefix
+ * variant exists. Not used for storage or collision detection.
+ */
+function fuzzyKey(command: string): string {
   return command.replace(/^[!.]/, '').toLowerCase();
 }
 
 export class HelpRegistry {
-  // Two-level map: pluginId → (normalized command → entry). The inner Map
-  // makes `register()` an upsert-by-command, so a plugin can register from
+  // Two-level map: pluginId → (strictKey → entry). The inner Map makes
+  // `register()` an upsert-by-strict-key, so a plugin can register from
   // multiple files (or re-register on config change) without piling up
   // duplicates and without sibling files clobbering each other.
   private entries: Map<string, Map<string, HelpEntry>> = new Map();
@@ -25,15 +36,19 @@ export class HelpRegistry {
   }
 
   /**
-   * Register help entries for a plugin. Each entry is upserted by command
-   * name within the plugin's bucket — calling `register()` again from a
-   * different file in the same plugin appends; calling it again with the
-   * same command replaces in place.
+   * Register help entries for a plugin. Each entry is upserted by strict
+   * key (case-folded, prefix-preserving) within the plugin's bucket —
+   * calling `register()` again from a different file in the same plugin
+   * appends; calling it again with the same command replaces in place.
    *
-   * Cross-bucket collisions (two plugins claiming the same trigger) are
-   * non-fatal: the newcomer is logged at warn level and stored under a
-   * namespaced key (`<pluginId>:<command>`) so it remains discoverable
-   * via `get('<pluginId>:foo')` rather than vanishing silently.
+   * Cross-bucket collisions on the strict key (two plugins claiming the
+   * same trigger including prefix) are non-fatal: the newcomer is logged
+   * at warn level and stored under a namespaced key
+   * (`<pluginId>:<command>`) so it remains discoverable via
+   * `get('<pluginId>:foo')` rather than vanishing silently. Different
+   * prefixes are NOT collisions — `.ban` and `!ban` coexist as distinct
+   * entries because they target different command surfaces (admin
+   * dot-command vs channel bang-command).
    *
    * Renaming a command (e.g. `!foo` → `!bar`) without unloading leaves the
    * old entry behind until the plugin is unloaded. Acceptable because
@@ -46,7 +61,7 @@ export class HelpRegistry {
       this.entries.set(pluginId, bucket);
     }
     for (const entry of entries) {
-      const key = normalizeCommand(entry.command);
+      const key = strictKey(entry.command);
       const owner = this.findExistingOwner(key, pluginId);
       if (owner) {
         const namespaced = `${pluginId}:${entry.command}`;
@@ -91,9 +106,14 @@ export class HelpRegistry {
   }
 
   /**
-   * Case-insensitive lookup by command name. Leading `!` and `.` are
-   * optional. Also resolves the namespaced fallback (`pluginId:command`)
-   * so the loser of a collision stays reachable.
+   * Case-insensitive lookup by command name. Resolution order:
+   *   1. Namespaced form `<pluginId>:command` — direct bucket lookup so
+   *      the loser of a collision stays reachable.
+   *   2. Strict (prefix-exact) match — `.ban` only matches `.ban`,
+   *      `!ban` only matches `!ban`.
+   *   3. Fuzzy fallback — bare or mismatched-prefix queries find any
+   *      registered prefix variant. Lets `!help ban` resolve regardless
+   *      of which prefix the entry was registered under.
    */
   get(command: string): HelpEntry | undefined {
     // Namespaced form (pluginId:command) — go straight to the owning bucket.
@@ -103,17 +123,28 @@ export class HelpRegistry {
       const rest = command.slice(colonIdx + 1);
       const bucket = this.entries.get(pluginId);
       if (bucket) {
-        const direct = bucket.get(`${pluginId}:${normalizeCommand(rest)}`);
+        const direct = bucket.get(`${pluginId}:${strictKey(rest)}`);
         if (direct) return direct;
-        const fallback = bucket.get(normalizeCommand(rest));
+        const fallback = bucket.get(strictKey(rest));
         if (fallback) return fallback;
       }
     }
 
-    const key = normalizeCommand(command);
+    // Strict (prefix-exact) match.
+    const strict = strictKey(command);
     for (const bucket of this.entries.values()) {
-      const entry = bucket.get(key);
+      const entry = bucket.get(strict);
       if (entry) return entry;
+    }
+
+    // Fuzzy fallback — match on prefix-stripped name. Iterates across all
+    // buckets and entries; first match wins (insertion order = registration
+    // order, so core wins over plugins for legacy compatibility).
+    const fuzzy = fuzzyKey(command);
+    for (const bucket of this.entries.values()) {
+      for (const [storedKey, entry] of bucket) {
+        if (fuzzyKey(storedKey) === fuzzy) return entry;
+      }
     }
     return undefined;
   }

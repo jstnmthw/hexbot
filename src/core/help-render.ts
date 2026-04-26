@@ -82,15 +82,20 @@ export type LookupResult =
 /**
  * Resolve a help query through the unified corpus. Resolution priority:
  *
- *   1. Exact command match (works through `helpRegistry.get` which
- *      strips `!` / `.` and lowercases). For multi-word queries like
- *      `set core logging.level`, the full query is the command name.
+ *   1. Exact command match — biased toward the active prefix. Bare
+ *      queries try `${prefix}${query}` first so `.help ban` from REPL
+ *      resolves to `.ban` (admin) rather than `!ban` (channel-op), and
+ *      `!help ban` from a channel resolves to `!ban` rather than
+ *      `.ban`. Cross-prefix queries (`.help !ban`) reject — only the
+ *      active prefix's surface is visible.
  *   2. Scope header detection — when the matched entry is a synthetic
  *      `.set <scope>` header, the lookup pivots to a scope view so
- *      `!help set chanmod` lists the scope's keys instead of dumping
+ *      `.help set chanmod` lists the scope's keys instead of dumping
  *      the bare command line.
  *   3. Category match — falls through when no command matched and the
- *      query case-folds to a category label.
+ *      query case-folds to a category label. Filtered by prefix so
+ *      `.help moderation` shows `.ban`/`.unban`/`.bans` and
+ *      `!help moderation` shows `!ban`/`!op`/`!kick`/etc.
  *   4. None.
  *
  * Permission gating: matched commands the caller cannot see resolve to
@@ -105,12 +110,25 @@ export function lookup(
   query: string,
   ctx: HandlerContext,
   perms: RenderPermissions | null,
+  prefix: string,
 ): LookupResult {
   const trimmed = query.trim();
   if (!trimmed) return { kind: 'none', query };
 
-  // Priority 1: command match
-  const entry = registry.get(trimmed);
+  // Priority 1: command match — biased toward the active prefix.
+  // Bare queries try the prefix-qualified form first; explicit-prefix
+  // queries resolve directly. Wrong-prefix entries are rejected so
+  // cross-surface lookups don't leak.
+  const queryHasPrefix = trimmed.startsWith('!') || trimmed.startsWith('.');
+  let entry: HelpEntry | undefined;
+  if (queryHasPrefix) {
+    entry = registry.get(trimmed);
+  } else {
+    entry = registry.get(`${prefix}${trimmed}`) ?? registry.get(trimmed);
+  }
+  if (entry && !commandMatchesPrefix(entry.command, prefix)) {
+    entry = undefined;
+  }
   if (entry) {
     const cat = entry.category ?? entry.pluginId ?? '';
     // Scope header → pivot to scope view so the listing of keys lands
@@ -119,7 +137,12 @@ export function lookup(
       const scope = cat.slice(4);
       if (isScopeHeaderEntry(entry, scope)) {
         const scopeEntries = filterByPermission(
-          registry.getAll().filter((e) => (e.category ?? e.pluginId ?? '') === cat),
+          registry
+            .getAll()
+            .filter(
+              (e) =>
+                (e.category ?? e.pluginId ?? '') === cat && commandMatchesPrefix(e.command, prefix),
+            ),
           ctx,
           perms,
         );
@@ -135,8 +158,12 @@ export function lookup(
     return { kind: 'denied', query };
   }
 
-  // Priority 2: category match (permission-filtered)
-  const visible = filterByPermission(registry.getAll(), ctx, perms);
+  // Priority 2: category match (prefix-filtered, then permission-filtered).
+  const visible = filterByPermission(
+    registry.getAll().filter((e) => commandMatchesPrefix(e.command, prefix)),
+    ctx,
+    perms,
+  );
   const categoryEntries = visible.filter(
     (e) => (e.category ?? e.pluginId ?? '').toLowerCase() === trimmed.toLowerCase(),
   );
@@ -151,6 +178,17 @@ export function lookup(
   }
 
   return { kind: 'none', query };
+}
+
+/**
+ * True when the entry's command trigger uses the active prefix. Isolates
+ * `.help` (REPL/admin dot-command) and `!help` (channel bang-command)
+ * corpora — each transport surfaces only its own commands. Multi-word
+ * commands like `.set core logging.level` still test the leading
+ * character so the whole settings tree stays bound to `.`.
+ */
+function commandMatchesPrefix(command: string, prefix: string): boolean {
+  return command.startsWith(prefix);
 }
 
 // ---------------------------------------------------------------------------

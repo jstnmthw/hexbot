@@ -113,7 +113,7 @@ export function init(api: PluginAPI): void {
     const helpRegistry = api.getHelpRegistry();
 
     if (arg) {
-      const result = lookup(helpRegistry, arg, ctx, api.permissions);
+      const result = lookup(helpRegistry, arg, ctx, api.permissions, '!');
       switch (result.kind) {
         case 'command':
           privateReply(ctx, renderCommand(result.entry));
@@ -155,8 +155,12 @@ export function init(api: PluginAPI): void {
     }
     cooldowns.set(cooldownKey, now);
 
+    // Prefix filter: this transport only surfaces channel-facing
+    // bang-commands (`!foo`). Dot-commands belong to the REPL/admin
+    // surface served by the core `.help` built-in.
     const visible = helpRegistry
       .getAll()
+      .filter((e) => e.command.startsWith('!'))
       .filter((e) => e.flags === '-' || api.permissions.checkFlags(e.flags, ctx));
     const lines = renderIndex(visible, {
       compact: api.settings.getFlag('compact_index'),

@@ -629,16 +629,18 @@ export interface HelpEntry {
 
 /**
  * Read-only window onto the unified help corpus. Mirrors the lookup
- * surface of the underlying `HelpRegistry` (case- and prefix-insensitive
- * `get`, plus `getAll`) without exposing the mutating `register` /
- * `unregister` paths — those go through the scoped `api.registerHelp`
- * so the factory can stamp the pluginId.
+ * surface of the underlying `HelpRegistry` (case-insensitive `get` with
+ * strict-then-fuzzy prefix resolution, plus `getAll`) without exposing
+ * the mutating `register` / `unregister` paths — those go through the
+ * scoped `api.registerHelp` so the factory can stamp the pluginId.
  */
 export interface HelpRegistryView {
   /**
-   * Look up an entry by command name. Strips an optional leading `!` or
-   * `.`, lowercases, and resolves namespaced fallback forms
-   * (`<pluginId>:command`) for the loser of a collision.
+   * Look up an entry by command name. Tries (1) namespaced form
+   * `<pluginId>:command`, then (2) strict prefix-exact match (`.foo`
+   * only matches `.foo`, `!foo` only matches `!foo`), then (3) fuzzy
+   * fallback that ignores the leading `!` or `.` so bare queries find
+   * any registered variant.
    */
   get(command: string): HelpEntry | undefined;
   /** All entries across every owner bucket. */

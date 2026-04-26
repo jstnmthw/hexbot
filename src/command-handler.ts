@@ -340,7 +340,7 @@ export class CommandHandler {
 
     const arg = args.trim();
     if (arg) {
-      const result = lookup(this.helpRegistry, arg, handlerCtx, renderPerms);
+      const result = lookup(this.helpRegistry, arg, handlerCtx, renderPerms, this.prefix);
       switch (result.kind) {
         case 'command':
           ctx.reply(renderCommand(result.entry).join('\n'));
@@ -363,12 +363,14 @@ export class CommandHandler {
 
     // Bare-index render. Verbose mode (compact: false) so the trusted
     // operator console gets the categorised listing operators expect.
+    // Prefix filter: this transport only surfaces its own trigger
+    // (`.foo` for the dot-command path). The bang-prefix corpus is
+    // shown by the channel-side `!help` plugin.
+    const prefixed = this.helpRegistry.getAll().filter((e) => e.command.startsWith(this.prefix));
     const visibleEntries =
       renderPerms === null
-        ? this.helpRegistry.getAll()
-        : this.helpRegistry
-            .getAll()
-            .filter((e) => e.flags === '-' || renderPerms.checkFlags(e.flags, handlerCtx));
+        ? prefixed
+        : prefixed.filter((e) => e.flags === '-' || renderPerms.checkFlags(e.flags, handlerCtx));
     const lines = renderIndex(visibleEntries, {
       compact: false,
       header: 'Available commands',
