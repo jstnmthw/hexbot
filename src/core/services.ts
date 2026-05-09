@@ -8,6 +8,7 @@ import { toEventObject } from '../utils/irc-event';
 import { ListenerGroup } from '../utils/listener-group';
 import { type Casemapping, ircLower, wildcardMatch } from '../utils/wildcard';
 import { tryLogModAction } from './audit';
+import type { ChannelState } from './channel-state';
 import { tryParseAccResponse, tryParseStatusResponse } from './services-parser';
 
 export type { VerifyResult };
@@ -78,6 +79,17 @@ export interface ServicesDeps {
    * identify-state tracking.
    */
   botNick?: string;
+  /**
+   * Channel-state tracker. When supplied, a successful `verifyUser` writes
+   * the resolved account back to channel-state before emitting
+   * `user:identified`, so any listener that subsequently reads
+   * `chanUser.accountName` agrees with what NickServ just told us. Without
+   * this bridge, plugins that listen to `user:identified` and re-enter
+   * `verifyUser` (e.g. chanmod's auto-op reconciler) would loop until
+   * something else terminates the chain — typically the IRC server's
+   * `+v`/`+o` echo finally landing in `chanUser.modes`.
+   */
+  channelState?: ChannelState;
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +103,7 @@ export class Services {
   private logger: LoggerLike | null;
   private db: BotDatabase | null;
   private botNick: string;
+  private channelState: ChannelState | null;
   private pending: Map<string, PendingVerify> = new Map();
   private listeners: ListenerGroup;
   private casemapping: Casemapping = 'rfc1459';
@@ -150,6 +163,7 @@ export class Services {
     this.logger = deps.logger?.child('services') ?? null;
     this.db = deps.db ?? null;
     this.botNick = deps.botNick ?? '';
+    this.channelState = deps.channelState ?? null;
     this.listeners = new ListenerGroup(deps.client, this.logger);
     this.servicesHostPattern = (deps.servicesConfig.services_host_pattern ?? '').trim();
 
@@ -601,6 +615,13 @@ export class Services {
     this.pending.delete(lower);
 
     if (verified && account !== null) {
+      // Update channel-state's account cache *before* the emit so any
+      // `user:identified` listener that re-enters via `chanUser.accountName`
+      // (e.g. chanmod's auto-op reconciler) sees the freshly-verified
+      // account and can short-circuit Stage A instead of issuing another
+      // ACC round-trip. Without this bridge the chain loops until the
+      // IRC server echoes the granted prefix mode.
+      this.channelState?.setAccountForNick(nick, account);
       this.eventBus.emit('user:identified', nick, account);
     }
 

@@ -22,6 +22,18 @@ All commands require the caller to have `+o` (op) flag in the channel.
 
 ## Per-channel settings (.chanset)
 
+Chanmod surfaces its tunables at two scopes that share the same names. The
+**plugin scope** (`.set chanmod <key>` / configured under `chanmod.config` in
+`plugins.json`) is the bot-wide default. The **channel scope** (`.chanset
+#chan <key>`) overrides that default for a specific channel — once set, it
+takes precedence over the plugin-scope value. Keys present at both scopes
+include `auto_op`, `bitch`, `enforce_modes`, `enforcebans`, `protect_ops`
+(plugin-scope `punish_deop`), `revenge` (plugin-scope `revenge_on_kick`),
+`channel_modes` (plugin-scope `enforce_channel_modes`), `channel_key`
+(`enforce_channel_key`), and `channel_limit` (`enforce_channel_limit`).
+`.info chanmod` hides those keys from its main listing — they're tracked
+per-channel via `.chanset`. Pass `.info chanmod --all` to see them inline.
+
 Most chanmod behaviors can be tuned per-channel using `.chanset` (requires `m` flag):
 
 ```

@@ -552,6 +552,16 @@ export type ReloadClass = 'live' | 'reload' | 'restart';
  */
 export interface PluginSettingDef extends ChannelSettingDef {
   reloadClass?: ReloadClass;
+  /**
+   * Marks a plugin-scope key whose value is the bot-wide default for a
+   * channel-scope key of the same name (declared separately via
+   * `api.channelSettings.register`). Operators override the default per
+   * channel through `.chanset`; `.info <plugin>` hides these keys from
+   * its main listing and points operators at `.chanset` instead, so the
+   * snapshot doesn't double-render the same knob. `.info <plugin> --all`
+   * (and `.set <plugin>` snapshot mode) still show every key.
+   */
+  channelOverridable?: boolean;
 }
 
 /** Callback signature for core/plugin scope setting changes. */

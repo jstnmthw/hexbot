@@ -386,6 +386,60 @@ describe('Services', () => {
 
       expect(listener).toHaveBeenCalledWith('Alice', 'Alice');
     });
+
+    it('writes the verified account to channel-state before emitting user:identified', async () => {
+      // Regression: previously a `user:identified` listener that re-entered
+      // verifyUser via `chanUser.accountName` would loop, because the
+      // channel-state cache wasn't updated when services confirmed identity.
+      // Listeners must observe the account already written on the cache by
+      // the time the emit fires.
+      const client = new MockClient();
+      const eventBus = new BotEventBus();
+      const channelState = new (await import('../../src/core/channel-state')).ChannelState(
+        client as never,
+        eventBus,
+      );
+      channelState.attach();
+
+      const services = new Services({
+        client,
+        servicesConfig: {
+          type: 'atheme',
+          nickserv: 'NickServ',
+          password: 'botpass',
+          sasl: false,
+        },
+        eventBus,
+        channelState,
+      });
+      services.attach();
+
+      // Seed channel-state with a joined user that has no account yet.
+      client.emit('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'alice.example',
+        channel: '#test',
+      });
+      expect(channelState.getUser('#test', 'Alice')!.accountName).toBeUndefined();
+
+      // What a chanmod-style listener would observe on the user:identified
+      // event: the cached accountName at emit time.
+      let observedAtEmit: string | null | undefined = '<unset>';
+      eventBus.on('user:identified', (nick) => {
+        observedAtEmit = channelState.getUser('#test', nick)?.accountName;
+      });
+
+      const promise = services.verifyUser('Alice', 1000);
+      client.simulateNotice('NickServ', 'Alice ACC 3');
+      await promise;
+
+      expect(observedAtEmit).toBe('Alice');
+      expect(channelState.getAccountForNick('Alice')).toBe('Alice');
+
+      services.detach();
+      channelState.detach();
+    });
   });
 
   describe('cleanup', () => {

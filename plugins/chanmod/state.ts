@@ -355,7 +355,13 @@ function readEnum<T extends string>(
  */
 export const CHANMOD_SETTING_DEFS: PluginSettingDef[] = [
   // Auto-op
-  { key: 'auto_op', type: 'flag', default: true, description: 'Auto-op flagged users on join' },
+  {
+    key: 'auto_op',
+    type: 'flag',
+    default: true,
+    description: 'Auto-op flagged users on join',
+    channelOverridable: true,
+  },
   {
     key: 'op_flags',
     type: 'string',
@@ -386,6 +392,7 @@ export const CHANMOD_SETTING_DEFS: PluginSettingDef[] = [
     type: 'flag',
     default: false,
     description: 'Re-apply channel mode string when removed',
+    channelOverridable: true,
   },
   {
     key: 'enforce_delay_ms',
@@ -404,18 +411,21 @@ export const CHANMOD_SETTING_DEFS: PluginSettingDef[] = [
     type: 'string',
     default: '',
     description: 'Mode string to enforce (e.g. "+nt-s"); per-channel override via channelSettings',
+    channelOverridable: true,
   },
   {
     key: 'enforce_channel_key',
     type: 'string',
     default: '',
     description: 'Channel key (+k) to enforce; per-channel override via channelSettings',
+    channelOverridable: true,
   },
   {
     key: 'enforce_channel_limit',
     type: 'int',
     default: 0,
     description: 'Channel user limit (+l) to enforce; per-channel override via channelSettings',
+    channelOverridable: true,
   },
   // Cycle
   {
@@ -480,6 +490,7 @@ export const CHANMOD_SETTING_DEFS: PluginSettingDef[] = [
     type: 'flag',
     default: false,
     description: 'Punish whoever kicks the bot (action set by revenge_action)',
+    channelOverridable: true,
   },
   {
     key: 'revenge_action',
@@ -511,12 +522,14 @@ export const CHANMOD_SETTING_DEFS: PluginSettingDef[] = [
     type: 'flag',
     default: false,
     description: 'Deop any user who receives +o without the required op flag',
+    channelOverridable: true,
   },
   {
     key: 'punish_deop',
     type: 'flag',
     default: false,
     description: 'Punish users who deop a flagged op',
+    channelOverridable: true,
   },
   {
     key: 'punish_action',
@@ -536,6 +549,7 @@ export const CHANMOD_SETTING_DEFS: PluginSettingDef[] = [
     type: 'flag',
     default: false,
     description: 'Kick users who match a new ban mask',
+    channelOverridable: true,
   },
   {
     key: 'nick_recovery',

@@ -142,6 +142,7 @@ function createLoaderFull(pluginDir: string, overrides?: Partial<PluginLoaderDep
     client: mockChannelClient,
     servicesConfig: MINIMAL_BOT_CONFIG.services,
     eventBus,
+    channelState,
   });
   const logger = new Logger(null, { value: 'debug' });
 
