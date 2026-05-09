@@ -183,7 +183,7 @@ describe('spotify-radio poll loop', () => {
     expect(h.instance[INTERNALS].getState().session!.lastTrackId).toBe('A');
   });
 
-  it('announcement format: "<prefix> Now playing: <artist> — <title> • Listen: <jamUrl>"', async () => {
+  it('announcement format: "<prefix> Now playing: <artist> — <title> • Tune In: <jamUrl>"', async () => {
     const h = harness();
     await h.instance.init(h.api);
     h.instance[INTERNALS].setSpotifyClient(
@@ -196,7 +196,7 @@ describe('spotify-radio poll loop', () => {
     expect(announce).toBeDefined();
     // Artist precedes title (the user-requested order), and the URL on the
     // line is the operator's pasted Jam URL — never the per-track URL.
-    expect(announce!.message).toBe(`[radio] Now playing: Mat Zo — Astatine • Listen: ${VALID}`);
+    expect(announce!.message).toBe(`[radio] Now playing: Mat Zo — Astatine • Tune In: ${VALID}`);
     expect(announce!.message).not.toContain('https://open.spotify.com/track/');
   });
 

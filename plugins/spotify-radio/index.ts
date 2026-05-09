@@ -56,6 +56,12 @@ export interface PluginConfig {
 export interface RadioSession {
   channel: string;
   jamUrl: string;
+  /**
+   * Nick that ran `!radio on`. Surfaced as "Current DJ" in the `!radio`
+   * status line; stored raw and stripped at display time, mirroring how
+   * track artist/title are handled in `announceTrack`.
+   */
+  startedBy: string;
   startedAt: number;
   ttlMs: number;
   /** Last announced trackId, or null until the first poll has fired. */
@@ -191,6 +197,7 @@ export function createSpotifyRadio(): SpotifyRadio {
           '!radio — show current session status (notice to you)',
           '!radio on <jam-url> — start a session and rebroadcast the Jam link (n)',
           '!radio off — stop the current session (n)',
+          'Tip: change the [radio] tag with .set spotify-radio announce_prefix <value> (n)',
         ],
         category: 'spotify-radio',
       },
@@ -242,10 +249,8 @@ export function createSpotifyRadio(): SpotifyRadio {
       return;
     }
     const ageMin = Math.floor((Date.now() - session.startedAt) / 60_000);
-    send(
-      `${prefix} Radio on for ${ageMin}m — Listen: ${session.jamUrl}` +
-        (session.lastTrackId ? '' : ' — waiting for the first track to start playing'),
-    );
+    const dj = api.stripFormatting(session.startedBy);
+    send(`${prefix} Current DJ: ${dj} • LIVE: ${ageMin}m • Tune In: ${session.jamUrl}`);
   }
 
   async function handleOn(api: PluginAPI, ctx: ChannelHandlerContext, rest: string): Promise<void> {
@@ -282,6 +287,7 @@ export function createSpotifyRadio(): SpotifyRadio {
     session = {
       channel: ctx.channel,
       jamUrl: validated,
+      startedBy: ctx.nick,
       startedAt: Date.now(),
       ttlMs: c.sessionTtlHours * HOURS_TO_MS,
       lastTrackId: null,
@@ -301,7 +307,7 @@ export function createSpotifyRadio(): SpotifyRadio {
       },
     });
 
-    api.say(ctx.channel, `${getPrefix(api)} Radio is on — Listen: ${validated}`);
+    api.say(ctx.channel, `${getPrefix(api)} Radio is on — Tune In: ${validated}`);
     api.log(`Session started in ${ctx.channel} by ${safeNick}`);
   }
 
@@ -458,7 +464,7 @@ export function createSpotifyRadio(): SpotifyRadio {
     // the radio's purpose is to direct people into the host's Jam, not
     // out to a track page. `s.jamUrl` is whatever the operator pasted,
     // already validateJamUrl-normalised.
-    const line = `${getPrefix(api)} Now playing: ${artist} — ${title} • Listen: ${s.jamUrl}`;
+    const line = `${getPrefix(api)} Now playing: ${artist} — ${title} • Tune In: ${s.jamUrl}`;
     api.say(s.channel, line);
   }
 

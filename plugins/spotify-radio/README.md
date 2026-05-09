@@ -4,7 +4,7 @@ A plugin that turns hexbot into a classic "now playing" IRC radio
 announcer backed by Spotify. The operator starts a Spotify Jam in their
 own client, runs `!radio on <jam-url>` in a channel, and the bot polls
 the operator's currently-playing track and announces each transition
-to the channel as `[radio] Now playing: Artist — Song • Listen: <jam-url>`.
+to the channel as `[radio] Now playing: Artist — Song • Tune In: <jam-url>`.
 
 This plugin **announces** tracks and **rebroadcasts** the Jam link.
 It does not create Jams (Spotify has no Jam API), and it does not
@@ -78,10 +78,18 @@ HEX_SPOTIFY_CLIENT_ID=... HEX_SPOTIFY_CLIENT_SECRET=... \
 Example output:
 
 ```
-<hexbot> [radio] Radio is on — Listen: https://spotify.link/b43IsXDr02b
-<hexbot> [radio] Now playing: Mat Zo — Astatine • Listen: https://spotify.link/b43IsXDr02b
-<hexbot> [radio] Now playing: Dr. Dre, Snoop Dogg — Still D.R.E. • Listen: https://spotify.link/b43IsXDr02b
+<hexbot> [radio] Radio is on — Tune In: https://spotify.link/b43IsXDr02b
+<hexbot> [radio] Now playing: Mat Zo — Astatine • Tune In: https://spotify.link/b43IsXDr02b
+<hexbot> [radio] Now playing: Dr. Dre, Snoop Dogg — Still D.R.E. • Tune In: https://spotify.link/b43IsXDr02b
+-HexBot- [radio] Current DJ: alice • LIVE: 4m • Tune In: https://spotify.link/b43IsXDr02b
 ```
+
+The last line is what `!radio` (no args) sends as a notice; `!listen`
+sends the same line to the channel so others can pick up the URL.
+
+To rename the `[radio]` tag, an owner runs
+`.set spotify-radio announce_prefix <value>` (control bytes are stripped,
+length is capped at 32, an empty value falls back to `[radio]`).
 
 Every line points listeners at the Jam URL the operator pasted, not
 the per-track Spotify page — the radio's job is to feed people into
