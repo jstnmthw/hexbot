@@ -51,19 +51,19 @@ A plugin that turns the hexbot into a classic "now playing" IRC radio announcer 
 
 **Why this phase ships first:** the plugin has nothing to do without a working refresh token. Building the auth helper first makes the rest of the plan end-to-end testable from day one.
 
-- [ ] Add the three Spotify env vars to `config/bot.env.example` with comments explaining:
+- [x] Add the three Spotify env vars to `config/bot.env.example` with comments explaining:
   - They are required only if the `spotify-radio` plugin is enabled.
   - They must belong to the Spotify account that will actually be hosting the Jam and playing music.
   - The refresh token is scope-locked at grant time — re-run the auth script if scopes change.
-- [ ] Create `scripts/spotify-auth.ts`:
+- [x] Create `scripts/spotify-auth.ts`:
   - Reads `HEX_SPOTIFY_CLIENT_ID` and `HEX_SPOTIFY_CLIENT_SECRET` from `process.env` (this script is a dev tool, not a plugin — direct `process.env` access is acceptable).
   - Reads a `--code <value>` CLI argument for the headless fallback path.
   - **Loopback listener mode (default):** binds `http.createServer` on `127.0.0.1:8888`, generates a PKCE `code_verifier` + `code_challenge` and a random `state` nonce, prints the Spotify authorize URL (`https://accounts.spotify.com/authorize?...` with `response_type=code`, `redirect_uri=http://127.0.0.1:8888/callback`, `scope=user-read-currently-playing user-read-playback-state`, `state`, `code_challenge`, `code_challenge_method=S256`) and asks the operator to open it in a browser. When the callback request arrives, validate the returned `state`, exchange `code` for tokens at `https://accounts.spotify.com/api/token`, close the listener, and print the refresh token to stdout with a clear banner telling the operator exactly which env var to paste it into.
   - **Headless fallback:** when `--code <value>` is present, skip the listener entirely, POST the code to the token endpoint using the same registered `redirect_uri`, print the refresh token.
   - Timeout: close the listener and exit non-zero after 5 minutes if no callback arrives.
   - **Never log the refresh token anywhere except the final stdout banner** — no debug prints, no error traces that interpolate it.
-- [ ] Add `"spotify:auth": "tsx scripts/spotify-auth.ts"` under `scripts` in `package.json`.
-- [ ] Verification:
+- [x] Add `"spotify:auth": "tsx scripts/spotify-auth.ts"` under `scripts` in `package.json`.
+- [x] Verification (deferred to operator — requires real Spotify app + browser):
   - Register a test app at developer.spotify.com with `http://127.0.0.1:8888/callback` as a redirect URI.
   - Export `HEX_SPOTIFY_CLIENT_ID` / `HEX_SPOTIFY_CLIENT_SECRET` in the local shell.
   - Run `pnpm run spotify:auth`, complete the flow, confirm a refresh token is printed.
@@ -71,18 +71,18 @@ A plugin that turns the hexbot into a classic "now playing" IRC radio announcer 
 
 **Security audit follow-ups (2026-04-14):**
 
-- [ ] Bind the loopback listener with an explicit `'127.0.0.1'` host argument: `server.listen(8888, '127.0.0.1', ...)`. Node's default `listen(port)` binds to `::` on dual-stack systems, which would expose the callback endpoint to the local network during the auth flow.
-- [ ] Wrap the token-exchange POST in a `try/catch` that re-throws a sanitised error containing only the HTTP status — never the request body (authorization code, client secret) or the response body (may echo credentials in error shapes).
-- [ ] Install a top-level `process.on('uncaughtException')` handler that logs a generic message and `process.exit(1)` without printing stack traces that could contain the authorization code or client secret.
-- [ ] Validate the returned `code` query parameter does not contain `\r`, `\n`, or `\0` before posting it to the token endpoint (defence in depth).
-- [ ] Resolve: either document how `--code` headless mode persists the PKCE `code_verifier` between the authorize print and the code exchange, or drop `--code` mode and use plain authorization-code flow (PKCE is technically unnecessary for a confidential client with a `client_secret` — see audit INFO finding).
+- [x] Bind the loopback listener with an explicit `'127.0.0.1'` host argument: `server.listen(8888, '127.0.0.1', ...)`. Node's default `listen(port)` binds to `::` on dual-stack systems, which would expose the callback endpoint to the local network during the auth flow.
+- [x] Wrap the token-exchange POST in a `try/catch` that re-throws a sanitised error containing only the HTTP status — never the request body (authorization code, client secret) or the response body (may echo credentials in error shapes).
+- [x] Install a top-level `process.on('uncaughtException')` handler that logs a generic message and `process.exit(1)` without printing stack traces that could contain the authorization code or client secret.
+- [x] Validate the returned `code` query parameter does not contain `\r`, `\n`, or `\0` before posting it to the token endpoint (defence in depth).
+- [x] Resolve: PKCE dropped. Confidential client (we have `client_secret` in env) doesn't need it; keeping PKCE would force `--code` headless mode to persist `code_verifier` between two separate script invocations for no security benefit. Plain authorization-code flow is now used both inline and headless.
 
 ### Phase 2: Plugin skeleton and config wiring
 
 **Goal:** A no-op `spotify-radio` plugin that loads, reads its config through the `_env` indirection, logs a startup banner, and unloads cleanly.
 
-- [ ] Create `plugins/spotify-radio/` directory.
-- [ ] Create `plugins/spotify-radio/config.json`:
+- [x] Create `plugins/spotify-radio/` directory.
+- [x] Create `plugins/spotify-radio/config.json`:
   ```json
   {
     "client_id_env": "HEX_SPOTIFY_CLIENT_ID",
@@ -96,15 +96,15 @@ A plugin that turns the hexbot into a classic "now playing" IRC radio announcer 
   }
   ```
   Secrets are declared via `_env` fields. `plugins.json` may override `poll_interval_sec`, `session_ttl_hours`, `announce_prefix`, `allowed_link_hosts`, and `max_consecutive_errors` — never the three `_env` fields. `allowed_link_hosts` defaults to `open.spotify.com` only; `spotify.link` shorts cannot be validated server-side (client-side JS redirects — see 2026-04-14 security audit) and must be explicitly opted in via `plugins.json` if an operator accepts the phishing risk.
-- [ ] Create `plugins/spotify-radio/index.ts` with required exports (`name`, `version`, `description`, `init`, `teardown`), a `PluginConfig` interface mirroring the JSON shape, and a `loadConfig(api)` helper that validates types and asserts secrets are non-empty (same pattern as `plugins/rss/index.ts` `loadConfig`).
-- [ ] On missing or empty `client_id` / `client_secret` / `refresh_token`, throw from `init()` with a message that names the env var (not its value): e.g. `HEX_SPOTIFY_REFRESH_TOKEN not set — run 'pnpm run spotify:auth' on your workstation and paste the result into config/bot.env`. hexbot's plugin loader treats an `init()` throw as a load failure and runs `teardown()`, so resources are cleaned.
-- [ ] Implement a stub `teardown()` that clears the module-level session variable (defined in phase 4). No-op for now.
-- [ ] Verification: Enable plugin in `config/plugins.json`, start bot with `HEX_SPOTIFY_*` set to dummy non-empty values, confirm `[plugin:spotify-radio] Loaded` banner. Start with those vars unset and confirm the load fails with the exact env var name in the error.
+- [x] Create `plugins/spotify-radio/index.ts` with required exports (`name`, `version`, `description`, `init`, `teardown`), a `PluginConfig` interface mirroring the JSON shape, and a `loadConfig(api)` helper that validates types and asserts secrets are non-empty (same pattern as `plugins/rss/index.ts` `loadConfig`).
+- [x] On missing or empty `client_id` / `client_secret` / `refresh_token`, throw from `init()` with a message that names the env var (not its value): e.g. `HEX_SPOTIFY_REFRESH_TOKEN not set — run 'pnpm run spotify:auth' on your workstation and paste the result into config/bot.env`. hexbot's plugin loader treats an `init()` throw as a load failure and runs `teardown()`, so resources are cleaned.
+- [x] Implement a stub `teardown()` that clears the module-level session variable (defined in phase 4). No-op for now.
+- [x] Verification: covered by `tests/plugins/spotify-radio/plugin-init.test.ts` (every loadConfig failure path + happy path).
 
 **Security audit follow-ups (2026-04-14):**
 
-- [ ] `loadConfig` validation errors name the env var only — never interpolate the resolved value even on "present but malformed" failures (e.g., surrounding whitespace, wrong length).
-- [ ] New `tests/plugins/spotify-radio/plugin-init.test.ts` file spies on `api.log` / `api.error` during every `loadConfig` failure path and asserts that no call argument contains the test client_id, client_secret, or refresh_token strings.
+- [x] `loadConfig` validation errors name the env var only — never interpolate the resolved value even on "present but malformed" failures (e.g., surrounding whitespace, wrong length).
+- [x] New `tests/plugins/spotify-radio/plugin-init.test.ts` file spies on `api.log` / `api.error` during every `loadConfig` failure path and asserts that no call argument contains the test client_id, client_secret, or refresh_token strings.
 
 ### Phase 3: Spotify HTTP client (access token + currently-playing)
 
@@ -160,19 +160,19 @@ interface CurrentlyPlaying {
 
 **Tasks:**
 
-- [ ] Create `plugins/spotify-radio/spotify-client.ts` with the `createSpotifyClient(opts)` factory that takes `{ clientId, clientSecret, refreshToken, log, fetch? }`. The injectable `fetch` parameter is purely for tests (defaults to `globalThis.fetch`).
-- [ ] Implement token caching + refresh logic as described.
-- [ ] Implement `getCurrentlyPlaying()` with the full error branching.
-- [ ] Export the error classes (`SpotifyAuthError`, `SpotifyRateLimitError`, `SpotifyHttpError`, `SpotifyNetworkError`).
-- [ ] Verification: unit tests in `tests/plugins/spotify-radio/spotify-client.test.ts`. See test plan for cases.
+- [x] Create `plugins/spotify-radio/spotify-client.ts` with the `createSpotifyClient(opts)` factory that takes `{ clientId, clientSecret, refreshToken, log, fetch? }`. The injectable `fetch` parameter is purely for tests (defaults to `globalThis.fetch`).
+- [x] Implement token caching + refresh logic as described.
+- [x] Implement `getCurrentlyPlaying()` with the full error branching.
+- [x] Export the error classes (`SpotifyAuthError`, `SpotifyRateLimitError`, `SpotifyHttpError`, `SpotifyNetworkError`).
+- [x] Verification: unit tests in `tests/plugins/spotify-radio/spotify-client.test.ts`. See test plan for cases.
 
 **Security audit follow-ups (2026-04-14):**
 
-- [ ] Hold the refresh token in a module-local mutable variable inside `createSpotifyClient`, seeded from `opts.refreshToken` at creation time. When Spotify returns a new `refresh_token` in a token-endpoint response, overwrite the variable and log at `info` that rotation happened (the fact, never the value). Do not write to `bot.env`.
-- [ ] Wrap every `fetch` call in a `fetchWithTimeout` helper that uses an `AbortController` with a 10-second timeout. Map `AbortError` to `SpotifyNetworkError` so the existing error-budget path handles it.
-- [ ] Add test: mocked token endpoint returns a new `refresh_token`; assert the next `refreshAccessToken()` call uses the new value and the old one is never re-sent.
-- [ ] Add test: `getCurrentlyPlaying()` on a hung fetch throws `SpotifyNetworkError` after 10 seconds.
-- [ ] Secret-redaction test must also verify that `SpotifyAuthError` instances never include the response body, authorization header, or Basic-auth credential bytes.
+- [x] Hold the refresh token in a module-local mutable variable inside `createSpotifyClient`, seeded from `opts.refreshToken` at creation time. When Spotify returns a new `refresh_token` in a token-endpoint response, overwrite the variable and log at `info` that rotation happened (the fact, never the value). Do not write to `bot.env`.
+- [x] Wrap every `fetch` call in a `fetchWithTimeout` helper that uses an `AbortController` with a 10-second timeout. Map `AbortError` to `SpotifyNetworkError` so the existing error-budget path handles it.
+- [x] Add test: mocked token endpoint returns a new `refresh_token`; assert the next `refreshAccessToken()` call uses the new value and the old one is never re-sent.
+- [x] Add test: `getCurrentlyPlaying()` on a hung fetch throws `SpotifyNetworkError` after 10 seconds.
+- [x] Secret-redaction test must also verify that `SpotifyAuthError` instances never include the response body, authorization header, or Basic-auth credential bytes.
 
 ### Phase 4: Session state and URL validation
 
@@ -215,17 +215,17 @@ The validator is a pure function. Test it exhaustively.
 
 **Tasks:**
 
-- [ ] Add `RadioSession` interface and module-level state variables.
-- [ ] Write `validateJamUrl(raw, allowedHosts)` — pure, no side effects, extractable for unit tests.
-- [ ] Flesh out `teardown()`: null out `session`, `spotify`, `cfg`. No dangling timers to clear because the poll loop is driven by a `time` bind (auto-removed on unload).
-- [ ] Verification: covered by unit tests in the next phase.
+- [x] Add `RadioSession` interface and module-level state variables.
+- [x] Write `validateJamUrl(raw, allowedHosts)` — pure, no side effects, extractable for unit tests.
+- [x] Flesh out `teardown()`: null out `session`, `spotify`, `cfg`. No dangling timers to clear because the poll loop is driven by a `time` bind (auto-removed on unload).
+- [x] Verification: covered by `tests/plugins/spotify-radio/url-validator.test.ts`.
 
 **Security audit follow-ups (2026-04-14):**
 
-- [ ] `JAM_PATH` regex is `/^\/jam\/[A-Za-z0-9]{1,64}\/?$/` — strict match with optional single trailing slash, no deeper path segments.
-- [ ] `validateJamUrl` strips every query parameter except `si` before returning `url.toString()`.
-- [ ] Default `allowed_link_hosts` is `["open.spotify.com"]` only. `spotify.link` is NOT included by default.
-- [ ] `url-validator.test.ts` extended cases:
+- [x] `JAM_PATH` regex is `/^\/jam\/[A-Za-z0-9]{1,64}\/?$/` — strict match with optional single trailing slash, no deeper path segments.
+- [x] `validateJamUrl` strips every query parameter except `si` before returning `url.toString()`.
+- [x] Default `allowed_link_hosts` is `["open.spotify.com"]` only. `spotify.link` is NOT included by default.
+- [x] `url-validator.test.ts` extended cases:
   - Reject `https://open.spotify.com/jam/abc/arbitrary/nested/path`.
   - Reject `https://spotify.link/ABcd1234` under default config.
   - Accept `https://spotify.link/ABcd1234` **only** when the test harness passes `["open.spotify.com", "spotify.link"]` explicitly.
@@ -267,25 +267,25 @@ Gate 2 is required because the dispatcher's built-in `VerificationProvider` gate
 
 **Tasks:**
 
-- [ ] Register `pub '-' '!radio'` bind in `init()` with an async handler that parses the subcommand and dispatches.
-- [ ] Register `pub '-' '!listen'` bind for the public-channel status alias.
-- [ ] Implement `handleRadioOn(api, ctx, rawUrl)`:
+- [x] Register `pub '-' '!radio'` bind in `init()` with an async handler that parses the subcommand and dispatches.
+- [x] Register `pub '-' '!listen'` bind for the public-channel status alias.
+- [x] Implement `handleRadioOn(api, ctx, rawUrl)`:
   - Single-session guard.
   - URL validation via `validateJamUrl`.
   - Construct the `RadioSession` with `startedAt = Date.now()` and `ttlMs = cfg.session_ttl_hours * 3600_000`.
   - Announce opening line to `ctx.channel`.
   - Log success.
-- [ ] Implement `handleRadioOff(api, ctx, reason)` where `reason` is `'manual'`, `'ttl'`, or `'error'` — shared helper used by the command handler, the TTL expiry path, and the error-threshold path.
-- [ ] Implement `handleRadioStatus(api, ctx, public)` that prints to channel when `public=true` and via notice otherwise.
-- [ ] Register `!radio` and `!listen` help entries via `api.registerHelp`.
-- [ ] Verification: see the command-routing test in the test plan.
+- [x] Implement `handleRadioOff(api, ctx, reason)` where `reason` is `'manual'`, `'ttl'`, or `'error'` — shared helper used by the command handler, the TTL expiry path, and the error-threshold path.
+- [x] Implement `handleRadioStatus(api, ctx, public)` that prints to channel when `public=true` and via notice otherwise.
+- [x] Register `!radio` and `!listen` help entries via `api.registerHelp`.
+- [x] Verification: see `tests/plugins/spotify-radio/command-routing.test.ts`.
 
 **Security audit follow-ups (2026-04-14):**
 
-- [ ] Every mutating `!radio` subcommand (`on`, `off`) calls `await api.services.verifyUser(ctx.nick)` after `checkFlags('n', ctx)` and before any state mutation, but only when `api.services.isAvailable()` is true. On failure, notice the invoker with `NickServ verification required for this command.` and log at `debug`.
-- [ ] Every plugin log line that interpolates `ctx.nick` or other user-supplied strings runs them through `api.stripFormatting()` first.
-- [ ] `command-routing.test.ts` case: mocked `VerificationProvider` returns `{ verified: false, account: null }`; assert `!radio on <valid-url>` is refused and `session` remains `null`.
-- [ ] `command-routing.test.ts` case: `api.services.isAvailable()` returns `false` (services not configured); assert command proceeds with hostmask-only gating (so networks without NickServ still work).
+- [x] Every mutating `!radio` subcommand (`on`, `off`) calls `await api.services.verifyUser(ctx.nick)` after `checkFlags('n', ctx)` and before any state mutation, but only when `api.services.isAvailable()` is true. On failure, notice the invoker with `NickServ verification required for this command.` and log at `debug`.
+- [x] Every plugin log line that interpolates `ctx.nick` or other user-supplied strings runs them through `api.stripFormatting()` first.
+- [x] `command-routing.test.ts` case: mocked `VerificationProvider` returns `{ verified: false, account: null }`; assert `!radio on <valid-url>` is refused and `session` remains `null`.
+- [x] `command-routing.test.ts` case: `api.services.isAvailable()` returns `false` (services not configured); assert command proceeds with hostmask-only gating (so networks without NickServ still work).
 
 ### Phase 6: Poll loop and announce-on-change
 
@@ -354,16 +354,16 @@ api.say(session.channel, line)
 
 **Tasks:**
 
-- [ ] Register the 10s `time` bind in `init()`.
-- [ ] Implement the tick handler with full branch coverage per the pseudocode.
-- [ ] Implement `announceTrack(api, session, current)` that composes the line and calls `api.say`.
-- [ ] Ensure `handleRadioOff('ttl' | 'error')` is reachable from the tick handler and does the same cleanup as the manual path.
-- [ ] Verification: integration-style test that drives the tick handler through a fake clock against a mocked Spotify client (see test plan).
+- [x] Register the 10s `time` bind in `init()`.
+- [x] Implement the tick handler with full branch coverage per the pseudocode.
+- [x] Implement `announceTrack(api, session, current)` that composes the line and calls `api.say`.
+- [x] Ensure `handleRadioOff('ttl' | 'error')` is reachable from the tick handler and does the same cleanup as the manual path.
+- [x] Verification: see `tests/plugins/spotify-radio/poll-loop.test.ts`.
 
 **Security audit follow-ups (2026-04-14):**
 
-- [ ] Tick handler includes a generic `catch (e: unknown)` after the four typed `catch` branches that increments `session.consecutiveErrors`, logs via `api.error('[spotify-radio] unexpected tick error', e)`, and escalates to `handleRadioOff('error')` when the threshold is hit.
-- [ ] `poll-loop.test.ts` case: mock `announceTrack` or the formatter to throw; assert the tick handler catches, increments `consecutiveErrors`, and does not propagate the error out of the bind.
+- [x] Tick handler includes a generic `catch (e: unknown)` after the four typed `catch` branches that increments `session.consecutiveErrors`, logs via `api.error('[spotify-radio] unexpected tick error', e)`, and escalates to `handleRadioOff('error')` when the threshold is hit.
+- [x] `poll-loop.test.ts` case: mock `announceTrack` or the formatter to throw; assert the tick handler catches, increments `consecutiveErrors`, and does not propagate the error out of the bind.
 
 ### Phase 7: README and operator docs
 
@@ -408,16 +408,16 @@ Required sections:
 
 **Tasks:**
 
-- [ ] Write `plugins/spotify-radio/README.md` per the structure above.
-- [ ] Add a brief note in `docs/SECURITY.md` section 6 (config secrets list) that names the three new `HEX_SPOTIFY_*` vars — so anyone auditing secrets sees them in the same place as the existing ones.
-- [ ] Verification: Read it cold. Can a second pair of eyes follow it end-to-end without asking for help?
+- [x] Write `plugins/spotify-radio/README.md` per the structure above.
+- [x] Add a brief note in `docs/SECURITY.md` section 6 (config secrets list) that names the three new `HEX_SPOTIFY_*` vars — so anyone auditing secrets sees them in the same place as the existing ones.
+- [x] Verification: deferred to operator — README is structured per the plan, but a "second pair of eyes" cold-read is out of scope here.
 
 **Security audit follow-ups (2026-04-14):**
 
-- [ ] Document the Feb 2026 Spotify developer-mode Premium requirement as a prerequisite (newly created developer client IDs require a Premium account for development mode).
-- [ ] Document the refresh-token rotation behaviour: operators may occasionally need to re-run `pnpm run spotify:auth` after a bot restart if Spotify has fully rotated the refresh token during the previous run.
-- [ ] Troubleshooting entry: `Request denied — NickServ verification required` → user must be identified with NickServ before the bot accepts mutating `!radio` commands on networks where `require_acc_for` covers `+n`.
-- [ ] Security notes section: mention that `spotify.link` shorts are NOT accepted by default, and explain the client-side-JS-redirect reasoning.
+- [x] Document the Feb 2026 Spotify developer-mode Premium requirement as a prerequisite (newly created developer client IDs require a Premium account for development mode).
+- [x] Document the refresh-token rotation behaviour: operators may occasionally need to re-run `pnpm run spotify:auth` after a bot restart if Spotify has fully rotated the refresh token during the previous run.
+- [x] Troubleshooting entry: `Request denied — NickServ verification required` → user must be identified with NickServ before the bot accepts mutating `!radio` commands on networks where `require_acc_for` covers `+n`.
+- [x] Security notes section: mention that `spotify.link` shorts are NOT accepted by default, and explain the client-side-JS-redirect reasoning.
 
 ## Config changes
 

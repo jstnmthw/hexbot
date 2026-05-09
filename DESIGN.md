@@ -800,6 +800,46 @@ export default defineConfig({
 });
 ```
 
+### Plugin test seams
+
+Most plugins are stateless or hold state inside per-call closures, so the default plugin shape (top-level `init` / `teardown` exports operating on module-level `let` bindings) tests cleanly: each test imports the module, drives `init(api)` against a mock api, asserts on api side-effects, and that's it.
+
+When a plugin grows internal state that tests need to inspect or replace — long-running session records, error-budget counters, retry timers, anything where assertions read what the plugin did between two calls — the module-level shape forces test-only exports (`_getStateForTest`, `_setForTest`) and double `teardown()` calls in `beforeEach` / `afterEach` to prevent cross-test leakage. The convention to avoid that is a **closure factory**:
+
+```typescript
+export interface MyPlugin {
+  init(api: PluginAPI): Promise<void>;
+  teardown(): void;
+  _internals: {
+    /* test-only accessors */
+  };
+}
+
+export function createMyPlugin(): MyPlugin {
+  let session: SessionState | null = null;
+  // ... handlers, helpers, state ...
+  return {
+    init,
+    teardown,
+    _internals: {
+      getState: () => ({ session }),
+      setSession: (s) => {
+        session = s;
+      },
+    },
+  };
+}
+
+// Singleton wired to the plugin loader.
+const _defaultInstance = createMyPlugin();
+export const init = _defaultInstance.init;
+export const teardown = _defaultInstance.teardown;
+```
+
+The plugin loader keeps using the module-level `init` / `teardown`. Tests construct a fresh `createMyPlugin()` per test and read `instance._internals` for assertions — the closure isolates state per test, so `beforeEach` doesn't need to call `teardown()` defensively. `spotify-radio` is the reference implementation.
+
+Don't reach for this pattern preemptively. Most plugins don't need it; `_internals` widens the public API of the module forever, even if production code never reads it.
+
 ### Plugin iteration workflow
 
 1. Edit plugin source code.

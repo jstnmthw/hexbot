@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`spotify-radio` plugin (MVP)**: announces the operator's currently-playing Spotify track to a channel and rebroadcasts a Jam share link. Owner-gated `!radio on <jam-url>` / `!radio off`, public `!radio` (notice) and `!listen` (channel) status. Strict URL allowlist (`open.spotify.com/jam/<id>` only by default; `spotify.link` opt-in), refresh-token rotation held in-memory, NickServ ACC verification on mutating commands when services are configured. New `pnpm run spotify:auth` workstation helper for the one-time OAuth flow. See `plugins/spotify-radio/README.md`.
 - **Three-scope settings registry** (`src/core/settings-registry.ts`): generalises the per-channel `chanset` pattern to `core` (bot-wide live config), `plugin:<id>` (per-plugin), and the existing `chanset` channel scope. KV-canonical-after-first-boot semantics: `bot.json` / `plugins.json` are first-run seeds, then operator `.set` / `.unset` / `.rehash` writes win.
 - **`.set <scope> <key> <value>` / `.unset <scope> <key>` / `.info <scope>` / `.helpset <scope> <key>` / `.rehash [scope]` / `.restart`** (`src/core/commands/settings-commands.ts`). Audit attribution flows through `auditActor(ctx)` so REPL / IRC / DCC / botlink-relay all converge on the same mod_log shape.
 - **Reload-class metadata** on every config schema field via `.describe('@reload:live|reload|restart')`. `.set` echoes the class as a hint: `(applied live)` / `(applied; subsystem reloaded)` / `(stored; takes effect after .restart)`.

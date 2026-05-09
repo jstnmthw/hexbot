@@ -7,10 +7,13 @@ import type { PluginAPI } from '../../src/types';
  * plugin-facing surface in `src/types.ts`. Mutating methods are vi.fn()
  * stubs (assertable), read methods return inert defaults
  * (`undefined` / `null` / empty arrays / `false`). `ircLower`,
- * `buildHostmask`, and `isBotNick` use real implementations because the
- * tests almost always need their actual behavior. Pass `overrides` to
- * tweak any field; common pattern is to override `db.get` so a test can
- * seed plugin state without standing up a real `BotDatabase`.
+ * `buildHostmask`, `isBotNick`, and `stripFormatting` are `vi.fn()`s
+ * pre-wired with real-behaviour implementations — tests that want the
+ * real behaviour just call them, tests that want to override per-case
+ * use `vi.mocked(api.fieldName).mockImplementationOnce(...)` without a
+ * cast. Pass `overrides` to tweak any field; common pattern is to
+ * override `db.get` so a test can seed plugin state without standing up
+ * a real `BotDatabase`.
  */
 export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginAPI {
   const noop = vi.fn();
@@ -92,10 +95,12 @@ export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginA
       logging: { level: 'info' as const, mod_actions: false },
     },
     getServerSupports: vi.fn().mockReturnValue({}),
-    ircLower: (s: string) => s.toLowerCase(),
-    buildHostmask: (source: { nick: string; ident: string; hostname: string }) =>
-      `${source.nick}!${source.ident}@${source.hostname}`,
-    isBotNick: (nick: string) => nick.toLowerCase() === 'hexbot',
+    ircLower: vi.fn((s: string) => s.toLowerCase()),
+    buildHostmask: vi.fn(
+      (source: { nick: string; ident: string; hostname: string }) =>
+        `${source.nick}!${source.ident}@${source.hostname}`,
+    ),
+    isBotNick: vi.fn((nick: string) => nick.toLowerCase() === 'hexbot'),
     channelSettings: {
       register: noop,
       get: vi.fn().mockReturnValue(false),
@@ -133,7 +138,7 @@ export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginA
       get: vi.fn().mockReturnValue(undefined),
       getAll: vi.fn().mockReturnValue([]),
     }),
-    stripFormatting: (s: string) => s,
+    stripFormatting: vi.fn((s: string) => s),
     getChannelKey: vi.fn().mockReturnValue(undefined),
     util: {
       matchWildcard: vi.fn().mockReturnValue(false),
