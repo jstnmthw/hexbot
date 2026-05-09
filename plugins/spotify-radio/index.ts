@@ -43,7 +43,6 @@ export interface PluginConfig {
   refreshToken: string;
   pollIntervalSec: number;
   sessionTtlHours: number;
-  announcePrefix: string;
   allowedLinkHosts: string[];
   maxConsecutiveErrors: number;
 }
@@ -133,6 +132,19 @@ export function createSpotifyRadio(): SpotifyRadio {
     // re-init without a fresh module evaluation), clear it before
     // wiring fresh config so `_internals.getState().session` cannot lie.
     session = null;
+    // Register live-tunable settings BEFORE loadConfig — the registry's
+    // seed walker fires inside register(), so anything that reads the
+    // setting later sees the JSON-seeded value. Defaults here mirror
+    // config.json's seed values; sanitisation lives in getPrefix().
+    api.settings.register([
+      {
+        key: 'announce_prefix',
+        type: 'string',
+        default: '[radio]',
+        description:
+          'Prefix on every spotify-radio announcement line. Control bytes are stripped and the prefix is capped at 32 characters; an empty string falls back to "[radio]".',
+      },
+    ]);
     cfg = loadConfig(api);
     spotify = createSpotifyClient({
       clientId: cfg.clientId,
@@ -218,20 +230,20 @@ export function createSpotifyRadio(): SpotifyRadio {
     ctx: ChannelHandlerContext,
     publicVisibility: boolean,
   ): Promise<void> {
-    const c = cfg;
-    if (!c) return;
+    if (!cfg) return;
     const send = (msg: string): void => {
       if (publicVisibility) api.say(ctx.channel, msg);
       else api.notice(ctx.nick, msg);
     };
 
+    const prefix = getPrefix(api);
     if (!session) {
-      send(`${c.announcePrefix} Radio is off.`);
+      send(`${prefix} Radio is off.`);
       return;
     }
     const ageMin = Math.floor((Date.now() - session.startedAt) / 60_000);
     send(
-      `${c.announcePrefix} Radio on for ${ageMin}m — join: ${session.jamUrl}` +
+      `${prefix} Radio on for ${ageMin}m — Listen: ${session.jamUrl}` +
         (session.lastTrackId ? '' : ' — waiting for the first track to start playing'),
     );
   }
@@ -261,7 +273,7 @@ export function createSpotifyRadio(): SpotifyRadio {
     if (!validated) {
       api.notice(
         ctx.nick,
-        'That URL is not a recognised Spotify Jam share link. Spotify\'s "Copy link" gives a spotify.link short URL that the bot cannot validate — open it in a browser, cancel the "Open in Spotify" prompt, then copy the https://open.spotify.com/socialsession/<id> URL from the address bar and paste that.',
+        'That URL is not a recognised Spotify share link. Use Spotify\'s "Copy link" share button (gives a spotify.link/<token> URL) or the https://open.spotify.com/socialsession/<id> URL from your browser\'s address bar.',
       );
       logCmd(api, ctx, 'on', 'rejected', 'invalid url');
       return;
@@ -289,7 +301,7 @@ export function createSpotifyRadio(): SpotifyRadio {
       },
     });
 
-    api.say(ctx.channel, `${c.announcePrefix} Radio is on — join the Jam: ${validated}`);
+    api.say(ctx.channel, `${getPrefix(api)} Radio is on — Listen: ${validated}`);
     api.log(`Session started in ${ctx.channel} by ${safeNick}`);
   }
 
@@ -325,21 +337,21 @@ export function createSpotifyRadio(): SpotifyRadio {
    * the error-budget tripwire in the poll loop.
    */
   function endSession(api: PluginAPI, reason: SessionEndReason): void {
-    const c = cfg;
-    if (!c) return;
+    if (!cfg) return;
     const closingChannel = session?.channel;
     session = null;
     if (!closingChannel) return;
+    const prefix = getPrefix(api);
     let line: string;
     switch (reason) {
       case 'manual':
-        line = `${c.announcePrefix} Session ended.`;
+        line = `${prefix} Session ended.`;
         break;
       case 'ttl':
-        line = `${c.announcePrefix} Session TTL reached. Radio off.`;
+        line = `${prefix} Session TTL reached. Radio off.`;
         break;
       case 'error':
-        line = `${c.announcePrefix} Too many errors talking to Spotify. Radio off.`;
+        line = `${prefix} Too many errors talking to Spotify. Radio off.`;
         break;
     }
     // Bot-driven closures (TTL expiry, error-budget tripwire) emit
@@ -435,15 +447,18 @@ export function createSpotifyRadio(): SpotifyRadio {
   }
 
   function announceTrack(api: PluginAPI, s: RadioSession, current: CurrentlyPlaying): void {
-    const c = cfg;
-    if (!c) return;
+    if (!cfg) return;
     // Cap before splicing — a 200-char title plus an 80-char artist plus
     // boilerplate stays well within IRC's 512-byte budget after the
     // network prepends `:nick!ident@host`. The slice happens AFTER
     // stripFormatting so caps count visible characters, not control bytes.
     const title = api.stripFormatting(current.title).slice(0, 120);
     const artist = api.stripFormatting(current.artist).slice(0, 80);
-    const line = `${c.announcePrefix} Now playing: ${title} — ${artist} • ${current.url}`;
+    // Listeners need a join URL on every line, not the per-track URL —
+    // the radio's purpose is to direct people into the host's Jam, not
+    // out to a track page. `s.jamUrl` is whatever the operator pasted,
+    // already validateJamUrl-normalised.
+    const line = `${getPrefix(api)} Now playing: ${artist} — ${title} • Listen: ${s.jamUrl}`;
     api.say(s.channel, line);
   }
 
@@ -462,6 +477,24 @@ export function createSpotifyRadio(): SpotifyRadio {
 // ---------------------------------------------------------------------------
 // Stateless helpers (no closure access)
 // ---------------------------------------------------------------------------
+
+const PREFIX_FALLBACK = '[radio]';
+const PREFIX_MAX_LEN = 32;
+
+/**
+ * Read the live `announce_prefix` setting and sanitise it for IRC
+ * output. Reads happen on every announcement so a `.set spotify-radio
+ * announce_prefix <value>` takes effect on the next line without a
+ * reload. Empty / control-byte-only / unset values fall back to
+ * `[radio]` so a misconfigured prefix can't silently produce a
+ * leading-space line or, worse, smuggle CR/LF into `say()`.
+ */
+function getPrefix(api: PluginAPI): string {
+  const raw = api.settings.getString('announce_prefix');
+  // eslint-disable-next-line no-control-regex
+  const cleaned = (raw ?? '').replace(/[\x00-\x1F\x7F]/g, '').slice(0, PREFIX_MAX_LEN);
+  return cleaned !== '' ? cleaned : PREFIX_FALLBACK;
+}
 
 /**
  * Two-gate authorisation used by every mutating !radio subcommand.
@@ -540,8 +573,10 @@ export function loadConfig(api: PluginAPI): PluginConfig {
 
   const pollIntervalSec = readInt(raw, 'poll_interval_sec', 10, 1, 3600);
   const sessionTtlHours = readInt(raw, 'session_ttl_hours', 6, 1, 168);
-  const announcePrefix = readString(raw, 'announce_prefix', '[radio]');
-  const allowedLinkHosts = readHostList(raw, 'allowed_link_hosts', ['open.spotify.com']);
+  const allowedLinkHosts = readHostList(raw, 'allowed_link_hosts', [
+    'open.spotify.com',
+    'spotify.link',
+  ]);
   const maxConsecutiveErrors = readInt(raw, 'max_consecutive_errors', 5, 1, 100);
 
   if (pollIntervalSec < TIMER_FLOOR_SEC) {
@@ -556,7 +591,6 @@ export function loadConfig(api: PluginAPI): PluginConfig {
     refreshToken,
     pollIntervalSec,
     sessionTtlHours,
-    announcePrefix,
     allowedLinkHosts,
     maxConsecutiveErrors,
   };
@@ -588,15 +622,6 @@ function readInt(
   if (value === undefined) return fallback;
   if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
     throw new Error(`spotify-radio config: ${key} must be an integer in [${min}, ${max}]`);
-  }
-  return value;
-}
-
-function readString(raw: Readonly<Record<string, unknown>>, key: string, fallback: string): string {
-  const value = raw[key];
-  if (value === undefined) return fallback;
-  if (typeof value !== 'string') {
-    throw new Error(`spotify-radio config: ${key} must be a string`);
   }
   return value;
 }

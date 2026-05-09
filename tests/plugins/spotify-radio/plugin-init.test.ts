@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createSpotifyRadio, loadConfig } from '../../../plugins/spotify-radio/index';
+import { validateJamUrl } from '../../../plugins/spotify-radio/url-validator';
 import type { PluginAPI } from '../../../src/types';
 import { createMockPluginAPI } from '../../helpers/mock-plugin-api';
 
@@ -180,14 +181,6 @@ describe('spotify-radio init / loadConfig', () => {
     await expect(instance.init(api)).rejects.toThrow(/poll_interval_sec/);
   });
 
-  it('rejects a non-string announce_prefix', async () => {
-    const cfg = fullValidBootConfig();
-    cfg.announce_prefix = 42 as unknown as string;
-    const { api } = apiWithBootConfig(cfg);
-    const instance = createSpotifyRadio();
-    await expect(instance.init(api)).rejects.toThrow(/announce_prefix/);
-  });
-
   it('rejects allowed_link_hosts containing an empty string', async () => {
     const cfg = fullValidBootConfig();
     cfg.allowed_link_hosts = ['open.spotify.com', ''];
@@ -208,8 +201,25 @@ describe('spotify-radio init / loadConfig', () => {
     const c = loadConfig(api);
     expect(c.pollIntervalSec).toBe(10);
     expect(c.sessionTtlHours).toBe(6);
-    expect(c.announcePrefix).toBe('[radio]');
-    expect(c.allowedLinkHosts).toEqual(['open.spotify.com']);
+    expect(c.allowedLinkHosts).toEqual(['open.spotify.com', 'spotify.link']);
     expect(c.maxConsecutiveErrors).toBe(5);
+  });
+
+  it('default allowed_link_hosts accepts both canonical and spotify.link share URLs', async () => {
+    const minimal: Record<string, unknown> = {
+      client_id: VALID_CLIENT_ID,
+      client_secret: VALID_CLIENT_SECRET,
+      refresh_token: VALID_REFRESH_TOKEN,
+    };
+    const { api } = apiWithBootConfig(minimal);
+    const c = loadConfig(api);
+    expect(
+      validateJamUrl('https://open.spotify.com/socialsession/abc123', c.allowedLinkHosts),
+    ).toBe('https://open.spotify.com/socialsession/abc123');
+    expect(validateJamUrl('https://spotify.link/b43IsXDr02b', c.allowedLinkHosts)).toBe(
+      'https://spotify.link/b43IsXDr02b',
+    );
+    // app.link is NOT a Spotify-owned vanity domain and must stay rejected.
+    expect(validateJamUrl('https://spotify.app.link/abc123', c.allowedLinkHosts)).toBeNull();
   });
 });

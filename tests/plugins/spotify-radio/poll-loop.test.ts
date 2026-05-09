@@ -183,6 +183,78 @@ describe('spotify-radio poll loop', () => {
     expect(h.instance[INTERNALS].getState().session!.lastTrackId).toBe('A');
   });
 
+  it('announcement format: "<prefix> Now playing: <artist> — <title> • Listen: <jamUrl>"', async () => {
+    const h = harness();
+    await h.instance.init(h.api);
+    h.instance[INTERNALS].setSpotifyClient(
+      installScriptedSpotify([track('XYZ', 'Astatine', 'Mat Zo')]).client,
+    );
+    await startSession(h);
+    h.says.length = 0;
+    await tickBind(h)(timeCtx());
+    const announce = h.says.find((s) => s.target === '#radio');
+    expect(announce).toBeDefined();
+    // Artist precedes title (the user-requested order), and the URL on the
+    // line is the operator's pasted Jam URL — never the per-track URL.
+    expect(announce!.message).toBe(`[radio] Now playing: Mat Zo — Astatine • Listen: ${VALID}`);
+    expect(announce!.message).not.toContain('https://open.spotify.com/track/');
+  });
+
+  it('announce_prefix is read live from settings on every announcement', async () => {
+    const h = harness();
+    await h.instance.init(h.api);
+    // Operator changes the prefix mid-session via `.set spotify-radio
+    // announce_prefix "[FM]"`; the next announcement picks it up
+    // without a reload.
+    (h.api.settings.getString as ReturnType<typeof vi.fn>).mockImplementation((key: string) =>
+      key === 'announce_prefix' ? '[FM]' : '',
+    );
+    h.instance[INTERNALS].setSpotifyClient(
+      installScriptedSpotify([track('A', 'Title', 'Artist')]).client,
+    );
+    await startSession(h);
+    h.says.length = 0;
+    await tickBind(h)(timeCtx());
+    const announce = h.says.find((s) => s.target === '#radio');
+    expect(announce!.message.startsWith('[FM] Now playing:')).toBe(true);
+  });
+
+  it('announce_prefix sanitises control bytes and length-caps the value', async () => {
+    const h = harness();
+    await h.instance.init(h.api);
+    // CRLF would smuggle a second IRC line; long values would push the
+    // announcement past 512 bytes once title/artist are appended.
+    const malicious = `[evil]\r\nQUIT :pwn${'x'.repeat(200)}`;
+    (h.api.settings.getString as ReturnType<typeof vi.fn>).mockImplementation((key: string) =>
+      key === 'announce_prefix' ? malicious : '',
+    );
+    h.instance[INTERNALS].setSpotifyClient(installScriptedSpotify([track('A')]).client);
+    await startSession(h);
+    h.says.length = 0;
+    await tickBind(h)(timeCtx());
+    const announce = h.says.find((s) => s.target === '#radio');
+    expect(announce).toBeDefined();
+    // No CR/LF/NUL anywhere — defends against IRC line-injection.
+    // eslint-disable-next-line no-control-regex
+    expect(/[\x00-\x1F]/.test(announce!.message)).toBe(false);
+    // Prefix truncated to 32 chars and followed by " Now playing:".
+    const expectedPrefix = malicious.replace(/[\r\n]/g, '').slice(0, 32);
+    expect(expectedPrefix).toHaveLength(32);
+    expect(announce!.message.startsWith(`${expectedPrefix} Now playing:`)).toBe(true);
+  });
+
+  it('announce_prefix falls back to "[radio]" on empty string', async () => {
+    const h = harness();
+    await h.instance.init(h.api);
+    (h.api.settings.getString as ReturnType<typeof vi.fn>).mockReturnValue('');
+    h.instance[INTERNALS].setSpotifyClient(installScriptedSpotify([track('A')]).client);
+    await startSession(h);
+    h.says.length = 0;
+    await tickBind(h)(timeCtx());
+    const announce = h.says.find((s) => s.target === '#radio');
+    expect(announce!.message.startsWith('[radio] Now playing:')).toBe(true);
+  });
+
   it('second tick on the same track does not re-announce', async () => {
     const h = harness();
     await h.instance.init(h.api);

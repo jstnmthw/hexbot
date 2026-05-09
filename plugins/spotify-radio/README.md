@@ -4,7 +4,7 @@ A plugin that turns hexbot into a classic "now playing" IRC radio
 announcer backed by Spotify. The operator starts a Spotify Jam in their
 own client, runs `!radio on <jam-url>` in a channel, and the bot polls
 the operator's currently-playing track and announces each transition
-to the channel as `[radio] Now playing: Song — Artist • Join: <link>`.
+to the channel as `[radio] Now playing: Artist — Song • Listen: <jam-url>`.
 
 This plugin **announces** tracks and **rebroadcasts** the Jam link.
 It does not create Jams (Spotify has no Jam API), and it does not
@@ -78,27 +78,28 @@ HEX_SPOTIFY_CLIENT_ID=... HEX_SPOTIFY_CLIENT_SECRET=... \
 Example output:
 
 ```
-<hexbot> [radio] Radio is on — join the Jam: https://open.spotify.com/socialsession/abc123
-<hexbot> [radio] Now playing: Still D.R.E. — Dr. Dre, Snoop Dogg • https://open.spotify.com/track/...
-<hexbot> [radio] Now playing: California Love — 2Pac, Dr. Dre • https://open.spotify.com/track/...
+<hexbot> [radio] Radio is on — Listen: https://spotify.link/b43IsXDr02b
+<hexbot> [radio] Now playing: Mat Zo — Astatine • Listen: https://spotify.link/b43IsXDr02b
+<hexbot> [radio] Now playing: Dr. Dre, Snoop Dogg — Still D.R.E. • Listen: https://spotify.link/b43IsXDr02b
 ```
+
+Every line points listeners at the Jam URL the operator pasted, not
+the per-track Spotify page — the radio's job is to feed people into
+the host's Jam so they can listen along.
 
 ## Operating it
 
 - **Start a Jam in your Spotify client.** See Spotify's own
   documentation for how — typically: play music, click the device
   picker, choose "Start a Jam".
-- **Get the canonical Jam URL.** Spotify's "Copy link" share button
-  gives a `spotify.link/...` short URL — the bot will not accept
-  these (their target is decoded by client-side JavaScript and cannot
-  be server-side validated; see "Security notes"). To get the URL the
-  bot wants:
-  1. Paste the `spotify.link/...` URL into a browser.
-  2. When the "Open Spotify?" prompt appears, **cancel** it.
-  3. The page falls back to `https://open.spotify.com/socialsession/<id>?...`.
-  4. Copy that URL from the address bar — that's what you paste into
-     `!radio on`. The bot strips `utm_*`, `ssp`, and other tracking
-     query params before announcing.
+- **Get the share URL.** In Spotify's share menu, choose "Copy link".
+  Paste the resulting `spotify.link/<token>` URL straight into
+  `!radio on` — the bot accepts it. If you'd rather paste the
+  canonical form, open the short link in a browser, cancel the
+  "Open in Spotify?" prompt, and copy the
+  `https://open.spotify.com/socialsession/<id>` URL from the address
+  bar instead. Either form is fine; the bot strips `utm_*`, `ssp`,
+  and other tracking params before announcing.
 - **End the Jam** in your Spotify client when you're done, then run
   `!radio off` in the channel. The Jam link expires when you end the
   Jam in Spotify; clearing the bot's session matches that.
@@ -108,14 +109,14 @@ Example output:
 
 ## Troubleshooting
 
-| Symptom                                                  | Fix                                                                                                                                                                                                                                                                            |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Bot won't load — `HEX_SPOTIFY_REFRESH_TOKEN not set`     | Run `pnpm run spotify:auth` on your workstation, paste the result into `config/bot.env`, restart.                                                                                                                                                                              |
-| `[radio] Authentication with Spotify failed.`            | The refresh token was revoked or scopes changed. Re-run `pnpm run spotify:auth`, update `bot.env`, then `.restart`.                                                                                                                                                            |
-| `NickServ verification required for this command.`       | The bot is configured to require NickServ identification for `+n`. Identify with NickServ, then retry.                                                                                                                                                                         |
-| Nothing happens when I run `!radio on`                   | Confirm the plugin is loaded (`!plugins`), confirm you have the `n` flag (`.flags <handle>`), confirm the URL matches `https://open.spotify.com/socialsession/<id>` (see "Operating it" for how to obtain that URL — Spotify's "Copy link" gives a short URL the bot rejects). |
-| `[radio] Too many errors talking to Spotify. Radio off.` | Network blip or Spotify outage. Check `journalctl` / bot log for the underlying status code; retry later.                                                                                                                                                                      |
-| Operator restarted bot mid-session — session is gone     | Sessions don't persist across restarts. Run `!radio on <url>` again. Spotify may also have rotated the refresh token during the previous run; if auth then fails, re-run `pnpm run spotify:auth`.                                                                              |
+| Symptom                                                  | Fix                                                                                                                                                                                                                          |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bot won't load — `HEX_SPOTIFY_REFRESH_TOKEN not set`     | Run `pnpm run spotify:auth` on your workstation, paste the result into `config/bot.env`, restart.                                                                                                                            |
+| `[radio] Authentication with Spotify failed.`            | The refresh token was revoked or scopes changed. Re-run `pnpm run spotify:auth`, update `bot.env`, then `.restart`.                                                                                                          |
+| `NickServ verification required for this command.`       | The bot is configured to require NickServ identification for `+n`. Identify with NickServ, then retry.                                                                                                                       |
+| Nothing happens when I run `!radio on`                   | Confirm the plugin is loaded (`!plugins`), confirm you have the `n` flag (`.flags <handle>`), confirm the URL is a `spotify.link/<token>` share short-link or a canonical `https://open.spotify.com/socialsession/<id>` URL. |
+| `[radio] Too many errors talking to Spotify. Radio off.` | Network blip or Spotify outage. Check `journalctl` / bot log for the underlying status code; retry later.                                                                                                                    |
+| Operator restarted bot mid-session — session is gone     | Sessions don't persist across restarts. Run `!radio on <url>` again. Spotify may also have rotated the refresh token during the previous run; if auth then fails, re-run `pnpm run spotify:auth`.                            |
 
 ## Limitations & design notes
 
@@ -140,13 +141,16 @@ Example output:
   other password — never paste it into IRC, never check it into git,
   never put it in `plugins.json`.
 - Revoke at any time via <https://www.spotify.com/account/apps/>.
-- The plugin only accepts `https://open.spotify.com/socialsession/<id>`
-  URLs by default. `spotify.link` shorts are **not** in the default allowlist
-  because their target is decoded by client-side JavaScript and cannot
-  be server-side validated — accepting them turns `!radio on` into a
-  potential phishing vector. Operators may opt in by adding
-  `"spotify.link"` to `allowed_link_hosts` in `plugins.json`, accepting
-  that risk.
+- The plugin accepts two URL forms by default: the canonical
+  `https://open.spotify.com/socialsession/<id>` and the share-menu
+  short-link `https://spotify.link/<token>`. Both are
+  Spotify-controlled namespaces — `spotify.link` is a vanity domain
+  Spotify owns and CNAMEs at Branch.io's redirector. The bot does
+  **not** follow the short link to inspect its target; the operator's
+  account is `+n` and the threat model is the operator, not arbitrary
+  third parties. Do **not** add `spotify.app.link` or other URL
+  shorteners — `app.link` is Branch's shared subdomain (any Branch
+  customer can register one), not a Spotify-owned namespace.
 - Refresh-token rotation is held in memory only. If Spotify rotates
   the token mid-session, the new value is used for the rest of the
   process lifetime and is **not** written back to `bot.env`. After a
@@ -161,13 +165,13 @@ Example output:
 `plugins/spotify-radio/config.json` defaults (overridable from
 `plugins.json` except for the three `_env` fields):
 
-| Key                      | Default                     | Description                                                                                                                                                                                 |
-| ------------------------ | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `client_id_env`          | `HEX_SPOTIFY_CLIENT_ID`     | Env var holding the Spotify app's Client ID.                                                                                                                                                |
-| `client_secret_env`      | `HEX_SPOTIFY_CLIENT_SECRET` | Env var holding the app's Client Secret.                                                                                                                                                    |
-| `refresh_token_env`      | `HEX_SPOTIFY_REFRESH_TOKEN` | Env var holding the refresh token from `pnpm run spotify:auth`.                                                                                                                             |
-| `poll_interval_sec`      | `10`                        | How often to poll Spotify (seconds). Floor is 10s (dispatcher constraint).                                                                                                                  |
-| `session_ttl_hours`      | `6`                         | Maximum session duration before auto-end.                                                                                                                                                   |
-| `announce_prefix`        | `[radio]`                   | Prefix on every announcement line.                                                                                                                                                          |
-| `allowed_link_hosts`     | `["open.spotify.com"]`      | Hostnames accepted by the URL validator. **Do not add `spotify.link`** unless you accept the phishing risk — it is a redirector whose target the bot cannot validate. See "Security notes". |
-| `max_consecutive_errors` | `5`                         | Error budget — session ends after this many consecutive poll failures.                                                                                                                      |
+| Key                      | Default                                | Description                                                                                                                                                                                                             |
+| ------------------------ | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `client_id_env`          | `HEX_SPOTIFY_CLIENT_ID`                | Env var holding the Spotify app's Client ID.                                                                                                                                                                            |
+| `client_secret_env`      | `HEX_SPOTIFY_CLIENT_SECRET`            | Env var holding the app's Client Secret.                                                                                                                                                                                |
+| `refresh_token_env`      | `HEX_SPOTIFY_REFRESH_TOKEN`            | Env var holding the refresh token from `pnpm run spotify:auth`.                                                                                                                                                         |
+| `poll_interval_sec`      | `10`                                   | How often to poll Spotify (seconds). Floor is 10s (dispatcher constraint).                                                                                                                                              |
+| `session_ttl_hours`      | `6`                                    | Maximum session duration before auto-end.                                                                                                                                                                               |
+| `announce_prefix`        | `[radio]`                              | Prefix on every announcement line. Live-tunable: `.set spotify-radio announce_prefix "[FM]"` takes effect on the next announcement. Control bytes are stripped, capped at 32 characters, empty falls back to `[radio]`. |
+| `allowed_link_hosts`     | `["open.spotify.com", "spotify.link"]` | Hostnames accepted by the URL validator. Both defaults are Spotify-controlled. **Do not add `spotify.app.link`** (Branch.io's shared subdomain — not Spotify-owned) or arbitrary URL shorteners. See "Security notes".  |
+| `max_consecutive_errors` | `5`                                    | Error budget — session ends after this many consecutive poll failures.                                                                                                                                                  |

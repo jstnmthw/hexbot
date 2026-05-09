@@ -1,5 +1,16 @@
 # How should spotify-radio handle Spotify's actual share-link UX without re-opening the phishing vector?
 
+> **Decision (2026-05-10):** went with **Option C** (accept `spotify.link`
+> verbatim, no server-side resolution) after revisiting the threat model.
+> `spotify.link` is a vanity domain Spotify owns and CNAMEs at Branch.io,
+> so it cannot be spoofed by a third party — only Spotify can configure
+> what `spotify.link/<token>` decodes to. The "off-Spotify destination
+> via Branch" concern below assumed an attacker-controllable redirector,
+> which is not what `spotify.link` is. `spotify.app.link` (Branch's
+> shared subdomain) remains rejected. Default `allowed_link_hosts` is
+> now `["open.spotify.com", "spotify.link"]`. Option D's resolver was
+> not implemented.
+
 ## Context
 
 The current Spotify share menu (desktop and mobile, mid-2026) does not give

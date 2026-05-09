@@ -5,6 +5,6 @@
   "poll_interval_sec": 10,
   "session_ttl_hours": 6,
   "announce_prefix": "[radio]",
-  "allowed_link_hosts": ["open.spotify.com"],
+  "allowed_link_hosts": ["open.spotify.com", "spotify.link"],
   "max_consecutive_errors": 5
 }

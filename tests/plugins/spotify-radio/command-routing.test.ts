@@ -175,7 +175,7 @@ describe('spotify-radio commands', () => {
     await h.instance.init(h.api);
     await pubBind(h, '!radio')(makeCtx({ args: 'on http://evil.example/jam/x' }));
     expect(h.instance[INTERNALS].getState().session).toBeNull();
-    expect(h.notices.some((n) => n.message.toLowerCase().includes('jam'))).toBe(true);
+    expect(h.notices.some((n) => n.message.toLowerCase().includes('share link'))).toBe(true);
   });
 
   it('!radio on <valid-url> when a session already exists — refused', async () => {
