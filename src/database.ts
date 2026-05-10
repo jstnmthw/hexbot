@@ -10,7 +10,7 @@ import {
   type ModLogEntry,
   type ModLogFilter,
 } from './core/mod-log';
-import { DatabaseBusyError, DatabaseFullError } from './database-errors';
+import { DatabaseBusyError, DatabaseFatalError, DatabaseFullError } from './database-errors';
 import type { BotEventBus } from './event-bus';
 import type { LoggerLike } from './logger';
 import { escapeLikePattern } from './utils/sql';
@@ -25,7 +25,7 @@ type SqliteErrorInstance = InstanceType<typeof SqliteError>;
 
 // Re-export error classes so existing `import { DatabaseBusyError } from
 // '../database'` call sites keep compiling after the split.
-export { DatabaseBusyError, DatabaseFullError } from './database-errors';
+export { DatabaseBusyError, DatabaseFatalError, DatabaseFullError } from './database-errors';
 
 // Re-export mod_log types from their new home so existing
 // `import { ModLogSource, ... } from '../database'` sites keep compiling.
@@ -101,11 +101,25 @@ export class BotDatabase {
    */
   private writesDisabled = false;
   /**
+   * Flipped once SQLITE_CORRUPT / SQLITE_NOTADB / SQLITE_IOERR* surfaces.
+   * Subsequent reads and writes throw {@link DatabaseFatalError} immediately;
+   * the `onFatal` observer (registered by `Bot`) drives an orderly
+   * `shutdown()` then `process.exit(2)` instead of bailing mid-tick.
+   */
+  private fatal = false;
+  /**
    * Optional sink for audit writes that failed with a degradable error.
    * Wired by `Bot` so `.status` can show queued rows and an operator can
    * recover the log tail after the DB comes back.
    */
   private auditFallback: ((options: LogModActionOptions) => void) | null = null;
+  /**
+   * Fired once when the database transitions to fatal. Bot uses it to start
+   * graceful shutdown — the listener must not throw and must be re-entrant
+   * safe (we may emit it multiple times but the listener should no-op after
+   * the first call).
+   */
+  private onFatal: (() => void) | null = null;
 
   // Prepared statements for the KV store (initialized on open)
   private stmtGet!: Statement;
@@ -147,13 +161,35 @@ export class BotDatabase {
   }
 
   /**
+   * Register a one-shot observer fired when the database hits a fatal
+   * condition (SQLITE_CORRUPT / NOTADB / IOERR*). `Bot` wires this so a
+   * fatal DB error triggers `shutdown()` instead of the prior `process.exit(2)`
+   * that bypassed every teardown step.
+   */
+  setOnFatal(cb: (() => void) | null): void {
+    this.onFatal = cb;
+    this.modLog?.setOnFatal(cb);
+  }
+
+  /** True once a fatal SQLite error has been observed. */
+  get isFatal(): boolean {
+    return this.fatal || (this.modLog?.isFatal ?? false);
+  }
+
+  /**
    * Wrap a DB operation so SqliteError codes are classified into the
    * three tiers the audit calls for: transient busy → throw
    * {@link DatabaseBusyError}; FULL → set read-only flag and throw
-   * {@link DatabaseFullError}; IOERR/CORRUPT/NOTADB → log CRITICAL and
-   * exit(2) so the supervisor restarts cleanly. The pragma-level
-   * `busy_timeout = 5000` means transient contention only surfaces here
-   * after 5s of SQLite-internal retry.
+   * {@link DatabaseFullError}; IOERR/CORRUPT/NOTADB → set the fatal flag,
+   * disable writes, fire `onFatal` to start graceful shutdown, and throw
+   * {@link DatabaseFatalError}. The pragma-level `busy_timeout = 5000` means
+   * transient contention only surfaces here after 5s of SQLite-internal retry.
+   *
+   * Fatal errors used to call `process.exit(2)` directly from this point —
+   * which bypassed every teardown step (IRC QUIT, message-queue flush,
+   * plugin teardown) and could leave the WAL inconsistent. The new flow
+   * lets `Bot.shutdown()` drive the orderly exit while still terminating
+   * the process with the same code 2 so supervisors restart us.
    */
   private runClassified<T>(opName: string, fn: () => T): T {
     try {
@@ -178,11 +214,20 @@ export class BotDatabase {
         throw new DatabaseFullError(opName, err);
       }
       if (isSqliteFatal(err)) {
-        this.logger?.error(
-          `[database] FATAL ${opName}: ${err.code} — cannot continue, exiting with code 2 so the supervisor restarts us`,
-          err,
-        );
-        process.exit(2);
+        if (!this.fatal) {
+          this.logger?.error(
+            `[database] FATAL ${opName}: ${err.code} — starting graceful shutdown so the supervisor restarts us`,
+            err,
+          );
+        }
+        this.fatal = true;
+        this.writesDisabled = true;
+        try {
+          this.onFatal?.();
+        } catch (cbErr) {
+          this.logger?.error('[database] onFatal observer threw', cbErr);
+        }
+        throw new DatabaseFatalError(opName, err);
       }
       throw err;
     }

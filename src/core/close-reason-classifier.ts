@@ -45,6 +45,16 @@ const FATAL_PATTERNS: Array<[RegExp, string]> = [
   [/ERR_TLS_CERT_ALTNAME_INVALID/i, 'TLS certificate altname mismatch'],
   [/DEPTH_ZERO_SELF_SIGNED_CERT/i, 'TLS self-signed certificate'],
   [/UNABLE_TO_GET_ISSUER_CERT/i, 'TLS certificate untrusted (no issuer)'],
+  // DNS resolution failures. The two realistic causes are an operator typo
+  // in `irc.host` (config error — not fixable by retry) and the resolver
+  // momentarily losing reachability mid-session (rare; a transient hiccup
+  // would normally surface as ETIMEDOUT/ECONNREFUSED, not ENOTFOUND, since
+  // Node and the OS cache recent lookups). The cost of a wrong host is a
+  // tight retry loop hammering DNS; classifying as fatal hands control to
+  // the supervisor instead, which re-runs resolution at boot.
+  [/ENOTFOUND/i, 'DNS lookup failed (host not found)'],
+  [/EAI_AGAIN/i, 'DNS lookup failed (temporary resolver failure)'],
+  [/getaddrinfo/i, 'DNS lookup failed'],
 ];
 
 const RATE_LIMITED_PATTERNS: Array<[RegExp, string]> = [

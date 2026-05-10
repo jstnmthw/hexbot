@@ -522,15 +522,17 @@ describe('ChannelState', () => {
   });
 
   describe('topic', () => {
-    it('should track channel topic', () => {
+    it('should ignore topic for an unjoined channel (no unbounded allocation)', () => {
+      // A TOPIC for a channel the bot never joined used to allocate a
+      // ChannelInfo via ensureChannel — letting a hostile or buggy server
+      // grow the map indefinitely. The new contract: only JOIN / USERLIST /
+      // injectChannelSync may allocate; stray TOPIC is dropped.
       client.simulateEvent('topic', {
-        channel: '#test',
-        topic: 'Welcome to #test!',
+        channel: '#never-joined',
+        topic: 'Welcome to #never-joined!',
       });
 
-      const ch = state.getChannel('#test');
-      expect(ch).toBeDefined();
-      expect(ch!.topic).toBe('Welcome to #test!');
+      expect(state.getChannel('#never-joined')).toBeUndefined();
     });
 
     it('should update topic on an existing channel', () => {
@@ -552,7 +554,13 @@ describe('ChannelState', () => {
       expect(state.isUserInChannel('#test', 'Alice')).toBe(true);
     });
 
-    it('should set empty topic', () => {
+    it('should set empty topic on a joined channel', () => {
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'a',
+        hostname: 'h',
+        channel: '#test',
+      });
       client.simulateEvent('topic', {
         channel: '#test',
         topic: 'Initial topic',
@@ -1444,6 +1452,12 @@ describe('ChannelState', () => {
     });
 
     it('parses +l as the only mode in channel info', () => {
+      client.simulateEvent('join', {
+        nick: 'Bot',
+        ident: 'b',
+        hostname: 'h',
+        channel: '#onlylimit',
+      });
       client.simulateEvent('channel info', {
         channel: '#onlylimit',
         modes: [{ mode: '+l', param: '42' }],
@@ -1456,6 +1470,20 @@ describe('ChannelState', () => {
       expect(ch!.limit).toBe(42);
       expect(ch!.modes).toBe('l');
       expect(ch!.key).toBe('');
+    });
+
+    it('ignores channel info for an unjoined channel (no unbounded allocation)', () => {
+      // Mirrors the topic guard — RPL_CHANNELMODEIS for a channel we never
+      // joined would otherwise let a buggy server grow this.channels via
+      // ensureChannel. Allocation is reserved for JOIN/USERLIST/inject.
+      client.simulateEvent('channel info', {
+        channel: '#never-joined',
+        modes: [{ mode: '+l', param: '42' }],
+        raw_modes: '+l',
+        raw_params: ['42'],
+      });
+
+      expect(state.getChannel('#never-joined')).toBeUndefined();
     });
   });
 

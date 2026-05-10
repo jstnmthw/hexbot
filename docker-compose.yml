@@ -8,13 +8,21 @@ services:
       - ./config:/app/config:ro
       - ./plugins:/app/plugins:ro
       - ./data:/app/data
+    # Default healthcheck = readiness (`-connected`): unhealthy means the bot
+    # cannot reach IRC right now. Ideal for operator visibility — `docker ps`
+    # turns red while the bot is in reconnect backoff. Compose `restart:
+    # unless-stopped` triggers on container exit, NOT on healthcheck status,
+    # so this signal is observability-only and never restart-thrashes the bot
+    # mid-backoff. For autoheal sidecars / Docker Swarm restart policies /
+    # k8s liveness probes, swap the file to `/tmp/.hexbot-alive` to mark the
+    # bot unhealthy only when the event loop wedges. See README.
     healthcheck:
       test:
         [
           'CMD',
           'sh',
           '-c',
-          '[ -f /tmp/.hexbot-healthy ] && [ $$(( $$(date +%s) - $$(stat -c %Y /tmp/.hexbot-healthy) )) -lt 120 ]',
+          '[ -f /tmp/.hexbot-connected ] && [ $$(( $$(date +%s) - $$(stat -c %Y /tmp/.hexbot-connected) )) -lt 120 ]',
         ]
       interval: 30s
       timeout: 5s

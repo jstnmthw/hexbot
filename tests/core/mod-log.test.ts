@@ -10,7 +10,11 @@ import Database, {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { type LogModActionOptions, ModLog } from '../../src/core/mod-log';
-import { DatabaseBusyError, DatabaseFullError } from '../../src/database-errors';
+import {
+  DatabaseBusyError,
+  DatabaseFatalError,
+  DatabaseFullError,
+} from '../../src/database-errors';
 import type { LoggerLike } from '../../src/logger';
 
 // ---------------------------------------------------------------------------
@@ -488,41 +492,38 @@ describe('ModLog.logModAction error handling', () => {
     expect(modLog.areWritesDisabled).toBe(false);
   });
 
-  it('routes SQLITE_CORRUPT through the fatal tier — process.exit(2)', () => {
-    // Mirrors the BotDatabase parallel: ModLog's runClassified at lines
-    // 292-297 must hand off CORRUPT/NOTADB/IOERR to the supervisor rather
-    // than swallow them as audit-fallback. We stub process.exit so the
-    // test process survives.
+  it('routes SQLITE_CORRUPT through the fatal tier — DatabaseFatalError + onFatal', () => {
+    // Mirrors the BotDatabase parallel: ModLog's runClassified must hand off
+    // CORRUPT/NOTADB/IOERR to Bot.shutdown() via the onFatal observer rather
+    // than swallow them as audit-fallback or call process.exit(2) directly
+    // (which would skip every teardown step).
     const logger = makeLogger();
     const modLog = new ModLog(raw, logger);
     const fallback = vi.fn<(opts: LogModActionOptions) => void>();
     modLog.setAuditFallback(fallback);
+    const onFatal = vi.fn();
+    modLog.setOnFatal(onFatal);
 
     stubInsert(modLog, new SqliteError('corrupted', 'SQLITE_CORRUPT'));
 
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
-      throw new Error(`process.exit(${code}) called`);
-    }) as never);
-    try {
-      expect(() =>
-        modLog.logModAction({ action: 'kick', source: 'irc', by: 'a', target: 'b' }),
-      ).toThrow('process.exit(2)');
-      expect(exitSpy).toHaveBeenCalledWith(2);
-      // Fatal tier never spills to fallback — the row goes nowhere because
-      // the supervisor is about to restart us.
-      expect(fallback).not.toHaveBeenCalled();
-      expect(
-        logger.errorCalls.some((args) => typeof args[0] === 'string' && args[0].includes('FATAL')),
-      ).toBe(true);
-    } finally {
-      exitSpy.mockRestore();
-    }
+    expect(() =>
+      modLog.logModAction({ action: 'kick', source: 'irc', by: 'a', target: 'b' }),
+    ).toThrow(DatabaseFatalError);
+    expect(modLog.isFatal).toBe(true);
+    expect(modLog.areWritesDisabled).toBe(true);
+    expect(onFatal).toHaveBeenCalledTimes(1);
+    // Fatal tier never spills to fallback — the row goes nowhere because
+    // the bot is about to shut down.
+    expect(fallback).not.toHaveBeenCalled();
+    expect(
+      logger.errorCalls.some((args) => typeof args[0] === 'string' && args[0].includes('FATAL')),
+    ).toBe(true);
   });
 
   it('rethrows non-degradable errors instead of swallowing them', () => {
     // The catch at line 365 only consumes Busy/Full. A SQLITE_CORRUPT —
-    // routed via runClassified to process.exit — still terminates. Any
-    // other oddball error (e.g. a programmer bug) must propagate so it
+    // routed via runClassified to a DatabaseFatalError — still terminates.
+    // Any other oddball error (e.g. a programmer bug) must propagate so it
     // surfaces in tests / supervisor logs rather than being silently
     // dropped on the audit floor.
     const modLog = new ModLog(raw, null);
@@ -1002,3 +1003,4 @@ describe('ModLog audit:log event bus emission', () => {
 // for type narrowing.
 void DatabaseBusyError;
 void DatabaseFullError;
+void DatabaseFatalError;

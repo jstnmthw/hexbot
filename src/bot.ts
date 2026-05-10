@@ -279,8 +279,31 @@ export class Bot {
     });
     this.registerCoreSettings();
 
+    // SQLITE_CORRUPT / NOTADB / IOERR* used to call process.exit(2) directly
+    // from inside runClassified, skipping every teardown step. Ask the DB to
+    // poke us instead — we kick off a graceful shutdown on the next microtask
+    // so the synchronous read/write that surfaced the error has unwound.
+    this.db.setOnFatal(() => this.scheduleFatalShutdown());
+
     this.wireDispatcher();
     this.pluginLoader = this.createPluginLoader();
+  }
+
+  /**
+   * Schedule an asynchronous `shutdown()` followed by `process.exit(2)`.
+   * Fired from a fatal-DB observer; reentrancy is guarded by both the
+   * `_fatalShutdownScheduled` flag here and `_isShuttingDown` inside
+   * {@link shutdown}, so multiple fatal errors collapse into one exit.
+   */
+  private _fatalShutdownScheduled = false;
+  private scheduleFatalShutdown(): void {
+    if (this._fatalShutdownScheduled) return;
+    this._fatalShutdownScheduled = true;
+    queueMicrotask(() => {
+      void this.shutdown()
+        .catch((err) => this.botLogger.error('shutdown after fatal DB error threw:', err))
+        .finally(() => process.exit(2));
+    });
   }
 
   /**
@@ -741,6 +764,11 @@ export class Bot {
       burst: this.config.queue?.burst,
       logger: this.logger,
     });
+    // Route mutating verbs (KICK/MODE/TOPIC/INVITE/JOIN-with-key) through
+    // the same per-target token bucket that paces say/notice. Without this
+    // the helper layer bypasses the 2 msg/s steady-state cap and a chanmod
+    // mass re-op or bulk .ban can trip Excess Flood.
+    ircCommands.setMessageQueue(messageQueue);
     const services = new Services({
       client,
       servicesConfig: this.config.services,

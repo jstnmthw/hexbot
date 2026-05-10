@@ -339,37 +339,61 @@ export function registerConnectionEvents(
     const policy = classifyCloseReason(lastCloseReason);
     lastCloseReason = null;
 
-    // Cancel any pending registration timeout — the socket is closed so the timer is moot.
-    if (registrationTimer !== null) {
-      clearTimeout(registrationTimer);
-      registrationTimer = null;
-    }
+    // Run each step under its own try/catch. A throw from any one of them —
+    // most realistically a `messageQueue.clear()` that hits a wedged DB on
+    // the audit-fallback path, or a listener installed via `onReconnecting`
+    // that throws synchronously — would otherwise abort onClose half-way
+    // and leave the reconnect driver without its `onDisconnect` call. The
+    // bot would sit silent until the next external event nudged it.
+    const step = (label: string, fn: () => void): void => {
+      try {
+        fn();
+      } catch (err) {
+        logger.error(`onClose:${label} threw — continuing teardown:`, err);
+      }
+    };
+
+    step('cancel-registration-timer', () => {
+      if (registrationTimer !== null) {
+        clearTimeout(registrationTimer);
+        registrationTimer = null;
+      }
+    });
 
     // Clear the per-channel presence check interval too. Without this the
     // interval keeps firing "Not in configured channel X" during long
     // rate-limited backoffs.
-    if (presenceTimer !== null) {
-      clearInterval(presenceTimer);
-      presenceTimer = null;
-    }
+    step('cancel-presence-timer', () => {
+      if (presenceTimer !== null) {
+        clearInterval(presenceTimer);
+        presenceTimer = null;
+      }
+    });
 
-    logger.info(`Connection closed: ${reason}`);
-    deps.eventBus.emit('bot:disconnected', reason);
+    step('log-and-emit-disconnect', () => {
+      logger.info(`Connection closed: ${reason}`);
+      deps.eventBus.emit('bot:disconnected', reason);
+    });
 
     // Drop per-session identity caches and the outgoing message queue on
     // every disconnect. The hook was previously tied to 'reconnecting',
     // but with auto_reconnect:false that event is never emitted.
-    if (deps.messageQueue.flushWithDeadline) {
-      const drained = deps.messageQueue.flushWithDeadline(DISCONNECT_FLUSH_DEADLINE_MS);
-      if (drained > 0) {
-        logger.debug(`Flushed ${drained} queued message(s) during disconnect`);
+    step('flush-message-queue', () => {
+      if (deps.messageQueue.flushWithDeadline) {
+        const drained = deps.messageQueue.flushWithDeadline(DISCONNECT_FLUSH_DEADLINE_MS);
+        if (drained > 0) {
+          logger.debug(`Flushed ${drained} queued message(s) during disconnect`);
+        }
       }
-    }
-    deps.messageQueue.clear();
-    deps.onReconnecting?.();
+    });
+    step('clear-message-queue', () => deps.messageQueue.clear());
+    step('on-reconnecting', () => deps.onReconnecting?.());
 
     // Driver owns backoff, tier escalation, fatal exit, and status state.
-    reconnectDriver.onDisconnect(policy);
+    // Always run last so a throw from any step above still hands control
+    // to the driver — without this, a buggy `onReconnecting` listener
+    // would silently disable reconnects.
+    step('reconnect-driver-on-disconnect', () => reconnectDriver.onDisconnect(policy));
   };
 
   const onSocketError = (err: unknown): void => {
@@ -462,57 +486,62 @@ function ingestSTSDirective(deps: ConnectionLifecycleDeps): void {
   if (!callback) return;
   const rawValue = deps.client.network.cap?.available?.get('sts');
   if (!rawValue) return;
-  // Defence in depth on top of `enforceSTS`: if we're on plaintext and a
-  // policy already exists for this host, never let the plaintext session
-  // mutate the stored directive. `enforceSTS` already refuses to run on
-  // plaintext under an active policy, so reaching this code path means
-  // something upstream went wrong — bail out loudly rather than quietly
-  // extending the expiry or swapping the recorded port from the attacker-
-  // controlled session.
-  // Note: this also blocks a *legitimate* `duration=0` retraction over
-  // plaintext. That's intentional — accepting any plaintext mutation
-  // (even a "delete the policy" one) under an active policy is the same
-  // surface a MITM would exploit. Operators who need to drop a stored
-  // STS policy can either reconnect over TLS first or remove the row
-  // from the `_sts` namespace manually.
-  if (deps.config.irc.tls === false && deps.stsStore?.get(deps.config.irc.host)) {
-    deps.logger.warn(
-      `Refusing to ingest STS directive from plaintext session for ${deps.config.irc.host} — a policy already exists`,
-    );
-    return;
-  }
-  // First-contact defense: a MITM-served CAP LS over TLS with
-  // `tls_verify=false` could pin a fake STS policy against a host the bot
-  // has never spoken to before. With verification disabled, the cert the
-  // bot trusted isn't authoritative — neither is the CAP list it returned.
-  // Refuse to ingest under that shape and warn loudly. Operators on
-  // networks without a stable CA chain are already warned at startup;
-  // this closes the policy-pin channel on top of that.
-  const tlsVerifyDisabled = deps.config.irc.tls_verify === false;
-  if (tlsVerifyDisabled && !deps.stsStore?.get(deps.config.irc.host)) {
-    deps.logger.warn(
-      `Refusing to ingest first-contact STS directive for ${deps.config.irc.host} with tls_verify=false — ` +
-        `untrusted TLS session cannot authoritatively pin a policy. Set tls_verify=true to enable STS pinning.`,
-    );
-    return;
-  }
   const directive = parseSTSDirective(rawValue);
   if (!directive) {
     deps.logger.warn(`Ignoring malformed STS directive "${rawValue}"`);
     return;
   }
-  // Plaintext duration-only lockout guard: a directive with no `port=` field
-  // received over plaintext leaves `enforceSTS` no upgrade target — every
-  // subsequent reconnect refuses, locking the operator out for the policy
-  // window. Reject the directive outright; require operators to configure
-  // TLS up front (or the server to advertise a port over plaintext) before
-  // any STS pinning takes effect. See SECURITY.md / audit 2026-05-10.
-  if (deps.config.irc.tls === false && directive.port === undefined) {
-    deps.logger.warn(
-      `[security] Refusing to persist STS policy for ${deps.config.irc.host}: directive received over plaintext has no port=, ` +
-        `which would lock the bot out of the host for ${directive.duration}s. Reconnect over TLS to ingest this policy.`,
-    );
-    return;
+  // Revocation (`duration=0`) bypasses the plaintext gates that follow:
+  // dropping a stored policy can never lock an operator out, and the only
+  // attack a malicious revocation enables is letting a future plaintext
+  // session pin a fresh (still-MITM'd) policy — which is exactly what the
+  // first-contact gate already prevents on its own. Operators rely on
+  // network-issued revocations to drop stored policies after a server
+  // configuration change; without this exemption their only recovery is
+  // a manual DB edit. See R2 / I1.5 in the 2026-05-10 stability audit.
+  const isRevocation = directive.duration === 0;
+  if (!isRevocation) {
+    // Defence in depth on top of `enforceSTS`: if we're on plaintext and a
+    // policy already exists for this host, never let the plaintext session
+    // mutate the stored directive. `enforceSTS` already refuses to run on
+    // plaintext under an active policy, so reaching this code path means
+    // something upstream went wrong — bail out loudly rather than quietly
+    // extending the expiry or swapping the recorded port from the attacker-
+    // controlled session.
+    if (deps.config.irc.tls === false && deps.stsStore?.get(deps.config.irc.host)) {
+      deps.logger.warn(
+        `Refusing to ingest STS directive from plaintext session for ${deps.config.irc.host} — a policy already exists`,
+      );
+      return;
+    }
+    // First-contact defense: a MITM-served CAP LS over TLS with
+    // `tls_verify=false` could pin a fake STS policy against a host the bot
+    // has never spoken to before. With verification disabled, the cert the
+    // bot trusted isn't authoritative — neither is the CAP list it returned.
+    // Refuse to ingest under that shape and warn loudly. Operators on
+    // networks without a stable CA chain are already warned at startup;
+    // this closes the policy-pin channel on top of that.
+    const tlsVerifyDisabled = deps.config.irc.tls_verify === false;
+    if (tlsVerifyDisabled && !deps.stsStore?.get(deps.config.irc.host)) {
+      deps.logger.warn(
+        `Refusing to ingest first-contact STS directive for ${deps.config.irc.host} with tls_verify=false — ` +
+          `untrusted TLS session cannot authoritatively pin a policy. Set tls_verify=true to enable STS pinning.`,
+      );
+      return;
+    }
+    // Plaintext duration-only lockout guard: a directive with no `port=`
+    // field received over plaintext leaves `enforceSTS` no upgrade target —
+    // every subsequent reconnect refuses, locking the operator out for the
+    // policy window. Reject the directive outright; require operators to
+    // configure TLS up front (or the server to advertise a port over
+    // plaintext) before any STS pinning takes effect.
+    if (deps.config.irc.tls === false && directive.port === undefined) {
+      deps.logger.warn(
+        `[security] Refusing to persist STS policy for ${deps.config.irc.host}: directive received over plaintext has no port=, ` +
+          `which would lock the bot out of the host for ${directive.duration}s. Reconnect over TLS to ingest this policy.`,
+      );
+      return;
+    }
   }
   deps.logger.info(
     `IRCv3 STS received: duration=${directive.duration}` +

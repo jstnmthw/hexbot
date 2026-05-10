@@ -205,7 +205,19 @@ describe('topic plugin', () => {
 
   describe('!topic lock', () => {
     function setLiveTopic(b: MockBot, channel: string, topic: string): void {
-      // Channel-state listens directly to the IRC client's 'topic' event
+      // Channel-state ignores TOPIC for channels we never joined (the
+      // [C-ENSURECHAN] containment). If the channel record is missing,
+      // bootstrap it with a JOIN; if it already exists (e.g. giveBotOps
+      // already simulated a bot-join), don't re-join — that would
+      // clobber the bot's user-modes record.
+      if (!b.channelState.getChannel(channel)) {
+        b.client.simulateEvent('join', {
+          nick: 'hexbot',
+          ident: 'hexbot',
+          hostname: 'host',
+          channel,
+        });
+      }
       b.client.simulateEvent('topic', {
         nick: 'server',
         ident: '',
@@ -284,6 +296,18 @@ describe('topic plugin', () => {
     }
 
     function setLiveTopic(b: MockBot, channel: string, topic: string): void {
+      // [C-ENSURECHAN] containment: TOPIC for an unjoined channel is dropped.
+      // Simulate a JOIN only when no record exists — re-joining a channel
+      // would otherwise overwrite the bot's user-modes (e.g. +o set by
+      // `giveBotOps`) since onJoin reseats the user record from scratch.
+      if (!b.channelState.getChannel(channel)) {
+        b.client.simulateEvent('join', {
+          nick: 'hexbot',
+          ident: 'hexbot',
+          hostname: 'host',
+          channel,
+        });
+      }
       b.client.simulateEvent('topic', {
         nick: 'server',
         ident: '',

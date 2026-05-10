@@ -6,7 +6,7 @@
 import { SqliteError } from 'better-sqlite3';
 import type { Database as DatabaseType, Statement } from 'better-sqlite3';
 
-import { DatabaseBusyError, DatabaseFullError } from '../database-errors';
+import { DatabaseBusyError, DatabaseFatalError, DatabaseFullError } from '../database-errors';
 import type { BotEventBus } from '../event-bus';
 import type { LoggerLike } from '../logger';
 import { sanitize } from '../utils/sanitize';
@@ -266,6 +266,14 @@ export class ModLog {
   private writesDisabled = false;
   /** External observer hook — BotDatabase uses this to mirror the flag. */
   private onWritesDisabled: (() => void) | null = null;
+  /**
+   * Flipped once SQLITE_CORRUPT / SQLITE_NOTADB / SQLITE_IOERR* surfaces.
+   * Mirrors {@link BotDatabase.fatal} so the audit log path degrades the
+   * same way the KV path does.
+   */
+  private fatal = false;
+  /** External observer fired when writes become fatally unavailable. */
+  private onFatal: (() => void) | null = null;
   /** Optional sink for audit writes that failed with a degradable error. */
   private auditFallback: ((options: LogModActionOptions) => void) | null = null;
 
@@ -315,8 +323,25 @@ export class ModLog {
   }
 
   /**
+   * Register a one-shot observer fired when the mod_log path hits a fatal
+   * SQLite condition. BotDatabase forwards its own observer so a fatal in
+   * either path triggers the same Bot.shutdown() flow.
+   */
+  setOnFatal(cb: (() => void) | null): void {
+    this.onFatal = cb;
+  }
+
+  /** True once a fatal SQLite error has been observed on the mod_log path. */
+  get isFatal(): boolean {
+    return this.fatal;
+  }
+
+  /**
    * Classify SQLite errors into three tiers. Mirrors the logic in
    * BotDatabase.runClassified so the ModLog write path degrades identically.
+   * Fatal errors fire `onFatal` and throw {@link DatabaseFatalError} instead
+   * of `process.exit(2)` so the bot's `shutdown()` harness can drive a
+   * graceful exit.
    */
   private runClassified<T>(opName: string, fn: () => T): T {
     try {
@@ -339,11 +364,20 @@ export class ModLog {
         throw new DatabaseFullError(opName, err);
       }
       if (isSqliteFatal(err)) {
-        this.logger?.error(
-          `[database] FATAL ${opName}: ${err.code} — cannot continue, exiting with code 2 so the supervisor restarts us`,
-          err,
-        );
-        process.exit(2);
+        if (!this.fatal) {
+          this.logger?.error(
+            `[database] FATAL ${opName}: ${err.code} — starting graceful shutdown so the supervisor restarts us`,
+            err,
+          );
+        }
+        this.fatal = true;
+        this.writesDisabled = true;
+        try {
+          this.onFatal?.();
+        } catch (cbErr) {
+          this.logger?.error('[database] onFatal observer threw', cbErr);
+        }
+        throw new DatabaseFatalError(opName, err);
       }
       throw err;
     }

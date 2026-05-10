@@ -14,19 +14,34 @@ import { BotREPL } from './repl';
 net.setDefaultAutoSelectFamily(false);
 
 // ---------------------------------------------------------------------------
-// Healthcheck heartbeat file
+// Healthcheck heartbeat files (k8s-style liveness + readiness)
 // ---------------------------------------------------------------------------
 
-const HEALTHCHECK_FILE = '/tmp/.hexbot-healthy';
-let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+// `ALIVE_FILE` is the **liveness** signal: touched every 30s while the event
+// loop is responsive, regardless of IRC connection state. Removed only on
+// graceful shutdown / fatal exit. Supervisors that auto-restart on unhealthy
+// (Docker Swarm restart policies, autoheal sidecars, k8s liveness probes)
+// should point here so an in-process reconnect backoff isn't mistaken for a
+// wedged process and restart-thrashed.
+//
+// `CONNECTED_FILE` is the **readiness** signal: touched on `bot:connected`,
+// removed on `bot:disconnected`. Operator dashboards and monitoring should
+// point here so an unhealthy report visibly captures "bot can't reach IRC."
+//
+// The default `docker-compose.yml` healthcheck uses `CONNECTED_FILE` to
+// preserve operator-visibility-first semantics. See README for the autoheal /
+// k8s alternative.
+const ALIVE_FILE = '/tmp/.hexbot-alive';
+const CONNECTED_FILE = '/tmp/.hexbot-connected';
+let aliveTimer: ReturnType<typeof setInterval> | null = null;
 
-function touchHealthcheck(): void {
+function touchFile(path: string): void {
   try {
     // Create the file if missing, then update its mtime.
     // The Docker healthcheck uses `stat -c %Y` (mtime in seconds) — no content needed.
-    closeSync(openSync(HEALTHCHECK_FILE, 'a'));
+    closeSync(openSync(path, 'a'));
     const now = new Date();
-    utimesSync(HEALTHCHECK_FILE, now, now);
+    utimesSync(path, now, now);
   } catch {
     // Best-effort — /tmp may be read-only in exotic containers (read-only
     // rootfs setups, --tmpfs mounted with `noexec,ro`). A failure here just
@@ -35,26 +50,50 @@ function touchHealthcheck(): void {
   }
 }
 
-function removeHealthcheck(): void {
+function removeFile(path: string): void {
   try {
-    unlinkSync(HEALTHCHECK_FILE);
+    unlinkSync(path);
   } catch {
-    // File may not exist (never created — see touchHealthcheck above).
+    // File may not exist (never created — see touchFile above).
     // Idempotent on shutdown; nothing else to do.
   }
 }
 
-function startHeartbeat(): void {
-  touchHealthcheck();
-  heartbeatTimer = setInterval(touchHealthcheck, 30_000);
+/** Begin the always-on liveness heartbeat. Idempotent. */
+function startAliveHeartbeat(): void {
+  if (aliveTimer !== null) return;
+  touchFile(ALIVE_FILE);
+  aliveTimer = setInterval(() => touchFile(ALIVE_FILE), 30_000);
+  // Keep liveness independent of any other timer so a stuck reference
+  // can't keep the process alive past intended shutdown.
+  if (typeof aliveTimer === 'object' && aliveTimer && 'unref' in aliveTimer) {
+    aliveTimer.unref();
+  }
 }
 
-function stopHeartbeat(): void {
-  if (heartbeatTimer !== null) {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
+/** Stop the liveness heartbeat and clean up its file. */
+function stopAliveHeartbeat(): void {
+  if (aliveTimer !== null) {
+    clearInterval(aliveTimer);
+    aliveTimer = null;
   }
-  removeHealthcheck();
+  removeFile(ALIVE_FILE);
+}
+
+/** Mark the bot as connected (readiness signal). */
+function markConnected(): void {
+  touchFile(CONNECTED_FILE);
+}
+
+/** Mark the bot as disconnected (readiness signal). */
+function markDisconnected(): void {
+  removeFile(CONNECTED_FILE);
+}
+
+/** Tear down both signals on graceful shutdown / fatal exit. */
+function stopAllHealthSignals(): void {
+  stopAliveHeartbeat();
+  markDisconnected();
 }
 
 // ---------------------------------------------------------------------------
@@ -104,14 +143,20 @@ process.title = `hexbot (v${pkgVersion}) - ${instanceName}`;
 let bot: Bot | null = null;
 
 async function main(): Promise<void> {
+  // Liveness heartbeat starts immediately and runs unconditionally — its job
+  // is to prove the event loop is responsive, not that IRC is reachable. It
+  // ticks during reconnect backoff, plugin reloads, and the cold-start
+  // window before `bot:connected` ever fires.
+  startAliveHeartbeat();
+
   bot = new Bot(configPath);
 
-  // Wire healthcheck heartbeat to connection events before start()
-  // so the initial bot:connected is not missed. Track under the 'bot'
-  // owner so shutdown's removeByOwner unwires us — the heartbeat
-  // closures live for the bot's lifetime by design.
-  bot.eventBus.trackListener('bot', 'bot:connected', startHeartbeat);
-  bot.eventBus.trackListener('bot', 'bot:disconnected', stopHeartbeat);
+  // Wire readiness signal to connection events before start() so the initial
+  // bot:connected is not missed. Track under the 'bot' owner so shutdown's
+  // removeByOwner unwires us — the closures live for the bot's lifetime by
+  // design.
+  bot.eventBus.trackListener('bot', 'bot:connected', markConnected);
+  bot.eventBus.trackListener('bot', 'bot:disconnected', markDisconnected);
 
   await bot.start();
 
@@ -138,9 +183,17 @@ async function runBotShutdown(): Promise<void> {
   }
 }
 
+// Re-entrancy guard: a second SIGTERM (operator double Ctrl-C, supervisor
+// escalation, fatalExit racing a SIGINT) would otherwise stack two
+// `shutdownWithTimeout` invocations and race two `process.exit` calls.
+// Bot.shutdown() itself is idempotent; this flag protects the outer harness.
+let signalHandled = false;
+
 async function gracefulShutdown(signal: string): Promise<void> {
+  if (signalHandled) return;
+  signalHandled = true;
   bot?.logger.child('bot').info(`Received ${signal}, shutting down...`);
-  stopHeartbeat();
+  stopAllHealthSignals();
   await runBotShutdown();
   process.exit(0);
 }
@@ -152,8 +205,9 @@ let fatalInProgress = false;
 function fatalExit(label: string, value: unknown): void {
   if (fatalInProgress) return;
   fatalInProgress = true;
+  signalHandled = true; // also block any racing SIGTERM/SIGINT path
   console.error(`[bot] ${label}:`, value);
-  stopHeartbeat();
+  stopAllHealthSignals();
   runBotShutdown().finally(() => process.exit(1));
 }
 

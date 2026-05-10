@@ -50,7 +50,7 @@ Each section below is a discrete review phase. `/build` and refactoring skills c
 
 ### [C-IRCCMDS] IRCCommands mutating verbs bypass the outbound message queue [verified]
 
-- [ ] **Fix queue bypass in `IRCCommands` mutating verbs**
+- [x] **Fix queue bypass in `IRCCommands` mutating verbs**
 - **File:** `src/core/irc-commands.ts:175,187,232,238,252,343,370`
 - **Pattern:** Self-denial via send-rate / unbounded send burst
 - **Anti-pattern (Nygard):** Integration point without throttle, self-denial attack
@@ -60,7 +60,7 @@ Each section below is a discrete review phase. `/build` and refactoring skills c
 
 ### [C-DBEXIT] `process.exit(2)` from inside synchronous DB reads bypasses every teardown step [verified]
 
-- [ ] **Replace DB `process.exit(2)` with a poisoned-flag throw routed through `bot.shutdown()`**
+- [x] **Replace DB `process.exit(2)` with a poisoned-flag throw routed through `bot.shutdown()`**
 - **File:** `src/database.ts:185`, `src/core/mod-log.ts:319` (both inside `runClassified`)
 - **Pattern:** Error containment — fatal-vs-non-fatal conflation
 - **Anti-pattern:** Cascading failure (DB hiccup → process exit during in-flight handlers)
@@ -71,7 +71,7 @@ Each section below is a discrete review phase. `/build` and refactoring skills c
 
 ### [C-ENSURECHAN] `ensureChannel` allowed for TOPIC/CHANNELINFO grows the channel map unboundedly [verified, borderline]
 
-- [ ] **Restrict `ensureChannel` to JOIN/USERLIST/`injectChannelSync`**
+- [x] **Restrict `ensureChannel` to JOIN/USERLIST/`injectChannelSync`**
 - **File:** `src/core/channel-state.ts:730-738` (called from `onTopic` at :567, `onUserlist`, `onChannelInfo`, `onJoin`)
 - **Pattern:** Unbounded growth / channel-state poisoning
 - **Anti-pattern:** Unbounded result set
@@ -121,15 +121,15 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 - [ ] **W1.3** — `identify_before_join` await not cancellable on shutdown (`connection-lifecycle.ts:285-307`). On `removeListeners()` mid-await, inner timer + EventBus once-listeners survive.
 - [ ] **W1.4** — `STSStore.get()` deletes expired rows during a read with no try/catch (`sts.ts:107-141`). Transient `SQLITE_BUSY` at boot blocks `Bot.start()`.
 - [ ] **W1.5** — `connect()` synchronous throw bypasses `'connecting'` event; registration timer leaks across retries (`connection-lifecycle.ts:206-235`).
-- [ ] **W1.6** — `messageQueue.clear()` runs before `cancelPendingVerifies`; DB throw inside `onClose` wedges reconnect (`connection-lifecycle.ts:362-369`). _Fix:_ per-step try/catch in `onClose`.
+- [x] **W1.6** — `messageQueue.clear()` runs before `cancelPendingVerifies`; DB throw inside `onClose` wedges reconnect (`connection-lifecycle.ts:362-369`). _Fix:_ per-step try/catch in `onClose`.
 - [ ] **W1.7** — `cancelReconnect()` does not stop registration timer or presence timer (`connection-lifecycle.ts:404-406`).
 - [ ] **W1.8** — Transient-tier exponential cap math (`2 ** consecutiveFailures`) blows up at `>= 50` (`reconnect-driver.ts:117-126`). Clamped, but fragile.
 - [ ] **W1.9** — `onSocketError` does not schedule fail-safe close-watchdog (`connection-lifecycle.ts:375-381`). TLS handshake-stage RST may strand bot.
-- [ ] **W1.10** — DNS ENOTFOUND classified as `transient`, retried every 1-30s forever (`close-reason-classifier.ts:82-94`). Operator typo → DNS hammered. _Fix:_ ENOTFOUND on first attempt → fatal.
+- [x] **W1.10** — DNS ENOTFOUND classified as `transient`, retried every 1-30s forever (`close-reason-classifier.ts:82-94`). Operator typo → DNS hammered. _Fix:_ ENOTFOUND on first attempt → fatal.
 
 ### Phase 2 — Dispatcher & plugin loader (6 items)
 
-- [ ] **W2.1** — `dispatch()` iterates `this.binds` array without snapshot — handler-side `unbindAll` reentrancy is undefined (`dispatcher.ts:362-398`) [verified]. _Fix:_ `const snapshot = this.binds.slice()` at top of loop.
+- [x] **W2.1** — `dispatch()` iterates `this.binds` array without snapshot — handler-side `unbindAll` reentrancy is undefined (`dispatcher.ts:362-398`) [verified]. _Fix:_ `const snapshot = this.binds.slice()` at top of loop.
 - [ ] **W2.2** — `unloadAll()` partial-failure recovery silently force-deletes without dispatcher cleanup (`plugin-loader.ts:588-601`, `unload()` 552-569). Throwing teardown leaves binds/listeners attached, plugin removed from `loaded` map. Ghost handlers fire post-unload.
 - [ ] **W2.3** — No circuit breaker for non-timer handlers throwing on every event (`dispatcher.ts:389-396`). 100 msgs/min at a broken `pubm` handler = 100 stack traces/min in logs forever. Timer binds get auto-disable; pub/msg/raw don't.
 - [ ] **W2.4** — Disposed-API guard cannot reach the user-supplied handler closure (`plugin-api-factory.ts:282-294`). Plugin's own `setInterval` outliving teardown calls `myHandler` against a torn-down api. The doc/comment overstates the guard's reach.
@@ -200,14 +200,14 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 
 ### Phase 6 — Services & identity (2 items)
 
-- [ ] **W6.1** — `verifyUser` ACC→STATUS retry doesn't reset 5s timeout (`services.ts:610-632`). Misconfigured `services.type` causes false-positive `nickserv-verify-timeout` rows.
+- [x] **W6.1** — `verifyUser` ACC→STATUS retry doesn't reset 5s timeout (`services.ts:610-632`). Misconfigured `services.type` causes false-positive `nickserv-verify-timeout` rows.
 - [ ] **W6.2** — `pendingGhostResolver` not cleared if GHOST notice arrives after 1.5s timer (`services.ts:579-584,773-790`). Generation race on rapid second reclaim.
 
 ### Phase 7 — Orchestrator & process (10 items)
 
 #### Demoted from CRITICAL
 
-- [ ] **[W-SIGTERM] Re-entrant SIGTERM stacks two `shutdownWithTimeout` invocations**
+- [x] **[W-SIGTERM] Re-entrant SIGTERM stacks two `shutdownWithTimeout` invocations**
   - **File:** `src/index.ts:141-146,160-165`
   - **Pattern:** Reentrant signals / shutdown ordering
   - **Scenario:** systemd `TimeoutStopSec` fires SIGTERM, then a second SIGTERM 5 seconds later (operator double Ctrl-C, supervisor escalation). Both invocations call `gracefulShutdown` → `runBotShutdown` → `bot.shutdown()`.
@@ -223,7 +223,7 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
   - **Demotion reason:** Diagnostic clarity is real but it's not "takes the bot offline." Triggers a fresh `unhandledRejection` only if a plugin's teardown throws AND `fatalExit` was already in flight.
   - **Remediation:** Inner try/catch in `shutdownWithTimeout`: convert reject to resolve; log the inner failure on a dedicated channel.
 
-- [ ] **[W-HEALTHCHECK] Single-file healthcheck conflates liveness with readiness — split into a two-file model**
+- [x] **[W-HEALTHCHECK] Single-file healthcheck conflates liveness with readiness — split into a two-file model**
   - **File:** `src/index.ts:113-116`, `docker-compose.yml`, `docs/multi-instance/docker-compose.yml`
   - **Pattern:** Supervisor signal vs restart-policy separation; k8s-style liveness/readiness
   - **Original framing (now revised):** "Bot is connected, gets K-lined, enters the rate-limited tier (300s initial, doubling to 1800s cap). `stopHeartbeat` runs on `bot:disconnected`, removing `/tmp/.hexbot-healthy`. Any healthcheck cadence shorter than the reconnect delay reports unhealthy → supervisor restarts the bot mid-backoff → fresh attempt → instant K-line → loop."
@@ -259,7 +259,7 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 - [ ] **W8.6** — `runEnd` (`.modlog end`) walks full result set with O(N/PAGE_SIZE) synchronous queries (`modlog-commands.ts:663-684`) [at-scale]. 1M-row mod_log → 100k SQLite queries blocks event loop.
 - [ ] **W8.7** — `messageQueue.setRate(0, ...)` silently coerces 0 to default 2 (`message-queue.ts:229-239`, `bot.ts:570-572`).
 - [ ] **W8.8** — `IRCCommands.mode()` parse-failure throws to caller; ban-commands runs synchronously without try/catch (`irc-commands.ts:98-108,301-306,358-364`, `ban-commands.ts:154`).
-- [ ] **W8.9** — `.bot <self> .<cmd>` recursion is not limited (`botlink-commands.ts:581-583`). _Fix:_ add `bot` to `BOT_RELAY_FORBIDDEN_COMMANDS`.
+- [x] **W8.9** — `.bot <self> .<cmd>` recursion is not limited (`botlink-commands.ts:581-583`). _Fix:_ add `bot` to `BOT_RELAY_FORBIDDEN_COMMANDS`.
 - [ ] **W8.10** — `.audit-tail` listener leaks closure over stale REPL ctx if shutdown order goes wrong (`modlog-commands.ts:548-557`, `repl.ts:147`) [latent].
 
 ### Phase 9 — Channel state & ISUPPORT (7 items)
@@ -308,7 +308,7 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 
 - [ ] **W12.1** — `eventBus.on(...)` direct (vs `trackListener`) bypasses ownership tracking (`event-bus.ts:201-208`).
 - [ ] **W12.2** — `help.cooldown_ms` snapshot at init time; live-config inconsistent with header/footer (`plugins/help/index.ts:82-87`).
-- [ ] **W12.3** — `plugins/ctcp/index.ts` `CTCP PING` echoes `ctx.text` verbatim with no length cap (`plugins/ctcp/index.ts:35-37`).
+- [x] **W12.3** — `plugins/ctcp/index.ts` `CTCP PING` echoes `ctx.text` verbatim with no length cap (`plugins/ctcp/index.ts:35-37`).
 - [ ] **W12.4** — SOCKS5 connect timeout not configured end-to-end (`src/utils/socks.ts`). Black-holed proxy → half-open connect.
 
 ---
@@ -321,11 +321,11 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 - [ ] **I1.2** `parseSTSDirective` silently drops unknown keys — debug-log for forward compat.
 - [ ] **I1.3** `cancelPendingVerifies` lacks audit `actor` — disconnect-driven row has no `by` field.
 - [ ] **I1.4** `permanentFailureChannels` cleared on registration but no explicit assertion — add test.
-- [ ] **I1.5** STS policy revocation (`duration=0`) is blocked over plaintext (`connection-lifecycle.ts:457-513` ~501, `sts.ts:68-91,149-154`) [verified]. Operators relying on the network's STS revocation cannot revoke from plaintext; only recovery is a manual DB edit. _Demoted from WARNING after operator confirmed STS revocation is rare._ _Fix (R2):_ allow `duration=0` through to `STSStore.put` regardless of plaintext.
+- [x] **I1.5** STS policy revocation (`duration=0`) is blocked over plaintext (`connection-lifecycle.ts:457-513` ~501, `sts.ts:68-91,149-154`) [verified]. Operators relying on the network's STS revocation cannot revoke from plaintext; only recovery is a manual DB edit. _Demoted from WARNING after operator confirmed STS revocation is rare._ _Fix (R2):_ allow `duration=0` through to `STSStore.put` regardless of plaintext.
 
 ### Phase 2
 
-- [ ] **I2.1** Build is broken at HEAD: `tsc` errors in `plugin-api-factory.ts:233` (readonly drift), `tests/core/commands/ban-commands.test.ts:210`, `tests/core/permissions.test.ts:878`, `tests/helpers/mock-plugin-api.ts:83`, `tests/plugin-api-dispose.test.ts:14`, `tests/plugins/audit-coverage.test.ts:49`, `tests/plugins/chanmod-bans.test.ts:64` — readonly mismatches and stale test mocks missing `version`/`botVersion` fields. Independent of this audit but blocks `pnpm build`.
+- [x] **I2.1** Build is broken at HEAD: `tsc` errors in `plugin-api-factory.ts:233` (readonly drift), `tests/core/commands/ban-commands.test.ts:210`, `tests/core/permissions.test.ts:878`, `tests/helpers/mock-plugin-api.ts:83`, `tests/plugin-api-dispose.test.ts:14`, `tests/plugins/audit-coverage.test.ts:49`, `tests/plugins/chanmod-bans.test.ts:64` — readonly mismatches and stale test mocks missing `version`/`botVersion` fields. Independent of this audit but blocks `pnpm build`. _(Verified clean at HEAD on 2026-05-10: both `pnpm build` and `pnpm tsc --noEmit` exit 0; resolved by prior commits.)_
 
 ### Phase 3
 
@@ -353,7 +353,7 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 - [ ] **I6.2** `_botIdentifyState='unidentified'` is sticky until next disconnect — momentary glitch locks bot for whole session.
 - [ ] **I6.3** `verifyUser` returns `verified:false` on `'unidentified'` with no operator-visible feedback — silent dispatch denial.
 - [ ] **I6.4** `permissions.findByHostmask` is O(users × hostmasks_per_user) per privileged event [at-scale].
-- [ ] **I6.5** `accountLookup` not wrapped in try/catch in `checkFlags` — misbehaving lookup throws into dispatch.
+- [x] **I6.5** `accountLookup` not wrapped in try/catch in `checkFlags` — misbehaving lookup throws into dispatch.
 - [ ] **I6.6** Owner bootstrap is idempotent — verified, no fix needed; small forensic gap on re-seed.
 - [ ] **I6.7** scrypt is async (libuv pool) — DCC pre-handshake gate sits ahead of it; flooding-model well-mitigated.
 - [ ] **I6.8** Hostmask wildcard matcher is bounded (512 / 4096) — verified clean.
@@ -402,7 +402,7 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 - [ ] **I12.1** `wildcard.ts` per-character `result += ch` — modern V8 handles via cons-strings; optional perf.
 - [ ] **I12.2** `sliding-window.ts` `Array.filter` allocation per call — in-place compaction would reduce GC.
 - [ ] **I12.3** `sliding-window.ts` FIFO eviction comment doesn't explain Map insertion-order assumption.
-- [ ] **I12.4** `duration.ts` `\d+` unbounded but `Math.min` clamps — bound regex to `\d{1,15}`.
+- [x] **I12.4** `duration.ts` `\d+` unbounded but `Math.min` clamps — bound regex to `\d{1,15}`.
 - [ ] **I12.5** Per-sender CTCP throttle relies entirely on outbound queue — inbound CPU is unconditional.
 - [ ] **I12.6** `seen` plugin hourly sweep does two table scans — combine into one pass.
 
@@ -465,26 +465,26 @@ Cross-references use symbolic IDs (`[C-XXX]`, `[W-XXX]`, `Wx.y`) that are stable
 
 ### Quick wins (< 1 hour each)
 
-- [ ] **R1** — Add `signalHandled` guard to `gracefulShutdown` ([W-SIGTERM]).
-- [ ] **R2** — Allow `duration=0` STS revoke from plaintext (I1.5; one-line config gate; low priority — operator confirmed rare use case).
-- [ ] **R3** — Add `bot` to `BOT_RELAY_FORBIDDEN_COMMANDS` (W8.9; one-line constant).
-- [ ] **R4** — Snapshot `this.binds.slice()` at top of `dispatch()` loop (W2.1).
-- [ ] **R5** — Wrap each step of `onClose` in its own try/catch (W1.6).
-- [ ] **R6** — Reset 5s timeout on ACC→STATUS retry (W6.1).
-- [ ] **R7** — Bound regex in `duration.ts` to `\d{1,15}` (I12.4).
-- [ ] **R8** — Wrap `accountLookup` invocation in try/catch (I6.5).
-- [ ] **R9** — Fix the typecheck failures (I2.1) — readonly drift in `plugin-api-factory.ts:233` and 6 stale test mocks. Independent of stability work but blocks `pnpm build`.
-- [ ] **R10** — Pattern-match DNS errors in `close-reason-classifier.ts` to fatal-on-first-attempt (W1.10).
-- [ ] **R11** — Add length cap in CTCP PING reply (W12.3).
-- [ ] **R12** — Implement two-file healthcheck model: `/tmp/.hexbot-alive` (liveness — always touched) + `/tmp/.hexbot-connected` (readiness — touched on `bot:connected`, removed on `bot:disconnected`). Update both `docker-compose.yml` files to point at `-connected` for default visibility-first semantics. README deploy section documents both files and the k8s-style mapping ([W-HEALTHCHECK]). ~25 LOC plus 2 docker-compose updates plus a README block.
+- [x] **R1** — Add `signalHandled` guard to `gracefulShutdown` ([W-SIGTERM]).
+- [x] **R2** — Allow `duration=0` STS revoke from plaintext (I1.5; one-line config gate; low priority — operator confirmed rare use case).
+- [x] **R3** — Add `bot` to `BOT_RELAY_FORBIDDEN_COMMANDS` (W8.9; one-line constant).
+- [x] **R4** — Snapshot `this.binds.slice()` at top of `dispatch()` loop (W2.1).
+- [x] **R5** — Wrap each step of `onClose` in its own try/catch (W1.6).
+- [x] **R6** — Reset 5s timeout on ACC→STATUS retry (W6.1).
+- [x] **R7** — Bound regex in `duration.ts` to `\d{1,15}` (I12.4).
+- [x] **R8** — Wrap `accountLookup` invocation in try/catch (I6.5).
+- [x] **R9** — Fix the typecheck failures (I2.1) — readonly drift in `plugin-api-factory.ts:233` and 6 stale test mocks. Independent of stability work but blocks `pnpm build`. _(No-op: HEAD is already clean — see I2.1.)_
+- [x] **R10** — Pattern-match DNS errors in `close-reason-classifier.ts` to fatal-on-first-attempt (W1.10).
+- [x] **R11** — Add length cap in CTCP PING reply (W12.3).
+- [x] **R12** — Implement two-file healthcheck model: `/tmp/.hexbot-alive` (liveness — always touched) + `/tmp/.hexbot-connected` (readiness — touched on `bot:connected`, removed on `bot:disconnected`). Update both `docker-compose.yml` files to point at `-connected` for default visibility-first semantics. README deploy section documents both files and the k8s-style mapping ([W-HEALTHCHECK]). ~25 LOC plus 2 docker-compose updates plus a README block.
 
 ### Medium effort (refactoring)
 
-- [ ] **R13** — Route every mutating `IRCCommands` verb through `messageQueue` ([C-IRCCMDS]) — touches all `client.raw` sites + ordering tests.
-- [ ] **R14** — Replace DB `process.exit(2)` with `DatabaseFatalError` flow ([C-DBEXIT] and [W-STS-EXIT]) — needs `bot.shutdown()` integration.
+- [x] **R13** — Route every mutating `IRCCommands` verb through `messageQueue` ([C-IRCCMDS]) — touches all `client.raw` sites + ordering tests.
+- [x] **R14** — Replace DB `process.exit(2)` with `DatabaseFatalError` flow ([C-DBEXIT] and [W-STS-EXIT]) — needs `bot.shutdown()` integration.
 - [ ] **R15** — Chunk botlink sync via `setImmediate`/`drain` ([W-BOTLINK-SYNC]) — small loop refactor with backpressure handling.
 - [ ] **R16** — Track botlink sync send-buffer for backpressure ([W-BOTLINK-BP]) — `socket.bufferedAmount` plus optional `SYNC_DIGEST` for divergence detection.
-- [ ] **R17** — Restrict `ensureChannel` to JOIN/USERLIST/inject ([C-ENSURECHAN]) — small refactor at every call site.
+- [x] **R17** — Restrict `ensureChannel` to JOIN/USERLIST/inject ([C-ENSURECHAN]) — small refactor at every call site.
 - [ ] **R18** — Resolve `Bot.start()` after first attempt scheduled ([W-BOTSTART]). Independent of R12 — this is about the REPL never starting and `main()` never completing on a rate-limited first boot, not about the healthcheck signal.
 - [ ] **R19** — DCC `pendingSessions` add-after-start ordering + re-attach fallback `'error'` listener (W4.1).
 - [ ] **R20** — DCC port-pool owner-token ([W-DCC-PORT]).
@@ -522,9 +522,9 @@ Cross-references use symbolic IDs (`[C-XXX]`, `[W-XXX]`, `Wx.y`) that are stable
 These were open during meta-review and have been answered. Captured here so future audits and `/build` can rely on the same context.
 
 - [ ] **Deployment scale:** Single-bot now, botnet possible later. [W-BOTLINK-SYNC] / [W-BOTLINK-BP] stay WARNING; treat `[at-scale]`-tagged items as "fix before scaling," not "fix before next deploy."
-- [ ] **Healthcheck design intent:** The single-file signal conflated _liveness_ ("restart me if I'm wedged") with _readiness_ ("am I doing my job"). Resolution: two-file k8s-style model — `/tmp/.hexbot-alive` (always touched) + `/tmp/.hexbot-connected` (touched on connect, removed on disconnect). Default `docker-compose.yml` uses `-connected` for operator visibility; autoheal/k8s liveness adopters point at `-alive` to preserve the in-process backoff. R12 implements this; the supposed "incompatibility with autoheal" is dissolved. R18 (Bot.start await blocking) is independent.
-- [ ] **DB `process.exit(2)` intent:** Unclear — but R14 preserves loud-fail semantics either way. Captured inline on [C-DBEXIT].
-- [ ] **STS revocation:** Rare use case. [W-STS-REVOKE] demoted to INFO (now I1.5). R2 stays in quick-wins at low priority.
+- [x] **Healthcheck design intent:** The single-file signal conflated _liveness_ ("restart me if I'm wedged") with _readiness_ ("am I doing my job"). Resolution: two-file k8s-style model — `/tmp/.hexbot-alive` (always touched) + `/tmp/.hexbot-connected` (touched on connect, removed on disconnect). Default `docker-compose.yml` uses `-connected` for operator visibility; autoheal/k8s liveness adopters point at `-alive` to preserve the in-process backoff. R12 implements this; the supposed "incompatibility with autoheal" is dissolved. R18 (Bot.start await blocking) is independent.
+- [x] **DB `process.exit(2)` intent:** Unclear — but R14 preserves loud-fail semantics either way. Captured inline on [C-DBEXIT].
+- [x] **STS revocation:** Rare use case. [W-STS-REVOKE] demoted to INFO (now I1.5). R2 stays in quick-wins at low priority.
 - [ ] **Future audit process (R43):** Both stricter CRITICAL bar in the skill AND parent verification of CRITICAL claims before accepting from subagents.
 
 ---

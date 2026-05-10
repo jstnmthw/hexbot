@@ -32,7 +32,7 @@ services:
           'CMD',
           'sh',
           '-c',
-          '[ -f /tmp/.hexbot-healthy ] && [ $$(( $$(date +%s) - $$(stat -c %Y /tmp/.hexbot-healthy) )) -lt 120 ]',
+          '[ -f /tmp/.hexbot-connected ] && [ $$(( $$(date +%s) - $$(stat -c %Y /tmp/.hexbot-connected) )) -lt 120 ]',
         ]
       interval: 30s
       timeout: 5s
@@ -57,7 +57,7 @@ services:
           'CMD',
           'sh',
           '-c',
-          '[ -f /tmp/.hexbot-healthy ] && [ $$(( $$(date +%s) - $$(stat -c %Y /tmp/.hexbot-healthy) )) -lt 120 ]',
+          '[ -f /tmp/.hexbot-connected ] && [ $$(( $$(date +%s) - $$(stat -c %Y /tmp/.hexbot-connected) )) -lt 120 ]',
         ]
       interval: 30s
       timeout: 5s

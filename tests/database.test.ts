@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { BotDatabase, DatabaseBusyError, DatabaseFullError } from '../src/database';
+import {
+  BotDatabase,
+  DatabaseBusyError,
+  DatabaseFatalError,
+  DatabaseFullError,
+} from '../src/database';
 import { createMockLogger } from './helpers/mock-logger';
 
 function tempDbPath(label: string): string {
@@ -709,59 +714,54 @@ describe('BotDatabase', () => {
       }
     });
 
-    it('maps SQLITE_CORRUPT to a fatal log + process.exit(2)', () => {
-      // The fatal tier is "we can't safely continue, hand off to the
-      // supervisor." We stub process.exit to prevent the test process
-      // from actually exiting.
+    it('maps SQLITE_CORRUPT to a fatal log + onFatal observer + DatabaseFatalError', () => {
+      // The fatal tier used to call process.exit(2) directly from inside
+      // runClassified, skipping every teardown step. The new flow throws
+      // DatabaseFatalError, sets `isFatal`, and fires the `onFatal` observer
+      // (Bot wires this to schedule a graceful shutdown).
       const logger = createMockLogger();
       const target = new BotDatabase(':memory:', logger);
       target.open();
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
-        throw new Error(`process.exit(${code}) called`);
-      }) as never);
       try {
         const corrupt = new SqliteError('corrupted', 'SQLITE_CORRUPT');
         stubStatement(target, 'stmtSet', corrupt);
-        expect(() => target.set('ns', 'k', 'v')).toThrow('process.exit(2)');
-        expect(exitSpy).toHaveBeenCalledWith(2);
+        const onFatal = vi.fn();
+        target.setOnFatal(onFatal);
+        expect(() => target.set('ns', 'k', 'v')).toThrow(DatabaseFatalError);
+        expect(target.isFatal).toBe(true);
+        expect(target.areWritesDisabled).toBe(true);
+        expect(onFatal).toHaveBeenCalledTimes(1);
         expect(logger.error).toHaveBeenCalled();
       } finally {
-        exitSpy.mockRestore();
         target.close();
       }
     });
 
-    it('maps SQLITE_NOTADB to a fatal log + process.exit(2)', () => {
+    it('maps SQLITE_NOTADB to DatabaseFatalError', () => {
       const target = new BotDatabase(':memory:');
       target.open();
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
-        throw new Error(`process.exit(${code}) called`);
-      }) as never);
       try {
         const notadb = new SqliteError('not a db', 'SQLITE_NOTADB');
         stubStatement(target, 'stmtSet', notadb);
-        expect(() => target.set('ns', 'k', 'v')).toThrow('process.exit(2)');
-        expect(exitSpy).toHaveBeenCalledWith(2);
+        const onFatal = vi.fn();
+        target.setOnFatal(onFatal);
+        expect(() => target.set('ns', 'k', 'v')).toThrow(DatabaseFatalError);
+        expect(onFatal).toHaveBeenCalledTimes(1);
       } finally {
-        exitSpy.mockRestore();
         target.close();
       }
     });
 
-    it('maps SQLITE_IOERR variants to a fatal log + process.exit(2)', () => {
+    it('maps SQLITE_IOERR variants to DatabaseFatalError', () => {
       // The classifier accepts any code starting with SQLITE_IOERR — proves
       // the `startsWith` branch in isSqliteFatal at database.ts:55.
       const target = new BotDatabase(':memory:');
       target.open();
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
-        throw new Error(`process.exit(${code}) called`);
-      }) as never);
       try {
         const ioerr = new SqliteError('io error', 'SQLITE_IOERR_WRITE');
         stubStatement(target, 'stmtSet', ioerr);
-        expect(() => target.set('ns', 'k', 'v')).toThrow('process.exit(2)');
+        expect(() => target.set('ns', 'k', 'v')).toThrow(DatabaseFatalError);
       } finally {
-        exitSpy.mockRestore();
         target.close();
       }
     });

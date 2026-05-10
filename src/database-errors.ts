@@ -33,3 +33,20 @@ export class DatabaseFullError extends Error {
     this.cause = cause;
   }
 }
+
+/**
+ * Thrown when SQLite returns SQLITE_CORRUPT / SQLITE_NOTADB / SQLITE_IOERR*.
+ * The database is unusable but the bot still needs to land its shutdown
+ * teardown — close the IRC socket cleanly, flush the message queue, fire
+ * `bot:disconnected` listeners — instead of `process.exit(2)`'ing mid-tick
+ * and leaving the WAL in an inconsistent state. The `setOnFatal` observer
+ * registered by `Bot` schedules `shutdown().finally(() => process.exit(2))`
+ * so the existing `step()` harness drives the orderly exit.
+ */
+export class DatabaseFatalError extends Error {
+  constructor(opName: string, cause: SqliteErrorInstance) {
+    super(`database is unrecoverable during ${opName}: ${cause.message}`);
+    this.name = 'DatabaseFatalError';
+    this.cause = cause;
+  }
+}

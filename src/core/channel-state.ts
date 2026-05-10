@@ -569,7 +569,12 @@ export class ChannelState {
     const channel = String(event.channel ?? '');
     const topic = String(event.topic ?? '');
 
-    const ch = this.ensureChannel(channel);
+    // Get-only: a TOPIC for a channel we never joined would otherwise grow
+    // `this.channels` unboundedly when a hostile or buggy server emits stray
+    // 332/TOPIC numerics. `ensureChannel` is reserved for JOIN / USERLIST /
+    // injectChannelSync — paths that imply we actually belong to the channel.
+    const ch = this.channels.get(this.lowerChannel(channel));
+    if (!ch) return;
     ch.topic = topic;
   }
 
@@ -583,7 +588,12 @@ export class ChannelState {
     // RPL_CREATIONTIME and RPL_CHANNEL_URL also emit 'channel info' without modes
     if (!isModeArray(event.modes)) return;
 
-    const ch = this.ensureChannel(channel);
+    // Same containment as `onTopic`: an RPL_CHANNELMODEIS for a channel we
+    // never joined must not allocate a tracking record. The legitimate flow
+    // is JOIN → request modes → 324 reply; if the entry is missing the
+    // numeric is stray (netsplit re-merge, server bug) and should be ignored.
+    const ch = this.channels.get(this.lowerChannel(channel));
+    if (!ch) return;
     let modeChars = '';
     let key = '';
     let limit = 0;

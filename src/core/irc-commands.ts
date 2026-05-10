@@ -21,6 +21,17 @@ export interface IRCCommandsClient {
 }
 
 /**
+ * Structural type for the outbound message queue. Kept local so this module
+ * doesn't acquire a hard dep on `MessageQueue`; matches the surface used by
+ * `enqueue`. When unset, mutating verbs send synchronously and bypass the
+ * 2 msg/s steady-state pacer — the bot is one chanmod recovery storm away
+ * from an Excess Flood K-line.
+ */
+export interface MessageQueueLike {
+  enqueue(target: string, fn: () => void): void;
+}
+
+/**
  * Narrow role interface for consumers that only need to set/lift channel
  * bans (e.g. `.ban`/`.unban` command registrars). `IRCCommands` satisfies
  * this structurally — use this type in consumers so tests can pass plain
@@ -118,6 +129,7 @@ export class IRCCommands {
   private modesPerLine: number;
   private capabilities: ServerCapabilities = defaultServerCapabilities();
   private defaultActor: ModActor = DEFAULT_ACTOR;
+  private messageQueue: MessageQueueLike | null = null;
 
   constructor(
     client: IRCCommandsClient,
@@ -132,6 +144,29 @@ export class IRCCommands {
     // of 3; 4 matches Solanum/Libera; the real number arrives via
     // `setCapabilities()` once 005 is parsed and may go up to 20+.
     this.modesPerLine = modesPerLine ?? 4;
+  }
+
+  /**
+   * Wire the outbound message queue so mutating verbs (KICK, MODE, TOPIC,
+   * INVITE, JOIN-with-key) pace through it. Bot wires this after both
+   * objects exist; tests can leave it null for synchronous semantics.
+   */
+  setMessageQueue(queue: MessageQueueLike | null): void {
+    this.messageQueue = queue;
+  }
+
+  /**
+   * Route a wire-level send through `messageQueue` if one is wired, else
+   * call `fn()` synchronously. The mod_log row is written by the caller
+   * at intent time (before this), so a queued line that never reaches the
+   * server still has the operator's audit trail.
+   */
+  private dispatchSend(target: string, fn: () => void): void {
+    if (this.messageQueue) {
+      this.messageQueue.enqueue(target, fn);
+    } else {
+      fn();
+    }
   }
 
   /** Update the max modes per line from ISUPPORT. */
@@ -178,19 +213,23 @@ export class IRCCommands {
    */
   join(channel: string, key?: string): void {
     if (key) {
-      this.client.raw(`JOIN ${sanitize(channel)} ${sanitize(key)}`);
+      const safeChan = sanitize(channel);
+      const safeKey = sanitize(key);
+      this.dispatchSend(channel, () => this.client.raw(`JOIN ${safeChan} ${safeKey}`));
     } else {
-      this.client.join(channel);
+      this.dispatchSend(channel, () => this.client.join(channel));
     }
   }
 
   part(channel: string, message?: string): void {
-    this.client.part(channel, message);
+    this.dispatchSend(channel, () => this.client.part(channel, message));
   }
 
   kick(channel: string, nick: string, reason?: string, actor?: ModActor): void {
     const safe = clampBytes(sanitize(reason ?? ''), MAX_KICK_REASON_BYTES);
-    this.client.raw(`KICK ${sanitize(channel)} ${sanitize(nick)} :${safe}`);
+    const safeChan = sanitize(channel);
+    const safeNick = sanitize(nick);
+    this.dispatchSend(channel, () => this.client.raw(`KICK ${safeChan} ${safeNick} :${safe}`));
     this.logMod('kick', channel, nick, actor, reason ?? null);
   }
 
@@ -238,13 +277,16 @@ export class IRCCommands {
     // RFC 2812 §3.2.7 INVITE: arg order is `<nick> <channel>`, the inverse of
     // the natural English reading. Easy to invert by accident — the sanitize()
     // calls also serve as a checkpoint for that order.
-    this.client.raw(`INVITE ${sanitize(nick)} ${sanitize(channel)}`);
+    const safeChan = sanitize(channel);
+    const safeNick = sanitize(nick);
+    this.dispatchSend(channel, () => this.client.raw(`INVITE ${safeNick} ${safeChan}`));
     this.logMod('invite', channel, nick, actor, null);
   }
 
   topic(channel: string, text: string, actor?: ModActor): void {
     const safe = clampBytes(sanitize(text), MAX_TOPIC_BYTES);
-    this.client.raw(`TOPIC ${sanitize(channel)} :${safe}`);
+    const safeChan = sanitize(channel);
+    this.dispatchSend(channel, () => this.client.raw(`TOPIC ${safeChan} :${safe}`));
     // Persist the new topic as `reason` so audit queries can grep topic
     // changes by substring. Text is user-controlled but safely stored
     // (parameterized insert). Cap at 4 KB so a pathological caller can't
@@ -351,10 +393,15 @@ export class IRCCommands {
   // -------------------------------------------------------------------------
 
   private sendMode(channel: string, mode: string, param: string): void {
+    const safeChan = sanitize(channel);
+    const safeMode = sanitize(mode);
+    const safeParam = sanitize(param);
     if (this.client.mode) {
-      this.client.mode(sanitize(channel), sanitize(mode), sanitize(param));
+      this.dispatchSend(channel, () => this.client.mode!(safeChan, safeMode, safeParam));
     } else {
-      this.client.raw(`MODE ${sanitize(channel)} ${sanitize(mode)} ${sanitize(param)}`);
+      this.dispatchSend(channel, () =>
+        this.client.raw(`MODE ${safeChan} ${safeMode} ${safeParam}`),
+      );
     }
   }
 
@@ -381,7 +428,7 @@ export class IRCCommands {
       safeParams.length > 0
         ? `MODE ${safeChannel} ${safeModes} ${safeParams.join(' ')}`
         : `MODE ${safeChannel} ${safeModes}`;
-    this.client.raw(line);
+    this.dispatchSend(channel, () => this.client.raw(line));
   }
 
   private logMod(

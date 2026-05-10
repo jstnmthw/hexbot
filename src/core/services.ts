@@ -52,6 +52,15 @@ interface PendingVerify {
    */
   controller: AbortController;
   method: 'acc' | 'status';
+  /**
+   * Restart the verify-timeout timer from now. Called when the
+   * "Unknown command ACC/STATUS" retry path swaps methods so the
+   * second round-trip gets the full `timeoutMs` budget instead of
+   * inheriting whatever was left of the first. Without this a
+   * misconfigured `services.type` produces false-positive
+   * `nickserv-verify-timeout` rows on the retry's first second.
+   */
+  restartTimer: () => void;
 }
 
 /**
@@ -421,34 +430,44 @@ export class Services {
 
     const controller = new AbortController();
     let resolveOuter!: (v: VerifyResult) => void;
+    // Hoisted out of the Promise executor so the retry path can swap the
+    // active timer when ACC↔STATUS falls back. The pending entry's
+    // `restartTimer()` clears whatever is here and reseats it with a fresh
+    // `effectiveTimeout` budget.
+    let activeTimer: ReturnType<typeof setTimeout> | null = null;
+    const onTimeout = (): void => {
+      // Natural timeout path — audit and resolve as a timeout-failure.
+      if (this.pending.get(lowerNick)?.controller === controller) {
+        this.pending.delete(lowerNick);
+      }
+      this.servicesTimeoutCount++;
+      this.logger?.warn(`Verification timeout for ${nick}`);
+      // Audit the silent failure mode — operators reviewing a denied
+      // privileged action need to distinguish "user not identified" from
+      // "services were unreachable". The action label leaves no doubt.
+      tryLogModAction(
+        this.db,
+        {
+          action: 'nickserv-verify-timeout',
+          source: 'system',
+          target: nick,
+          outcome: 'failure',
+          metadata: {
+            timeoutMs: effectiveTimeout,
+            servicesTimeoutCount: this.servicesTimeoutCount,
+          },
+        },
+        this.logger,
+      );
+      resolveOuter({ verified: false, account: null });
+    };
+    const restartTimer = (): void => {
+      if (activeTimer !== null) clearTimeout(activeTimer);
+      activeTimer = setTimeout(onTimeout, effectiveTimeout);
+    };
     const promise = new Promise<VerifyResult>((resolve) => {
       resolveOuter = resolve;
-      const timer = setTimeout(() => {
-        // Natural timeout path — audit and resolve as a timeout-failure.
-        if (this.pending.get(lowerNick)?.controller === controller) {
-          this.pending.delete(lowerNick);
-        }
-        this.servicesTimeoutCount++;
-        this.logger?.warn(`Verification timeout for ${nick}`);
-        // Audit the silent failure mode — operators reviewing a denied
-        // privileged action need to distinguish "user not identified" from
-        // "services were unreachable". The action label leaves no doubt.
-        tryLogModAction(
-          this.db,
-          {
-            action: 'nickserv-verify-timeout',
-            source: 'system',
-            target: nick,
-            outcome: 'failure',
-            metadata: {
-              timeoutMs: effectiveTimeout,
-              servicesTimeoutCount: this.servicesTimeoutCount,
-            },
-          },
-          this.logger,
-        );
-        resolve({ verified: false, account: null });
-      }, effectiveTimeout);
+      restartTimer();
 
       // `abort()` is the single cancellation idiom for every teardown path
       // (detach, resolveVerification success). Clearing the timer here
@@ -456,7 +475,8 @@ export class Services {
       controller.signal.addEventListener(
         'abort',
         () => {
-          clearTimeout(timer);
+          if (activeTimer !== null) clearTimeout(activeTimer);
+          activeTimer = null;
           resolve({ verified: false, account: null });
         },
         { once: true },
@@ -471,6 +491,7 @@ export class Services {
       resolve: resolveOuter,
       controller,
       method,
+      restartTimer,
     });
 
     if (method === 'status') {
@@ -621,6 +642,12 @@ export class Services {
           const altMethod = pending.method === 'acc' ? 'status' : 'acc';
           const target = this.getNickServTarget();
           pending.method = altMethod;
+          // Reset the verify timeout so the retry gets a full budget rather
+          // than racing whatever's left of the original window. On a slow
+          // services link a 5s default would otherwise expire ~immediately
+          // after the retry's command went out, producing a misleading
+          // `nickserv-verify-timeout` audit row.
+          pending.restartTimer();
           this.logger?.info(
             `${failedCmd} not supported, falling back to ${altMethod.toUpperCase()} for ${pending.nick}`,
           );

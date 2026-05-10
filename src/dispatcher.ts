@@ -360,7 +360,15 @@ export class EventDispatcher {
    * Handler errors are caught — one bad handler won't crash others.
    */
   async dispatch(type: BindType, ctx: HandlerContext): Promise<void> {
-    for (const entry of this.binds) {
+    // Snapshot the binds array up-front so a handler that mutates
+    // `this.binds` via `unbindAll`/`bind`/plugin reload mid-dispatch can't
+    // shift the iterator and silently skip or double-fire siblings. The
+    // snapshot is shallow — entries are the live references, so an entry
+    // removed during dispatch still runs once (its `unloaded` flag is
+    // checked by the disposed-API guard inside the handler closure if the
+    // plugin author needs idempotency).
+    const snapshot = this.binds.slice();
+    for (const entry of snapshot) {
       if (entry.type !== type) continue;
       if (!this.matchesMask(type, entry.mask, ctx)) continue;
       // Ordering invariant: flag check FIRST, verification gate SECOND,

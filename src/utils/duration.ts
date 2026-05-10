@@ -30,8 +30,13 @@ export function parseDuration(input: string): number | null {
   // "0" means permanent
   if (trimmed === '0') return 0;
 
-  // Suffixed format: 5m, 2h, 1d
-  const match = trimmed.match(/^(\d+)([mhd])$/i);
+  // Suffixed format: 5m, 2h, 1d. The digit-count is bounded to keep a
+  // pathological input like `"9".repeat(1_000_000) + "m"` from sending
+  // the regex / `parseInt` engines through a megabyte of state for what
+  // is always going to clamp to MAX_DURATION_MS anyway. 15 digits is well
+  // above any sane unit-prefixed duration (10^15 ms ≈ 31000 years) but
+  // gives the matcher an O(1) ceiling.
+  const match = trimmed.match(/^(\d{1,15})([mhd])$/i);
   if (match) {
     const value = parseInt(match[1], 10);
     if (value === 0) return 0;
@@ -41,7 +46,7 @@ export function parseDuration(input: string): number | null {
 
   // Bare number → minutes (backward compat with chanmod)
   const num = parseInt(trimmed, 10);
-  if (!Number.isNaN(num) && String(num) === trimmed && num >= 0) {
+  if (!Number.isNaN(num) && String(num) === trimmed && num >= 0 && trimmed.length <= 15) {
     if (num === 0) return 0;
     return Math.min(num * UNIT_MS.m, MAX_DURATION_MS);
   }

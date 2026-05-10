@@ -23,7 +23,10 @@ import type { BotlinkDCCView } from '../dcc';
 // password-rotation command through the bot link. Comparison is done on
 // the lowercased subcommand name so case variants (`.CHPASS`) cannot
 // bypass the gate.
-const BOT_RELAY_FORBIDDEN_COMMANDS = new Set(['chpass']);
+//
+// `bot` is also refused: `.bot <self> .bot <self> .<cmd>` would otherwise
+// recurse without bound and lock the dispatcher under a hostile leaf.
+const BOT_RELAY_FORBIDDEN_COMMANDS = new Set(['chpass', 'bot']);
 
 // Subcommands whose args land in mod_log as `[redacted]` even when they are
 // allowed to dispatch. Kept separate from the hard-refusal list so future

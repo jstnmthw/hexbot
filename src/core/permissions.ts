@@ -509,8 +509,21 @@ export class Permissions {
     // and fall back to the channel-state lookup for events that don't carry it.
     // The lookup returns undefined when we've seen no account data for that
     // nick; normalise both to null so findByHostmask treats them the same.
-    const account: string | null =
-      ctx.account ?? (this.accountLookup ? (this.accountLookup(ctx.nick) ?? null) : null);
+    //
+    // Wrap the lookup so a misbehaving provider (e.g. an account map that
+    // throws on a torn-down state during reconnect) cannot escape into the
+    // dispatcher. A failed lookup degrades to "no account" — same as a
+    // genuinely unidentified user — so the privileged check fails closed.
+    let lookedUpAccount: string | null = null;
+    if (this.accountLookup) {
+      try {
+        lookedUpAccount = this.accountLookup(ctx.nick) ?? null;
+      } catch (err) {
+        this.logger?.warn(`accountLookup threw for ${ctx.nick} — denying privileged access:`, err);
+        lookedUpAccount = null;
+      }
+    }
+    const account: string | null = ctx.account ?? lookedUpAccount;
     const record = this.findByHostmask(fullHostmask, account);
     if (!record) return false;
 

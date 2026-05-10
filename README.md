@@ -188,6 +188,36 @@ Plugins and config live on the host filesystem via bind mounts. Edit a plugin fi
 
 For non-Docker production use, `pnpm start` runs the bot directly via `tsx`.
 
+### Healthcheck signals
+
+The bot writes two files under `/tmp` so supervisors can distinguish "the
+process is wedged" from "the process is fine but IRC is unreachable":
+
+| File                     | Meaning                                     | What it tracks                                                                       |
+| ------------------------ | ------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `/tmp/.hexbot-alive`     | **Liveness** — the event loop is responsive | Touched every 30s, always running. Removed only on graceful shutdown / fatal exit.   |
+| `/tmp/.hexbot-connected` | **Readiness** — the bot is connected to IRC | Touched on `bot:connected`, removed on `bot:disconnected` (incl. reconnect backoff). |
+
+The default `docker-compose.yml` healthcheck reads `-connected`, so `docker
+ps` turns red while the bot is in reconnect backoff — useful for operator
+visibility. Compose `restart: unless-stopped` triggers on container exit, not
+on healthcheck status, so this signal is observability-only and never
+restart-thrashes the bot mid-backoff.
+
+For autoheal sidecars, Docker Swarm restart policies, or a Kubernetes
+liveness probe, point at `-alive` instead so the bot is only marked unhealthy
+when the event loop wedges. The in-process reconnect driver handles IRC
+backoff on its own:
+
+```yaml
+healthcheck:
+  test:
+    - 'CMD'
+    - 'sh'
+    - '-c'
+    - '[ -f /tmp/.hexbot-alive ] && [ $$(( $$(date +%s) - $$(stat -c %Y /tmp/.hexbot-alive) )) -lt 120 ]'
+```
+
 ## Development
 
 ```bash

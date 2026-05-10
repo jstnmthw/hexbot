@@ -35,8 +35,17 @@ export function init(api: PluginAPI): void {
   // `ctx.text` with anything else (timestamp, "PONG", etc.) would
   // break the spec and most clients. The `ctcpResponse` helper
   // CTCP-quotes the payload; do not pre-encode it here.
+  //
+  // Cap the echoed payload at 200 chars so a hostile peer can't use
+  // CTCP PING as an asymmetric-bandwidth amplifier — sending a long
+  // payload with our nick as origin would have us flooding our own
+  // outbound queue. 200 is comfortably above any client's real timing
+  // payload (typically a 13-char unix timestamp) and well below the
+  // IRC line limit so the NOTICE wrapper never overruns.
+  const PING_MAX_BYTES = 200;
   api.bind('ctcp', '-', 'PING', (ctx) => {
-    api.ctcpResponse(ctx.nick, 'PING', ctx.text);
+    const payload = ctx.text.length > PING_MAX_BYTES ? ctx.text.slice(0, PING_MAX_BYTES) : ctx.text;
+    api.ctcpResponse(ctx.nick, 'PING', payload);
   });
 
   // CTCP TIME format is intentionally unspecified by the de-facto
