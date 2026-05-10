@@ -104,6 +104,49 @@ describe('chanmod state', () => {
       expect(state.intentionalModeChanges.size).toBe(0);
       expect(state.enforcementCooldown.size).toBe(0);
     });
+
+    it('drops idle threatScores entries when takeoverWindowMs is supplied', () => {
+      const state = createState();
+      const now = Date.now();
+      state.threatScores.set('#fresh', { score: 1, events: [], windowStart: now });
+      state.threatScores.set('#idle', {
+        score: 5,
+        events: [{ type: 'x', actor: 'a', timestamp: now - 1_000_000 }],
+        windowStart: now - 1_000_000,
+      });
+      // takeoverWindowMs=30s → idle cutoff at 4*30s=120s; the #idle entry
+      // is well past the cutoff and should be dropped.
+      pruneExpiredState(state, 30_000);
+      expect(state.threatScores.has('#fresh')).toBe(true);
+      expect(state.threatScores.has('#idle')).toBe(false);
+    });
+
+    it('leaves threatScores alone when takeoverWindowMs is omitted', () => {
+      const state = createState();
+      state.threatScores.set('#x', {
+        score: 1,
+        events: [],
+        windowStart: Date.now() - 1_000_000,
+      });
+      pruneExpiredState(state);
+      expect(state.threatScores.has('#x')).toBe(true);
+    });
+
+    it('drops lastKnownModes past the 24h TTL', () => {
+      const state = createState();
+      const now = Date.now();
+      state.lastKnownModes.set('#recent', { modes: '+nt', setAt: now - 60_000 });
+      state.lastKnownModes.set('#old', {
+        modes: '+nt',
+        setAt: now - 25 * 60 * 60_000,
+      });
+      // Untimestamped legacy entry — left alone (no setAt to compare).
+      state.lastKnownModes.set('#legacy', { modes: '+nt' });
+      pruneExpiredState(state);
+      expect(state.lastKnownModes.has('#recent')).toBe(true);
+      expect(state.lastKnownModes.has('#old')).toBe(false);
+      expect(state.lastKnownModes.has('#legacy')).toBe(true);
+    });
   });
 
   describe('scheduleEnforcement()', () => {

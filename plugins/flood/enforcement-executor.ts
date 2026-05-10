@@ -54,6 +54,16 @@ const MAX_ACTIONS_PER_CHANNEL_WINDOW = 10;
 const CHANNEL_WINDOW_MS = 5_000;
 
 /**
+ * Hard cap on the number of distinct channel keys tracked in
+ * {@link EnforcementExecutor.channelActionRate}. Bounded by joinable
+ * channel count in normal operation, but defensive against a runaway
+ * grow path (a future regression that called `reserveChannelSlot`
+ * without ever joining the channel). When inserting past the cap,
+ * the oldest entry by insertion order is evicted.
+ */
+const MAX_CHANNEL_RATE_KEYS = 1024;
+
+/**
  * Minimum gap between offences that actually advances the escalation
  * ladder. A long response that overflows the rate-limit threshold fires
  * `check()=true` on every trailing message — without dedup, a single
@@ -130,6 +140,26 @@ export class EnforcementExecutor {
   }
 
   /**
+   * Drop per-channel state for `channel`. Wired from the bot PART/KICK
+   * branch in index.ts so channel-scoped enforcement state doesn't
+   * linger after the bot leaves. `channelActionRate` and `recentTerminal`
+   * are channel-scoped and dropped immediately; `offenceTracker` keys
+   * for `join:` / `part:` / `nick:` are network-wide on the user's
+   * hostmask and deliberately left alone here. `msg:` offence keys are
+   * channel-scoped but use a different lowercasing helper than
+   * `api.ircLower`, so they are left to age out via the periodic sweep
+   * to avoid a partial drop.
+   */
+  dropChannel(channel: string): void {
+    const lowered = this.api.ircLower(channel);
+    this.channelActionRate.delete(lowered);
+    const targetPrefix = `${lowered}:`;
+    for (const key of this.recentTerminal.keys()) {
+      if (key.startsWith(targetPrefix)) this.recentTerminal.delete(key);
+    }
+  }
+
+  /**
    * Consume a per-channel action slot. Returns false if the cap has
    * been hit within the current rolling window; caller must drop the
    * action.
@@ -139,6 +169,17 @@ export class EnforcementExecutor {
     const key = this.api.ircLower(channel);
     let state = this.channelActionRate.get(key);
     if (!state || now - state.windowStart > CHANNEL_WINDOW_MS) {
+      // Hard cap on distinct keys: evict the oldest by insertion order
+      // before inserting a new entry. Bounded by joinable channel count
+      // in normal operation; the cap is defense against a future code
+      // path that calls reserveChannelSlot without a paired bot-PART.
+      if (
+        !this.channelActionRate.has(key) &&
+        this.channelActionRate.size >= MAX_CHANNEL_RATE_KEYS
+      ) {
+        const oldest = this.channelActionRate.keys().next().value;
+        if (oldest !== undefined) this.channelActionRate.delete(oldest);
+      }
       state = { windowStart: now, count: 0 };
       this.channelActionRate.set(key, state);
     }

@@ -87,8 +87,14 @@ export interface SharedState {
   // Kick+ban recovery
   /** Channels where RECOVER was used and post-recovery +i +m cleanup is needed. Value is expiresAt. */
   pendingRecoverCleanup: Map<string, number>;
-  /** Last-known channel modes before the bot was kicked (for +i/+k detection). */
-  lastKnownModes: Map<string, { modes: string; key?: string }>;
+  /**
+   * Last-known channel modes before the bot was kicked (for +i/+k
+   * detection). `setAt` is the wall-clock ms when the snapshot was
+   * taken — `pruneExpiredState` drops entries older than
+   * {@link LAST_KNOWN_MODES_TTL_MS} so a kick that never recovers
+   * doesn't leak.
+   */
+  lastKnownModes: Map<string, { modes: string; key?: string; setAt?: number }>;
   /** Channels where we already sent requestUnban (prevent double-sends). Value is expiresAt. */
   unbanRequested: Map<string, number>;
   // Topic recovery
@@ -225,10 +231,30 @@ export function clearSharedState(state: SharedState): void {
   state.takeoverWarnedChannels.clear();
 }
 
+/**
+ * Per-channel threat-state TTL. A channel that hasn't recorded a threat
+ * event for this long has either fully recovered or never came under
+ * sustained attack — the entry holds up to 1000 cached events × ~80 B
+ * each, so dropping idle entries keeps `threatScores` from growing
+ * with cumulative incidents rather than active ones. Tied to 4×
+ * `takeover_window_ms` instead of an absolute number so it scales with
+ * operator-tuned detection windows.
+ */
+export const THREAT_STATE_IDLE_MULTIPLIER = 4;
+
+/**
+ * Idle TTL for `lastKnownModes`. The map is populated when the bot is
+ * kicked (so chanmod can re-impose `+i` / `+k` after rejoin) and is
+ * normally cleared when the bot regains ops. If a kick is followed by
+ * a permanent unrecovered state, the entry would otherwise sit until
+ * the next reload.
+ */
+export const LAST_KNOWN_MODES_TTL_MS = 24 * 60 * 60_000;
+
 /** Prune expired entries from intentionalModeChanges and enforcementCooldown,
  *  plus TTL-based cleanup of pendingRecoverCleanup/unbanRequested/cycle locks
  *  so a dropped follow-up event (services outage, etc.) doesn't leak entries. */
-export function pruneExpiredState(state: SharedState): void {
+export function pruneExpiredState(state: SharedState, takeoverWindowMs?: number): void {
   const now = Date.now();
   for (const [key, expiresAt] of state.intentionalModeChanges) {
     if (now >= expiresAt) state.intentionalModeChanges.delete(key);
@@ -241,6 +267,25 @@ export function pruneExpiredState(state: SharedState): void {
   }
   for (const [key, expiresAt] of state.unbanRequested) {
     if (now >= expiresAt) state.unbanRequested.delete(key);
+  }
+  // Drop idle threat-state entries. `windowStart` is updated on every
+  // recorded event by `getOrCreateThreat`, so an entry whose start is
+  // older than several windows is by definition not actively under
+  // attack — its event log is stale and the score has already decayed.
+  if (takeoverWindowMs && takeoverWindowMs > 0) {
+    const idleCutoff = now - takeoverWindowMs * THREAT_STATE_IDLE_MULTIPLIER;
+    for (const [key, threat] of state.threatScores) {
+      if (threat.windowStart < idleCutoff) state.threatScores.delete(key);
+    }
+  }
+  // Drop stale lastKnownModes — only relevant immediately after a kick
+  // until the next op-recovery cycle clears it. Past 24 h the snapshot
+  // is no longer useful and the channel almost certainly recovered (or
+  // the bot is permanently barred and the snapshot will never apply).
+  for (const [key, entry] of state.lastKnownModes) {
+    if (entry.setAt !== undefined && now - entry.setAt > LAST_KNOWN_MODES_TTL_MS) {
+      state.lastKnownModes.delete(key);
+    }
   }
   state.cycles.pruneExpired(now, PENDING_STATE_TTL_MS);
 }

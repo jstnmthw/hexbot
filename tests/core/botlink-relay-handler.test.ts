@@ -89,6 +89,75 @@ describe('handleRelayFrame', () => {
         toBot: 'testbot',
       });
     });
+
+    it('rejects with RELAY_END once a single fromBot has 64 active sessions', () => {
+      const deps = createDeps();
+      const sessions: RelaySessionMap = new Map();
+      // Pre-fill 64 sessions all owned by leafbot to hit the cap.
+      for (let i = 0; i < 64; i++) {
+        sessions.set(`alice${i}`, { fromBot: 'leafbot', sendOutput: vi.fn() });
+      }
+      handleRelayFrame(
+        { type: 'RELAY_REQUEST', handle: 'alice64', fromBot: 'leafbot' },
+        deps,
+        sessions,
+      );
+      expect(sessions.has('alice64')).toBe(false);
+      expect(deps.sender.sendTo).toHaveBeenCalledWith(
+        'leafbot',
+        expect.objectContaining({ type: 'RELAY_END', reason: 'Relay cap reached' }),
+      );
+    });
+
+    it('reusing an existing handle is allowed even when at cap', () => {
+      const deps = createDeps();
+      const sessions: RelaySessionMap = new Map();
+      for (let i = 0; i < 64; i++) {
+        sessions.set(`alice${i}`, { fromBot: 'leafbot', sendOutput: vi.fn() });
+      }
+      // Re-issuing RELAY_REQUEST for an already-tracked handle replaces
+      // the entry in place — count stays at 64, no rejection.
+      handleRelayFrame(
+        { type: 'RELAY_REQUEST', handle: 'alice0', fromBot: 'leafbot' },
+        deps,
+        sessions,
+      );
+      expect(sessions.size).toBe(64);
+      expect(deps.sender.sendTo).toHaveBeenCalledWith('leafbot', {
+        type: 'RELAY_ACCEPT',
+        handle: 'alice0',
+        toBot: 'testbot',
+      });
+    });
+
+    it('cap is per-fromBot — a different bot can still create sessions', () => {
+      const deps = createDeps();
+      const sessions: RelaySessionMap = new Map();
+      for (let i = 0; i < 64; i++) {
+        sessions.set(`alice${i}`, { fromBot: 'leafbot', sendOutput: vi.fn() });
+      }
+      handleRelayFrame(
+        { type: 'RELAY_REQUEST', handle: 'bob', fromBot: 'otherleaf' },
+        deps,
+        sessions,
+      );
+      expect(sessions.has('bob')).toBe(true);
+    });
+  });
+
+  describe('RELAY_INPUT with deleted handle', () => {
+    it('ends the session and sends RELAY_END when the user no longer exists', () => {
+      const deps = createDeps({ permissions: { getUser: () => null } });
+      const sessions: RelaySessionMap = new Map();
+      sessions.set('zombie', { fromBot: 'leafbot', sendOutput: vi.fn() });
+      handleRelayFrame({ type: 'RELAY_INPUT', handle: 'zombie', line: '.help' }, deps, sessions);
+      expect(sessions.has('zombie')).toBe(false);
+      expect(deps.sender.send).toHaveBeenCalledWith({
+        type: 'RELAY_END',
+        handle: 'zombie',
+        reason: 'user removed',
+      });
+    });
   });
 
   describe('RELAY_ACCEPT', () => {

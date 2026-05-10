@@ -131,6 +131,16 @@ export type AdmissionResult =
   | { allowed: false; reason: 'banned' | 'cidr-banned' | 'pending-limit' | 'unknown-ip' };
 
 /**
+ * Hard cap on distinct IPs tracked in `pendingHandshakes`. Sibling state
+ * surfaces (authTracker, manualCidrBans) all enforce caps; without one
+ * here, any IP that admits but never releases — present-day code paths
+ * always release, but a future regression could forget — leaks ~80 B
+ * per unique source IP forever. 4096 covers any realistic bot fleet
+ * with headroom while bounding worst-case at ~320 KB.
+ */
+const MAX_PENDING_IPS = 4096;
+
+/**
  * Owns authentication state for the bot-link hub: per-botnet HMAC key,
  * per-IP failure tracker with exponential ban backoff, pending-handshake
  * counting, manual CIDR bans, and the persisted link-ban store.
@@ -224,8 +234,19 @@ export class BotLinkAuthManager {
     }
 
     if (!whitelisted) {
-      // Ban check — immediately reject banned IPs before any protocol setup
-      const tracker = this.store.authTracker.get(ip);
+      // Ban check — immediately reject banned IPs before any protocol setup.
+      // On LRU miss, fall back to the persisted manual-ban store so a
+      // permanent operator-set ban that aged out of the LRU under scanner
+      // pressure still applies. Re-hydrates the tracker so subsequent
+      // hits short-circuit without a DB lookup.
+      let tracker = this.store.authTracker.get(ip);
+      if (!tracker) {
+        const persisted = this.store.getPersistedSingleIpBan(ip);
+        if (persisted) {
+          this.store.addManualBan(persisted);
+          tracker = this.store.authTracker.get(ip);
+        }
+      }
       if (tracker && tracker.bannedUntil > Date.now()) {
         return { allowed: false, reason: 'banned' };
       }
@@ -242,6 +263,17 @@ export class BotLinkAuthManager {
       const maxPending = this.config.max_pending_handshakes ?? 3;
       const pending = this.pendingHandshakes.get(ip) ?? 0;
       if (pending >= maxPending) {
+        return { allowed: false, reason: 'pending-limit' };
+      }
+      // Map-size cap: rejects new IPs once the table is saturated. Existing
+      // entries can still increment past this point — only first-time inserts
+      // are gated. A misbehaving release path that forgets to decrement
+      // surfaces here as a flood of `pending-limit` rejections instead of
+      // unbounded growth.
+      if (pending === 0 && this.pendingHandshakes.size >= MAX_PENDING_IPS) {
+        this.logger?.warn(
+          `pendingHandshakes at cap (${MAX_PENDING_IPS}); rejecting ${ip} — investigate stuck releasePending callers`,
+        );
         return { allowed: false, reason: 'pending-limit' };
       }
       this.pendingHandshakes.set(ip, pending + 1);

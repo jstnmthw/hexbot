@@ -531,6 +531,10 @@ export class BotLinkLeaf {
       this.reconnectTimer = null;
       this.connect();
     }, jitteredDelay);
+    // Defense in depth: a graceful shutdown that bypasses `disconnect()`
+    // shouldn't be blocked by a pending reconnect attempt. `disconnect()`
+    // already clears this timer; `unref()` is the safety net.
+    this.reconnectTimer.unref();
 
     // Exponential backoff — based on the un-jittered delay so every leaf
     // converges toward the cap at the same rate.

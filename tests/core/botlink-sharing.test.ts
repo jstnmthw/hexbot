@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { BanListSyncer, SharedBanList } from '../../src/core/botlink';
 
@@ -86,6 +86,90 @@ describe('SharedBanList', () => {
     list.addBan('#a', '*!*@x', 'a', 0);
     list.addExempt('#b', '*!*@y', 'a', 0);
     expect(list.getChannels().sort()).toEqual(['#a', '#b']);
+  });
+
+  it('caps distinct channels per mask list at 1024 (add path)', () => {
+    const warn = vi.fn();
+    const childLogger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn,
+      error: vi.fn(),
+      child: () => childLogger,
+      setLevel: vi.fn(),
+      getLevel: () => 'info' as const,
+    };
+    const logger = childLogger;
+    const list = new SharedBanList(logger);
+    for (let i = 0; i < 1024; i++) {
+      list.addBan(`#chan${i}`, '*!*@x', 'a', 0);
+    }
+    list.addBan('#overflow', '*!*@x', 'a', 0);
+    expect(list.getBans('#overflow')).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('1024 channels'));
+  });
+
+  it('drops masks past the per-channel 256 cap (add path)', () => {
+    const warn = vi.fn();
+    const childLogger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn,
+      error: vi.fn(),
+      child: () => childLogger,
+      setLevel: vi.fn(),
+      getLevel: () => 'info' as const,
+    };
+    const list = new SharedBanList(childLogger);
+    for (let i = 0; i < 256; i++) {
+      list.addBan('#chan', `*!*@host${i}`, 'a', 0);
+    }
+    list.addBan('#chan', '*!*@overflow', 'a', 0);
+    expect(list.getBans('#chan')).toHaveLength(256);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('cap (256)'));
+  });
+
+  it('truncates sync payloads past the per-channel 256 cap', () => {
+    const warn = vi.fn();
+    const childLogger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn,
+      error: vi.fn(),
+      child: () => childLogger,
+      setLevel: vi.fn(),
+      getLevel: () => 'info' as const,
+    };
+    const list = new SharedBanList(childLogger);
+    const oversize = Array.from({ length: 300 }, (_, i) => ({
+      mask: `*!*@host${i}`,
+      setBy: 'a',
+      setAt: 0,
+    }));
+    list.syncBans('#chan', oversize);
+    expect(list.getBans('#chan')).toHaveLength(256);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('exceeds cap (256)'));
+  });
+
+  it('caps distinct channels per mask list at 1024 (sync path)', () => {
+    const warn = vi.fn();
+    const childLogger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn,
+      error: vi.fn(),
+      child: () => childLogger,
+      setLevel: vi.fn(),
+      getLevel: () => 'info' as const,
+    };
+    const logger = childLogger;
+    const list = new SharedBanList(logger);
+    for (let i = 0; i < 1024; i++) {
+      list.syncBans(`#chan${i}`, [{ mask: '*!*@x', setBy: 'a', setAt: 0 }]);
+    }
+    list.syncBans('#overflow', [{ mask: '*!*@x', setBy: 'a', setAt: 0 }]);
+    expect(list.getBans('#overflow')).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('1024 channels'));
   });
 });
 

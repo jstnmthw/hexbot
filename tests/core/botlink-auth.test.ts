@@ -505,6 +505,52 @@ describe('auth brute-force protection', () => {
     expect(auth.manualCidrBans.has('203.0.113.0/24')).toBe(false);
   });
 
+  it('rejects new IPs once pendingHandshakes is at the global 4096 cap', () => {
+    const hub = makeHub(hubConfig({ max_pending_handshakes: 100 }), '1.0.0');
+    // Seed the pendingHandshakes map directly to skip 4096 connection
+    // round-trips.
+    const auth = hub.auth;
+    const pending = (auth as unknown as { pendingHandshakes: Map<string, number> })
+      .pendingHandshakes;
+    for (let i = 0; i < 4096; i++) {
+      pending.set(`10.${(i >> 16) & 0xff}.${(i >> 8) & 0xff}.${i & 0xff}`, 1);
+    }
+    // 4097th unique IP must be rejected with pending-limit.
+    const result = auth.admit('192.0.2.1');
+    expect(result).toEqual({ allowed: false, reason: 'pending-limit' });
+    // Existing IPs can still increment past their per-IP limit (already
+    // tracked, doesn't grow the map).
+    const existingIp = '10.0.0.0';
+    const before = pending.get(existingIp);
+    auth.admit(existingIp);
+    expect(pending.get(existingIp)).toBe((before ?? 0) + 1);
+  });
+
+  it('re-hydrates manual permanent /32 bans dropped by LRU eviction', async () => {
+    const { BotDatabase } = await import('../../src/database');
+    const db = new BotDatabase(':memory:');
+    db.open();
+    const hub = makeHub(hubConfig(), '1.0.0', null, undefined, db);
+
+    // Set a permanent manual ban on a single IP (not a CIDR), then evict
+    // it from the LRU by directly deleting the tracker entry — emulates
+    // scanner pressure pushing the tracker past 10k and dropping our ban.
+    hub.manualBan('198.51.100.5', 0, 'forever', 'admin');
+    expect(hub.auth.authTracker.get('198.51.100.5')?.bannedUntil).toBe(Number.MAX_SAFE_INTEGER);
+    hub.auth.authTracker.delete('198.51.100.5');
+    expect(hub.auth.authTracker.get('198.51.100.5')).toBeUndefined();
+
+    // Next admit() for that IP must re-hydrate from the persisted store
+    // and still reject the connection.
+    const { socket } = createMockSocketWithIP('198.51.100.5');
+    hub.addConnection(socket);
+    await realTick();
+    expect(socket.destroyed).toBe(true);
+    expect(hub.auth.authTracker.get('198.51.100.5')?.bannedUntil).toBe(Number.MAX_SAFE_INTEGER);
+
+    db.close();
+  });
+
   it('rejects new CIDR bans once MAX_CIDR_BANS is reached', () => {
     const warnings: string[] = [];
     const mockLogger = {

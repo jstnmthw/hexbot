@@ -160,6 +160,13 @@ export class Bot {
    * double-close the db after one already ran.
    */
   private _isShuttingDown = false;
+  /**
+   * True after {@link start} has run to completion. Symmetric with
+   * `_isShuttingDown` so a double-`start()` no-ops instead of restamping
+   * `startTime` (which would reset visible uptime everywhere) and re-
+   * running the connect/attach plumbing.
+   */
+  private _isStarted = false;
 
   /** Bot config path captured during construction so `.rehash` can re-read it on demand. */
   private readonly _botConfigPath: string;
@@ -891,6 +898,11 @@ export class Bot {
 
   /** Start the bot: open DB, load permissions, connect to IRC, wire everything. */
   async start(): Promise<void> {
+    if (this._isStarted) {
+      this.botLogger.warn('start() called twice — ignoring (uptime stays anchored to first start)');
+      return;
+    }
+    this._isStarted = true;
     this.printBanner();
 
     this.db.open();

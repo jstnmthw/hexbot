@@ -401,8 +401,14 @@ export class DCCSession implements DCCSessionEntry {
    * password prompt succeeds — see {@link showBanner}. version/botNick are
    * captured here (not in the constructor) so a single DCCSession instance
    * can be re-used by tests that drive the prompt directly.
+   *
+   * `preStartErrorHandler` is the early `socket.once('error', …)` listener
+   * that {@link DCCManager.openSession} installs to bridge the window
+   * before the session's own error handler is attached. We remove it
+   * here so the per-session closure (which captures `this`) is the only
+   * 'error' listener for the rest of the session lifetime.
    */
-  start(version: string, botNick: string): void {
+  start(version: string, botNick: string, preStartErrorHandler?: (err: Error) => void): void {
     this.versionForBanner = version;
     this.botNickForBanner = botNick;
 
@@ -416,17 +422,19 @@ export class DCCSession implements DCCSessionEntry {
     this.phase = 'awaiting_password';
     this.resetPromptIdle();
 
-    rl.on('line', (line: string) => {
+    this.lineHandler = (line: string) => {
       // readline has just delivered a complete line — every byte that
       // contributed to it is no longer "pending". Reset before dispatch so
       // the next chunk's accounting starts clean.
       this.pendingLineBytes = 0;
       this.onLine(line);
-    });
+    };
+    rl.on('line', this.lineHandler);
 
-    this.socket.on('close', () => this.onClose());
-    /* v8 ignore next -- socket error event unreachable in tests: Duplex.emit('error') propagates even with a handler */
-    this.socket.on('error', () => this.onClose());
+    if (preStartErrorHandler) {
+      this.socket.off('error', preStartErrorHandler);
+    }
+    this.attachLifecycleHandlers();
   }
 
   /**
@@ -451,6 +459,24 @@ export class DCCSession implements DCCSessionEntry {
    * `this`) lives until the socket itself is destroyed.
    */
   private dataGuard: ((chunk: Buffer) => void) | null = null;
+  /**
+   * Named references to the socket lifecycle listeners installed by
+   * {@link start} / {@link startActiveForTesting}. Stored so
+   * {@link clearAllTimers} can `socket.off()` them — without this, the
+   * closures (which capture `this`) live until the socket itself is
+   * destroyed and GC'd, retaining the full session graph during the
+   * window where the socket has emitted `close` but isn't yet collected.
+   */
+  private closeHandler: (() => void) | null = null;
+  private errorHandler: (() => void) | null = null;
+  /**
+   * Named reference to the readline 'line' listener. Released via
+   * `rl.close()` in `teardownSession`, but the named field lets us
+   * `rl.off('line', this.lineHandler)` symmetrically with
+   * {@link dataGuard} so heap snapshots taken between socket-close and
+   * GC don't show an anonymous `this`-capturing closure.
+   */
+  private lineHandler: ((line: string) => void) | null = null;
 
   /**
    * Count bytes that arrive on the socket between newlines and destroy the
@@ -534,15 +560,27 @@ export class DCCSession implements DCCSessionEntry {
     this.showBanner();
     this.resetIdle();
 
-    rl.on('line', (line: string) => {
+    this.lineHandler = (line: string) => {
       // See `start()` — reset the pending-bytes guard on each completed line.
       this.pendingLineBytes = 0;
       this.onLine(line);
-    });
+    };
+    rl.on('line', this.lineHandler);
 
-    this.socket.on('close', () => this.onClose());
+    this.attachLifecycleHandlers();
+  }
+
+  /**
+   * Wire the named close/error handlers onto the socket. Shared by
+   * {@link start} and {@link startActiveForTesting} so the named-field
+   * cleanup in {@link clearAllTimers} works for both entry points.
+   */
+  private attachLifecycleHandlers(): void {
+    this.closeHandler = () => this.onClose();
     /* v8 ignore next -- socket error event unreachable in tests: Duplex.emit('error') propagates even with a handler */
-    this.socket.on('error', () => this.onClose());
+    this.errorHandler = () => this.onClose();
+    this.socket.on('close', this.closeHandler);
+    this.socket.on('error', this.errorHandler);
   }
 
   /** Send the welcome banner + stats. Called after the password prompt succeeds. */
@@ -879,6 +917,25 @@ export class DCCSession implements DCCSessionEntry {
       this.socket.off('data', this.dataGuard);
       this.dataGuard = null;
     }
+    // Same treatment for the close/error lifecycle handlers — without
+    // explicit removal, the closures (which capture `this`) live until
+    // the socket is destroyed, retaining the session graph in heap
+    // snapshots during peer-drop spikes.
+    if (this.closeHandler !== null) {
+      this.socket.off('close', this.closeHandler);
+      this.closeHandler = null;
+    }
+    if (this.errorHandler !== null) {
+      this.socket.off('error', this.errorHandler);
+      this.errorHandler = null;
+    }
+    // rl.close() in teardownSession also drops listeners, but explicit
+    // off() symmetric with dataGuard / closeHandler keeps the closure
+    // GC-eligible immediately rather than waiting for rl finalization.
+    if (this.rl !== null && this.lineHandler !== null) {
+      this.rl.off('line', this.lineHandler);
+    }
+    this.lineHandler = null;
     // Defensive: close() may arrive while a pending relay is still awaiting
     // confirmation. The happy-path exitRelay() clears this timer first, so
     // the branch only fires if the socket dies mid-handshake. setRelayState()
@@ -1476,14 +1533,21 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     const session = this.sessionStore.get(nick);
     if (session) {
       if (session.isStale) {
-        // Either the session already closed itself, or the socket is dead
-        // but onClose hasn't fired yet. Evict and let the new offer through.
+        // Either the session already closed itself (isClosed=true → its
+        // own teardownSession ran; just drop the residual entry), or the
+        // socket is dead but onClose hasn't fired yet (call close() to
+        // run teardownSession via the normal path). Pager / audit-tail
+        // cleanup runs uniformly in both branches so the isClosed path
+        // — which used to rely on close()'s early-return and skip
+        // cleanup — still releases the `dcc:<handle>` entries.
         if (session.isClosed) {
           this.sessionStore.delete(nick);
         } else {
           this.logger?.info(`DCC: evicting stale session for ${nick}`);
           session.close('Stale session replaced.');
         }
+        clearPagerForSession(`dcc:${session.handle}`);
+        clearAuditTailForSession(`dcc:${session.handle}`);
       } else {
         this.client.notice(nick, 'DCC CHAT: request denied.');
         return false;
@@ -1609,13 +1673,18 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     socket.setKeepAlive(true, 60_000);
 
     // Early error handler — guards the window before DCCSession.start()
-    // attaches its own. Use `.once` so it self-removes after firing (or
-    // becomes GC-eligible with the socket if no pre-start error occurs),
-    // avoiding the two-coexisting-listeners pattern flagged in audit
-    // finding W-DCC2 (2026-04-14).
-    socket.once('error', (err) => {
-      this.logger?.debug(`DCC socket error for ${pending.nick}: ${err.message}`);
-    });
+    // attaches its own. Capture only the nick string (not the entire
+    // PendingDCC) so the closure doesn't retain a UserRecord, server
+    // reference, ident/hostname strings, and the cleared port-timeout
+    // timer for the full session lifetime. Stored as a named function
+    // so DCCSession.start() can socket.off() it once its own permanent
+    // error handler is attached.
+    const pendingNick = pending.nick;
+    const logger = this.logger;
+    const preHandshakeErrorHandler = (err: Error): void => {
+      logger?.debug(`DCC socket error for ${pendingNick}: ${err.message}`);
+    };
+    socket.on('error', preHandshakeErrorHandler);
 
     const key = `${pending.nick}!${pending.ident}@${pending.hostname}`;
 
@@ -1663,7 +1732,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
     this.logger?.info(`DCC CHAT: prompting ${pending.user.handle} (${pending.nick}) for password`);
 
-    session.start(this.version, this.botNick);
+    session.start(this.version, this.botNick, preHandshakeErrorHandler);
   }
 
   private closeAll(reason?: string): void {

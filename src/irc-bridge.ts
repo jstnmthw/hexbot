@@ -133,6 +133,19 @@ export class IRCBridge {
 
   /** Register all irc-framework event listeners. */
   attach(): void {
+    // Idempotency guard: a second attach() without an intervening
+    // detach() would silently double every event handler and orphan the
+    // CTCP-sweep interval + topic-startup-grace timer. Today no caller
+    // does this, but a future STS/reconnect refactor that re-attaches
+    // the bridge would leak ~14 listeners + two timers per call. Detach
+    // first so the new attach is clean.
+    if (this.listeners.length > 0) {
+      this.logger?.warn(
+        'attach() called while already attached — detaching previous listeners first',
+      );
+      this.detach();
+    }
+
     this.listenIrc('privmsg', this.onPrivmsg.bind(this));
     this.listenIrc('action', this.onAction.bind(this));
     this.listenIrc('join', this.onJoin.bind(this));

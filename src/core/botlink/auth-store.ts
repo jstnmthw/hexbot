@@ -128,6 +128,23 @@ export class BotLinkAuthStore {
     this.linkBanStore?.del(ip);
   }
 
+  /**
+   * Look up a persisted manual single-IP ban for `ip`. Returns the ban
+   * when one exists in the DB, is non-CIDR, and is either permanent
+   * (`bannedUntil === 0`) or unexpired. Used by the admission gate to
+   * re-hydrate the LRU `authTracker` on cache miss — the LRU can evict
+   * a single-IP manual ban under scanner pressure even though the
+   * underlying record is permanent. Without this, an evicted permanent
+   * ban silently stops applying until process restart.
+   */
+  getPersistedSingleIpBan(ip: string): LinkBan | null {
+    if (!this.linkBanStore) return null;
+    const ban = this.linkBanStore.get(ip);
+    if (!ban || ban.ip.includes('/')) return null;
+    if (ban.bannedUntil !== 0 && ban.bannedUntil <= Date.now()) return null;
+    return ban;
+  }
+
   /** Enumerate persisted manual bans — used by `getAuthBans` for the admin list. */
   listPersistedBans(): LinkBan[] {
     return this.linkBanStore?.list() ?? [];

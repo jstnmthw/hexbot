@@ -58,10 +58,18 @@ function snapshotOps(api: PluginAPI, state: SharedState): void {
 
 /**
  * Register quit + mode binds implementing the stopnethack feature.
- * No-op if `config.stopnethack_mode` is 0.
+ * No-op if `config.stopnethack_mode` is 0. Returns a teardown function
+ * so any future per-stopnethack timer/listener has a wired cleanup
+ * site — today the binds are auto-reaped and there is nothing to undo,
+ * but matching the `() => void` shape of every other `setup*` keeps a
+ * future regression from leaking silently.
  */
-export function setupStopnethack(api: PluginAPI, config: ChanmodConfig, state: SharedState): void {
-  if (config.stopnethack_mode <= 0) return;
+export function setupStopnethack(
+  api: PluginAPI,
+  config: ChanmodConfig,
+  state: SharedState,
+): () => void {
+  if (config.stopnethack_mode <= 0) return () => {};
 
   // Detect netsplit via burst of split-quit messages
   api.bind('quit', '-', '*', (ctx) => {
@@ -122,4 +130,6 @@ export function setupStopnethack(api: PluginAPI, config: ChanmodConfig, state: S
       });
     }
   });
+
+  return () => {};
 }

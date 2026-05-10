@@ -308,9 +308,26 @@ export function init(api: PluginAPI): void {
   // keeps the registration pattern consistent with the other setup* helpers.
   teardowns.push(setupStickyBans(api, state));
 
-  // Periodic cleanup of expired intentionalModeChanges and enforcementCooldown entries
+  // Periodic cleanup of expired intentionalModeChanges and
+  // enforcementCooldown entries, plus idle threatScores / lastKnownModes
+  // so a busy network with intermittent takeover events doesn't
+  // accumulate per-channel state forever.
   api.bind('time', '-', '60', () => {
-    pruneExpiredState(state);
+    pruneExpiredState(state, config.takeover_window_ms);
+  });
+
+  // Drop per-channel state when the bot leaves a channel — keeps
+  // long-lived sets like `takeoverWarnedChannels` from accumulating
+  // entries for channels we'll never auto-op into again. Bind handlers
+  // are auto-reaped by the loader on plugin unload.
+  const dropChannelState = (channel: string): void => {
+    state.takeoverWarnedChannels.delete(api.ircLower(channel));
+  };
+  api.bind('part', '-', '*', (ctx) => {
+    if (api.isBotNick(ctx.nick)) dropChannelState(ctx.channel);
+  });
+  api.bind('kick', '-', '*', (ctx) => {
+    if (api.isBotNick(ctx.nick)) dropChannelState(ctx.channel);
   });
 
   // Belt-and-braces: null every Map/Set on shared state at teardown so a

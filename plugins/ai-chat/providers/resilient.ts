@@ -31,13 +31,39 @@ export const DEFAULT_RESILIENCE: ResilienceConfig = {
 export class ResilientProvider implements AIProvider {
   private consecutiveFailures = 0;
   private circuitOpenedAt: number | null = null;
+  /**
+   * Pending retry-backoff sleeps. Each entry holds the setTimeout
+   * handle and the promise resolver so {@link abort} can cancel the
+   * timer and resolve the awaiting promise — without resolving, the
+   * await chain inside {@link complete} would hang forever after
+   * teardown. Resolving early is safe because the next iteration
+   * either succeeds or throws via the inner provider's own abort path.
+   */
+  private pendingSleeps = new Set<{ timer: ReturnType<typeof setTimeout>; resolve: () => void }>();
 
   constructor(
     public readonly inner: AIProvider,
     private config: ResilienceConfig = DEFAULT_RESILIENCE,
     private now: () => number = Date.now,
-    private sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
-  ) {}
+    sleep?: (ms: number) => Promise<void>,
+  ) {
+    // Default sleep registers itself in `pendingSleeps` so abort() can
+    // cancel mid-backoff. A test-injected `sleep` is used as-is — tests
+    // typically mock sleep to resolve immediately.
+    this.sleep =
+      sleep ??
+      ((ms): Promise<void> =>
+        new Promise<void>((resolve) => {
+          const entry = { timer: setTimeout(() => {}, 0), resolve };
+          entry.timer = setTimeout(() => {
+            this.pendingSleeps.delete(entry);
+            resolve();
+          }, ms);
+          this.pendingSleeps.add(entry);
+        }));
+  }
+
+  private sleep: (ms: number) => Promise<void>;
 
   get name(): string {
     return this.inner.name;
@@ -105,6 +131,17 @@ export class ResilientProvider implements AIProvider {
 
   /** Forward to the inner provider so teardown can cancel in-flight calls. */
   abort(): void {
+    // Cancel any pending retry-backoff sleep first — without this, a
+    // teardown mid-backoff leaves timers (and the closures they capture)
+    // sitting on the event loop until the configured backoff elapses,
+    // and the awaiting `complete()` chain hangs. Resolve so the await
+    // unwinds; the next iteration either succeeds or throws via the
+    // inner provider's own abort path.
+    for (const entry of this.pendingSleeps) {
+      clearTimeout(entry.timer);
+      entry.resolve();
+    }
+    this.pendingSleeps.clear();
     this.inner.abort?.();
   }
 

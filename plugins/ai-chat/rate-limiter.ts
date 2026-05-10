@@ -245,6 +245,16 @@ export class RateLimiter {
     this.userBuckets.delete(userKey.toLowerCase());
   }
 
+  /**
+   * Drop a channel's ambient window. Wire to bot PART/KICK so a channel
+   * the bot leaves releases its window immediately instead of waiting
+   * for the LRU cap (256) to push it out. Mirrors the per-channel
+   * cleanup the rest of ai-chat already does on bot leave.
+   */
+  forgetChannel(channelKey: string): void {
+    this.ambientChannelWindows.delete(channelKey.toLowerCase());
+  }
+
   // -------------------------------------------------------------------------
   // Internal — token-bucket bookkeeping
   // -------------------------------------------------------------------------

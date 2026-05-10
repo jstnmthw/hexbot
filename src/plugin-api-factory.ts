@@ -196,6 +196,10 @@ export function createPluginApi(
     mask: string;
     wrapped: BindHandler;
   }
+  // Implicit cap: the dispatcher rejects any bind() past PLUGIN_BIND_HARDCAP
+  // (1000) per plugin, so this array is bounded by that limit even though
+  // it carries no cap of its own. A plugin that hits the dispatcher cap
+  // never makes it into wrappedHandlers either.
   const wrappedHandlers: WrappedEntry[] = [];
 
   // Build plugin-facing bot config (password omitted; filesystem paths omitted).

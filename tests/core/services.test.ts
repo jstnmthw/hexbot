@@ -470,6 +470,43 @@ describe('Services', () => {
       const { services } = createServices({ type: 'atheme' });
       expect(() => services.cancelPendingVerifies('no pending')).not.toThrow();
     });
+
+    it('detach cancels a pending GHOST timer + resolver', async () => {
+      vi.useFakeTimers();
+      const { services } = createServices({ type: 'atheme' });
+      // Kick off a GHOST race — finish either via NickServ ack or the
+      // 1.5s safety timer. detach() must clear both before they fire.
+      const promise = services.ghostAndReclaim('OldNick', 'pw');
+      services.detach();
+      await promise; // resolves immediately because clearGhostTimer ran
+      // Advancing time past the original 1.5s should not cause the
+      // timer to fire (it was cleared).
+      await vi.advanceTimersByTimeAsync(2000);
+      vi.useRealTimers();
+    });
+
+    it('cancelPendingVerifies clears a pending GHOST timer too', async () => {
+      vi.useFakeTimers();
+      const { services } = createServices({ type: 'atheme' });
+      const promise = services.ghostAndReclaim('OldNick', 'pw');
+      services.cancelPendingVerifies('socket dropped');
+      await promise;
+      await vi.advanceTimersByTimeAsync(2000);
+      vi.useRealTimers();
+    });
+
+    it('SASL identify-check timer is cleared on disconnect', async () => {
+      vi.useFakeTimers();
+      const { services, eventBus } = createServices({ type: 'atheme', sasl: true });
+      eventBus.emit('bot:connected');
+      // Fast-forward to right before the 3s warn would fire, then disconnect.
+      await vi.advanceTimersByTimeAsync(2999);
+      eventBus.emit('bot:disconnected', 'test');
+      // The 3s timer should be cleared — no warning fires after the fact.
+      await vi.advanceTimersByTimeAsync(2000);
+      services.detach();
+      vi.useRealTimers();
+    });
   });
 
   describe('observability counters', () => {

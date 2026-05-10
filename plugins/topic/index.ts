@@ -234,10 +234,11 @@ export function init(api: PluginAPI): void {
         return;
       }
       const nowMs = Date.now();
-      if (previewCooldown.size > 1000) {
-        for (const [k, expires] of previewCooldown) {
-          if (expires <= nowMs) previewCooldown.delete(k);
-        }
+      // Sweep on every invocation. Gated by `+o` flag so volume is
+      // negligible; the prior `size > 1000` threshold left expired
+      // entries lingering indefinitely below the bar.
+      for (const [k, expires] of previewCooldown) {
+        if (expires <= nowMs) previewCooldown.delete(k);
       }
       previewCooldown.set(cooldownKey, nowMs + PREVIEW_COOLDOWN_MS);
 

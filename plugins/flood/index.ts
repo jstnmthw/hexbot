@@ -469,16 +469,23 @@ export function init(pluginApi: PluginAPI): void {
 
   api.bind('pubm', '-', '*', handleMsgFlood);
   api.bind('join', '-', '*', handleJoinFlood);
-  api.bind('part', '-', '*', handlePartFlood);
-  api.bind('nick', '-', '*', handleNickFlood);
-  // Drop lockdown state when the bot itself leaves a channel, otherwise
-  // the scheduled unlock timer fires against a channel we're not in and
-  // the entry lingers until then.
+  // Single part bind: the user-flood path runs first; if the leaver is the
+  // bot itself, additionally drop lockdown + per-channel enforcement state
+  // so the scheduled unlock timer doesn't fire against a channel we're not
+  // in. Two binds previously did the same work.
   api.bind('part', '-', '*', (ctx) => {
-    if (api.isBotNick(ctx.nick)) lockdown.dropChannel(ctx.channel);
+    handlePartFlood(ctx);
+    if (api.isBotNick(ctx.nick)) {
+      lockdown.dropChannel(ctx.channel);
+      enforcement.dropChannel(ctx.channel);
+    }
   });
+  api.bind('nick', '-', '*', handleNickFlood);
   api.bind('kick', '-', '*', (ctx) => {
-    if (api.isBotNick(ctx.nick)) lockdown.dropChannel(ctx.channel);
+    if (api.isBotNick(ctx.nick)) {
+      lockdown.dropChannel(ctx.channel);
+      enforcement.dropChannel(ctx.channel);
+    }
   });
   // Periodic sweep — pruning rate-limit and offence state inline on every
   // event would be cheaper per-call but would walk the maps every message;

@@ -463,8 +463,21 @@ export class BotLinkHub {
       return;
     }
 
-    // Past the early-reject gates — create the protocol wrapper (readline, frame parsing)
-    const protocol = new BotLinkProtocol(socket, this.logger);
+    // Past the early-reject gates — create the protocol wrapper (readline,
+    // frame parsing). Construction shouldn't throw under normal conditions,
+    // but if it does we must still release the pending-handshake slot we
+    // just admitted; otherwise the per-IP cap leaks one slot per failure
+    // and a repeated construction error locks the IP out at
+    // `max_pending_handshakes`.
+    let protocol: BotLinkProtocol;
+    try {
+      protocol = new BotLinkProtocol(socket, this.logger);
+    } catch (err) {
+      this.logger?.error(`BotLinkProtocol construction threw for ${ip}:`, err);
+      this.auth.releasePending(ip, admission.whitelisted);
+      socket.destroy();
+      return;
+    }
     this.beginHandshake(protocol, ip, admission.whitelisted);
   }
 

@@ -570,6 +570,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
       socialTracker?.dropChannel(ctx.channel);
       contextManager?.clearContext(ctx.channel);
       engagementTracker?.dropChannel(ctx.channel);
+      rateLimiter?.forgetChannel(ctx.channel);
       lastRateLimitOpNoticeAt.delete(ctx.channel);
       return;
     }
@@ -581,6 +582,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
       socialTracker?.dropChannel(ctx.channel);
       contextManager?.clearContext(ctx.channel);
       engagementTracker?.dropChannel(ctx.channel);
+      rateLimiter?.forgetChannel(ctx.channel);
       lastRateLimitOpNoticeAt.delete(ctx.channel);
       return;
     }
@@ -785,6 +787,12 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
     // each fragment independently.
     if (coalescer) {
       coalescer.submit(ctx.channel, ctx.nick, text, ctx, (msg: CoalescedMessage) => {
+        // Defense in depth: between coalescer.submit and the timer firing,
+        // teardown() can null `coalescer` and the dependent state. The
+        // pipeline downstream uses optional chaining everywhere so this
+        // is safe today, but bail early to avoid a wasted processing pass
+        // against torn-down state.
+        if (!coalescer || !state) return;
         void processIncomingMessage(msg.ctx, msg.text, msg.fragmentCount);
       });
     } else {

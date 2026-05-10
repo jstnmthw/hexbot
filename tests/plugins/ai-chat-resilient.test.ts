@@ -209,4 +209,53 @@ describe('ResilientProvider', () => {
       kind: 'other',
     });
   });
+
+  describe('abort cancels pending retry sleep', () => {
+    it('default sleep registers in pendingSleeps and abort resolves them', async () => {
+      // Use the real default sleep (no injected sleep arg) so we exercise
+      // the pendingSleeps tracking path. A long initialBackoffMs ensures
+      // the timer is still pending when abort() fires.
+      let attempt = 0;
+      const inner: AIProvider = {
+        name: 'mock',
+        initialize: vi.fn(async () => {}),
+        complete: vi.fn(async () => {
+          attempt++;
+          if (attempt === 1) throw new AIProviderError('rate', 'rate_limit');
+          return okRes('after-abort');
+        }),
+        countTokens: vi.fn(async () => 1),
+        getModelName: () => 'mock',
+        abort: vi.fn(),
+      };
+      const p = new ResilientProvider(inner, {
+        maxRetries: 2,
+        initialBackoffMs: 30_000, // would block for 15-45s without abort
+        failureThreshold: 5,
+        openDurationMs: 1000,
+      });
+      const promise = p.complete('s', [{ role: 'user', content: 'q' }], 100);
+      // Yield until the first attempt rejects and the sleep is scheduled,
+      // then abort: the early-resolved sleep lets the second attempt run.
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+      p.abort();
+      await expect(promise).resolves.toMatchObject({ text: 'after-abort' });
+      expect(inner.abort).toHaveBeenCalled();
+    });
+
+    it('abort with no pending sleeps is a no-op aside from forwarding', () => {
+      const inner: AIProvider = {
+        name: 'mock',
+        initialize: vi.fn(async () => {}),
+        complete: vi.fn(async () => okRes()),
+        countTokens: vi.fn(async () => 1),
+        getModelName: () => 'mock',
+        abort: vi.fn(),
+      };
+      const p = new ResilientProvider(inner);
+      expect(() => p.abort()).not.toThrow();
+      expect(inner.abort).toHaveBeenCalledTimes(1);
+    });
+  });
 });

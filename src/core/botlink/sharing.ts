@@ -44,6 +44,16 @@ function isBanEntry(value: unknown): value is BanEntry {
  */
 const MAX_MASKS_PER_CHANNEL = 256;
 
+/**
+ * Hard cap on the number of distinct channels tracked in a MaskList.
+ * Prevents a hostile peer from sending sync frames for unbounded
+ * distinct channel names (each carrying a mask list up to
+ * {@link MAX_MASKS_PER_CHANNEL}). 1024 is far above realistic shared
+ * channel counts on any single network while keeping worst-case memory
+ * bounded at ~1024 × 256 mask entries per list.
+ */
+const MAX_CHANNELS_PER_LIST = 1024;
+
 /** Per-channel mask list (bans or exempts). */
 class MaskList {
   private entries: Map<string, BanEntry[]> = new Map();
@@ -59,7 +69,15 @@ class MaskList {
 
   add(channel: string, mask: string, setBy: string, setAt: number): void {
     const lower = channel.toLowerCase();
-    if (!this.entries.has(lower)) this.entries.set(lower, []);
+    if (!this.entries.has(lower)) {
+      if (this.entries.size >= MAX_CHANNELS_PER_LIST) {
+        this.logger?.warn(
+          `dropping mask for ${lower}: channel list at cap (${MAX_CHANNELS_PER_LIST} channels)`,
+        );
+        return;
+      }
+      this.entries.set(lower, []);
+    }
     const list = this.entries.get(lower)!;
     if (list.some((b) => b.mask === mask)) return;
     if (list.length >= MAX_MASKS_PER_CHANNEL) {
@@ -84,6 +102,12 @@ class MaskList {
 
   sync(channel: string, entries: BanEntry[]): void {
     const lower = channel.toLowerCase();
+    if (!this.entries.has(lower) && this.entries.size >= MAX_CHANNELS_PER_LIST) {
+      this.logger?.warn(
+        `dropping sync for ${lower}: channel list at cap (${MAX_CHANNELS_PER_LIST} channels)`,
+      );
+      return;
+    }
     if (entries.length > MAX_MASKS_PER_CHANNEL) {
       this.logger?.warn(
         `truncating sync for ${lower}: ${entries.length} masks exceeds cap (${MAX_MASKS_PER_CHANNEL})`,

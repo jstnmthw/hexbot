@@ -91,12 +91,15 @@ export function setupProtection(
       onThreat(channel, 'bot_kicked', 4, kickerNick, kicked);
     }
 
-    // Snapshot last-known channel modes before we lose channel state
+    // Snapshot last-known channel modes before we lose channel state.
+    // `setAt` lets `pruneExpiredState` drop stale snapshots from kicks
+    // that never recovered (otherwise the entry sits until reload).
     const ch = api.getChannel(channel);
     if (ch) {
       state.lastKnownModes.set(api.ircLower(channel), {
         modes: ch.modes,
         key: ch.key,
+        setAt: Date.now(),
       });
     }
 
@@ -291,9 +294,12 @@ export function setupProtection(
   }
 
   // Stopnethack (netsplit-aware op protection) lives in ./stopnethack.ts.
-  setupStopnethack(api, config, state);
+  // Capture its teardown so any future per-stopnethack resource gets
+  // released alongside the protection-chain cycles.
+  const stopnethackTeardown = setupStopnethack(api, config, state);
 
   return () => {
+    stopnethackTeardown();
     state.cycles.clearAll();
   };
 }

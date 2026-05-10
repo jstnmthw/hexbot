@@ -161,6 +161,15 @@ export class Logger implements LoggerLike {
   /** Set of registered sinks. Iterated on every log line. */
   private static sinks: Set<LogSink> = new Set();
 
+  /**
+   * Owner → sinks installed by that owner. Lets a caller (typically a
+   * plugin) bulk-remove every sink it installed via a single
+   * `removeByOwner(name)` instead of having to track each `LogSink`
+   * reference for `removeSink()`. Mirrors the
+   * `BotEventBus.trackListener` / `removeByOwner` pattern.
+   */
+  private static sinksByOwner: Map<string, Set<LogSink>> = new Map();
+
   /** Default sink that writes to console.log / console.error. */
   private static readonly consoleSink: LogSink = (record) => {
     if (record.level === 'error') {
@@ -215,14 +224,47 @@ export class Logger implements LoggerLike {
   /** Remove a previously registered sink. */
   static removeSink(sink: LogSink): void {
     Logger.sinks.delete(sink);
+    // Drop the sink from any owner-tracked set as well so a subsequent
+    // `removeByOwner` doesn't try to delete an already-released sink.
+    for (const [owner, set] of Logger.sinksByOwner) {
+      if (set.delete(sink) && set.size === 0) Logger.sinksByOwner.delete(owner);
+    }
     // Re-arm the warning once the count drops back under the threshold so
     // a future re-leak warns instead of silently growing past it again.
+    if (Logger.sinks.size <= Logger.SINK_WARN_THRESHOLD) Logger.sinkWarnFired = false;
+  }
+
+  /**
+   * Register a sink and tag it with `owner` so a single
+   * `removeByOwner(owner)` releases everything that owner installed.
+   * Plugins should prefer this over {@link addSink} — without an owner
+   * tag, every sink registered before a missed `removeSink` becomes
+   * impossible to find without the original `LogSink` reference, which
+   * a plugin reload typically loses.
+   */
+  static addSinkByOwner(owner: string, sink: LogSink): void {
+    Logger.addSink(sink);
+    let set = Logger.sinksByOwner.get(owner);
+    if (!set) {
+      set = new Set();
+      Logger.sinksByOwner.set(owner, set);
+    }
+    set.add(sink);
+  }
+
+  /** Remove every sink that `owner` installed via {@link addSinkByOwner}. */
+  static removeByOwner(owner: string): void {
+    const set = Logger.sinksByOwner.get(owner);
+    if (!set) return;
+    for (const sink of set) Logger.sinks.delete(sink);
+    Logger.sinksByOwner.delete(owner);
     if (Logger.sinks.size <= Logger.SINK_WARN_THRESHOLD) Logger.sinkWarnFired = false;
   }
 
   /** Remove every registered sink, including the default console sink. */
   static clearSinks(): void {
     Logger.sinks.clear();
+    Logger.sinksByOwner.clear();
     Logger.hookWrapper = null;
     Logger.sinkWarnFired = false;
   }

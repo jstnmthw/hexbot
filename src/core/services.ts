@@ -156,6 +156,22 @@ export class Services {
   private readonly _onConnected: () => void;
   private readonly _onDisconnected: () => void;
 
+  /**
+   * SASL identify-check timer scheduled in `_onConnected`. Hoisted into
+   * a field so a disconnect inside the 3 s window cancels the warning
+   * instead of letting the closure (which captures `this`) outlive
+   * teardown and emit a misleading log line for a dead session.
+   */
+  private saslIdentifyCheckTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * GHOST/reclaim timeout timer scheduled in `ghostAndReclaim`. Hoisted
+   * so `detach()` and `cancelPendingVerifies()` can clear it on
+   * shutdown — without this, a mid-shutdown GHOST keeps `this` alive
+   * for up to 1.5 s and fires `changeNick` against a closed transport.
+   */
+  private ghostTimer: ReturnType<typeof setTimeout> | null = null;
+
   constructor(deps: ServicesDeps) {
     this.client = deps.client;
     this.servicesConfig = deps.servicesConfig;
@@ -176,14 +192,21 @@ export class Services {
       // a few seconds after registration. This fires seconds after reconnect
       // rather than waiting for chanmod probe timeouts to surface the miss.
       if (this.servicesConfig.sasl) {
-        setTimeout(() => {
+        // Drop any prior timer before re-arming so a flapping reconnect
+        // doesn't stack pending warnings.
+        if (this.saslIdentifyCheckTimer !== null) {
+          clearTimeout(this.saslIdentifyCheckTimer);
+        }
+        this.saslIdentifyCheckTimer = setTimeout(() => {
+          this.saslIdentifyCheckTimer = null;
           if (this._botIdentifyState !== 'identified') {
             this.logger?.warn(
               'SASL configured but bot is not identified after connect — SASL may have failed silently. ' +
                 'Check for a "This nickname is registered" NickServ notice.',
             );
           }
-        }, 3_000).unref();
+        }, 3_000);
+        this.saslIdentifyCheckTimer.unref();
       }
     };
     this._onDisconnected = () => {
@@ -191,6 +214,13 @@ export class Services {
       this._botIdentifyState = 'unknown';
       this._identifyFallbackSent = false;
       this.reconnectedAt = null;
+      // Cancel a pending SASL identify-check so its closure (which
+      // captures `this`) doesn't fire against a torn-down session and
+      // log a misleading "SASL not identified" warning.
+      if (this.saslIdentifyCheckTimer !== null) {
+        clearTimeout(this.saslIdentifyCheckTimer);
+        this.saslIdentifyCheckTimer = null;
+      }
       if (wasIdentified) {
         this.eventBus.emit('bot:deidentified');
       }
@@ -233,6 +263,11 @@ export class Services {
       p.controller.abort();
     }
     this.pending.clear();
+    this.clearGhostTimer();
+    if (this.saslIdentifyCheckTimer !== null) {
+      clearTimeout(this.saslIdentifyCheckTimer);
+      this.saslIdentifyCheckTimer = null;
+    }
     this.logger?.info('Detached from IRC client');
   }
 
@@ -243,12 +278,35 @@ export class Services {
    * a misleading `nickserv-verify-timeout` audit row.
    */
   cancelPendingVerifies(reason: string): void {
-    if (this.pending.size === 0) return;
-    this.logger?.info(`Cancelling ${this.pending.size} pending verify(s): ${reason}`);
-    for (const p of this.pending.values()) {
-      p.controller.abort();
+    // Always run the GHOST cleanup — a mid-shutdown reclaim can be in
+    // flight even when no NickServ verify is pending. Skip the log line
+    // only when there's nothing to cancel.
+    if (this.pending.size > 0) {
+      this.logger?.info(`Cancelling ${this.pending.size} pending verify(s): ${reason}`);
+      for (const p of this.pending.values()) {
+        p.controller.abort();
+      }
+      this.pending.clear();
     }
-    this.pending.clear();
+    this.clearGhostTimer();
+  }
+
+  /**
+   * Cancel a pending GHOST/reclaim timer and clear the resolver. Shared
+   * by `detach` and `cancelPendingVerifies` so a mid-shutdown reclaim
+   * cannot fire `changeNick` against a closed transport or pin Services
+   * scope through the resolver closure.
+   */
+  private clearGhostTimer(): void {
+    if (this.ghostTimer !== null) {
+      clearTimeout(this.ghostTimer);
+      this.ghostTimer = null;
+    }
+    if (this.pendingGhostResolver !== null) {
+      const prev = this.pendingGhostResolver;
+      this.pendingGhostResolver = null;
+      prev();
+    }
   }
 
   /**
@@ -685,12 +743,9 @@ export class Services {
     // this, a second ghostAndReclaim() within 1.5s leaves the old
     // setTimeout scheduled; when it fires it nulls out the *new* race's
     // resolver, so the second reclaim waits the full 1.5s instead of
-    // unblocking on ack.
-    if (this.pendingGhostResolver) {
-      const prev = this.pendingGhostResolver;
-      this.pendingGhostResolver = null;
-      prev();
-    }
+    // unblocking on ack. Also drop the prior timer so the orphan callback
+    // doesn't sit on the event loop.
+    this.clearGhostTimer();
     this._identifyFallbackSent = false; // reset so the re-identify path can fire
     const target = this.getNickServTarget();
     this.client.say(target, `GHOST ${nick} ${password}`);
@@ -704,12 +759,16 @@ export class Services {
       const finish = (): void => {
         if (done) return;
         done = true;
-        clearTimeout(timer);
+        if (this.ghostTimer !== null) {
+          clearTimeout(this.ghostTimer);
+          this.ghostTimer = null;
+        }
         if (this.pendingGhostResolver === finish) this.pendingGhostResolver = null;
         resolve();
       };
       this.pendingGhostResolver = finish;
-      const timer = setTimeout(finish, 1500).unref();
+      this.ghostTimer = setTimeout(finish, 1500);
+      this.ghostTimer.unref();
     });
     this.client.changeNick(nick);
     this.logger?.info(`Sent NICK ${nick} to reclaim primary nick after GHOST`);

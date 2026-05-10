@@ -59,6 +59,23 @@ export interface RelayVirtualSession {
 export type RelaySessionMap = Map<string, RelayVirtualSession>;
 
 /**
+ * Per-`fromBot` cap on virtual relay sessions. A hostile leaf could
+ * otherwise mint a new session per RELAY_REQUEST handle until the
+ * orchestrator's `virtualSessions` map grew to swallow the heap. 64
+ * is well above any realistic operator-driven relay fan-out (DCC
+ * sessions per bot are themselves capped at 5–20) while still
+ * containing a malicious leaf to a bounded blast radius.
+ */
+const MAX_VIRTUAL_SESSIONS_PER_BOT = 64;
+
+/** Count how many virtual sessions originate from `fromBot`. */
+function countSessionsFromBot(sessions: RelaySessionMap, fromBot: string): number {
+  let n = 0;
+  for (const vs of sessions.values()) if (vs.fromBot === fromBot) n++;
+  return n;
+}
+
+/**
  * Handle an incoming RELAY_* frame.
  * Manages virtual relay sessions, command execution, and party line chat
  * for relayed DCC users across the bot link.
@@ -85,6 +102,25 @@ export function handleRelayFrame(
         type: 'RELAY_END',
         handle,
         reason: 'User not found',
+      });
+      return;
+    }
+    // Per-bot cap: refuse new relay sessions once a single fromBot has
+    // saturated its slice of the virtualSessions map. Without this, a
+    // compromised leaf could mint sessions until the heap is exhausted.
+    // Re-using an existing handle is allowed (the .set below replaces
+    // the entry without growing the count).
+    if (
+      !sessions.has(handle) &&
+      countSessionsFromBot(sessions, fromBot) >= MAX_VIRTUAL_SESSIONS_PER_BOT
+    ) {
+      log?.warn(
+        `RELAY_REQUEST from "${fromBot}" rejected — per-bot virtual-session cap (${MAX_VIRTUAL_SESSIONS_PER_BOT}) reached`,
+      );
+      deps.sender.sendTo(fromBot, {
+        type: 'RELAY_END',
+        handle,
+        reason: 'Relay cap reached',
       });
       return;
     }

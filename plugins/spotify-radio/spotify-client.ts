@@ -63,6 +63,14 @@ export interface SpotifyClientOptions {
    * access token is re-minted this many ms before its real expiry).
    */
   refreshSkewMs?: number;
+  /**
+   * Plugin-lifecycle abort signal. When the plugin's `teardown()` aborts
+   * its own controller, every in-flight fetch this client started cancels
+   * immediately instead of pinning the closure (which retains the refresh
+   * token) for up to `timeoutMs`. Optional for tests that don't care
+   * about teardown — production wiring always passes one.
+   */
+  abortSignal?: AbortSignal;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,11 +165,26 @@ export function createSpotifyClient(opts: SpotifyClientOptions): SpotifyClient {
    * `fetch` wrapper with a hard AbortController timeout. A hung TLS
    * handshake or a TCP black hole would otherwise stall the bot's
    * poll loop indefinitely; this path always resolves within
-   * `timeoutMs` (or sooner on a real error).
+   * `timeoutMs` (or sooner on a real error). When the caller supplies
+   * `opts.abortSignal`, we forward an aggregate signal so a plugin
+   * teardown that aborts mid-flight cancels the fetch immediately
+   * instead of waiting for the timeout — without this, the SpotifyClient
+   * closure (which holds the refresh token) is pinned for up to
+   * `timeoutMs` after teardown.
    */
   async function fetchWithTimeout(input: string, init: RequestInit): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const externalSignal = opts.abortSignal;
+    let onExternalAbort: (() => void) | null = null;
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        controller.abort();
+      } else {
+        onExternalAbort = () => controller.abort();
+        externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+      }
+    }
     try {
       return await fetchImpl(input, { ...init, signal: controller.signal });
     } catch (err) {
@@ -171,6 +194,9 @@ export function createSpotifyClient(opts: SpotifyClientOptions): SpotifyClient {
       );
     } finally {
       clearTimeout(timer);
+      if (externalSignal && onExternalAbort) {
+        externalSignal.removeEventListener('abort', onExternalAbort);
+      }
     }
   }
 

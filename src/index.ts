@@ -190,6 +190,13 @@ function noteRecoverable(): boolean {
     recoverableTimestamps.shift();
   }
   recoverableTimestamps.push(now);
+  // Hard cap so a long quiet period after a burst can't leave the array
+  // sitting at size N indefinitely (the wall-clock prune above only fires
+  // when noteRecoverable is called). Keeps memory bounded without needing
+  // a separate sweep timer.
+  if (recoverableTimestamps.length > RECOVERABLE_RATE_MAX * 2) {
+    recoverableTimestamps.splice(0, recoverableTimestamps.length - RECOVERABLE_RATE_MAX);
+  }
   return recoverableTimestamps.length > RECOVERABLE_RATE_MAX;
 }
 

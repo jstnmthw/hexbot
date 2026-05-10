@@ -127,6 +127,13 @@ export function createSpotifyRadio(): SpotifyRadio {
   let cfg: PluginConfig | null = null;
   let spotify: SpotifyClient | null = null;
   let session: RadioSession | null = null;
+  /**
+   * Plugin-lifecycle abort controller. Forwarded into the SpotifyClient so
+   * teardown cancels in-flight fetches instead of letting them run to the
+   * 10s internal timeout while pinning the closure (which retains the
+   * refresh token in memory). Mirrors the pattern in `plugins/rss/index.ts`.
+   */
+  let teardownController: AbortController | null = null;
 
   // -------------------------------------------------------------------------
   // Lifecycle
@@ -152,12 +159,14 @@ export function createSpotifyRadio(): SpotifyRadio {
       },
     ]);
     cfg = loadConfig(api);
+    teardownController = new AbortController();
     spotify = createSpotifyClient({
       clientId: cfg.clientId,
       clientSecret: cfg.clientSecret,
       refreshToken: cfg.refreshToken,
       log: api.log,
       error: api.error,
+      abortSignal: teardownController.signal,
     });
 
     registerCommands(api);
@@ -166,6 +175,12 @@ export function createSpotifyRadio(): SpotifyRadio {
   }
 
   function teardown(): void {
+    // Abort first so any in-flight Spotify fetch unwinds with a clear
+    // teardown reason instead of running to the 10s internal timeout
+    // and pinning the SpotifyClient closure (which holds the refresh
+    // token) past plugin unload.
+    teardownController?.abort(new Error('spotify-radio plugin torn down'));
+    teardownController = null;
     cfg = null;
     spotify = null;
     session = null;
@@ -381,6 +396,13 @@ export function createSpotifyRadio(): SpotifyRadio {
     // The dispatcher's timer floor is 10s; configuring `poll_interval_sec`
     // below 10 still ticks every 10s but the per-target due-time gate
     // collapses configured-vs-actual to whichever is greater.
+    //
+    // No explicit unbind in teardown(): the plugin loader drops every
+    // plugin-owned bind on unload (`dispatcher.unbindAll(<pluginId>)`),
+    // so capturing the bind handle here would be redundant. tickPollLoop
+    // additionally early-returns when `cfg`/`session`/`spotify` are null,
+    // which teardown() sets — defense in depth if the loader contract
+    // were to regress.
     api.bind('time', '-', String(TIMER_FLOOR_SEC), async () => {
       await tickPollLoop(api);
     });

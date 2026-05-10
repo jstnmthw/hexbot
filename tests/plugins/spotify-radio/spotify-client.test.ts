@@ -545,6 +545,72 @@ describe('createSpotifyClient', () => {
       expect(err).toBeInstanceOf(SpotifyNetworkError);
       expect((err as Error).message).toMatch(/timed out/);
     });
+
+    it('cancels in-flight fetch when an external abortSignal fires', async () => {
+      const log = makeLog();
+      const fetchSpy = vi.fn<FetchFn>(
+        (_url, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              const err = new Error('aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
+          }),
+      );
+      const external = new AbortController();
+      const client = createSpotifyClient({
+        clientId: TEST_CLIENT_ID,
+        clientSecret: TEST_CLIENT_SECRET,
+        refreshToken: TEST_REFRESH,
+        log: log.log,
+        error: log.error,
+        fetch: fetchSpy,
+        timeoutMs: 30_000,
+        abortSignal: external.signal,
+      });
+      const pending = client.getCurrentlyPlaying().catch((e) => e);
+      // Yield once so fetchWithTimeout has registered the abort listener.
+      await Promise.resolve();
+      external.abort();
+      const err = await pending;
+      expect(err).toBeInstanceOf(SpotifyNetworkError);
+    });
+
+    it('rejects immediately when external abortSignal is already aborted', async () => {
+      const log = makeLog();
+      // Mock matches real fetch semantics: an already-aborted signal at
+      // call time produces an immediate AbortError rejection.
+      const fetchSpy = vi.fn<FetchFn>(
+        (_url, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal;
+            const fail = (): void => {
+              const err = new Error('aborted');
+              err.name = 'AbortError';
+              reject(err);
+            };
+            if (signal?.aborted) {
+              fail();
+              return;
+            }
+            signal?.addEventListener('abort', fail);
+          }),
+      );
+      const external = new AbortController();
+      external.abort();
+      const client = createSpotifyClient({
+        clientId: TEST_CLIENT_ID,
+        clientSecret: TEST_CLIENT_SECRET,
+        refreshToken: TEST_REFRESH,
+        log: log.log,
+        error: log.error,
+        fetch: fetchSpy,
+        timeoutMs: 30_000,
+        abortSignal: external.signal,
+      });
+      await expect(client.getCurrentlyPlaying()).rejects.toBeInstanceOf(SpotifyNetworkError);
+    });
   });
 
   // -------------------------------------------------------------------------
