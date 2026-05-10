@@ -34,7 +34,10 @@ const DEFAULT_CHARACTER: Character = {
     'You are friendly, approachable, and concise.',
 };
 
-/** Resolve the characters directory relative to the plugin root. */
+/** Resolve the characters directory relative to the plugin root.
+ *  When bundled with tsup the plugin entry runs from `<plugin>/dist/index.js`;
+ *  hop up one level so `characters/` resolves to the source-tree directory
+ *  the operator actually edits, not the empty bundle dir. */
 export function resolveCharactersDir(relative = 'characters'): string {
   const here = dirname(fileURLToPath(import.meta.url));
   const pluginRoot = here.endsWith('/dist') || here.endsWith('\\dist') ? resolve(here, '..') : here;
@@ -162,7 +165,14 @@ export function loadCharacters(dir: string, log?: (msg: string) => void): Map<st
   return characters;
 }
 
-/** Get a character by name, falling back to default. */
+/**
+ * Get a character by name, falling back to `friendly`, then to the in-memory
+ * default. Three-tier fallback so the plugin always has a usable persona even
+ * when the operator's chosen character has been deleted from disk and the
+ * `friendly` JSON file is also missing — the in-memory DEFAULT_CHARACTER's
+ * `persona` is non-empty, which is the single invariant the assistant's
+ * stable system prompt relies on.
+ */
 export function getCharacter(characters: Map<string, Character>, name: string): Character {
   return characters.get(name.toLowerCase()) ?? characters.get('friendly') ?? DEFAULT_CHARACTER;
 }

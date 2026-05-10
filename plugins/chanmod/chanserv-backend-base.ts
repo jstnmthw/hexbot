@@ -24,6 +24,10 @@ import { type BackendAccess, type ProtectionBackend, accessAtLeast } from './pro
  */
 export abstract class ChanServBackendBase implements ProtectionBackend {
   abstract readonly name: string;
+  // Priority 2 sits behind a future Botnet backend (priority 1, in-bot
+  // protection that can act without round-tripping through services) but
+  // ahead of any operator-driven manual fallback. ProtectionChain sorts
+  // ascending — see protection-backend.ts.
   readonly priority = 2;
 
   protected readonly accessLevels = new Map<string, BackendAccess>();

@@ -46,6 +46,10 @@ export class LockdownController {
    * when the distinct-flooder count within the window meets `lockCount`.
    */
   record(channel: string, hostmask: string): void {
+    // `<= 0` rather than `=== 0`: lockCount sourced from operator config
+    // can in principle be negative if a user typoed `.set flood
+    // flood_lock_count -1`, and a negative threshold would otherwise be
+    // crossed by every record() call (since count >= -1 is trivially true).
     if (this.cfg.lockCount <= 0) return; // lockdown disabled
 
     const lowerChannel = this.api.ircLower(channel);

@@ -122,6 +122,11 @@ export class MessageCoalescer {
   }
 
   private keyOf(channel: string, nick: string): string {
+    // Pipe separator: IRC nicks/channels can't contain `|` (RFC 2812), so
+    // there's no ambiguity between e.g. `#a|b` + nick `c` vs `#a` + `b|c`.
+    // Channel kept case-sensitive (callers already pre-canonicalise via
+    // `getChannel`), nick lowercased so case-flips inside one burst don't
+    // open a second key.
     return `${channel}|${nick.toLowerCase()}`;
   }
 

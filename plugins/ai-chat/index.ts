@@ -121,6 +121,9 @@ let gamesDir: string = '';
  * doesn't spam every op once per attempt. Cleared on teardown.
  */
 const lastRateLimitOpNoticeAt = new Map<string, number>();
+/** 5-minute cooldown — long enough to suppress per-message spam during a
+ *  multi-minute upstream outage, short enough that ops still get a follow-up
+ *  notice if the outage continues into a new burst of triggered messages. */
 const RATE_LIMIT_OP_NOTICE_COOLDOWN_MS = 5 * 60_000;
 
 /**
@@ -130,6 +133,11 @@ const RATE_LIMIT_OP_NOTICE_COOLDOWN_MS = 5 * 60_000;
  * `output.maxLines * output.maxLineLength`.
  */
 const MAX_ENTRY_BYTES = 2048;
+/** Pre-pipeline byte cap on raw incoming text before it touches any in-memory
+ *  buffer. Per-character cap (`context.maxMessageChars`, default 1000) and the
+ *  prompt cap (`input.maxPromptChars`, default 2000) further bound what the
+ *  pipeline sees; this is the outermost wall against a multiline-capable
+ *  server delivering an oversize PRIVMSG. */
 function truncateForBuffer(text: string): string {
   return text.length > MAX_ENTRY_BYTES ? text.slice(0, MAX_ENTRY_BYTES) + '...' : text;
 }

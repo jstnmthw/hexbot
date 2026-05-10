@@ -85,6 +85,23 @@ function offBusListener(
 // BotLinkHub
 // ---------------------------------------------------------------------------
 
+/**
+ * Inbound side of the bot-link protocol — accepts leaf connections,
+ * drives the per-connection HMAC handshake, and dispatches steady-state
+ * frames. Co-owners of state surfaces:
+ *
+ *   - {@link BotLinkAuthManager} ({@link auth}): admission / ban / failure tracking
+ *   - {@link BotLinkRelayRouter} ({@link routes}): cross-bot routing tables
+ *   - {@link PendingRequestMap} (`pendingCmds`): hub-originated CMDs awaiting reply
+ *
+ * A single hub instance handles up to `config.max_leaves` simultaneous
+ * leaves. The hub is also a regular peer in the botnet — `config.botname`
+ * appears in BOTJOIN and is reachable by `.bot <name>` like any leaf.
+ *
+ * Callback fields (`onLeafConnected`, `onSyncRequest`, `onBsay`, etc.)
+ * are wired by the bot orchestrator post-construction; until they are
+ * set, frames that depend on them are silently dropped.
+ */
 export class BotLinkHub {
   private server: NetServer | null = null;
   private leaves: Map<string, LeafConnection> = new Map();
@@ -742,11 +759,18 @@ export class BotLinkHub {
 
   private onSteadyState(botname: string, frame: LinkFrame): void {
     const conn = this.leaves.get(botname);
+    // Race guard: socket may deliver one buffered frame after onLeafClose
+    // already removed the leaf entry. Drop silently.
     if (!conn) return;
 
     conn.lastMessageAt = Date.now();
 
-    // Enforce authenticated identity — prevent a leaf from spoofing another leaf's name
+    // Authenticated identity overwrite — the leaf's botname was fixed at
+    // handshake-accept; trust that, not whatever the wire says. A
+    // compromised leaf could otherwise stamp `fromBot: "other-bot"` onto
+    // BSAY/CMD frames and impersonate a sibling. Only overwrite when the
+    // field is already present so this stays a wire normalization rather
+    // than an unconditional injection.
     if ('fromBot' in frame) frame.fromBot = botname;
 
     dispatchSteadyStateFrame(
@@ -782,6 +806,8 @@ export class BotLinkHub {
 
   private onLeafClose(botname: string): void {
     const conn = this.leaves.get(botname);
+    // Idempotent: a heartbeat-timeout teardown and the socket-close event
+    // can both reach here for the same connection; second call is a no-op.
     if (!conn) return;
 
     conn.heartbeat?.stop();

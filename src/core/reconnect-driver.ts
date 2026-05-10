@@ -90,9 +90,18 @@ export interface ReconnectDriver {
 // Implementation
 // ---------------------------------------------------------------------------
 
-/** Threshold of consecutive rate-limited failures before we flip to degraded. */
+/**
+ * Threshold of consecutive rate-limited failures before we flip to degraded.
+ * Three failures in a row almost always means a real problem (K-line, DNSBL
+ * hit, sustained throttle) rather than transient noise — at that point the
+ * `.status` command should reflect that the bot is not just retrying.
+ */
 const DEGRADED_THRESHOLD = 3;
-/** Cap on the doubling exponent so rate-limited delay tops out predictably. */
+/**
+ * Cap on the doubling exponent so rate-limited delay tops out predictably.
+ * 2^3 = 8x multiplier on `rate_limited_initial_ms` is plenty of breathing
+ * room without wandering into hours-per-retry territory.
+ */
 const RATE_LIMITED_DOUBLING_CAP = 3;
 
 export function createReconnectDriver(deps: ReconnectDriverDeps): ReconnectDriver {

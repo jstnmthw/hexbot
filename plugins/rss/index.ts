@@ -71,6 +71,8 @@ export const version = '1.0.0';
 export const description = 'Polls RSS/Atom feeds and announces new items to configured channels';
 
 // Mutable feed map: merged config + runtime feeds. Keyed by feed id.
+// On id collision, plugins.json config wins (see init's merge loop) — a
+// runtime `!rss add` for an id already in config is rejected by handleAdd.
 let activeFeeds = new Map<string, FeedConfig>();
 // Parametrize the parser to an empty extension so its `Item` type stays
 // narrow — the default generic widens custom fields to `any`, contaminating
@@ -177,7 +179,10 @@ export async function init(api: PluginAPI): Promise<void> {
     }
   });
 
-  // Daily cleanup of stale dedup entries
+  // Daily cleanup of stale dedup entries. Hourly would burn DB scans for
+  // little gain — dedup entries don't need fine-grained pruning, only a
+  // bounded ceiling. The per-feed MAX_SEEN_PER_FEED cap in feed-store
+  // handles the high-volume case in real time.
   api.bind('time', '-', '86400', () => {
     cleanupSeen(api, cfg.dedup_window_days);
   });
@@ -232,6 +237,12 @@ export async function init(api: PluginAPI): Promise<void> {
 }
 
 export function teardown(): void {
+  // Order matters: abort BEFORE clearing the maps so any in-flight fetch
+  // that's about to call back into the plugin sees the abort signal
+  // first and bails — clearing `activeFeeds` first would let a late
+  // `pollFeed` return an empty announce list and then race against
+  // `activeFeeds.clear()` while iterating channels.
+  //
   // Abort any in-flight HTTP fetch or drip-fed announce loop before we
   // drop the `activeFeeds` reference. Without this a still-pending
   // wall-clock timer in feed-fetcher would keep calling through to

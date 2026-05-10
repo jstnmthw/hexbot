@@ -1,3 +1,7 @@
+// chanmod takeover-detection — point/threat scoring, level transitions, and
+// the protection-chain integration that drives the response. Uses a mocked
+// `BackendAccess` chain so threat-level math is exercised without standing
+// up the real ChanServ/Anope plumbing.
 import { resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 

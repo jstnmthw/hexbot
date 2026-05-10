@@ -335,12 +335,18 @@ export class MemoManager {
       case 'read': {
         const arg = rest[0] ?? 'LAST';
         this.client.say(this.config.memoserv_nick, `READ ${arg.toUpperCase()}`);
+        // Optimistic clear — services will deliver the memo body via a NOTICE
+        // we don't necessarily see here, and a subsequent join-delivery prompt
+        // for the same count would be noise. Resets to authoritative on the
+        // next MemoServ "You have N new memo(s)" notice.
         this.pendingMemoCount = 0;
         break;
       }
 
       case 'list': {
         this.client.say(this.config.memoserv_nick, 'LIST');
+        // Same optimistic-clear rationale as `read` — operator has now seen
+        // the count, suppress the follow-up join-delivery prompt.
         this.pendingMemoCount = 0;
         break;
       }

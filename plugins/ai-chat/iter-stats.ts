@@ -33,7 +33,9 @@ export class IterStats {
     this.output += usage.output;
   }
 
-  /** Read-only view of the current totals plus elapsed wall time since reset. */
+  /** Read-only view of the current totals plus elapsed wall time since reset.
+   *  Returned as a fresh object — caller can stash and compare without aliasing
+   *  the live counters. */
   snapshot(): IterStatsSnapshot {
     return {
       requests: this.requests,

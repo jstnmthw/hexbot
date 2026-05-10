@@ -1864,6 +1864,10 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     for (const session of [...this.pendingSessions]) {
       if (session.handle.toLowerCase() === lower) {
         this.pendingSessions.delete(session);
+        // The cast widens `close` to optional so a hand-rolled
+        // `DCCSessionEntry` test fixture that omits the method (the
+        // surrounding `registerPendingSession` is itself optional on
+        // `DCCSessionManager`) cannot crash this teardown path.
         const closable = session as DCCSessionEntry & { close?: (reason: string) => void };
         closable.close?.(reason);
         this.logger?.warn(

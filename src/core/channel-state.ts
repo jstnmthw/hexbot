@@ -283,8 +283,11 @@ export class ChannelState {
     const hostname = String(event.hostname ?? '');
     const channel = String(event.channel);
 
-    // IRCv3 extended-join: account field is present when the cap is negotiated.
-    // irc-framework sets it to false (not the string '*') when the user is not identified.
+    // IRCv3 extended-join (cap `extended-join`, IRCv3.2): when negotiated, the
+    // server appends an account name and realname to JOIN. irc-framework sets
+    // `account` to `false` when the user is not identified — the wire form is
+    // the literal `*`, but the framework normalises that to `false` rather
+    // than passing the string through.
     let accountName: string | null | undefined;
     if ('account' in event) {
       accountName =
@@ -378,6 +381,8 @@ export class ChannelState {
     const oldNick = String(event.nick);
     const newNick = String(event.new_nick);
 
+    // RFC 2812 §3.1.2 NICK: a successful NICK message is broadcast to every
+    // channel the user is in, so we must rekey across all tracked channels.
     // Track bot's own nick changes (e.g. GHOST recovery — HEX_ → HEX).
     if (this.botNick && this.lowerNick(oldNick) === this.lowerNick(this.botNick)) {
       this.botNick = newNick;
@@ -727,6 +732,11 @@ export class ChannelState {
     return ircLower(name, this.casemapping);
   }
 
+  /**
+   * Get-or-create a channel record. Stores under the case-folded key so
+   * subsequent lookups via either casing converge on the same record, but
+   * preserves the original casing in `ChannelInfo.name` for display.
+   */
   private ensureChannel(name: string): ChannelInfo {
     const lower = this.lowerChannel(name);
     let ch = this.channels.get(lower);

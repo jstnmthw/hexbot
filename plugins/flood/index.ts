@@ -96,7 +96,11 @@ let lockdown: LockdownController;
 // ---------------------------------------------------------------------------
 
 /** Read a numeric setting with fallback. Live (re-read on every init); the
- *  cfg snapshot below is what handlers consume so windowed math stays stable. */
+ *  cfg snapshot below is what handlers consume so windowed math stays stable.
+ *  The `=== 0 && !isSet` check distinguishes "operator hasn't set this" from
+ *  "operator explicitly set 0" — `getInt` returns 0 in both cases, but only
+ *  the unset case should fall back. An operator who genuinely wants 0 (e.g.
+ *  `flood_lock_count=0` to disable lockdown) gets through unmolested. */
 function cfgNum(key: string, fallback: number): number {
   const v = api.settings.getInt(key);
   return v === 0 && !api.settings.isSet(key) ? fallback : v;
@@ -491,6 +495,11 @@ export function init(pluginApi: PluginAPI): void {
   // event would be cheaper per-call but would walk the maps every message;
   // a 60s tick lets a sustained-but-modest flood drift through cleanly
   // while still bounding worst-case memory.
+  //
+  // Order: liftExpiredBans first so a recovering user is unbanned BEFORE
+  // their offence state ages out — keeps mod_log honest (the `flood-ban`
+  // row's expiry actually corresponds to an unban event). Counter sweeps
+  // run after, since they have no dependency on the others.
   api.bind('time', '-', '60', () => {
     enforcement.liftExpiredBans();
     rateLimits.sweep();

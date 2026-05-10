@@ -514,10 +514,12 @@ export class Permissions {
     const record = this.findByHostmask(fullHostmask, account);
     if (!record) return false;
 
-    // Parse required flags — support OR with `|`
+    // Parse required flags — support OR with `|`. Each alternative is a
+    // conjunction of single flag chars (`+nm` = needs n AND m); `|` between
+    // alternatives is OR. So `+n|+mo` means owner, OR (master AND op).
+    // Strips the optional leading `+` (legacy form, accepted for ergonomics).
     const alternatives = requiredFlags.split('|').map((s) => s.trim().replace(/^\+/, ''));
 
-    // Check: does the user have at least one of the required flag sets?
     for (const required of alternatives) {
       if (this.userHasFlags(record, required, ctx.channel)) {
         return true;
@@ -618,19 +620,25 @@ export class Permissions {
     return true;
   }
 
-  /** Check if a user record has a single flag. */
+  /**
+   * Check if a user record has a single flag. Precedence is:
+   *   1. global owner (`n`) → grants every flag everywhere
+   *   2. global flag match → grants regardless of channel
+   *   3. channel owner (`n` on the channel) → grants every flag on that channel
+   *   4. channel flag match → grants only on that channel
+   *
+   * Channel scope can grant but never revoke a global flag — there is no
+   * negative override. Plugins that need "deny in channel X" use the `d`
+   * (deop) modifier on auto-op grants instead. See `docs/SECURITY.md` §3.3.
+   */
   private userHasFlag(record: UserRecord, flag: string, channel: string | null): boolean {
-    // Owner implies all flags
     if (record.global.includes(OWNER_FLAG)) return true;
 
-    // Check global flags
     if (record.global.includes(flag)) return true;
 
-    // Check channel-specific flags
     if (channel) {
       const channelFlags = record.channels[this.lowerChannel(channel)];
       if (channelFlags) {
-        // Owner in channel implies all flags for that channel
         if (channelFlags.includes(OWNER_FLAG)) return true;
         if (channelFlags.includes(flag)) return true;
       }

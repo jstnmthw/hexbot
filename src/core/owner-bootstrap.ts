@@ -18,17 +18,18 @@ export interface EnsureOwnerDeps {
 }
 
 /**
- * Ensure the configured owner user exists, seed their password hash from
- * the env var on first boot, and emit a loud warning if DCC is enabled but
- * no password is available anywhere.
- */
-/**
  * Match a recognizable hostmask shape — the full `nick!ident@host`
  * form (with `*` wildcards permitted) or the IRCv3 account pattern
  * `$a:account`. Anything else is a typo or a misconfiguration; we'd
  * rather fail loudly than silently install a record that never matches.
  */
 const OWNER_HOSTMASK_RE = /^(?:\$a:[^\s!@]+|[^\s!@]+![^\s!@]+@[^\s!@]+)$/;
+
+/**
+ * Ensure the configured owner user exists, seed their password hash from
+ * the env var on first boot, and emit a loud warning if DCC is enabled but
+ * no password is available anywhere.
+ */
 
 export async function ensureOwner(deps: EnsureOwnerDeps): Promise<void> {
   const { config, permissions, logger } = deps;

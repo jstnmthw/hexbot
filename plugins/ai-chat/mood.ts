@@ -46,6 +46,12 @@ const QUIET_WINDOW_MS = 15 * 60_000;
 const MOOD_LOW_THRESHOLD = 0.3;
 const MOOD_HIGH_THRESHOLD = 0.7;
 
+/**
+ * Initial mood. Energy and patience start above neutral so a fresh bot is
+ * upbeat on first message; engagement and humor start mid-range so they can
+ * drift either way without immediately tripping the LOW/HIGH thresholds and
+ * surfacing a modifier in the very first volatile header.
+ */
 const DEFAULT_MOOD: BotMood = { energy: 0.7, engagement: 0.5, patience: 0.8, humor: 0.5 };
 
 /**
@@ -108,6 +114,10 @@ export class MoodEngine {
 
     if (this.mood.patience < MOOD_LOW_THRESHOLD) parts.push('getting impatient');
 
+    // Humor uses an asymmetric threshold pair (0.2 vs HIGH=0.7): "serious"
+    // requires the humor random walk to drift considerably below neutral
+    // before the system prompt picks up a tonal shift, so brief dips don't
+    // produce flickering "serious mood" annotations on every other turn.
     if (this.mood.humor > MOOD_HIGH_THRESHOLD) parts.push('in a funny mood');
     else if (this.mood.humor < 0.2) parts.push('serious mood');
 

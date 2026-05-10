@@ -19,7 +19,11 @@ export interface TokenBudgetConfig {
 /** Key used for the aggregate (global) daily record. */
 export const GLOBAL_KEY = '__global__';
 
-/** How many days of history to keep. Older rows are pruned lazily. */
+/** How many days of history to keep. Older rows are pruned lazily by
+ *  `cleanupIfNewDay`. 30 days is enough to spot weekly usage trends in
+ *  `.ai stats` without letting the kv table grow without bound on a busy
+ *  channel — at default ~50K tokens/user/day with one row per (date,user),
+ *  the worst case is small. */
 const RETENTION_DAYS = 30;
 
 /** Lazy daily token tracker — stores rows as `tokens:{YYYY-MM-DD}:{key}`. */

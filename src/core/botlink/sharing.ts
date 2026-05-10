@@ -127,6 +127,14 @@ class MaskList {
 // SharedBanList — in-memory ban/exempt tracking for shared channels
 // ---------------------------------------------------------------------------
 
+/**
+ * In-memory pair of ban + exempt mask lists for channels marked `shared:
+ * true` in chanmod config. Persistence is intentionally absent — on bot
+ * restart the lists rebuild from CHAN_BAN_SYNC frames sent by peers during
+ * the post-handshake sync phase. A bot that comes up with no peers
+ * reachable starts with empty lists and re-learns from the IRC server's
+ * own `MODE +b` responses.
+ */
 export class SharedBanList {
   private bans: MaskList;
   private exempts: MaskList;
@@ -176,6 +184,14 @@ export class SharedBanList {
 // BanListSyncer — build/apply ban sharing frames
 // ---------------------------------------------------------------------------
 
+/**
+ * Static helpers translating between {@link SharedBanList} state and the
+ * CHAN_BAN_* / CHAN_EXEMPT_* link frames. Stateless so both sides
+ * (frame-emitting and frame-applying) are unit-testable without standing
+ * up a peer. `isShared` is supplied by the caller — sharing is configured
+ * per-channel on each bot, and a frame for a channel this bot does not
+ * mark as shared is dropped silently rather than mirrored.
+ */
 export class BanListSyncer {
   /**
    * Build CHAN_BAN_SYNC and CHAN_EXEMPT_SYNC frames for all shared channels.

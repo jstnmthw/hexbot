@@ -6,8 +6,11 @@ import { botHasOps } from './helpers';
 import type { ChanmodConfig, SharedState } from './state';
 
 /**
- * Migrate any ban records from the old chanmod plugin DB namespace to the core _bans namespace.
- * Safe to call on every load — idempotent.
+ * Migrate any ban records from the old chanmod plugin DB namespace
+ * (`ban:<channel>:<mask>` keys) to the core `_bans` namespace owned by
+ * `api.banStore`. Safe to call on every load — idempotent: when no
+ * legacy entries exist the call is a no-op, and `migrateFromPluginNamespace`
+ * deletes the old keys after copying so a subsequent run finds nothing.
  */
 export function migrateBansToCore(api: PluginAPI): number {
   const oldBans = api.db.list('ban:');
@@ -33,7 +36,11 @@ export function setupBans(api: PluginAPI, _config: ChanmodConfig, state: SharedS
   const setMode = (ch: string, modes: string, param: string) => api.mode(ch, modes, param);
   const isTracked = (ch: string) => api.getChannel(ch) !== null;
 
-  // Lift bans that expired during downtime (after a short delay to allow joining + getting ops)
+  // Lift bans that expired during downtime. The 5s delay gives the bot time
+  // to (a) finish JOINing every configured channel, and (b) receive the
+  // ChanServ OP on join — without ops the `-b` lift is silently rejected by
+  // the server and the periodic 60s tick has to clean up. 5s is comfortably
+  // longer than typical join → +o latency on Atheme/Anope networks.
   state.startupTimer = setTimeout(() => {
     state.startupTimer = null;
     const lifted = api.banStore.liftExpiredBans(hasOps, setMode, isTracked);

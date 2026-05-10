@@ -631,6 +631,19 @@ export class ModLog {
     `);
   }
 
+  /**
+   * Indexes that back the `.modlog` query patterns:
+   *  - `mod_log_ts`         — the default tail-DESC view + cursor pagination
+   *                           (`id` and `timestamp` are correlated; ordering
+   *                           by timestamp uses this index, ordering by id
+   *                           uses the implicit primary key).
+   *  - `mod_log_target`     — `.modlog target <name>` filters
+   *  - `mod_log_channel_ts` — per-channel views (master flag, channel-scoped
+   *                           audit reads from chanmod) — composite on
+   *                           `(channel, timestamp DESC)` so the channel-scope
+   *                           filter and the descending sort share one index.
+   *  - `mod_log_source`     — partition view by `repl|irc|dcc|botlink|plugin|…`
+   */
   private initModLogIndexes(): void {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS mod_log_ts         ON mod_log(timestamp DESC);

@@ -222,6 +222,10 @@ export class EngagementTracker {
  */
 function extractAddressedNick(text: string, channelNicks: string[]): string | null {
   const trimmed = text.trim();
+  // Matches `<word>:` or `<word>,` at the start of the message — the two
+  // common IRC address-by-name shapes ("alice: hey", "alice, look at this").
+  // Greedy-up-to-separator: anything non-whitespace that isn't `:` or `,`,
+  // then exactly one of those terminators.
   const match = /^([^\s:,]+)[:,]/.exec(trimmed);
   if (!match) return null;
   const candidate = match[1].toLowerCase();

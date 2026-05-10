@@ -47,6 +47,16 @@ export const POINTS_MODE_LOCKED = 1;
 export const POINTS_UNAUTHORIZED_OP = 2;
 export const POINTS_ENFORCEMENT_SUPPRESSED = 2;
 
+/**
+ * Cap on the per-channel event ring inside {@link ThreatState.events}. A
+ * sustained takeover attempt could otherwise grow the array indefinitely.
+ * 1000 entries is enough for forensics across a multi-hour siege without
+ * making the in-memory history of a single channel unreasonable. Capped
+ * with `splice` so we keep the most-recent slice rather than dropping the
+ * tail — recent actor identities are what `performHostileResponse` needs.
+ */
+const THREAT_EVENT_RING_CAP = 1000;
+
 // ---------------------------------------------------------------------------
 // Core functions
 // ---------------------------------------------------------------------------
@@ -71,7 +81,14 @@ function getOrCreateThreat(
     return threat;
   }
 
-  // Decay: if the window has expired, reset
+  // Hard reset on window expiry rather than continuous decay. A sliding
+  // half-life would smooth the score curve but it would also let a
+  // patient attacker pace events to keep the score perpetually below the
+  // threshold; the hard window means a brief lull (services hiccup,
+  // attacker reconfiguring) drops the score back to clean before the
+  // next burst, and the next burst has to clear THE WHOLE threshold on
+  // its own — exactly the property we want for false-positive
+  // resistance.
   if (now - threat.windowStart > config.takeover_window_ms) {
     threat.score = 0;
     threat.events = [];
@@ -118,13 +135,8 @@ export function assessThreat(
     target,
     timestamp: Date.now(),
   });
-  // Cap the per-channel event ring so a sustained takeover attempt
-  // can't grow `threat.events` indefinitely. 1000 entries is enough
-  // for attack forensics over a multi-hour siege without making the
-  // in-memory history of a single channel unreasonable.
-  const RING_CAP = 1000;
-  if (threat.events.length > RING_CAP) {
-    threat.events.splice(0, threat.events.length - RING_CAP);
+  if (threat.events.length > THREAT_EVENT_RING_CAP) {
+    threat.events.splice(0, threat.events.length - THREAT_EVENT_RING_CAP);
   }
 
   const newLevel = scoreToLevel(config, threat.score);

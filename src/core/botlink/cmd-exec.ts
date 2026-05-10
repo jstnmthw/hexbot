@@ -21,6 +21,10 @@ export function executeCmdFrame(
   const ref = String(frame.ref ?? '');
   const command = String(frame.command ?? '');
   const args = String(frame.args ?? '');
+  // Preserve a wire-side `null` distinctly from "channel field omitted":
+  // both flow through to the handler ctx as `null`, but `String(null)`
+  // would otherwise coerce to the literal "null" and look like a real
+  // channel name to the permissions layer.
   const channel =
     frame.channel !== null && frame.channel !== undefined ? String(frame.channel) : null;
 

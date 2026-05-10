@@ -47,6 +47,7 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
       // directory names; hostmasks are bounded to prevent unbounded DB
       // rows; all three reject embedded control characters as a defense
       // against log / audit injection from a compromised transport.
+      // Regex: leading [A-Za-z0-9], then 0–31 of [A-Za-z0-9_-] → 1–32 chars total.
       if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/.test(handle)) {
         ctx.reply(
           'Invalid handle — must start alphanumeric, then alphanumeric/underscore/hyphen, max 32 chars.',

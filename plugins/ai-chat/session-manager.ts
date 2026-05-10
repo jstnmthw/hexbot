@@ -156,7 +156,8 @@ export class SessionManager {
     return expired;
   }
 
-  /** Snapshot of all active sessions. */
+  /** Snapshot of all active sessions. Spread copy so callers can't mutate
+   *  the live map by holding the returned array. */
   list(): Session[] {
     return [...this.sessions.values()];
   }

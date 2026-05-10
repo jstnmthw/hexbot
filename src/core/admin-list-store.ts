@@ -37,7 +37,12 @@ export class AdminListStore<T> {
     this.warn = opts.warn ?? ((message: string) => console.warn(message));
   }
 
-  /** Get an item by key, or null if not found. */
+  /**
+   * Get an item by key, or null if not found.
+   * Throws if the deserialize callback rejects the stored row — single-row
+   * fetches surface corruption to the caller, unlike `list()` which only
+   * warns and continues so one bad row doesn't take down the whole listing.
+   */
   get(key: string): T | null {
     const raw = this.db.get(this.namespace, key);
     if (raw == null) return null;

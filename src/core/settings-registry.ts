@@ -544,6 +544,14 @@ export class SettingsRegistry {
     return { reloadClass: 'restart', restartReason: reason };
   }
 
+  /**
+   * Coerce a stored KV string back into the def's runtime type. Storage is
+   * always a string (KV namespace is text-only), so booleans land as
+   * `"true"`/`"false"` and ints as decimal text. A `parseInt` failure on
+   * an int-typed key returns `NaN`; callers reading via `getInt()` get a
+   * `0` fallback rather than the NaN, so corrupted rows don't propagate
+   * a poison value into command logic.
+   */
   private coerce(def: SettingDef, stored: string): ChannelSettingValue {
     switch (def.type) {
       case 'flag':

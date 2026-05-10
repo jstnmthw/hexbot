@@ -374,6 +374,9 @@ export function registerConnectionEvents(
 
   const onSocketError = (err: unknown): void => {
     const error = err instanceof Error ? err : new Error(String(err));
+    // Stash the message so the subsequent 'close' classifier (TLS verify
+    // failures, ECONNRESET, registration timeout) can name the cause in the
+    // log instead of falling through to the generic "connection closed".
     lastCloseReason = error.message;
     logger.error('Socket error:', error.message);
     deps.eventBus.emit('bot:error', error);

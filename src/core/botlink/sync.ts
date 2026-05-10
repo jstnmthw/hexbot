@@ -10,6 +10,14 @@ import type { LinkFrame } from './types.js';
 // ChannelStateSyncer
 // ---------------------------------------------------------------------------
 
+/**
+ * Static helpers for the BOTJOIN/CHAN sync handshake. The hub calls
+ * {@link ChannelStateSyncer.buildSyncFrames} during the post-handshake
+ * SYNC_START/SYNC_END phase to ship its full {@link ChannelState} to a
+ * fresh leaf; the leaf calls {@link ChannelStateSyncer.applyFrame} on every
+ * incoming CHAN frame to mirror the hub's view. Stateless by design — both
+ * sides can be exercised in isolation by passing a fixture ChannelState.
+ */
 export class ChannelStateSyncer {
   /** Build CHAN frames for all tracked channels. */
   static buildSyncFrames(channelState: ChannelState): LinkFrame[] {
@@ -73,6 +81,14 @@ export class ChannelStateSyncer {
 // PermissionSyncer
 // ---------------------------------------------------------------------------
 
+/**
+ * Static helpers for ADDUSER / SETFLAGS / DELUSER frames. The hub broadcasts
+ * a full snapshot via {@link PermissionSyncer.buildSyncFrames} during sync
+ * and individual mutation frames thereafter via the `user:*` event-bus
+ * subscriptions wired in `BotLinkHub.setCommandRelay`. ADDUSER and SETFLAGS
+ * share an apply path because the hub treats them as upserts — the wire
+ * distinction is informational, not semantic.
+ */
 export class PermissionSyncer {
   /** Build ADDUSER frames for all users. */
   static buildSyncFrames(permissions: Permissions): LinkFrame[] {

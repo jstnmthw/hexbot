@@ -31,7 +31,8 @@ export interface ModActor {
  * is a strict subset of {@link ModLogSource}, so the mapping is direct — no
  * fallback logic needed. Use this instead of hand-rolling `{ by: ctx.nick,
  * source: ... }` so an audit review can grep for the helper as the single
- * call-site-to-actor translation.
+ * call-site-to-actor translation. See `docs/SECURITY.md` §3.4 for the audit
+ * coverage contract.
  *
  * Prefers `ctx.handle` (the resolved {@link UserRecord.handle}) over
  * `ctx.nick`. Nicks are user-chosen and change across sessions; a handle

@@ -121,7 +121,13 @@ export class HelpRegistry {
     return undefined;
   }
 
-  /** Remove all help entries for a plugin. */
+  /**
+   * Remove all help entries for a plugin. Called from the plugin loader on
+   * unload — namespaced collision losers (`<pluginId>:<command>` entries
+   * stored under another plugin's bucket) survive because they live in
+   * the *other* plugin's bucket; that's intentional, since the original
+   * owner's help should remain usable when an interloper is unloaded.
+   */
   unregister(pluginId: string): void {
     this.entries.delete(pluginId);
   }

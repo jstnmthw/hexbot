@@ -23,10 +23,11 @@
 //    churn the chanset through `founder → none → founder`. During the
 //    defer window an operator can run `.chanset chanserv_access founder`
 //    and we must not clobber that write. The snapshot comparison at the
-//    flush point (line ~178) is the guard: if the current chanset no
-//    longer matches what we snapshotted when the defer was recorded, we
-//    skip the flush. The race is real but one-sided — the worst outcome
-//    is the deferred commit being dropped, which is intentional.
+//    flush point inside `ANOPE_INFO_END_RE` handling is the guard: if
+//    the current chanset no longer matches what we snapshotted when the
+//    defer was recorded, we skip the flush. The race is real but
+//    one-sided — the worst outcome is the deferred commit being
+//    dropped, which is intentional.
 //
 // 3. GETKEY callback expiry. `requestRemoveKey` in AnopeBackend registers
 //    a pending callback with a 10s timeout. If the key arrives AFTER the

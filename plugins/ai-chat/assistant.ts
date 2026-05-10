@@ -138,11 +138,13 @@ export async function respond(
     };
   }
 
-  // Rough estimate: assume the user's new prompt costs ~prompt.length/4 tokens.
-  // We'll check the full budget again after the call with actual usage.
-  // +64 absorbs the system-prompt overhead the heuristic ignores (Persona,
-  // Rules, volatile header) so a borderline-budget user isn't admitted on a
-  // tiny prompt that then exceeds the cap once full context is sent.
+  // Rough estimate: assume the user's new prompt costs ~prompt.length/4 tokens
+  // (the standard ~4 chars/token English heuristic; rounding up keeps budget
+  // enforcement on the safe side of the true count). We'll re-check the full
+  // budget after the call with actual usage. +64 absorbs the system-prompt
+  // overhead the heuristic ignores (Persona, Rules, volatile header) so a
+  // borderline-budget user isn't admitted on a tiny prompt that then exceeds
+  // the cap once full context is sent.
   const estimate = Math.ceil(req.prompt.length / 4) + 64;
   // Admins bypass the per-user daily cap — global cap still enforced to
   // prevent runaway spend from a compromised prompt loop.

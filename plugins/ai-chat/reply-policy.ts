@@ -82,7 +82,13 @@ export function activityScale(activity: ActivityLevel): number {
   }
 }
 
-/** Recency boost: 1.5× if the user has been interacting with the bot recently. */
+/**
+ * Recency boost: 1.5× if the user has been interacting with the bot within
+ * `RECENT_BOT_INTERACTION_MS` (15 min — see pipeline.ts). Captures the "still
+ * in the same thread" feeling even after the formal EngagementTracker entry
+ * has timed out — a user who just finished a back-and-forth a few minutes
+ * ago should still see slightly amplified rolled-reply odds.
+ */
 export function recencyBoost(recent: boolean): number {
   return recent ? 1.5 : 1.0;
 }
@@ -98,7 +104,11 @@ export function rolledProbability(input: {
   characterChattiness: number;
 }): number {
   if (input.randomChance <= 0) return 0;
-  if (input.social.lastWasBot) return 0; // back-to-back guard
+  // Back-to-back guard: never roll a reply when the bot was the last speaker
+  // — otherwise a chatty character could monologue across rolls.
+  if (input.social.lastWasBot) return 0;
+  // Command sigil guard: messages aimed at other plugins / services
+  // (`!help`, `.deop`, `/quit`) are not invitations to chat.
   if (startsWithCommandSigil(input.text)) return 0;
   const scale = activityScale(input.social.activity);
   if (scale === 0) return 0;

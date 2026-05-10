@@ -29,7 +29,10 @@ export class ProviderSemaphore {
    * about double-release on retry paths.
    */
   tryAcquire(): (() => void) | null {
-    if (this.maxInflight <= 0) return () => {}; // disabled — always admit
+    // maxInflight=0 (or negative) is the operator's "disable concurrency cap"
+    // setting — return a no-op release so the call site doesn't need a
+    // null-check, and the in-flight counter is never bumped.
+    if (this.maxInflight <= 0) return () => {};
     if (this.inFlight >= this.maxInflight) return null;
     this.inFlight++;
     let released = false;

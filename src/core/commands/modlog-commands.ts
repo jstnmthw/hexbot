@@ -406,6 +406,11 @@ function renderRow(row: ModLogEntry): string {
   );
 }
 
+// `_db` is unused today — the snapshot total captured at `beginQuery` time
+// (see PagerState.totalAtFirstQuery) feeds the footer instead of a live
+// COUNT(*). Kept on the signature so a future renderer that wants live
+// counts (e.g. "X new since you opened the pager") can wire it in without
+// rewriting every caller.
 function renderPage(state: PagerState, _db: BotDatabase): string[] {
   const lines: string[] = [];
   if (state.rows.length === 0) {

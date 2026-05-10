@@ -24,6 +24,19 @@ import type {
 // BotLinkLeaf
 // ---------------------------------------------------------------------------
 
+/**
+ * Outbound side of the bot-link protocol — connects to a single hub,
+ * runs the HMAC challenge handshake, and exchanges steady-state frames.
+ * Owns reconnect-with-backoff, heartbeat, pending-request bookkeeping
+ * for CMD/PARTY_WHOM/PROTECT round trips, and an inbound CMD rate limit.
+ *
+ * One leaf instance per bot. The hub side ({@link BotLinkHub}) accepts
+ * many leaves; both sides share {@link BotLinkProtocol} for framing.
+ *
+ * Lifecycle: construct → {@link connect} → onConnected → arbitrary frame
+ * traffic → {@link disconnect} (or {@link reconnect}). The reconnect path
+ * can fire repeatedly across the lifetime of a single instance.
+ */
 export class BotLinkLeaf {
   private config: BotlinkConfig;
   private version: string;
@@ -106,7 +119,13 @@ export class BotLinkLeaf {
     this.linkKey = deriveLinkKey(config.password, config.link_salt!);
   }
 
-  /** Connect to the hub via TCP. */
+  /**
+   * Connect to the hub via TCP. Idempotent: re-entering while already
+   * connected, mid-connect, or mid-disconnect is a no-op so callers
+   * (reconnect timer, manual `.relink`, on-startup wire) don't have to
+   * coordinate. Failures schedule a reconnect via {@link scheduleReconnect}
+   * with exponential backoff.
+   */
   connect(): void {
     if (this.connected || this.connecting || this.disconnecting) return;
 
@@ -155,7 +174,12 @@ export class BotLinkLeaf {
     return this.protocol.send(frame);
   }
 
-  /** Send a command relay frame to the hub (Phase 5). */
+  /**
+   * Send a fire-and-forget CMD frame to the hub. No `ref` is set, so no
+   * CMD_RESULT is awaited — this is the "broadcast a command, ignore
+   * output" shape used by sync helpers. Use {@link relayCommand} when the
+   * caller needs the result back.
+   */
   sendCommand(command: string, args: string, fromHandle: string, channel: string | null): boolean {
     return this.send({
       type: 'CMD',
@@ -388,6 +412,9 @@ export class BotLinkLeaf {
       }
       if (frame.type === 'WELCOME') {
         if (!challengeAnswered) {
+          // WELCOME without a preceding CHALLENGE means the peer either
+          // skipped the auth step or is speaking a different protocol —
+          // either way, refuse to enter steady state.
           this.logger?.warn('WELCOME before CHALLENGE — closing');
           this.protocol?.close();
           return;
@@ -395,7 +422,10 @@ export class BotLinkLeaf {
         clearHandshakeTimer();
         this.hubBotname = String(frame.botname ?? '');
         this.connected = true;
-        this.reconnectDelay = this.reconnectDelayMs; // Reset backoff
+        // Successful handshake — reset exponential backoff so the next
+        // disconnection starts at the base delay, not whatever ceiling
+        // the previous outage climbed to.
+        this.reconnectDelay = this.reconnectDelayMs;
         this.lastHeartbeatAt = Date.now();
 
         // Switch to steady state

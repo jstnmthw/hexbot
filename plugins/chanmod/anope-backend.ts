@@ -183,7 +183,12 @@ export class AnopeBackend extends ChanServBackendBase {
 
   requestAkick(channel: string, mask: string, reason?: string): void {
     super.requestAkick(channel, mask, reason);
-    // Anope-specific: immediately enforce the AKICK list
+    // Anope-specific: `AKICK ADD` only writes the entry to the persistent
+    // list; users already in the channel are NOT kicked until the list is
+    // enforced. `AKICK ENFORCE` walks the channel and applies pending
+    // entries — without it, a takeover hostile would only be banned on
+    // their next join, not removed from the channel right now. Atheme's
+    // AKICK ADD enforces immediately, hence no equivalent in the base.
     this.sendChanServ(`AKICK ${channel} ENFORCE`);
   }
 

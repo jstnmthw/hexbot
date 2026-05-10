@@ -102,6 +102,8 @@ export class BanStore {
 
   /** Get all bans for a specific channel. */
   getChannelBans(channel: string): BanRecord[] {
+    // Trailing `:` keeps the prefix scan tight to this channel — without it,
+    // `ban:#foo` would also match `ban:#foobar:...` rows.
     return this.store.list(`ban:${this.ircLower(channel)}:`);
   }
 

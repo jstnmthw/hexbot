@@ -274,6 +274,9 @@ export class SocialTracker {
     }
 
     // Opportunistic global sweep: drop idle channels and enforce hard cap.
+    // Piggybacks on the per-message recalc so we never need a dedicated
+    // timer — `maintain` self-throttles via `lastMaintainAt` to actually
+    // do work at most once per MAINTAIN_INTERVAL_MS (1h).
     this.maintain(now);
   }
 
@@ -368,7 +371,8 @@ export function looksLikeQuestion(text: string): boolean {
   // English interrogative openers — kept short and high-precision. A trailing
   // space avoids matching prefixes ("isolation" → "is "); inflected forms
   // ("does" but not "do") are intentional to suppress imperative/declarative
-  // false positives ("do that", "is here").
+  // false positives ("do that", "is here"). English-only: ai-chat ambient
+  // is opt-in and channels in other languages can disable it via config.
   const interrogatives = [
     'who ',
     'what ',

@@ -155,7 +155,9 @@ export function parseISupport(client: SupportsProvider): ServerCapabilities {
         ? Math.min(MODES_HARD_CEILING, modesRaw)
         : 3;
 
-  // CHANTYPES — irc-framework stores it as a char array; fall back to '#&'.
+  // CHANTYPES — irc-framework stores it as a char array; fall back to '#&'
+  // per RFC 2812 §1.3 (channels start with `#` or `&`; some networks like
+  // IRCnet add `!` for safe channels).
   const ctRaw = supports('CHANTYPES');
   const chantypes =
     Array.isArray(ctRaw) && ctRaw.length > 0

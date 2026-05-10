@@ -31,7 +31,15 @@ export interface TriggerMatch {
   prompt: string;
 }
 
-/** Heuristic bot-nick patterns from config — list of lowercase glob-like strings. */
+/**
+ * Heuristic bot detection from configured glob patterns. Matches `*foo`,
+ * `foo*`, `*foo*`, and exact-case-insensitive `foo` shapes; anything else
+ * falls through. Used to short-circuit pubm before we feed bot-vs-bot
+ * chatter into context buffers, social trackers, or the AI pipeline. False
+ * negatives (a bot whose nick doesn't match any pattern) are absorbed by
+ * the explicit ignoreList; false positives (a human with a `*bot` nick)
+ * just opt them out of AI chat — neither is dangerous.
+ */
 export function isLikelyBot(nick: string, patterns: string[], ignoreBots: boolean): boolean {
   if (!ignoreBots) return false;
   const lower = nick.toLowerCase();

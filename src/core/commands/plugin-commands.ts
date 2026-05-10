@@ -24,6 +24,11 @@ export interface PluginCommandsDeps {
  */
 export function registerPluginCommands(deps: PluginCommandsDeps): void {
   const { handler, pluginLoader } = deps;
+  // `pluginDir` and `db` are accepted on the deps object so external
+  // wiring stays stable when lifecycle commands return — the read-only
+  // `.plugins` listing has no use for either today. The `void` reads
+  // mark them as deliberately unused so a noUnusedParameters tweak won't
+  // flag the destructure later.
   void deps.pluginDir;
   void deps.db;
   handler.registerCommand(

@@ -317,6 +317,8 @@ export class MessageQueue {
     // Pick the target to drain next *before* potentially removing the
     // current one: the "peer after me" is always targetOrder[currentIdx+1]
     // (wrapping) regardless of whether we end up splicing the current slot.
+    // Computing this after `removeTarget` would shift the modulo basis and
+    // could make us re-visit the same target two drains in a row.
     const peerIdx = (currentIdx + 1) % this.targetOrder.length;
     const nextAfter = this.targetOrder[peerIdx];
 

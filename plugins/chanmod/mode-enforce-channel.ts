@@ -26,6 +26,14 @@ export function handleReapplyRemovedModes(
   parsed: { add: Set<string>; remove: Set<string> },
 ): void {
   const { channel, setter, modeStr, canEnforce } = mctx;
+  // `modeStr.length === 2` selects single-character parameterless events
+  // like `-n`, `-t`, `-s`. The bridge dispatches one mode flip per event,
+  // so a multi-flip server message ("MODE #x -n+s") arrives here as two
+  // separate calls. Parameterised modes (`-o nick`, `-k key`) carry the
+  // parameter in `target` and `modeStr` stays length 2 too, but
+  // `parseChannelModes` strips +o/+v/+k/+l from `parsed.add`/`parsed.remove`
+  // so the `parsed.add.has(modeChar)` check below filters them out
+  // naturally.
   if (parsed.add.size > 0 && modeStr.startsWith('-') && modeStr.length === 2 && canEnforce) {
     const modeChar = modeStr[1];
     if (parsed.add.has(modeChar)) {
@@ -51,6 +59,9 @@ export function handleRemoveUnauthorizedModes(
   parsed: { add: Set<string>; remove: Set<string> },
 ): void {
   const { channel, setter, modeStr, target, canEnforce } = mctx;
+  // `!target` excludes parameterised mode flips (+o/+v/+k/+l carry a
+  // parameter in `target`); same parameterless-only invariant as in
+  // `handleReapplyRemovedModes` above.
   if (modeStr.startsWith('+') && modeStr.length === 2 && !target && canEnforce) {
     const modeChar = modeStr[1];
     if (parsed.remove.has(modeChar)) {

@@ -189,7 +189,11 @@ export function seedFromJson(
   return counts;
 }
 
-/** Sum two SeedCounts — used by `.rehash` to roll up across scopes. */
+/**
+ * Sum two SeedCounts — used by `.rehash` to roll up across the core,
+ * plugin, and channel scope registries into a single operator-facing
+ * tally line.
+ */
 export function addCounts(a: SeedCounts, b: SeedCounts): SeedCounts {
   return {
     seeded: a.seeded + b.seeded,

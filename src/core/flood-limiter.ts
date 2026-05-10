@@ -143,8 +143,10 @@ export class FloodLimiter {
 
     // User is flooding.
     if (!this.warned.has(key)) {
-      // FIFO-evict the oldest entry before adding when capped. Sets preserve
-      // insertion order, so `values().next()` yields the earliest-warned key.
+      // FIFO-evict the oldest entry before adding when capped. JavaScript Sets
+      // preserve insertion order (ES2015 §23.2 — `[[SetData]]` iteration), so
+      // `values().next()` yields the earliest-warned key without us having to
+      // track insertion order separately.
       if (this.warned.size >= MAX_WARNED_KEYS) {
         const oldest = this.warned.values().next().value;
         if (oldest !== undefined) this.warned.delete(oldest);

@@ -71,6 +71,10 @@ export function parseSTSDirective(rawValue: string | undefined): STSDirective | 
   let duration: number | undefined;
   let port: number | undefined;
 
+  // Tokens are comma-separated `key=value` pairs per IRCv3 STS spec
+  // (https://ircv3.net/specs/extensions/sts). The spec leaves whitespace
+  // handling unspecified; trim defensively so `port=6697, duration=2592000`
+  // parses the same as the canonical no-space form.
   for (const pair of rawValue.split(',')) {
     const [rawKey, rawVal] = pair.split('=');
     if (!rawKey) continue;

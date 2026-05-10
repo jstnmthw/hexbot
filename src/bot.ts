@@ -988,6 +988,11 @@ export class Bot {
     // first JOIN attempt rather than bouncing us with a 477 numeric.
     await this.connect();
 
+    // Re-anchor uptime to the moment IRC registration completed. The field
+    // initializer ran during `new Bot()` (well before `connect()` resolves),
+    // so without this reset `.status` would report several seconds of
+    // pre-connect setup as "connected uptime" and operators investigating a
+    // flap window would see misleading numbers.
     this.startTime = Date.now();
   }
 
@@ -1341,6 +1346,10 @@ export class Bot {
       }
     });
 
+    // flush() drains the pending-send buffer through the IRC client one last
+    // time; stop() then halts the drain timer and rejects any new enqueues.
+    // Order matters — stopping first would strand whatever was queued, so a
+    // last-second `.say` from a teardown hook would silently disappear.
     step('message-queue.flush', () => this.messageQueue.flush());
     step('message-queue.stop', () => this.messageQueue.stop());
 

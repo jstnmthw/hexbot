@@ -170,6 +170,12 @@ export class IRCCommands {
     this.client.notice(target, message);
   }
 
+  /**
+   * Send a JOIN. When a channel key is provided we drop to `raw()` because
+   * irc-framework's typed `join()` does not accept a key parameter. Both
+   * `channel` and `key` are sanitized to strip CRLF — see SECURITY.md §2.1
+   * (raw() output sanitization is mandatory).
+   */
   join(channel: string, key?: string): void {
     if (key) {
       this.client.raw(`JOIN ${sanitize(channel)} ${sanitize(key)}`);
@@ -229,6 +235,9 @@ export class IRCCommands {
   }
 
   invite(channel: string, nick: string, actor?: ModActor): void {
+    // RFC 2812 §3.2.7 INVITE: arg order is `<nick> <channel>`, the inverse of
+    // the natural English reading. Easy to invert by accident — the sanitize()
+    // calls also serve as a checkpoint for that order.
     this.client.raw(`INVITE ${sanitize(nick)} ${sanitize(channel)}`);
     this.logMod('invite', channel, nick, actor, null);
   }

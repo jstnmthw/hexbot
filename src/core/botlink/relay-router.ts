@@ -90,6 +90,18 @@ export interface RelayRouterDeps {
   getLocalPartyUsers: () => PartyLineUser[];
 }
 
+/**
+ * Hub-side routing tables for cross-bot relay traffic. Holds the four
+ * Maps the hub consults to forward CMD_RESULT, PROTECT_ACK, RELAY_*, and
+ * PARTY_* frames between leaves; the hub itself only knows about
+ * connection lifecycle. All entries are TTL-swept by {@link sweepStaleRoutes},
+ * called once per heartbeat tick — losing the matching END/ACK frame in
+ * transit therefore self-heals within `RELAY_TTL` / `SHORT_TTL` / `PARTY_TTL`.
+ *
+ * Per-map size caps (`MAX_*`) are the second line of defense against a
+ * compromised leaf flooding a routing table; the trusted-peer model is
+ * the first.
+ */
 export class BotLinkRelayRouter {
   /** Active relay sessions. Key: handle. Exposed `readonly` so tests can seed sweep state. */
   readonly activeRelays = new Map<string, RelayEntry>();

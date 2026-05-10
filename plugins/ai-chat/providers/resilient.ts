@@ -89,7 +89,11 @@ export class ResilientProvider implements AIProvider {
         return res;
       } catch (err) {
         const provErr = toProviderError(err);
-        // Retryable kinds: rate_limit (429) and network (5xx) only.
+        // Retryable kinds: rate_limit (429) and network (5xx / connect errors)
+        // only. `safety` and `auth` are deterministic (the same input would
+        // re-fail) and `other` covers config bugs (404 missing model, 400
+        // malformed body) — retrying any of these just burns rate-limit
+        // window for no chance of success.
         const retryable = provErr.kind === 'rate_limit' || provErr.kind === 'network';
         if (!retryable || attempt >= this.config.maxRetries) {
           // Only transient/infrastructure failures count toward the circuit

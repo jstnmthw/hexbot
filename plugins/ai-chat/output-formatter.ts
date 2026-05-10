@@ -187,7 +187,9 @@ function splitLongLine(line: string, maxByteLen: number): string[] {
 
   while (utf8ByteLen(remaining) > maxByteLen) {
     // Take a search window slightly larger than the cap — gives the boundary
-    // search a sentence break that lands at or just past the cap.
+    // search a sentence break that lands at or just past the cap. +4 is one
+    // max-width UTF-8 codepoint of slack so a punctuation char straddling
+    // the cap boundary still falls inside the window.
     const { head: window } = sliceByBytes(remaining, maxByteLen + 4);
     // Prefer a sentence boundary, then fall back to word boundary.
     let cut = findLastMatch(window, /[.!?](\s|$)/g);

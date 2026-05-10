@@ -144,6 +144,8 @@ function handleEnforceBans(api: PluginAPI, state: SharedState, mctx: ModeContext
   const enforcebans = api.channelSettings.getFlag(channel, 'enforcebans');
   if (!enforcebans || modeStr !== '+b' || !target || !botHasOps(api, channel)) return false;
 
+  // Non-null cast safe: `botHasOps` above returned true, which is only
+  // possible when `getChannel(channel)` returned a populated record.
   const ch = api.getChannel(channel)!;
   for (const user of ch.users.values()) {
     if (api.isBotNick(user.nick)) continue;

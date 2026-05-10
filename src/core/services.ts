@@ -354,10 +354,11 @@ export class Services {
       return { verified: true, account: nick };
     }
 
-    // C-3: if the bot is known-unidentified, NickServ will ignore STATUS/ACC
-    // queries from us (Rizon/Anope silently drops them). Fail fast with a
-    // structured reason so the caller sees a clean verified:false rather than
-    // a 5-second timeout.
+    // C-3 (services audit, 2026-04): if the bot is known-unidentified,
+    // NickServ will ignore STATUS/ACC queries from us (Rizon/Anope silently
+    // drops them — Atheme returns nothing rather than an error). Fail fast
+    // with a structured reason so the caller sees a clean verified:false
+    // rather than a 5-second timeout.
     if (this._botIdentifyState === 'unidentified') {
       this.logger?.warn(
         `Skipping NickServ verify for ${nick} — bot is not identified (will retry once bot identifies)`,
@@ -604,7 +605,9 @@ export class Services {
     // Detect "Unknown command" and retry with the other method.
     // Some IRC networks (e.g. Anope) don't support the ACC command (Atheme-style)
     // and respond with "Unknown command ACC". In that case we fall back to STATUS,
-    // and vice versa for networks that don't support STATUS.
+    // and vice versa for networks that don't support STATUS. The probed network
+    // type is configured up front, but the on-the-wire backend can differ
+    // from the operator's expectation (services migrations, federated bridges).
     // Regex: capture the command name after the literal "Unknown command "
     // prefix that both Atheme and Anope emit verbatim for unknown subcommands.
     const unknownCmd = message.match(/^Unknown command (\S+)/i);

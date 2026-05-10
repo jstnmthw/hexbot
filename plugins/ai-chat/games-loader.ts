@@ -27,7 +27,9 @@ export function listGames(gamesDir: string): string[] {
 
 /** Load a game's system prompt. Returns null if the file doesn't exist or is unsafe. */
 export function loadGamePrompt(gamesDir: string, name: string): string | null {
-  // Only allow safe names (no path separators, no traversal).
+  // Strict allowlist for game names: no `/`, no `..`, no NUL — anything that
+  // could escape the games dir or smuggle a path segment is rejected before
+  // we touch the filesystem. Mirrors the character-name allowlist.
   if (!/^[a-zA-Z0-9_-]+$/.test(name)) return null;
   // Defence-in-depth: resolve both sides and refuse any path that escapes the
   // games dir. `gamesDir` is operator-supplied config (trusted), but a
@@ -41,7 +43,10 @@ export function loadGamePrompt(gamesDir: string, name: string): string | null {
   try {
     const st = statSync(filePath);
     if (!st.isFile()) return null;
-    // Sanity: cap at 32 KB to avoid loading huge files.
+    // 32 KB cap on game prompts. Game system prompts are typically a few KB
+    // of rules + framing; anything larger is either misconfigured or hostile
+    // (loading a multi-megabyte file would burn prompt-eval cost on every
+    // turn of every game). Mirrors the 64 KB cap on character JSON.
     if (st.size > 32 * 1024) return null;
     return readFileSync(filePath, 'utf-8').trim();
   } catch {

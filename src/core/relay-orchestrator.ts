@@ -331,6 +331,9 @@ export class RelayOrchestrator {
       const message = String(e.message ?? '');
       // Only mirror PMs — channel notices are part of the public channel
       // stream, not a service-reply, and would flood relay consoles.
+      // Hardcoded `#&` rather than ISUPPORT CHANTYPES because relay mirrors
+      // run before ISUPPORT lands on first connection; the conservative
+      // default catches every real network we target.
       if (/^[#&]/.test(target)) return;
       // Suppress NickServ verification chatter so the relay user isn't
       // shown the bot's own internal ACC/STATUS round-trips.

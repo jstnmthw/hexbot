@@ -382,6 +382,12 @@ export class EnforcementExecutor {
       this.auditLog('flood-kick', channel, nick, reason);
       return;
     }
+    // Ban BEFORE kick so an autorejoining client can't beat the +b. If we
+    // kicked first the target would have a window between the KICK landing
+    // and the MODE +b being processed where their auto-rejoin is allowed
+    // back in. The ircd serializes our outbound but the client's RECONNECT
+    // races them at the network layer — order here is the only thing
+    // closing that race.
     this.api.ban(channel, banMask);
     this.storeBan(channel, banMask);
     this.api.kick(channel, nick, `[flood] ${reason}`);

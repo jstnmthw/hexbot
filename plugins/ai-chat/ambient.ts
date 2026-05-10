@@ -60,7 +60,12 @@ export class AmbientEngine {
     private warn: (msg: string) => void = () => {},
   ) {}
 
-  /** Start the ambient tick loop. */
+  /**
+   * Start the ambient tick loop. The default 30s cadence is a rough match for
+   * the unanswered-question wait_seconds (default 90s) and the idle.afterMinutes
+   * floor — finer than 30s wastes cycles on conditions that change on the
+   * minute scale, coarser misses the start of an idle window by up to a tick.
+   */
   start(sender: AmbientSender, intervalMs = 30_000): void {
     this.sender = sender;
     if (this.tickHandle) clearInterval(this.tickHandle);

@@ -24,6 +24,10 @@ export interface ServicesVerificationReply {
  * Anchored with `(?:\s|$)` after the level so trailing text (e.g. a
  * human-readable "(identified)" suffix some backends append) doesn't
  * silently re-interpret a malformed `<nick> ACC 3evil` as a valid reply.
+ *
+ * Regex intent: `<nick>` (one or more non-space chars), the literal `ACC`
+ * (case-insensitive), then a base-10 level followed by whitespace or
+ * end-of-message.
  */
 export function tryParseAccResponse(message: string): ServicesVerificationReply | null {
   const m = message.match(/^(\S+)\s+ACC\s+(\d+)(?:\s|$)/i);

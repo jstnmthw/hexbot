@@ -37,6 +37,10 @@ const ACCOUNT_MATCH_BONUS = 1_000_000;
  * Heuristic: count literal (non-wildcard) characters and subtract a small
  * penalty per wildcard. This keeps `alice!*@host.isp.net` ahead of
  * `*!*@host.isp.net` and keeps a literal hostmask ahead of either.
+ *
+ * Counter-pin: `?` (single-char wildcard, IRC traditional usage) is treated
+ * as a wildcard the same as `*` so `nick!?@*` doesn't appear deceptively
+ * specific just because `?` is one character.
  */
 export function patternSpecificity(pattern: string): number {
   let literal = 0;

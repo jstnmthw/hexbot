@@ -200,6 +200,10 @@ export function createSpotifyRadio(): SpotifyRadio {
   }
 
   function registerHelp(api: PluginAPI): void {
+    // Help registry takes `flags: '-'` (everyone can see help) but the
+    // per-line `(n)` annotations remind users that the actual mutating
+    // subcommands gate on the +n flag inside requireAuth(). Keeping this
+    // visible in help avoids a "why was I rejected" round-trip.
     api.registerHelp([
       {
         command: '!radio',
@@ -427,7 +431,14 @@ export function createSpotifyRadio(): SpotifyRadio {
 
     try {
       const current = await sp.getCurrentlyPlaying();
+      // Reset the consecutive-error counter on every successful poll. A
+      // single transient blip shouldn't tip a healthy session over the
+      // budget on its next failure — the budget tracks *consecutive*
+      // failures by design.
       s.consecutiveErrors = 0;
+      // null = "nothing playing right now" (paused, between tracks, ad, or
+      // a non-track item we project away). Don't announce, don't error;
+      // the next tick will pick up whatever resumes.
       if (current === null) return;
       if (current.trackId !== s.lastTrackId) {
         s.lastTrackId = current.trackId;
@@ -451,6 +462,11 @@ export function createSpotifyRadio(): SpotifyRadio {
       return;
     }
     if (err instanceof SpotifyRateLimitError) {
+      // Push lastPollAt INTO the future so the per-target due-time gate
+      // in tickPollLoop swallows ticks until the Retry-After window
+      // elapses. Spotify's client clamps Retry-After to 300s (see
+      // parseRetryAfter), so the worst case here is a 5min freeze, not
+      // an indefinite stall.
       s.lastPollAt = now + err.retryAfterSec * SECONDS_TO_MS;
       s.consecutiveErrors += 1;
       api.warn(`Rate-limited by Spotify; backing off ${err.retryAfterSec}s`);

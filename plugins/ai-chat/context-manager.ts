@@ -210,6 +210,11 @@ export class ContextManager {
       // so a nick with punctuation can't masquerade as role metadata inside
       // the history stream.
       const speaker = safeSpeakerName(e.nick) || 'user';
+      // History format convention: `nick: text` (NEVER `[nick] text` — that
+      // shape is used only by the session pipeline). The current-turn user
+      // content has no nick prefix at all; the speaker rides on the volatile
+      // header instead. Bot turns are stored unprefixed because they map to
+      // role='assistant' below, which is its own attribution.
       const content = e.isBot || options?.dropNickPrefix ? e.text : `${speaker}: ${e.text}`;
       if (chars + content.length > maxChars && messages.length > 0) break;
       messages.push({ role: e.isBot ? 'assistant' : 'user', content });
