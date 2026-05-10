@@ -71,10 +71,9 @@ function assertNoSecretsInCalls(...spies: Array<ReturnType<typeof vi.fn>>): void
 
 describe('spotify-radio init / loadConfig', () => {
   it('loads cleanly when every required field is present', async () => {
-    const { api, log } = apiWithBootConfig(fullValidBootConfig());
+    const { api } = apiWithBootConfig(fullValidBootConfig());
     const instance = createSpotifyRadio();
     await expect(instance.init(api)).resolves.toBeUndefined();
-    expect(log).toHaveBeenCalled();
   });
 
   it('throws naming the env var when client_id is missing', async () => {

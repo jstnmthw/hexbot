@@ -163,8 +163,6 @@ export function createSpotifyRadio(): SpotifyRadio {
     registerCommands(api);
     registerHelp(api);
     registerPollLoop(api);
-
-    api.log('Loaded — session inactive (run !radio on <jam-url> to start)');
   }
 
   function teardown(): void {
