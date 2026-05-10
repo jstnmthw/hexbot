@@ -1,6 +1,11 @@
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Pre-warm the chanmod module so its TS-transform cost (~250ms for 6.5k lines
+// across 25 sub-modules) is billed to file-load instead of the first test's
+// beforeEach. Without this the first test consistently exceeds the 300ms
+// slow-test threshold under full-suite worker contention.
+import '../../plugins/chanmod/index';
 import { makeChanmodPluginOverrides } from '../helpers/chanmod-plugin-config';
 import { type MockBot, createMockBot } from '../helpers/mock-bot';
 import { flush, giveBotOps, tick } from '../helpers/plugin-test-helpers';

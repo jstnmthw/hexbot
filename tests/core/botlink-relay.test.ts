@@ -1,5 +1,5 @@
 import { Duplex } from 'node:stream';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { CommandHandler } from '../../src/command-handler';
 import type { CommandContext } from '../../src/command-handler';
@@ -15,6 +15,29 @@ import {
   pushFrame,
   testLinkKey,
 } from '../helpers/mock-socket';
+
+// Memoize deriveLinkKey across the file. scryptSync (~50ms) runs on every
+// BotLinkHub/Leaf construction; a single (password, salt) pair is reused
+// across tests, so caching collapses repeated KDF cost. vi.mock is hoisted
+// before any production import.
+vi.mock('../../src/core/botlink/protocol', async () => {
+  const actual = await vi.importActual<typeof import('../../src/core/botlink/protocol')>(
+    '../../src/core/botlink/protocol',
+  );
+  const cache = new Map<string, Buffer>();
+  return {
+    ...actual,
+    deriveLinkKey(password: string, linkSaltHex: string): Buffer {
+      const cacheKey = `${password}\0${linkSaltHex}`;
+      let key = cache.get(cacheKey);
+      if (!key) {
+        key = actual.deriveLinkKey(password, linkSaltHex);
+        cache.set(cacheKey, key);
+      }
+      return Buffer.from(key);
+    },
+  };
+});
 
 async function tick(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));

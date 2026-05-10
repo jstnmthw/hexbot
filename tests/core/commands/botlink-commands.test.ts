@@ -18,6 +18,29 @@ import {
   testLinkKey,
 } from '../../helpers/mock-socket';
 
+// Memoize deriveLinkKey across the file. scryptSync (~50ms) runs on every
+// BotLinkHub/Leaf/AuthManager construction; a single (password, salt) pair
+// is reused across tests, so caching collapses repeated KDF cost. vi.mock
+// is hoisted before any production import.
+vi.mock('../../../src/core/botlink/protocol', async () => {
+  const actual = await vi.importActual<typeof import('../../../src/core/botlink/protocol')>(
+    '../../../src/core/botlink/protocol',
+  );
+  const cache = new Map<string, Buffer>();
+  return {
+    ...actual,
+    deriveLinkKey(password: string, linkSaltHex: string): Buffer {
+      const cacheKey = `${password}\0${linkSaltHex}`;
+      let key = cache.get(cacheKey);
+      if (!key) {
+        key = actual.deriveLinkKey(password, linkSaltHex);
+        cache.set(cacheKey, key);
+      }
+      return Buffer.from(key);
+    },
+  };
+});
+
 // Derive once at module load — the HMAC key depends only on the shared
 // test password + link salt, so reusing it across tests trims per-test
 // scrypt cost to a single call.

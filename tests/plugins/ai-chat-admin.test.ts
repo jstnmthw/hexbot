@@ -2,6 +2,10 @@
 import { resolve } from 'node:path';
 import { type Mock, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Pre-warm the bundled ai-chat plugin (~5k lines, ~186KB) so the first
+// loadPlugin call hits Node's ESM cache instead of paying transform/parse
+// cost at test time.
+import '../../plugins/ai-chat/dist/index.js';
 import type { AIChatDeps } from '../../plugins/ai-chat/index';
 import type { AIProvider } from '../../plugins/ai-chat/providers/types';
 import { Permissions } from '../../src/core/permissions';

@@ -28,6 +28,31 @@ import {
   testLinkKey,
 } from '../helpers/mock-socket';
 
+// Memoize deriveLinkKey across the test file. Production calls scryptSync
+// (N=16384, ~50ms) on every BotLinkHub/BotLinkLeaf/BotLinkAuthManager
+// construction; the suite creates ~136 such instances with the same
+// (password, salt) pair, so caching by input collapses ~5s of pure scrypt
+// time into a single hash. vi.mock is hoisted, so the mock is in place
+// before any production module imports `./protocol`.
+vi.mock('../../src/core/botlink/protocol', async () => {
+  const actual = await vi.importActual<typeof import('../../src/core/botlink/protocol')>(
+    '../../src/core/botlink/protocol',
+  );
+  const cache = new Map<string, Buffer>();
+  return {
+    ...actual,
+    deriveLinkKey(password: string, linkSaltHex: string): Buffer {
+      const cacheKey = `${password}\0${linkSaltHex}`;
+      let key = cache.get(cacheKey);
+      if (!key) {
+        key = actual.deriveLinkKey(password, linkSaltHex);
+        cache.set(cacheKey, key);
+      }
+      return Buffer.from(key);
+    },
+  };
+});
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
