@@ -3,6 +3,7 @@
 import type { CommandHandler } from '../../command-handler';
 import type { BotDatabase } from '../../database';
 import { formatDuration, parseDuration } from '../../utils/duration';
+import { paginate, parsePageFlag } from '../../utils/paginate';
 import { stripFormatting } from '../../utils/strip-formatting';
 import { auditActor, tryAudit } from '../audit';
 import type { BanStore } from '../ban-store';
@@ -43,10 +44,12 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
     {
       flags: '+o',
       description: 'List tracked channel bans',
-      usage: '.bans [#channel]',
+      usage: '.bans [#channel] [--page N]',
       category: 'moderation',
     },
-    (args, ctx) => {
+    (rawArgs, ctx) => {
+      const { page, rest } = parsePageFlag(rawArgs);
+      const args = rest;
       const channelArg = args.trim() || undefined;
       const localBans = channelArg ? banStore.getChannelBans(channelArg) : banStore.getAllBans();
 
@@ -81,12 +84,14 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
         return;
       }
 
-      const lines = [`Channel bans (${total}):`];
+      // Build the data lines first, then prepend the header after
+      // pagination so the header appears on every page.
+      const dataLines: string[] = [];
       const now = Date.now();
       for (const ban of localBans) {
         const remaining = ban.expires === 0 ? 'permanent' : formatDuration(ban.expires - now);
         const stickyTag = ban.sticky ? ' [sticky]' : '';
-        lines.push(
+        dataLines.push(
           `  ${stripFormatting(ban.channel).padEnd(12)} ${stripFormatting(ban.mask).padEnd(25)} by ${stripFormatting(ban.by).padEnd(10)} ${remaining}${stickyTag}`,
         );
       }
@@ -94,11 +99,14 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
         // Shared entries arrive over botlink — sanitized at the frame
         // boundary, but strip-format again for defense-in-depth so a
         // crafted `by` never repaints the operator's terminal.
-        lines.push(
+        dataLines.push(
           `  ${stripFormatting(entry.channel).padEnd(12)} ${stripFormatting(entry.mask).padEnd(25)} by ${stripFormatting(entry.by).padEnd(10)} [shared]`,
         );
       }
-      ctx.reply(lines.join('\n'));
+      const paged = paginate(dataLines, page);
+      const out = [`Channel bans (${total}):`, ...paged.lines];
+      if (paged.footer) out.push(paged.footer);
+      ctx.reply(out.join('\n'));
     },
   );
 

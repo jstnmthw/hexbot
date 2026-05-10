@@ -5,7 +5,21 @@
 // for a configurable duration, then automatically unlocked. Separating this
 // state from the detection wiring makes it possible to drain locks in
 // teardown without touching the counters.
+//
+// Active locks are persisted to `api.db` under the `lockdown:` prefix so a
+// reconnect / restart in the middle of a lockdown window doesn't strand
+// the mode on the server. On init, `restoreLocks()` replays surviving
+// records: past-expiry entries trigger an immediate `-${mode}`, and live
+// entries reschedule the auto-unlock timer for the remaining duration.
 import type { PluginAPI } from '../../src/types';
+
+/** Persisted shape under `lockdown:<chan>` (JSON-encoded). */
+interface PersistedLock {
+  mode: string;
+  expiresAt: number;
+}
+
+const LOCKDOWN_DB_PREFIX = 'lockdown:';
 
 export interface LockdownConfig {
   /**
@@ -146,6 +160,7 @@ export class LockdownController {
     const lowerChannel = this.api.ircLower(channel);
     const mode = this.api.channelSettings.getString(channel, 'flood_lock_mode');
     const flooderCount = this.timestamps.get(lowerChannel)?.length ?? 0;
+    const expiresAt = Date.now() + this.cfg.lockDurationMs;
 
     this.api.mode(channel, `+${mode}`);
     this.api.log(`Channel lockdown: set +${mode} on ${channel} (flood detected)`);
@@ -155,10 +170,103 @@ export class LockdownController {
       metadata: { mode, flooderCount, durationMs: this.cfg.lockDurationMs },
     });
 
+    // Persist before scheduling the timer — if the bot crashes between the
+    // mode-set and the timer-arm, the lock is still recoverable on next
+    // boot. We tolerate a stale row when the bot is killed mid-lift; the
+    // restoreLocks path emits a guarded `-${mode}` for past-expiry rows.
+    this.persistLock(lowerChannel, mode, expiresAt);
+
     const timer = setTimeout(() => {
       this.lift(channel, mode);
     }, this.cfg.lockDurationMs);
     this.activeLocks.set(lowerChannel, timer);
+  }
+
+  private persistLock(lowerChannel: string, mode: string, expiresAt: number): void {
+    try {
+      const payload: PersistedLock = { mode, expiresAt };
+      this.api.db.set(LOCKDOWN_DB_PREFIX + lowerChannel, JSON.stringify(payload));
+    } catch (err) {
+      this.api.warn(`lockdown persist failed for ${lowerChannel}:`, err);
+    }
+  }
+
+  private clearPersistedLock(lowerChannel: string): void {
+    try {
+      this.api.db.del(LOCKDOWN_DB_PREFIX + lowerChannel);
+    } catch (err) {
+      this.api.warn(`lockdown clear failed for ${lowerChannel}:`, err);
+    }
+  }
+
+  /**
+   * Replay persisted locks at init / reconnect. Each record represents a
+   * lockdown that was in flight when the bot last shut down or
+   * disconnected. Two cases:
+   *
+   *   - `expiresAt` is in the past: the auto-unlock should already have
+   *     fired. Emit `-${mode}` immediately if we have ops, otherwise
+   *     leave the row so a future call (e.g. the next bot:opped event)
+   *     can re-attempt.
+   *   - `expiresAt` is still in the future: reschedule the timer for the
+   *     remaining duration so the lock lifts on time.
+   */
+  restoreLocks(): void {
+    let entries: Array<{ key: string; value: string }>;
+    try {
+      entries = this.api.db.list(LOCKDOWN_DB_PREFIX);
+    } catch (err) {
+      this.api.warn('lockdown restore: db.list failed:', err);
+      return;
+    }
+    const now = Date.now();
+    for (const { key, value } of entries) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(value);
+      } catch {
+        parsed = null;
+      }
+      const persisted = parsePersistedLock(parsed);
+      if (!persisted) {
+        // Corrupt or wrong-shape row — drop it rather than retry forever.
+        this.api.warn(`lockdown restore: dropping malformed row ${key}`);
+        try {
+          this.api.db.del(key);
+        } catch {
+          /* nothing to do; next sweep will retry */
+        }
+        continue;
+      }
+      const lowerChannel = key.slice(LOCKDOWN_DB_PREFIX.length);
+      // Already-active in memory — nothing to restore (init was racy).
+      if (this.activeLocks.has(lowerChannel)) continue;
+
+      if (now >= persisted.expiresAt) {
+        // Past-expiry: try to remove the mode if we have ops. The
+        // `lift` path itself handles the cleanup (clearing persisted
+        // state + audit row); calling it directly with the original
+        // channel-name unknown means we use the lower-case key as the
+        // channel — fine for `mode()` since servers fold both.
+        if (this.botHasOps(lowerChannel)) {
+          this.lift(lowerChannel, persisted.mode);
+        } else {
+          this.api.warn(
+            `lockdown restore: cannot lift -${persisted.mode} on ${lowerChannel} — bot lacks ops`,
+          );
+        }
+        continue;
+      }
+
+      const remaining = persisted.expiresAt - now;
+      this.api.log(
+        `lockdown restore: rescheduling auto-unlock for ${lowerChannel} in ${remaining}ms`,
+      );
+      const timer = setTimeout(() => {
+        this.lift(lowerChannel, persisted.mode);
+      }, remaining);
+      this.activeLocks.set(lowerChannel, timer);
+    }
   }
 
   /**
@@ -174,6 +282,7 @@ export class LockdownController {
     this.activeLocks.delete(lowerChannel);
     this.flooders.delete(lowerChannel);
     this.timestamps.delete(lowerChannel);
+    this.clearPersistedLock(lowerChannel);
 
     if (this.botHasOps(channel)) {
       this.api.mode(channel, `-${mode}`);
@@ -185,4 +294,19 @@ export class LockdownController {
       });
     }
   }
+}
+
+/**
+ * Validate a row from `api.db.list(LOCKDOWN_DB_NAMESPACE, ...)`. Rejects
+ * shape mismatches without throwing — a corrupt row should be dropped, not
+ * propagate into the lockdown timer scheduler.
+ */
+function parsePersistedLock(raw: unknown): PersistedLock | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const v = raw as Record<string, unknown>;
+  if (typeof v.mode !== 'string' || v.mode.length === 0 || v.mode.length > 4) return null;
+  if (typeof v.expiresAt !== 'number' || !Number.isFinite(v.expiresAt) || v.expiresAt <= 0) {
+    return null;
+  }
+  return { mode: v.mode, expiresAt: v.expiresAt };
 }

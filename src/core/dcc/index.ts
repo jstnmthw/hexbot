@@ -1691,29 +1691,25 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
       server,
       port,
       timer: setTimeout(() => {
-        server.close();
-        this.portAllocator.release(port);
-        this.pending.delete(port);
+        cleanupPending(`timeout (${nick})`);
         this.logger?.info(`DCC offer to ${nick} timed out`);
       }, PENDING_TIMEOUT_MS),
     };
     pending.timer.unref?.();
     this.pending.set(port, pending);
 
-    server.once('connection', (socket: Socket) => {
+    // Idempotent cleanup keyed by `port`. Both the success path
+    // (`'connection'`) and the failure paths (timeout, `'error'`) end up
+    // here; running twice is safe because the `pending.has(port)` check
+    // gates the port-pool release. Without this, a microsecond race
+    // between `'connection'` and a late `'error'` (Linux socket-accept
+    // races, EADDRINUSE on a closing listener) double-released the port,
+    // potentially freeing a slot owned by a parallel offer to a different
+    // nick. (W-DCC-PORT / R20)
+    const cleanupPending = (label: string): void => {
+      const entry = this.pending.get(port);
+      if (entry !== pending) return; // already cleaned up by a peer path
       clearTimeout(pending.timer);
-      server.close();
-      this.portAllocator.release(port);
-      this.pending.delete(port);
-      this.openSession(pending, socket);
-    });
-
-    server.on('error', (err) => {
-      this.logger?.error(`DCC server error on port ${port}:`, err);
-      clearTimeout(pending.timer);
-      // Close the listener so its file descriptor is actually released —
-      // without this the `server` object (and its FD) leaks on listen
-      // errors.
       try {
         server.close();
       } catch {
@@ -1721,6 +1717,25 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
       }
       this.portAllocator.release(port);
       this.pending.delete(port);
+      this.logger?.debug(`DCC pending port ${port} cleaned up: ${label}`);
+    };
+
+    // Detach the persistent `'error'` listener as soon as `'connection'`
+    // fires. After we hand off to `openSession` the `server` is closed and
+    // any subsequent `'error'` we'd see is moot — but if we *don't* detach
+    // and the kernel emits a stray late `'error'` (closing-listener
+    // edge case), that handler would re-run `cleanupPending` against a
+    // port slot the openSession has now repurposed. R20 / W-DCC-PORT.
+    const onError = (err: Error): void => {
+      this.logger?.error(`DCC server error on port ${port}:`, err);
+      cleanupPending(`error: ${err.message}`);
+    };
+    server.on('error', onError);
+
+    server.once('connection', (socket: Socket) => {
+      server.off('error', onError);
+      cleanupPending(`accept (${nick})`);
+      this.openSession(pending, socket);
     });
     /* v8 ignore stop */
   }
@@ -1810,12 +1825,30 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
     this.logger?.info(`DCC CHAT: prompting ${pending.user.handle} (${pending.nick}) for password`);
 
-    // Track in-flight pending sessions so password-rotation eviction can
-    // reach them. `unregisterPendingSession` is called from `onAuthSuccess`
-    // (transition into active) and from the session's close path (auth
-    // failed / socket dropped) so the set never grows unbounded.
+    // Track in-flight pending sessions BEFORE start() so a synchronous
+    // throw inside start() (or an `'error'` event in the microtask gap
+    // where `start()` has removed `preHandshakeErrorHandler` but not yet
+    // attached the lifecycle handlers) leaves the set entry to be reaped
+    // via the close-path. If `start()` itself throws, the catch below
+    // re-attaches the pre-handshake handler and removes the pending
+    // session entry to avoid a leak. (W4.1 / R19)
     this.pendingSessions.add(session);
-    session.start(this.version, this.botNick, preHandshakeErrorHandler);
+    try {
+      session.start(this.version, this.botNick, preHandshakeErrorHandler);
+    } catch (err) {
+      this.logger?.error(`DCCSession.start() threw for ${pending.nick}:`, err);
+      // Re-attach a fallback `'error'` listener so a late socket error
+      // doesn't escape into Node's `unhandledException` path. We also
+      // drop the half-registered session so password rotation doesn't
+      // attempt to walk it.
+      socket.once('error', preHandshakeErrorHandler);
+      try {
+        socket.destroy();
+      } catch {
+        /* ignore — socket may already be destroyed */
+      }
+      this.pendingSessions.delete(session);
+    }
   }
 
   /** Live password-hash lookup used by DCCSession to close the prompt-phase TOCTOU. */

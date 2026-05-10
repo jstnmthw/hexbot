@@ -115,7 +115,43 @@ export class BotREPL {
     this.rl.on('close', () => {
       this.logger?.info('Shutting down...');
       this.stop();
-      this.bot.shutdown().then(() => process.exit(0));
+      // .catch() guards against a shutdown rejection — without it the
+      // promise becomes an unhandled-rejection that doesn't run the
+      // `.then(() => process.exit(0))` continuation, leaving the bot as
+      // a zombie process. .finally is the canonical "exit no matter
+      // what" path. (W8.3 / R26)
+      this.bot
+        .shutdown()
+        .catch((err) => {
+          this.logger?.error('REPL close: bot.shutdown() rejected:', err);
+        })
+        .finally(() => process.exit(0));
+    });
+
+    // Don't let an EPIPE on stdout (parent process closed the pipe — common
+    // with `node ... | head -n 1`) crash the bot. Without this handler
+    // Node's default behavior is to surface stdout EPIPE as an
+    // `'uncaughtException'` and tear the process down. (W8.4 / R26)
+    process.stdout.on('error', (err) => {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EPIPE' || code === 'ERR_STREAM_DESTROYED') {
+        // Operator detached. Drop the output hook and let the close
+        // handler complete the shutdown chain naturally.
+        Logger.setOutputHook(null);
+        return;
+      }
+      this.logger?.error('stdout error:', err);
+    });
+    process.stdin.on('error', (err) => {
+      this.logger?.warn('stdin error:', err);
+      // EPIPE / EBADF on stdin means the readline interface won't
+      // recover. Trigger a clean shutdown rather than waiting for the
+      // operator's terminal to be reopened.
+      try {
+        this.rl?.close();
+      } catch {
+        /* close itself can throw if rl is already torn down */
+      }
     });
 
     this.rl.prompt();

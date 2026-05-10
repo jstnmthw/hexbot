@@ -148,12 +148,18 @@ function makeContext(overrides?: Partial<ConnectionLifecycleDeps>): TestContext 
 
 describe('registerConnectionEvents', () => {
   describe('registered event', () => {
-    it('calls resolve', () => {
+    it('does not call resolve from inside registerConnectionEvents (R18 / W-BOTSTART)', () => {
+      // After R18, Bot.start() resolves the moment `client.connect()` is
+      // invoked rather than gating on the first registration. The
+      // `_resolve`/`_reject` parameters to registerConnectionEvents are
+      // vestigial and must remain untouched even on a clean register —
+      // otherwise a sneaky re-introduction would re-park `Bot.start()`
+      // on rate-limited tiers.
       const { client, deps } = makeContext();
       const resolve = vi.fn();
       registerConnectionEvents(deps, resolve, () => {});
       client.emit('registered');
-      expect(resolve).toHaveBeenCalledOnce();
+      expect(resolve).not.toHaveBeenCalled();
     });
 
     it('emits bot:connected', () => {

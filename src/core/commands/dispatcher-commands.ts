@@ -2,6 +2,7 @@
 // Registers .binds with the command handler.
 import type { CommandHandler } from '../../command-handler';
 import type { EventDispatcher } from '../../dispatcher';
+import { paginate, parsePageFlag } from '../../utils/paginate';
 import { stripFormatting } from '../../utils/strip-formatting';
 import { formatTable } from '../../utils/table';
 
@@ -24,11 +25,12 @@ export function registerDispatcherCommands(deps: DispatcherCommandsDeps): void {
     {
       flags: '+o',
       description: 'List active binds (optionally filtered by plugin)',
-      usage: '.binds [pluginId]',
+      usage: '.binds [pluginId] [--page N]',
       category: 'dispatcher',
     },
-    (_args, ctx) => {
-      const pluginId = _args.trim() || undefined;
+    (rawArgs, ctx) => {
+      const { page, rest } = parsePageFlag(rawArgs);
+      const pluginId = rest.trim() || undefined;
       const filter = pluginId ? { pluginId } : undefined;
       const binds = dispatcher.listBinds(filter);
 
@@ -43,9 +45,13 @@ export function registerDispatcherCommands(deps: DispatcherCommandsDeps): void {
       // could otherwise inject IRC control codes into an operator's
       // console via the `.binds` output. See docs/SECURITY.md.
 
-      // Group binds by plugin so the rendered table reads top-down by
-      // owning plugin instead of interleaving handlers from different
-      // plugins as they happened to register.
+      // Render each bind as a single line so pagination is uniform with
+      // the other paged commands (.modlog, .bans, .users). Group headers
+      // are interleaved with their rows.
+      const allLines: string[] = [];
+      const title = pluginId ? `Binds for "${pluginId}"` : 'All binds';
+      allLines.push(`${title} (${binds.length}):`);
+
       const groups = new Map<string, typeof binds>();
       for (const b of binds) {
         const id = stripFormatting(b.pluginId);
@@ -57,23 +63,26 @@ export function registerDispatcherCommands(deps: DispatcherCommandsDeps): void {
         group.push(b);
       }
 
-      const lines: string[] = [];
-      const title = pluginId ? `Binds for "${pluginId}"` : 'All binds';
-      lines.push(`${title} (${binds.length}):`);
-
       for (const [id, group] of groups) {
         const s = group.length === 1 ? 'bind' : 'binds';
-        lines.push(`[${id}] ${group.length} ${s}`);
+        allLines.push(`[${id}] ${group.length} ${s}`);
         const rows = group.map((b) => [
           stripFormatting(b.type),
           stripFormatting(b.flags),
           `"${stripFormatting(b.mask)}"`,
           `(hits: ${b.hits})${b.tripped ? ' [tripped]' : ''}`,
         ]);
-        lines.push(formatTable(rows));
+        // Split the formatted table into per-row lines so pagination
+        // doesn't slice in the middle of a multi-line block.
+        for (const row of formatTable(rows).split('\n')) {
+          allLines.push(row);
+        }
       }
 
-      ctx.reply(lines.join('\n'));
+      const paged = paginate(allLines, page);
+      const out = paged.lines.slice();
+      if (paged.footer) out.push(paged.footer);
+      ctx.reply(out.join('\n'));
     },
   );
 }

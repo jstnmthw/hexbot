@@ -1009,19 +1009,92 @@ export class Bot {
       );
     }
 
+    // Re-anchor uptime to the first `bot:connected` event so `.status`
+    // reports the connected-window. With the R18 fix `connect()` resolves
+    // before registration succeeds; we defer the anchor to the actual
+    // event so a long initial backoff doesn't make uptime show "negative"
+    // values. The listener is one-shot — every subsequent reconnect leaves
+    // `startTime` anchored to the original first-connect moment, which
+    // matches operator expectations for "uptime since the bot started
+    // serving."
+    let startTimeAnchored = false;
+    this.eventBus.trackListener('bot', 'bot:connected', () => {
+      if (startTimeAnchored) return;
+      startTimeAnchored = true;
+      this.startTime = Date.now();
+    });
+
+    this.scheduleKvMaintenance();
+
     // Connect to IRC (all handlers are registered — safe to receive events).
     // NickServ IDENTIFY (non-SASL fallback) is triggered from the `registered`
     // handler in connection-lifecycle, BEFORE joinConfiguredChannels: this
     // ensures channels with mode +r (registered-nicks-only) accept us on the
     // first JOIN attempt rather than bouncing us with a 477 numeric.
     await this.connect();
+  }
 
-    // Re-anchor uptime to the moment IRC registration completed. The field
-    // initializer ran during `new Bot()` (well before `connect()` resolves),
-    // so without this reset `.status` would report several seconds of
-    // pre-connect setup as "connected uptime" and operators investigating a
-    // flap window would see misleading numbers.
-    this.startTime = Date.now();
+  /**
+   * Long-uptime hygiene for the `kv` table. Two timers (both `unref`'d so
+   * they never block shutdown):
+   *
+   *   - daily prune: walks a known-namespace retention table and drops
+   *     rows older than the per-namespace TTL. Plugins with their own
+   *     sweeps (seen, ai-chat) keep theirs; this is the safety net for
+   *     long-running deployments where ad-hoc plugin state otherwise
+   *     accumulates forever (R21 / W3.6).
+   *   - monthly VACUUM: reclaims pages freed by the prune. Holds an
+   *     exclusive lock for the duration, so we run it 03:00-aligned to
+   *     coincide with the typical low-traffic window.
+   */
+  private kvDailyTimer: ReturnType<typeof setInterval> | null = null;
+  private kvMonthlyTimer: ReturnType<typeof setInterval> | null = null;
+  private static readonly KV_RETENTION_DAYS: ReadonlyArray<{ ns: string; days: number }> = [
+    // ai-chat per-channel rate-limit / mood / token-budget rows: 30 days
+    // is well past any active conversation window.
+    { ns: 'plugin:ai-chat', days: 30 },
+    // seen plugin: enforced cap is 10000 + size cap; this is the
+    // belt-and-braces for ancient idle channels the cap never reaches.
+    { ns: 'plugin:seen', days: 90 },
+    // social-tracker / spotify-radio / topic / chanmod: each plugin
+    // holds onto state by user / channel. 90d covers active operator
+    // tenure without dropping a still-active record.
+    { ns: 'plugin:social-tracker', days: 90 },
+    { ns: 'plugin:spotify-radio', days: 90 },
+    { ns: 'plugin:topic', days: 365 },
+    { ns: 'plugin:chanmod', days: 90 },
+    { ns: 'plugin:flood', days: 30 },
+    { ns: 'plugin:greeter', days: 365 },
+    { ns: 'plugin:rss', days: 7 },
+  ];
+  private scheduleKvMaintenance(): void {
+    const ONE_DAY = 24 * 60 * 60 * 1000;
+    const dailyPrune = (): void => {
+      let totalPruned = 0;
+      for (const { ns, days } of Bot.KV_RETENTION_DAYS) {
+        try {
+          totalPruned += this.db.pruneOlderThan(ns, days);
+        } catch (err) {
+          this.botLogger.warn(`kv prune failed for ${ns}:`, err);
+        }
+      }
+      if (totalPruned > 0) {
+        this.botLogger.info(`kv daily prune: removed ${totalPruned} stale row(s)`);
+      }
+    };
+    this.kvDailyTimer = setInterval(dailyPrune, ONE_DAY);
+    this.kvDailyTimer.unref?.();
+
+    const monthlyVacuum = (): void => {
+      try {
+        this.db.vacuum();
+        this.botLogger.info('kv VACUUM complete');
+      } catch (err) {
+        this.botLogger.warn('kv VACUUM failed:', err);
+      }
+    };
+    this.kvMonthlyTimer = setInterval(monthlyVacuum, 30 * ONE_DAY);
+    this.kvMonthlyTimer.unref?.();
   }
 
   /**
@@ -1374,6 +1447,17 @@ export class Bot {
       }
     });
 
+    step('kv-maintenance.cancel', () => {
+      if (this.kvDailyTimer !== null) {
+        clearInterval(this.kvDailyTimer);
+        this.kvDailyTimer = null;
+      }
+      if (this.kvMonthlyTimer !== null) {
+        clearInterval(this.kvMonthlyTimer);
+        this.kvMonthlyTimer = null;
+      }
+    });
+
     // flush() drains the pending-send buffer through the IRC client one last
     // time; stop() then halts the drain timer and rejects any new enqueues.
     // Order matters — stopping first would strand whatever was queued, so a
@@ -1471,6 +1555,13 @@ export class Bot {
       exit: (code) => process.exit(code),
     });
     this._reconnectDriver = reconnectDriver;
+    // R18 / W-BOTSTART: resolve as soon as `client.connect()` is invoked.
+    // Previously we awaited the first `registered` event, which on a
+    // K-line / DNSBL / Throttled rate-limited tier would park `Bot.start()`
+    // for 5–30 minutes — main() blocks, the REPL never starts, and the
+    // healthcheck never gets a chance to attach to `bot:connected`. The
+    // in-process driver still owns retry/backoff; downstream code that
+    // needs to observe connection state subscribes to `bot:connected`.
     return new Promise<void>((resolve, reject) => {
       this._lifecycleHandle = registerConnectionEvents(
         {
@@ -1553,6 +1644,9 @@ export class Bot {
         reject,
       );
       this.client.connect(options);
+      // Resolve immediately — see comment above. The lifecycle's
+      // `_resolve`/`_reject` parameters are now vestigial.
+      resolve();
     });
   }
 

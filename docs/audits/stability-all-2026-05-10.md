@@ -98,7 +98,7 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
   - **Demotion reason:** Trigger requires an _operator config error_ (plaintext `tls=false` + persistent STS policy). Once-per-deployment event. The supervisor restarts cleanly; FD/WAL leak on already-exiting process is recoverable.
   - **Remediation:** Throw a typed `STSRefusalError`. Catch in `Bot.start()`, run `gracefulShutdown` with desired exit code (2). Or call `await this.shutdown()` before `process.exit(2)`.
 
-- [ ] **[W-BOTSTART] `Bot.start()` does not resolve until first registration succeeds** [verified]
+- [x] **[W-BOTSTART] `Bot.start()` does not resolve until first registration succeeds** [verified]
   - **File:** `src/core/connection-lifecycle.ts:174-184,319-322`, `src/bot.ts:1415`
   - **Pattern:** Cascading failure / supervisor handshake
   - **Scenario:** First boot to a network that returns `ERROR :Closing Link (Throttled)` or K-line on the very first attempt. Driver classifies as `rate-limited` (5min initial, 30min cap). `onRegistered` never runs.
@@ -143,7 +143,7 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 - [x] **W3.3** — Schema migration runs unconditionally inside constructor without batching (`mod-log.ts:255,558-581`) [at-scale]. 2M-row mod*log migration holds write lock and blocks bot for tens of seconds. \_Fix:* batched copy via `setImmediate`. _(scope: scale-deferred.)_
 - [x] **W3.4** — `permissions.listUsers()` walks whole namespace; botlink replace path also linear (`permissions.ts:538,572`) [at-scale]. _Fix:_ `db.list(ns, prefix, { limit })` and stream. _(scope: scale-deferred.)_
 - [ ] **W3.5** — `transaction()` does not short-circuit when `writesDisabled` (`database.ts:197`).
-- [ ] **W3.6** — `kv` table has no retention or pruning (`database.ts:243-251`). `seen`, `ai-chat`, `social-tracker`, `feed-store`, `ban:`, `tokens:` all grow forever. _Fix:_ per-namespace retention hook + periodic VACUUM.
+- [x] **W3.6** — `kv` table has no retention or pruning (`database.ts:243-251`). `seen`, `ai-chat`, `social-tracker`, `feed-store`, `ban:`, `tokens:` all grow forever. _Fix:_ per-namespace retention hook + periodic VACUUM.
 - [ ] **W3.7** — `parseMetadataSafe` returns `null` on read but `audit:log` already emitted parsed metadata (`mod-log.ts:58-72,439,470`). Asymmetric state for botlink relay observers.
 - [ ] **W3.8** — `ban-store.ts:202-210` empty-arg catch silently drops parse errors during legacy migration. Silent data loss; no audit row.
 
@@ -151,7 +151,7 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 
 #### Demoted from CRITICAL
 
-- [ ] **[W-DCC-PORT] DCC port-pool double-release race after `connection`+`error` on the same listener** [verified]
+- [x] **[W-DCC-PORT] DCC port-pool double-release race after `connection`+`error` on the same listener** [verified]
   - **File:** `src/core/dcc/index.ts:1703-1724`
   - **Pattern:** Resource exhaustion / port-pool corruption
   - **Scenario:** A peer accepts a DCC offer (`server.once('connection')` fires → `clearTimeout(pending.timer)`, `pending.delete(port)`, `portAllocator.release(port)`). Microseconds later the same `server` emits `'error'` (late EADDRINUSE-style fault while finishing accept on Linux). Persistent error handler runs, calls `portAllocator.release(port)` _a second time_. Meanwhile a parallel offer to a different nick has marked the same port number used. The duplicate release silently frees a port owned by a different in-flight offer.
@@ -161,7 +161,7 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 
 #### Original WARNINGs
 
-- [ ] **W4.1** — `pendingSessions` leak if `DCCSession.start()` throws before `attachLifecycleHandlers` (`dcc/index.ts:1817-1818,435-462`). Pre-start `'error'` handler is removed before lifecycle handlers attach; an `'error'` event in that microtask gap can crash. Even if caught, session sits in `pendingSessions` forever.
+- [x] **W4.1** — `pendingSessions` leak if `DCCSession.start()` throws before `attachLifecycleHandlers` (`dcc/index.ts:1817-1818,435-462`). Pre-start `'error'` handler is removed before lifecycle handlers attach; an `'error'` event in that microtask gap can crash. Even if caught, session sits in `pendingSessions` forever.
 - [ ] **W4.2** — Lockout/no-password `socket.write` not wrapped in try/catch (`dcc/index.ts:1766-1768,1785-1788`). Late RST emits `'error'` after pre-handshake handler is removed → unhandled error.
 - [ ] **W4.3** — `mod_log` writes during DCC auth-failure storm are synchronous (`dcc/index.ts:1198-1209,1248-1278`). Brute-force attacker triggers O(maxFailures) inserts per identity per window. _Fix:_ batch `auth-fail` rows under lockout window.
 - [ ] **W4.4** — DCC sessions survive IRC reconnect; can issue commands while IRC is down (`bot.ts:1283-1287`, `dcc/index.ts:1367-1399`). _Fix:_ surface connection state to DCC prompt.
@@ -253,9 +253,9 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 
 - [ ] **W8.1** — `messageQueue.flush()` on shutdown drains synchronously without deadline (`message-queue.ts:168-173`, `bot.ts:1322`). 200 queued lines → server K-lines on burst right before QUIT → restart connects into K-line.
 - [ ] **W8.2** — `client.quit()` after `flush()` may not sequence QUIT after the burst (`bot.ts:1322-1334`).
-- [ ] **W8.3** — REPL `process.exit(0)` from `rl.on('close')` skips Promise.catch (`repl.ts:115-119`). `bot.shutdown()` rejection → unhandled; bot zombies.
-- [ ] **W8.4** — REPL has no `process.stdin.on('error')` handler (`repl.ts:51-122`). EPIPE on stdout crashes the bot.
-- [ ] **W8.5** — `.modlog`, `.bans`, `.users`, `.binds` reply with unbounded `lines.join('\n')` (`ban-commands.ts:84-101`, `modlog-commands.ts:730-734`, `permission-commands.ts:228-241`, `dispatcher-commands.ts:60-77`). Botlink-relayed dot-commands silent-truncate at per-target queue cap.
+- [x] **W8.3** — REPL `process.exit(0)` from `rl.on('close')` skips Promise.catch (`repl.ts:115-119`). `bot.shutdown()` rejection → unhandled; bot zombies.
+- [x] **W8.4** — REPL has no `process.stdin.on('error')` handler (`repl.ts:51-122`). EPIPE on stdout crashes the bot.
+- [x] **W8.5** — `.modlog`, `.bans`, `.users`, `.binds` reply with unbounded `lines.join('\n')` (`ban-commands.ts:84-101`, `modlog-commands.ts:730-734`, `permission-commands.ts:228-241`, `dispatcher-commands.ts:60-77`). Botlink-relayed dot-commands silent-truncate at per-target queue cap.
 - [x] **W8.6** — `runEnd` (`.modlog end`) walks full result set with O(N/PAGE*SIZE) synchronous queries (`modlog-commands.ts:663-684`) [at-scale]. 1M-row mod_log → 100k SQLite queries blocks event loop. *(scope: scale-deferred.)\_
 - [ ] **W8.7** — `messageQueue.setRate(0, ...)` silently coerces 0 to default 2 (`message-queue.ts:229-239`, `bot.ts:570-572`).
 - [ ] **W8.8** — `IRCCommands.mode()` parse-failure throws to caller; ban-commands runs synchronously without try/catch (`irc-commands.ts:98-108,301-306,358-364`, `ban-commands.ts:154`).
@@ -299,7 +299,7 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 - [ ] **W11.3** — Stale `pendingRecoverCleanup` / `unbanRequested` fires `-im` on rejoin (`mode-enforce-recovery.ts:131-134`, `protection.ts:111-113`).
 - [ ] **W11.4** — `splitActive` / `splitExpiry` not pruned by 60s time bind (`plugins/chanmod/stopnethack.ts:99-106`).
 - [x] **W11.5** — Mass re-op `+oooooooo...` not capped per recovery cycle (`mode-enforce-recovery.ts:225-241`). 30-flagged-user channel: 6-7 MODE lines + deop/halfop/voice + hostile response in one tick → flood K-line during recovery.
-- [ ] **W11.6** — Lockdown timer fires `-${mode}` after bot disconnect; if reconnect not complete, mode stranded on server forever (`plugins/flood/lockdown.ts:154-156,168-183`). _Fix:_ persist active locks in `api.db`; re-attempt on rejoin.
+- [x] **W11.6** — Lockdown timer fires `-${mode}` after bot disconnect; if reconnect not complete, mode stranded on server forever (`plugins/flood/lockdown.ts:154-156,168-183`). _Fix:_ persist active locks in `api.db`; re-attempt on rejoin.
 - [ ] **W11.7** — `joinRates` / lockdown counters survive bot ops loss mid-window (`plugins/flood/lockdown.ts:48-58`).
 - [ ] **W11.8** — `enforcement-executor inFlight` Set has detached promise race against teardown (`plugins/flood/enforcement-executor.ts:276-281`). _Fix:_ `disposed` flag at top of teardown.
 - [x] **W11.9** — Greeter `joinRates` per-channel map never pruned for departed channels (`plugins/greeter/index.ts:145,184`). _Fix:_ mirror chanmod's bot-PART/KICK pattern.
@@ -485,15 +485,15 @@ Cross-references use symbolic IDs (`[C-XXX]`, `[W-XXX]`, `Wx.y`) that are stable
 - [x] **R15** — Chunk botlink sync via `setImmediate`/`drain` ([W-BOTLINK-SYNC]) — small loop refactor with backpressure handling. _(scope: scale-deferred.)_
 - [x] **R16** — Track botlink sync send-buffer for backpressure ([W-BOTLINK-BP]) — `socket.bufferedAmount` plus optional `SYNC_DIGEST` for divergence detection. _(scope: scale-deferred.)_
 - [x] **R17** — Restrict `ensureChannel` to JOIN/USERLIST/inject ([C-ENSURECHAN]) — small refactor at every call site.
-- [ ] **R18** — Resolve `Bot.start()` after first attempt scheduled ([W-BOTSTART]). Independent of R12 — this is about the REPL never starting and `main()` never completing on a rate-limited first boot, not about the healthcheck signal.
-- [ ] **R19** — DCC `pendingSessions` add-after-start ordering + re-attach fallback `'error'` listener (W4.1).
-- [ ] **R20** — DCC port-pool owner-token ([W-DCC-PORT]).
-- [ ] **R21** — `kv` table per-namespace retention hook + periodic VACUUM (W3.6).
+- [x] **R18** — Resolve `Bot.start()` after first attempt scheduled ([W-BOTSTART]). Independent of R12 — this is about the REPL never starting and `main()` never completing on a rate-limited first boot, not about the healthcheck signal.
+- [x] **R19** — DCC `pendingSessions` add-after-start ordering + re-attach fallback `'error'` listener (W4.1).
+- [x] **R20** — DCC port-pool owner-token ([W-DCC-PORT]).
+- [x] **R21** — `kv` table per-namespace retention hook + periodic VACUUM (W3.6).
 - [x] **R22** — Batch mod*log migration via `setImmediate` (W3.3). *(scope: scale-deferred.)\_
-- [ ] **R23** — Persist flood lockdown active-locks in `api.db`; re-attempt `-mode` on rejoin (W11.6).
+- [x] **R23** — Persist flood lockdown active-locks in `api.db`; re-attempt `-mode` on rejoin (W11.6).
 - [x] **R24** — Cap chanmod mass re-op per recovery cycle, mirroring `HOSTILE_BATCH_SIZE` (W11.5).
-- [ ] **R25** — Pagination + caps on `.modlog`, `.bans`, `.users`, `.binds` reply lines (W8.5, W8.6).
-- [ ] **R26** — REPL `process.stdin/stdout` error handling + `Promise.catch` on shutdown (W8.3, W8.4).
+- [x] **R25** — Pagination + caps on `.modlog`, `.bans`, `.users`, `.binds` reply lines (W8.5, W8.6). _(`.bans`, `.users`, `.binds` now accept `--page N` with a 20-line cap via `src/utils/paginate.ts`. `.modlog` already paginates via `next`/`prev`/`top` at PAGE_SIZE=10. W8.6 [.modlog end] stays scope: scale-deferred.)_
+- [x] **R26** — REPL `process.stdin/stdout` error handling + `Promise.catch` on shutdown (W8.3, W8.4).
 - [x] **R27** — ai-chat surface `'circuit_open'` error kind and route to silent path ([W-AICHAT-SPAM]).
 - [x] **R28** — ai-chat `inflightControllers` per-init epoch token (W10.3).
 - [x] **R29** — Bound RSS retry / circuit on manual `!rss check` (W10.2).
@@ -506,7 +506,7 @@ Cross-references use symbolic IDs (`[C-XXX]`, `[W-XXX]`, `Wx.y`) that are stable
 
 - [x] **R34** — Reconcile loop for "intent vs reality": periodic check that bot is op'd in channels where config says it should be; mode `+t` enforced where chanset says so; lockdown not stranded. Currently fragmentary across plugins. _(scope: deferred — operator chose to keep per-plugin recovery rather than build a generic ReconcileManager. Revisit if recovery gaps are observed in production.)_
 - [x] **R35** — Single-source-of-truth for queue config — `messageQueue.setRate` should restart timer to honor config changes live. _(Verified at HEAD: `MessageQueue.setRate` already calls `this.start()` to restart the timer on rate change — see message-queue.ts:255-258. No-op.)_
-- [ ] **R36** — Pluggable namespace retention: per-plugin TTL for `kv` rows; long-uptime invariant.
+- [x] **R36** — Pluggable namespace retention: per-plugin TTL for `kv` rows; long-uptime invariant. _(Implemented as a hardcoded `KV_RETENTION_DAYS` table in `Bot` plus `BotDatabase.pruneOlderThan()` / `vacuum()` helpers; daily prune + monthly VACUUM under unref'd timers. Pluggable per-plugin opt-in via the API surface deferred — extend the table or expose `api.db.setRetentionDays()` if a plugin needs a tighter TTL than the default.)_
 - [x] **R37** — `eventBus.on()` deprecation — make `trackListener(owner, ...)` the only public surface (W12.1). _(Doc-only deprecation; full migration left as future refactor — flagged with @deprecated JSDoc.)_
 - [x] **R38** — `sd_notify` integration for `Type=notify` units; READY=1 on connected, STOPPING=1 on shutdown, optional WATCHDOG=1 (W7.3). _(scope: deferred — operator deploys via Docker, not systemd. The two-file healthcheck (R12) covers the same need for Docker / k8s.)_
 - [x] **R39** — Botlink reconnect-storm protection: per-IP whitelist exempts WireGuard exit; document NAT topology requirement (W5.8). _(scope: scale-deferred.)_

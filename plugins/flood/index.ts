@@ -459,6 +459,11 @@ export function init(pluginApi: PluginAPI): void {
   rateLimits = new RateLimitTracker(cfg, api.util.createSlidingWindowCounter);
   enforcement = new EnforcementExecutor(api, cfg, botHasOps, logFloodError);
   lockdown = new LockdownController(api, cfg, botHasOps);
+  // Replay any locks that were active at the previous shutdown — without
+  // this, a reconnect mid-lockdown strands `+R`/`+i` on the server until
+  // a human op lifts it manually. Past-expiry rows trigger an immediate
+  // lift; live rows reschedule the auto-unlock for the remainder. (W11.6)
+  lockdown.restoreLocks();
 
   // Register per-channel lockdown settings
   api.channelSettings.register([

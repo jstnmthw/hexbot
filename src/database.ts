@@ -392,6 +392,44 @@ export class BotDatabase {
     });
   }
 
+  /**
+   * Prune rows in `namespace` whose `updated` column is older than the
+   * given number of days. Returns the number of rows deleted. Callers
+   * are responsible for picking a sensible TTL — long-uptime invariants
+   * vary by namespace (a `seen` row is happy to live a month; a
+   * short-lived rate-limit counter wants days).
+   *
+   * Skipped silently when `writesDisabled` — a degraded database should
+   * stay readable, not be re-pruned.
+   */
+  pruneOlderThan(namespace: string, days: number): number {
+    this.ensureOpen();
+    if (this.writesDisabled) return 0;
+    if (!Number.isFinite(days) || days <= 0) return 0;
+    const cutoff = Math.floor(Date.now() / 1000) - days * 86_400;
+    return this.runClassified('pruneOlderThan', () => {
+      const result = this.db!.prepare('DELETE FROM kv WHERE namespace = ? AND updated < ?').run(
+        namespace,
+        cutoff,
+      );
+      return Number(result.changes);
+    });
+  }
+
+  /**
+   * Run `VACUUM` to reclaim space after long retention prunes. Cheap on
+   * an idle database; expensive while writes are landing because VACUUM
+   * holds an exclusive lock for the duration. Bot wires this on a
+   * once-per-month tick — outside the critical path.
+   *
+   * No-op when `writesDisabled` — VACUUM itself writes a new file.
+   */
+  vacuum(): void {
+    this.ensureOpen();
+    if (this.writesDisabled) return;
+    this.runClassified('vacuum', () => this.db!.exec('VACUUM'));
+  }
+
   // ---------------------------------------------------------------------------
   // Mod log — thin delegates to core/mod-log.ts
   // ---------------------------------------------------------------------------

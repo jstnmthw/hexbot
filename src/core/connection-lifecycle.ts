@@ -163,25 +163,22 @@ const DISCONNECT_FLUSH_DEADLINE_MS = 100;
 
 /**
  * Register all IRC connection lifecycle event listeners on the client.
- * The returned promise resolves on the first successful registration so
- * Bot.start() can proceed past `connect()`. After that, every disconnect
- * is routed to the injected ReconnectDriver, which schedules the next
- * `client.connect()` call — we never reject after the initial resolve.
  *
- * The `reject` callback is only used if listeners throw synchronously
- * while being wired up (an internal error — retained for safety).
+ * After R18 / W-BOTSTART, `Bot.start()` resolves as soon as `client.connect()`
+ * is invoked rather than gating on the first successful registration —
+ * otherwise a rate-limited (5min initial → 30min cap) first attempt would
+ * block `main()` and the REPL until the K-line lifted. The `_resolve` /
+ * `_reject` parameters are retained for signature stability but unused;
+ * downstream consumers observe the connection state via `getReconnectState()`
+ * and the `bot:connected` / `bot:disconnected` events.
  */
 export function registerConnectionEvents(
   deps: ConnectionLifecycleDeps,
-  resolve: () => void,
+  _resolve: () => void,
   _reject: (err: Error) => void,
 ): ConnectionLifecycleHandle {
   const { client, config, logger, reconnectDriver } = deps;
   const cfg = config.irc;
-  // `firstConnect` exists only so Bot.start()'s await completes on the first
-  // successful registration. Every subsequent reconnect cycle is handled
-  // by the driver — we just notify it via onDisconnect/onConnected.
-  let firstConnect = true;
   let presenceTimer: ReturnType<typeof setInterval> | null = null;
   // Captures the last IRC ERROR reason or socket error so we can classify
   // it when 'close' fires — irc-framework's 'close' event only passes a boolean.
@@ -315,11 +312,6 @@ export function registerConnectionEvents(
     permanentFailureChannels.clear();
     if (presenceTimer !== null) clearInterval(presenceTimer);
     presenceTimer = startChannelPresenceCheck(deps, permanentFailureChannels, retrySchedule);
-
-    if (firstConnect) {
-      firstConnect = false;
-      resolve();
-    }
   };
 
   // Capture the server's IRC ERROR message (e.g. "Closing Link: ... (Throttled)")

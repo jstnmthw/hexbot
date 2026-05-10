@@ -1,6 +1,7 @@
 // HexBot — Permission management commands
 // Registers .adduser, .deluser, .flags, .users with the command handler.
 import type { CommandHandler } from '../../command-handler';
+import { paginate, parsePageFlag } from '../../utils/paginate';
 import { stripFormatting } from '../../utils/strip-formatting';
 import { formatTable } from '../../utils/table';
 import { getAuditSource, parseCommandArgs } from '../command-helpers';
@@ -228,10 +229,11 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
     {
       flags: '+o',
       description: 'List all bot users',
-      usage: '.users',
+      usage: '.users [--page N]',
       category: 'permissions',
     },
-    (_args, ctx) => {
+    (rawArgs, ctx) => {
+      const { page } = parsePageFlag(rawArgs);
       const users = permissions.listUsers();
       if (users.length === 0) {
         ctx.reply('No users registered.');
@@ -243,7 +245,13 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
         `flags=${stripFormatting(u.global || '(none)')}`,
         `hostmasks=[${u.hostmasks.map((h) => stripFormatting(h)).join(', ')}]`,
       ]);
-      ctx.reply(`Users (${users.length}):\n${formatTable(rows)}`);
+      // Paginate the post-formatTable line array so column alignment
+      // is computed against the full table, not a truncated slice.
+      const tableLines = formatTable(rows).split('\n');
+      const paged = paginate(tableLines, page);
+      const out = [`Users (${users.length}):`, ...paged.lines];
+      if (paged.footer) out.push(paged.footer);
+      ctx.reply(out.join('\n'));
     },
   );
 }
