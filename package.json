@@ -19,6 +19,7 @@
     "build:plugins": "tsx scripts/build-plugins.ts",
     "scaffold": "tsx scripts/scaffold-plugin.ts",
     "preview:banner": "tsx scripts/preview-banner.ts",
+    "spotify:auth": "tsx --env-file-if-exists=config/bot.env scripts/spotify-auth.ts",
     "prepare": "husky"
   },
   "lint-staged": {

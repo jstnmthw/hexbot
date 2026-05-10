@@ -230,6 +230,100 @@ describe('settings-commands — .info', () => {
     await handler.execute('.info bogus', ctx);
     expect(ctx.reply.mock.calls[0][0]).toMatch(/Unknown scope/);
   });
+
+  it('hides channelOverridable keys from plugin-scope snapshot and adds a footer', async () => {
+    const { handler, pluginSettings } = setup();
+    const rss = pluginSettings.get('rss');
+    if (!rss) throw new Error('rss registry missing');
+    rss.register('rss', [
+      {
+        key: 'fetch_interval_ms',
+        type: 'int',
+        default: 60_000,
+        description: 'Bot-wide fetch interval',
+      },
+      {
+        key: 'enabled',
+        type: 'flag',
+        default: true,
+        description: 'Default enabled state for new feeds',
+        channelOverridable: true,
+      },
+      {
+        key: 'announce',
+        type: 'flag',
+        default: false,
+        description: 'Default announce flag',
+        channelOverridable: true,
+      },
+    ]);
+    const ctx = makeCtx();
+    await handler.execute('.info rss', ctx);
+    const out = ctx.reply.mock.calls.map((c) => c[0]).join('\n');
+    expect(out).toMatch(/fetch_interval_ms/);
+    expect(out).not.toMatch(/\benabled\b/);
+    expect(out).not.toMatch(/\bannounce\b/);
+    expect(out).toMatch(/2 keys are per-channel — see \.chanset/);
+    expect(out).toMatch(/--all to show/);
+  });
+
+  it('shows all plugin-scope keys when --all is passed', async () => {
+    const { handler, pluginSettings } = setup();
+    const rss = pluginSettings.get('rss');
+    if (!rss) throw new Error('rss registry missing');
+    rss.register('rss', [
+      {
+        key: 'enabled',
+        type: 'flag',
+        default: true,
+        description: 'Default enabled state for new feeds',
+        channelOverridable: true,
+      },
+    ]);
+    const ctx = makeCtx();
+    await handler.execute('.info rss --all', ctx);
+    const out = ctx.reply.mock.calls.map((c) => c[0]).join('\n');
+    expect(out).toMatch(/\benabled\b/);
+    expect(out).not.toMatch(/per-channel — see \.chanset/);
+  });
+
+  it('does not filter for core scope (channelOverridable is plugin-scope only)', async () => {
+    const { handler, coreSettings } = setup();
+    coreSettings.register('bot', [
+      {
+        key: 'looks_overridable',
+        type: 'flag',
+        default: false,
+        description: 'Should still appear under core',
+        // Marker is harmless on non-plugin scopes — registry just stores it.
+        channelOverridable: true,
+      },
+    ]);
+    const ctx = makeCtx();
+    await handler.execute('.info core', ctx);
+    const out = ctx.reply.mock.calls.map((c) => c[0]).join('\n');
+    expect(out).toMatch(/looks_overridable/);
+    expect(out).not.toMatch(/per-channel — see \.chanset/);
+  });
+
+  it('.set <plugin> snapshot still shows channelOverridable keys', async () => {
+    const { handler, pluginSettings } = setup();
+    const rss = pluginSettings.get('rss');
+    if (!rss) throw new Error('rss registry missing');
+    rss.register('rss', [
+      {
+        key: 'enabled',
+        type: 'flag',
+        default: true,
+        description: 'Default enabled state for new feeds',
+        channelOverridable: true,
+      },
+    ]);
+    const ctx = makeCtx();
+    await handler.execute('.set rss', ctx);
+    const out = ctx.reply.mock.calls.map((c) => c[0]).join('\n');
+    expect(out).toMatch(/\benabled\b/);
+  });
 });
 
 describe('settings-commands — .helpset removal', () => {

@@ -92,6 +92,13 @@ export interface SettingDef extends ChannelSettingDef {
    * cannot apply live. Used only when `reloadClass === 'restart'`.
    */
   onRestartRequired?: (value: ChannelSettingValue) => string;
+  /**
+   * Plugin-scope-only flag mirroring {@link PluginSettingDef.channelOverridable}.
+   * The registry only stores it; the `.info <plugin>` command reads it
+   * to filter overlapping keys out of the snapshot listing. Channel and
+   * core scopes ignore it (it has no meaning there).
+   */
+  channelOverridable?: boolean;
 }
 
 /** SettingDef with its owning subsystem/plugin attached (registry view). */

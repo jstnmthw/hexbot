@@ -735,6 +735,7 @@ export class Bot {
       logger: this.logger,
       db,
       botNick: this.config.irc.nick,
+      channelState,
     });
     const channelSettings = new ChannelSettings(
       db,

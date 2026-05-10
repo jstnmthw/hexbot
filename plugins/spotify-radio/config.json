@@ -1,0 +1,10 @@
+{
+  "client_id_env": "HEX_SPOTIFY_CLIENT_ID",
+  "client_secret_env": "HEX_SPOTIFY_CLIENT_SECRET",
+  "refresh_token_env": "HEX_SPOTIFY_REFRESH_TOKEN",
+  "poll_interval_sec": 10,
+  "session_ttl_hours": 6,
+  "announce_prefix": "[radio]",
+  "allowed_link_hosts": ["open.spotify.com", "spotify.link"],
+  "max_consecutive_errors": 5
+}

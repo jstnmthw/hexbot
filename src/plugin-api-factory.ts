@@ -176,9 +176,9 @@ export function createPluginApi(
   if (channelScope !== undefined) {
     scopeSet = new Set(channelScope.map((ch) => ircLower(ch, getCasemapping())));
     if (scopeSet.size > 0) {
-      pluginLogger?.info(`Channel scope: ${channelScope.join(', ')}`);
+      pluginLogger?.debug(`Channel scope: ${channelScope.join(', ')}`);
     } else {
-      pluginLogger?.info('Channel scope: (empty — all channel events blocked)');
+      pluginLogger?.debug('Channel scope: (empty — all channel events blocked)');
     }
   }
 

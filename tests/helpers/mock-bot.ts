@@ -120,6 +120,7 @@ export function createMockBot(options?: { botNick?: string; currentNick?: string
     servicesConfig: botConfig.services,
     eventBus,
     logger,
+    channelState,
   });
   services.attach();
 

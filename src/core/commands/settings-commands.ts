@@ -271,27 +271,36 @@ export function registerSettingsCommands(deps: SettingsCommandsDeps): void {
   );
 
   // ---------------------------------------------------------------------------
-  // .info <scope>
+  // .info <scope> [--all]
   // ---------------------------------------------------------------------------
   // Read-only summary view — flags as a +/- grid, others as labeled lines,
   // grouped by owner (helpful when multiple plugins register into channel
   // scope). Permission flag is `-` so anyone with a command session can
   // inspect what's configured.
+  //
+  // For plugin scope, keys marked `channelOverridable: true` (chanmod's
+  // bot-wide defaults that mirror channel-scope keys via `.chanset`) are
+  // hidden from the main listing and counted in a footer; `--all`
+  // bypasses the filter for operators who want the unfiltered view.
+  // `.set <plugin>` snapshot mode never filters (muscle-memory parity
+  // with the canonical operator surface).
   handler.registerCommand(
     'info',
     {
       flags: '-',
       description: 'Show settings for a scope',
-      usage: '.info <scope>',
+      usage: '.info <scope> [--all]',
       category: 'settings',
     },
     (args, ctx) => {
-      const parts = args
+      const allParts = args
         .trim()
         .split(/\s+/)
         .filter((p) => p.length > 0);
+      const showAll = allParts.includes('--all');
+      const parts = allParts.filter((p) => p !== '--all');
       if (parts.length < 1) {
-        ctx.reply(`Usage: .info <scope>  (scopes: ${listScopes(deps).join(', ')})`);
+        ctx.reply(`Usage: .info <scope> [--all]  (scopes: ${listScopes(deps).join(', ')})`);
         return;
       }
       const resolved = resolveScope(parts[0], deps);
@@ -305,14 +314,25 @@ export function registerSettingsCommands(deps: SettingsCommandsDeps): void {
         ctx.reply(`No settings registered under ${label}`);
         return;
       }
-      const setCount = snapshot.filter((s) => !s.isDefault).length;
-      const defaultCount = snapshot.filter((s) => s.isDefault).length;
+
+      // Hide plugin-scope keys whose value is the bot-wide default for a
+      // channel-scope key of the same name — operators override them via
+      // `.chanset <#chan>`. Tracked count drives the footer pointer.
+      const isPluginScope = registry.getScope() === 'plugin';
+      const visible =
+        isPluginScope && !showAll
+          ? snapshot.filter((s) => s.entry.channelOverridable !== true)
+          : snapshot;
+      const hiddenCount = snapshot.length - visible.length;
+
+      const setCount = visible.filter((s) => !s.isDefault).length;
+      const defaultCount = visible.filter((s) => s.isDefault).length;
       ctx.reply(`Settings for ${label} (${setCount} set, ${defaultCount} default):`);
 
       // Group by owner — readable when channel scope has chanmod, flood,
       // greeter, etc. all registered against the same registry.
-      const byOwner = new Map<string, typeof snapshot>();
-      for (const item of snapshot) {
+      const byOwner = new Map<string, typeof visible>();
+      for (const item of visible) {
         const list = byOwner.get(item.entry.owner) ?? [];
         list.push(item);
         byOwner.set(item.entry.owner, list);
@@ -324,6 +344,11 @@ export function registerSettingsCommands(deps: SettingsCommandsDeps): void {
         const others = items.filter((s) => s.entry.type !== 'flag');
         lines.push(...formatFlagGrid(flags, ownerPrefix));
         lines.push(...formatValueLines(others, ownerPrefix));
+      }
+      if (hiddenCount > 0) {
+        lines.push(
+          `  ${hiddenCount} key${hiddenCount === 1 ? '' : 's'} are per-channel — see .chanset <#chan>  (.info ${label} --all to show)`,
+        );
       }
       ctx.reply(lines.join('\n'));
     },
