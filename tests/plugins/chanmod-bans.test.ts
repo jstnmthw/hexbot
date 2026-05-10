@@ -74,6 +74,7 @@ function makeApi(botHasOps = true): {
       identity: { method: 'hostmask', require_acc_for: [] },
       services: { type: 'none', nickserv: 'NickServ', sasl: false },
       logging: { level: 'info', mod_actions: false },
+      version: '0.0.0-test',
     },
     getChannel: vi.fn().mockReturnValue({ users }),
     mode: modeSpy,

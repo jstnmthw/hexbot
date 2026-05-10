@@ -238,8 +238,13 @@ export class IRCCommands {
     this.client.raw(`TOPIC ${sanitize(channel)} :${safe}`);
     // Persist the new topic as `reason` so audit queries can grep topic
     // changes by substring. Text is user-controlled but safely stored
-    // (parameterized insert); long topics are not truncated.
-    this.logMod('topic', channel, null, actor, text);
+    // (parameterized insert). Cap at 4 KB so a pathological caller can't
+    // bloat the row beyond mod_log's existing 8 KiB metadata cap; the
+    // wire-level value already went out under MAX_TOPIC_BYTES.
+    const TOPIC_REASON_MAX = 4096;
+    const persistedReason =
+      text.length > TOPIC_REASON_MAX ? `${text.slice(0, TOPIC_REASON_MAX - 1)}…` : text;
+    this.logMod('topic', channel, null, actor, persistedReason);
   }
 
   quiet(channel: string, mask: string, actor?: ModActor): void {

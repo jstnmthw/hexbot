@@ -53,18 +53,27 @@ export class AnopeBackend extends ChanServBackendBase {
   readonly name = 'anope';
 
   private recoverStepDelayMs: number;
+  private recoverCooldownMs: number;
   private probeState: ProbeState | null;
   /** Track active recover timers for cleanup. Entries self-remove on fire. */
   private recoverTimers: Set<ReturnType<typeof setTimeout>> = new Set();
+  /**
+   * Last `requestRecover` start timestamp keyed by lowercased channel.
+   * Used by the per-channel cooldown gate so a flood of takeover signals
+   * doesn't ChanServ-spam the network with overlapping recover sequences.
+   */
+  private lastRecoverAt: Map<string, number> = new Map();
 
   constructor(
     api: PluginAPI,
     chanservNick: string,
     recoverStepDelayMs?: number,
     probeState?: ProbeState,
+    recoverCooldownMs?: number,
   ) {
     super(api, chanservNick);
     this.recoverStepDelayMs = recoverStepDelayMs ?? RECOVER_STEP_DELAY_MS;
+    this.recoverCooldownMs = recoverCooldownMs ?? 60_000;
     this.probeState = probeState ?? null;
   }
 
@@ -93,6 +102,19 @@ export class AnopeBackend extends ChanServBackendBase {
    * 6. OP #channel
    */
   requestRecover(channel: string): void {
+    // Per-channel cooldown — without this, repeated takeover signals
+    // produce overlapping recover sequences and the bot looks like it
+    // is spamming ChanServ. The cooldown defaults to 60s; operators
+    // tune via `chanserv_recover_cooldown_ms`.
+    const key = channel.toLowerCase();
+    const now = Date.now();
+    const last = this.lastRecoverAt.get(key);
+    if (last !== undefined && now - last < this.recoverCooldownMs) {
+      const remaining = Math.ceil((this.recoverCooldownMs - (now - last)) / 1000);
+      this.api.log(`Anope: skipping RECOVER for ${channel} — within ${remaining}s cooldown`);
+      return;
+    }
+    this.lastRecoverAt.set(key, now);
     this.api.log(`Anope: starting synthetic RECOVER for ${channel}`);
 
     // Step 1: Clear all ops

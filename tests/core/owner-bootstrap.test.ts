@@ -131,14 +131,15 @@ describe('ensureOwner — password seeding', () => {
   it('does not overwrite an existing hash (rotations via .chpass survive restart)', async () => {
     const { permissions, logger } = setup();
     permissions.addUser('admin', '*!admin@trusted.host', 'n', 'REPL');
-    permissions.setPasswordHash('admin', 'scrypt$pre$existing', 'REPL');
+    const stub = `scrypt$${'a'.repeat(32)}$${'b'.repeat(128)}`;
+    permissions.setPasswordHash('admin', stub, 'REPL');
 
     const config = makeConfig({
       owner: { handle: 'admin', hostmask: '*!admin@trusted.host', password: 'shouldnotoverwrite' },
     });
     await ensureOwner({ config, permissions, logger });
 
-    expect(permissions.getPasswordHash('admin')).toBe('scrypt$pre$existing');
+    expect(permissions.getPasswordHash('admin')).toBe(stub);
     // No "Seeded" info line.
     const infoMessages = logger.info.mock.calls.map((c) => String(c[0]));
     expect(infoMessages.every((m) => !m.includes('Seeded owner password'))).toBe(true);
@@ -218,7 +219,7 @@ describe('ensureOwner — DCC onboarding guardrail', () => {
   it('does NOT warn when DCC is enabled and a hash already exists from a prior boot', async () => {
     const { permissions, logger } = setup();
     permissions.addUser('admin', '*!admin@trusted.host', 'n', 'REPL');
-    permissions.setPasswordHash('admin', 'scrypt$existing$hash', 'REPL');
+    permissions.setPasswordHash('admin', `scrypt$${'c'.repeat(32)}$${'d'.repeat(128)}`, 'REPL');
 
     await ensureOwner({
       config: makeConfig({ dcc: dccEnabled() }),

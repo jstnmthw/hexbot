@@ -7,6 +7,7 @@ import type { HandlerContext, UserRecord } from '../types';
 import { type Casemapping, ircLower } from '../utils/wildcard';
 import { tryLogModAction } from './audit';
 import { ACCOUNT_PATTERN_PREFIX, HostmaskMatcher, patternSpecificity } from './hostmask-matcher';
+import { isValidPasswordFormat } from './password';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -215,13 +216,40 @@ export class Permissions {
   ): void {
     const lower = handle.toLowerCase();
     const flags = this.normalizeFlags(globalFlags);
+    // Defense-in-depth: bot-link's frame sanitizer strips CR/LF/NUL but
+    // doesn't enforce character class or length. The same shape checks
+    // `permission-commands.ts` runs at the IRC `.adduser` boundary apply
+    // here too — a hostile/buggy hub leaks a malformed mask into every
+    // leaf otherwise.
+    for (const hostmask of hostmasks) {
+      if (typeof hostmask !== 'string' || hostmask.length === 0 || hostmask.length > 200) {
+        throw new Error(
+          `syncUser("${handle}"): invalid hostmask length (got ${hostmask?.length ?? 'non-string'})`,
+        );
+      }
+      if (/[\r\n\0]/.test(hostmask)) {
+        throw new Error(`syncUser("${handle}"): hostmask contains control characters`);
+      }
+    }
     // Warn on weak hostmasks even when the record arrives via botlink —
     // previously the hub could quietly propagate `admin!*@*` out to every
     // leaf with no surfacing of the risk.
     for (const hostmask of hostmasks) {
       this.warnInsecureHostmask(hostmask, flags, handle);
     }
-    this.users.set(lower, { handle, hostmasks, global: flags, channels: channelFlags });
+    // Normalize channel keys via lowerChannel so a sync frame with mixed
+    // case (`{"#MIXEDCASE": "o"}`) doesn't silently deny privileges on
+    // the case-folded channel name lookup later.
+    const normalizedChannels: Record<string, string> = {};
+    for (const [chan, chanFlags] of Object.entries(channelFlags)) {
+      normalizedChannels[this.lowerChannel(chan)] = chanFlags;
+    }
+    this.users.set(lower, {
+      handle,
+      hostmasks,
+      global: flags,
+      channels: normalizedChannels,
+    });
     this.persist();
 
     const by = source ?? 'botlink';
@@ -292,6 +320,14 @@ export class Permissions {
     record.global = this.normalizeFlags(flags);
     this.persist();
 
+    // Re-emit weak-hostmask warnings for every existing hostmask so a
+    // runtime escalation (e.g. `.flags bob +o` against an existing
+    // `bob!*@*` record) surfaces in the security log immediately rather
+    // than waiting for the next `auditWeakHostmasks()` boot sweep.
+    for (const hostmask of record.hostmasks) {
+      this.warnInsecureHostmask(hostmask, record.global, handle);
+    }
+
     const by = source ?? 'unknown';
     this.recordModAction('flags', null, handle, by, `global=${record.global}`, transport);
     this.eventBus?.emit('user:flagsChanged', handle, record.global, record.channels);
@@ -308,6 +344,15 @@ export class Permissions {
     if (!record) {
       throw new Error(`User "${handle}" not found`);
     }
+    // Defense-in-depth: callers are responsible for hashing, but a future
+    // API path that accepts a hash from another source (migration, sync
+    // frame, plugin) could land a malformed value here. Reject anything
+    // that doesn't parse as a valid scrypt-formatted hash before we
+    // persist — once stored, an unparseable hash silently rejects every
+    // login attempt with no clear error trail.
+    if (!isValidPasswordFormat(hash)) {
+      throw new Error(`setPasswordHash("${handle}"): hash is not in valid scrypt format`);
+    }
     record.password_hash = hash;
     this.persist();
 
@@ -316,7 +361,16 @@ export class Permissions {
     this.eventBus?.emit('user:passwordChanged', handle);
   }
 
-  /** Return the stored password hash for a user, or null if none set / user unknown. */
+  /**
+   * Return the stored password hash for a user, or null if none set / user unknown.
+   *
+   * @internal Plugins must never call this — `password_hash` is stripped
+   *   from the plugin-facing `PublicUserRecord` view and there is no
+   *   plugin-API path to reach this method. The only legitimate callers
+   *   are `DCCManager` (verifies the prompt against the live hash) and
+   *   internal owner-bootstrap / .chpass paths. Adding a new caller
+   *   requires SECURITY.md §3.4 review.
+   */
   getPasswordHash(handle: string): string | null {
     const record = this.getUser(handle);
     return record?.password_hash ?? null;
@@ -358,6 +412,17 @@ export class Permissions {
     }
     this.persist();
 
+    // Re-emit weak-hostmask warnings on per-channel escalation too, mirroring
+    // the global-flag path. The merged effective flag string passed to
+    // `warnInsecureHostmask` is `global + channel` so the threshold is
+    // computed against the user's strongest level on this channel.
+    if (normalized !== '') {
+      const merged = record.global + normalized;
+      for (const hostmask of record.hostmasks) {
+        this.warnInsecureHostmask(hostmask, merged, handle);
+      }
+    }
+
     const by = source ?? 'unknown';
     this.recordModAction('flags', channel, handle, by, `channel=${normalized}`, transport);
     this.eventBus?.emit('user:flagsChanged', handle, record.global, record.channels);
@@ -392,6 +457,13 @@ export class Permissions {
    * answer for events without an authoritative account source.
    */
   findByHostmask(fullHostmask: string, account?: string | null): UserRecord | null {
+    // Defense-in-depth: an empty-string `account` would match `$a:*`
+    // wildcards via `wildcardMatch`, effectively granting anyone-with-no-
+    // account-tag the same record as a wildcard-account user. No current
+    // code path delivers `account: ''` (callers normalise to null), but
+    // collapsing here to null keeps the invariant explicit.
+    const normalizedAccount =
+      typeof account === 'string' && account.length === 0 ? null : (account ?? null);
     // Score every matching pattern across every record and return the single
     // most specific winner. First-match-wins would let two users with
     // overlapping patterns race on Map iteration order, so an unprivileged
@@ -401,7 +473,7 @@ export class Permissions {
     let best: { record: UserRecord; score: number } | null = null;
     for (const record of this.users.values()) {
       for (const pattern of record.hostmasks) {
-        const score = this.matcher.scorePattern(pattern, fullHostmask, account);
+        const score = this.matcher.scorePattern(pattern, fullHostmask, normalizedAccount);
         if (score !== null && (best === null || score > best.score)) {
           best = { record, score };
         }

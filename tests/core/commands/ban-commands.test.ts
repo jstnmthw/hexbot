@@ -128,10 +128,17 @@ describe('ban admin commands', () => {
   // -----------------------------------------------------------------------
 
   describe('.ban', () => {
-    it('stores ban and calls ircCommands.ban()', async () => {
+    it('stores ban and calls ircCommands.ban() with the caller actor', async () => {
       const { reply, ctx } = makeReply();
       await commandHandler.execute('.ban #test *!*@evil.com 30m', ctx);
-      expect(banSpy).toHaveBeenCalledWith('#test', '*!*@evil.com');
+      // Audit 2026-05-10: the actor flows through IRCCommands.ban so the
+      // single mod_log row attributes the action to the caller. Without
+      // this the row would land as `system`/`bot`.
+      expect(banSpy).toHaveBeenCalledWith(
+        '#test',
+        '*!*@evil.com',
+        expect.objectContaining({ by: expect.any(String), source: expect.any(String) }),
+      );
       const ban = banStore.getBan('#test', '*!*@evil.com');
       expect(ban).not.toBeNull();
       expect(ban!.expires).toBeGreaterThan(0);
@@ -191,14 +198,18 @@ describe('ban admin commands', () => {
       db2.close();
     });
 
-    it('logs mod action', async () => {
-      const { reply: _, ctx } = makeReply();
+    it('forwards the audit actor to IRCCommands so the mod_log row attributes to the caller', async () => {
+      // Audit 2026-05-10: the .ban handler used to write its own
+      // tryAudit row alongside IRCCommands.ban's row — two rows, half
+      // mis-attributed. Now exactly one row is written, by IRCCommands.
+      // This unit test verifies the actor handoff; the mod_log row
+      // itself is covered by IRCCommands tests.
+      const { ctx } = makeReply();
       await commandHandler.execute('.ban #test *!*@evil.com 1h bad user', ctx);
-      const log = db.getModLog({ action: 'ban' });
-      expect(log).toHaveLength(1);
-      expect(log[0].channel).toBe('#test');
-      expect(log[0].target).toBe('*!*@evil.com');
-      expect(log[0].reason).toBe('bad user');
+      const banMock = vi.mocked(banSpy);
+      expect(banMock).toHaveBeenCalledTimes(1);
+      const [, , actor] = banMock.mock.calls[0];
+      expect(actor).toMatchObject({ by: 'Admin' });
     });
   });
 
@@ -207,11 +218,17 @@ describe('ban admin commands', () => {
   // -----------------------------------------------------------------------
 
   describe('.unban', () => {
-    it('removes ban and calls ircCommands.unban()', async () => {
+    it('removes ban and calls ircCommands.unban() with the caller actor', async () => {
       banStore.storeBan('#test', '*!*@evil.com', 'admin', 0);
       const { reply, ctx } = makeReply();
       await commandHandler.execute('.unban #test *!*@evil.com', ctx);
-      expect(unbanSpy).toHaveBeenCalledWith('#test', '*!*@evil.com');
+      // Audit 2026-05-10: actor threads through to IRCCommands.unban so
+      // the single mod_log row attributes to the caller, not to bot/system.
+      expect(unbanSpy).toHaveBeenCalledWith(
+        '#test',
+        '*!*@evil.com',
+        expect.objectContaining({ by: expect.any(String), source: expect.any(String) }),
+      );
       expect(banStore.getBan('#test', '*!*@evil.com')).toBeNull();
       expect(reply).toHaveBeenCalledWith(expect.stringContaining('Unbanned'));
     });

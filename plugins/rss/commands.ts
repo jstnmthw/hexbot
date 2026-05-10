@@ -32,6 +32,13 @@ export interface RssCommandsConfig {
   max_feed_bytes: number;
   /** Permit `http://` feed URLs. Default false (https-only). */
   allow_http: boolean;
+  /**
+   * Hard ceiling on `activeFeeds.size`. `!rss add` refuses to register a
+   * new feed once the cap is reached. Without this a misbehaving (or
+   * compromised) `+m` operator can register thousands of feeds, each
+   * spawning HTTP fetches every 60s and hoarding dedup rows.
+   */
+  max_feeds: number;
 }
 
 export interface RssCommandsDeps {
@@ -229,6 +236,19 @@ export async function handleAdd(
   if (activeFeeds.has(id)) {
     api.notice(ctx.nick, `Feed "${id}" already exists.`);
     logCmd(api, ctx, 'add', 'rejected', `id collision: ${id}`);
+    return;
+  }
+
+  // Hard cap to bound HTTP fetch fanout and dedup-row accumulation. The
+  // operator can raise this via `.set rss max_feeds <n>` if they really
+  // need more — the default protects against accidental and malicious
+  // mass-add alike.
+  if (activeFeeds.size >= cfg.max_feeds) {
+    api.notice(
+      ctx.nick,
+      `Feed cap reached (${cfg.max_feeds}). Remove an existing feed or raise it via .set rss max_feeds <n>.`,
+    );
+    logCmd(api, ctx, 'add', 'rejected', `max_feeds reached (${cfg.max_feeds})`);
     return;
   }
 

@@ -4,6 +4,7 @@
 // lines that `DCCSession.showBanner()` used to print inline. Kept apart
 // from `dcc.ts` so banner tweaks don't require reading the session state
 // machine, and so unit tests can snapshot the output directly.
+import { stripFormatting } from '../../utils/strip-formatting';
 import { type ConsoleFlagLetter, formatFlags } from './console-flags';
 
 /** Live stats surfaced in the DCC session banner. */
@@ -101,6 +102,20 @@ function truncatePeer(peer: string, max = 40): string {
  * after the password prompt succeeds, or by the dev preview script.
  */
 export function renderBanner(opts: BannerRenderOptions, writeLine: (line: string) => void): void {
+  // Defensive stripFormatting on user-controlled identity fields. The IRC
+  // bridge `sanitize()` strips CR/LF/NUL but leaves mIRC formatting bytes
+  // (\x02 bold, \x03 color, \x0f reset, \x1f underline) intact. On
+  // non-cloaked networks an attacker who controls their nick/ident/host
+  // could otherwise inject color codes that repaint the operator's
+  // terminal during the join announcement. Same posture for the
+  // session-list strings — a misbehaving admin could store a handle with
+  // embedded color which would leak into every other user's banner.
+  const handle = stripFormatting(opts.handle);
+  const nick = stripFormatting(opts.nick);
+  const ident = stripFormatting(opts.ident);
+  const hostname = stripFormatting(opts.hostname);
+  const otherSessions = opts.otherSessions.map((s) => stripFormatting(s));
+
   const d = new Date();
   const time = d.toLocaleTimeString();
   const tz = d.toLocaleTimeString('en-US', { timeZoneName: 'short' }).split(' ').pop();
@@ -116,8 +131,8 @@ export function renderBanner(opts: BannerRenderOptions, writeLine: (line: string
   const ordinal = ordinals[new Intl.PluralRules('en-US', { type: 'ordinal' }).select(day)];
   const date = `${d.toLocaleDateString('en-US', { month: 'long' })} ${day}${ordinal}, ${d.getFullYear()}`;
   const consoleLine =
-    opts.otherSessions.length > 0
-      ? `${opts.otherSessions.length} other(s) here: ${opts.otherSessions.join(', ')}`
+    otherSessions.length > 0
+      ? `${otherSessions.length} other(s) here: ${otherSessions.join(', ')}`
       : 'you are the only one here';
 
   // Logo
@@ -129,7 +144,7 @@ export function renderBanner(opts: BannerRenderOptions, writeLine: (line: string
   // Greeting
   writeLine('');
   writeLine(
-    `Hi ${B}${opts.handle}${B}, I am ${B}${opts.botNick}${B}. The local time is ${time} (${tz}) on ${date}.`,
+    `Hi ${B}${handle}${B}, I am ${B}${opts.botNick}${B}. The local time is ${time} (${tz}) on ${date}.`,
   );
 
   // Owner-only notice
@@ -166,9 +181,7 @@ export function renderBanner(opts: BannerRenderOptions, writeLine: (line: string
     const f = formatFlags(opts.consoleFlags);
     return f.length > 0 ? `+${f}` : '+-';
   })();
-  writeLine(
-    `  ${lbl('Session')}${B}${opts.handle}${B} (${opts.nick}!${opts.ident}@${opts.hostname})`,
-  );
+  writeLine(`  ${lbl('Session')}${B}${handle}${B} (${nick}!${ident}@${hostname})`);
   writeLine(`  ${lbl('Flags')}${flagDisplay}`);
   writeLine(`  ${lbl('ConFlags')}${consoleDisplay}`);
   if (opts.stats) {

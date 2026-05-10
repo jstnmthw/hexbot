@@ -6,6 +6,7 @@ import type { LoggerLike } from '../logger';
 import type { ServicesConfig, VerifyResult } from '../types';
 import { toEventObject } from '../utils/irc-event';
 import { ListenerGroup } from '../utils/listener-group';
+import { sanitize } from '../utils/sanitize';
 import { type Casemapping, ircLower, wildcardMatch } from '../utils/wildcard';
 import { tryLogModAction } from './audit';
 import type { ChannelState } from './channel-state';
@@ -320,7 +321,13 @@ export class Services {
     if (!this.servicesConfig.password) return;
 
     const target = this.getNickServTarget();
-    this.client.say(target, `IDENTIFY ${this.servicesConfig.password}`);
+    // Defensive sanitize: passwords loaded from env shouldn't contain CR/LF,
+    // but a malformed `.env` could smuggle a NEWLINE into the IDENTIFY line
+    // and inject a second IRC command. The config-load validation in
+    // `validateResolvedSecrets` is the primary guard; this is belt-and-
+    // suspenders so a future call site bypassing config validation can't
+    // weaponize a password value.
+    this.client.say(target, `IDENTIFY ${sanitize(this.servicesConfig.password)}`);
     this._botIdentifyState = 'pending';
     this.logger?.info('Sent IDENTIFY to NickServ');
   }
@@ -544,15 +551,19 @@ export class Services {
       return;
     }
 
-    // Defence-in-depth: when a services_host_pattern is configured, reject
-    // notices from a sender whose hostname doesn't match it. On
-    // non-services-reserved networks a user can `/nick NickServ` and craft
-    // ACC replies to resolve pending verifications with whatever level
-    // they want. Matching against `services.servicesConfig` at construction
-    // time keeps the hot path allocation-free.
-    if (this.servicesHostPattern && !wildcardMatch(this.servicesHostPattern, hostname, true)) {
+    // Defense-in-depth: when a services_host_pattern is configured, reject
+    // notices from a sender whose full hostmask doesn't match it. Matching
+    // against `nick!ident@host` (rather than hostname only) forces the
+    // operator to think about both fields when crafting the pattern — on
+    // networks that allow user-controlled hostname spoofing, a `services.*`
+    // hostname pattern alone matches any user who picks a hostname starting
+    // with "services.". The recommendation in SECURITY.md §3.2 is to pin
+    // the most specific pattern available (e.g. `NickServ!*@services.libera.chat`).
+    const ident = String((event as { ident?: unknown }).ident ?? '');
+    const fullHostmask = `${nick}!${ident}@${hostname}`;
+    if (this.servicesHostPattern && !wildcardMatch(this.servicesHostPattern, fullHostmask, true)) {
       this.logger?.warn(
-        `[security] Ignoring NickServ-nick notice from unexpected host ${hostname} ` +
+        `[security] Ignoring NickServ-nick notice from unexpected hostmask ${fullHostmask} ` +
           `(does not match services_host_pattern="${this.servicesHostPattern}")`,
       );
       return;
@@ -634,7 +645,10 @@ export class Services {
         this.logger?.warn(
           'NickServ "please identify" received — SASL may have failed; falling back to password IDENTIFY',
         );
-        this.client.say(this.getNickServTarget(), `IDENTIFY ${this.servicesConfig.password}`);
+        this.client.say(
+          this.getNickServTarget(),
+          `IDENTIFY ${sanitize(this.servicesConfig.password)}`,
+        );
         this._botIdentifyState = 'pending';
       } else {
         this._botIdentifyState = 'unidentified';
@@ -748,7 +762,12 @@ export class Services {
     this.clearGhostTimer();
     this._identifyFallbackSent = false; // reset so the re-identify path can fire
     const target = this.getNickServTarget();
-    this.client.say(target, `GHOST ${nick} ${password}`);
+    // Defensive sanitize on both fields: `nick` is operator-controlled but
+    // routed through here, and `password` should already be CRLF-free
+    // (validateResolvedSecrets enforces it at load), but a malformed `.env`
+    // bypass would otherwise smuggle a newline and inject a second IRC
+    // command. See SECURITY.md §3.2.
+    this.client.say(target, `GHOST ${sanitize(nick)} ${sanitize(password)}`);
     this.logger?.warn(`Sent GHOST for ${nick} — waiting for NickServ ack (1.5s cap)`);
     // Race the NickServ ack notice against the legacy 1.5s upper-bound
     // sleep — whichever fires first. Most services respond in < 100 ms, so

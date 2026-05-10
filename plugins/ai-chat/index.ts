@@ -974,6 +974,14 @@ const SUB_HANDLERS: Record<string, SubHandler> = {
       ctx.reply('Usage: !ai unignore <nick|hostmask>');
       return;
     }
+    // Mirror the shape validation that `ignore` enforces. Without it,
+    // `unignore` becomes a no-op delete on any malformed string —
+    // confusing for operators (the reply suggests success) and a slow
+    // path through `db.del` on garbage input.
+    if (target.length > 128 || !/^[$#&]?[\w[\]\\`^{}*?@!.-]+$/.test(target)) {
+      ctx.reply('Invalid ignore target.');
+      return;
+    }
     api.db.del(`${IGNORE_PREFIX}${target}`);
     ctx.reply(`No longer ignoring "${api.stripFormatting(target)}".`);
   },

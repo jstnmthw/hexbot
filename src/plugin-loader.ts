@@ -97,6 +97,13 @@ export interface PluginLoaderDeps {
   db: BotDatabase | null;
   permissions: Permissions;
   botConfig: BotConfig;
+  /**
+   * Bot version exposed to plugins via `api.botConfig.version`. Optional
+   * to keep test fixtures terse — the loader defaults to `'0.0.0'` when
+   * omitted so a CTCP VERSION reply still answers something. Production
+   * `Bot` always passes the real `package.json` version.
+   */
+  botVersion?: string;
   ircClient: IRCClientForPlugins | null;
   channelState?: ChannelState | null;
   ircCommands?: IRCCommands | null;
@@ -158,6 +165,7 @@ export class PluginLoader {
   private db: BotDatabase | null;
   private permissions: Permissions;
   private botConfig: BotConfig;
+  private botVersion: string;
   private ircClient: IRCClientForPlugins | null;
   private channelState: ChannelState | null;
   private ircCommands: IRCCommands | null;
@@ -195,6 +203,7 @@ export class PluginLoader {
     this.db = deps.db;
     this.permissions = deps.permissions;
     this.botConfig = deps.botConfig;
+    this.botVersion = deps.botVersion ?? '0.0.0';
     this.ircClient = deps.ircClient;
     this.channelState = deps.channelState ?? null;
     this.ircCommands = deps.ircCommands ?? null;
@@ -241,6 +250,18 @@ export class PluginLoader {
     try {
       for (const entry of readdirSync(this.pluginDir, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
+        // Validate disk-discovery names through SAFE_NAME_RE before adding
+        // to the candidate set. The path-traversal guard inside `load()`
+        // catches the actual escape, but the intermediate `coreSettings`
+        // / `pluginSettings` registration sites pollute their registries
+        // with the bad name first. Filtering here keeps the registries
+        // clean.
+        if (!SAFE_NAME_RE.test(entry.name)) {
+          this.logger?.warn(
+            `Ignoring plugin directory "${entry.name}" — invalid name (path-traversal guard)`,
+          );
+          continue;
+        }
         if (existsSync(join(this.pluginDir, entry.name, 'dist', 'index.js'))) {
           pluginNames.add(entry.name);
         }
@@ -416,12 +437,32 @@ export class PluginLoader {
 
     const pluginName = mod.name;
 
-    // Validate safe name
+    // Validate safe name first — catches path-traversal attempts in
+    // `mod.name` (`../escape`) before they reach the directory-mismatch
+    // check, which would otherwise produce a confusing error mentioning
+    // both the bad name and the directory.
     if (!SAFE_NAME_RE.test(pluginName)) {
       return {
         name: pluginName,
         status: 'error',
         error: `Plugin name "${pluginName}" contains invalid characters (must be alphanumeric, hyphens, underscores)`,
+      };
+    }
+
+    // Reject when the exported `name` doesn't match the on-disk directory
+    // name (`inferredName` was computed at the top of this function). A
+    // plugin shipped in `plugins/foo/dist/index.js` that sets
+    // `export const name = "bar"` would otherwise get tracked under "bar",
+    // own DB namespace `bar`, write settings to `plugin:bar`, and shadow
+    // help/settings entries that the real "bar" plugin would own. The
+    // duplicate check below bounds the damage but doesn't prevent
+    // first-boot races where load order picks the directory that wins
+    // the namespace.
+    if (pluginName !== inferredName) {
+      return {
+        name: inferredName,
+        status: 'error',
+        error: `Plugin in ${absPath} exports name="${pluginName}" but lives in directory "${inferredName}". The exported name must match the directory.`,
       };
     }
 
@@ -734,6 +775,7 @@ export class PluginLoader {
         db: this.db,
         permissions: this.permissions,
         botConfig: this.botConfig,
+        botVersion: this.botVersion,
         ircClient: this.ircClient,
         channelState: this.channelState,
         ircCommands: this.ircCommands,
@@ -822,16 +864,21 @@ export class PluginLoader {
    * on `'/'` is portable here even though `path.sep` is `'\\'` on Windows.
    */
   private inferPluginName(filePath: string): string {
-    // Path is plugins/<name>/dist/index.js — name is two levels above the file
+    // Path is plugins/<name>/dist/index.js or plugins/<name>/index.ts —
+    // the plugin name is the directory holding `dist/` (production) or
+    // the directory holding `index.ts` (test / dev paths).
     const parts = filePath.split('/');
-    const indexIdx = parts.lastIndexOf('index.js');
-    if (indexIdx > 1) {
-      return parts[indexIdx - 2];
+    const distIdx = parts.lastIndexOf('dist');
+    if (distIdx > 0 && parts[distIdx + 1]?.startsWith('index.')) {
+      return parts[distIdx - 1];
     }
-    // Fallback: filename without extension. Reached only for unusual layouts
-    // (single-file plugin paths, tests with synthetic paths) — production
-    // discovery always lands in the `index.js` branch above.
+    // Direct `index.ts` / `index.js` (no dist): pick the parent directory.
     const last = parts[parts.length - 1];
-    return last.replace(/\.(ts|js)$/, '');
+    if (/^index\.(ts|js|mjs|cjs)$/.test(last) && parts.length >= 2) {
+      return parts[parts.length - 2];
+    }
+    // Last-ditch fallback: filename without extension. Reached only for
+    // truly unusual layouts; production discovery always lands above.
+    return last.replace(/\.(ts|js|mjs|cjs)$/, '');
   }
 }

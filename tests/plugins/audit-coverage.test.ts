@@ -55,6 +55,7 @@ function buildApi(pluginId: string): { api: PluginAPI; db: BotDatabase } {
     eventBus,
     db,
     permissions: {} as PluginApiDeps['permissions'],
+    botVersion: '0.0.0-test',
     botConfig: {
       irc: {
         host: 'h',

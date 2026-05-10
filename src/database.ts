@@ -371,14 +371,21 @@ export class BotDatabase {
   }
 
   /** Toggle persistence of `logModAction` writes at runtime — used by
-   *  `core.logging.mod_actions` onChange. Past rows are not affected. */
+   *  `core.logging.mod_actions` onChange. Past rows are not affected.
+   *  Forwards to the underlying ModLog so its own check at write time
+   *  reflects the new value (the BotDatabase mirror is kept in sync for
+   *  any caller that reads `db.modLogEnabled` directly). */
   setModLogEnabled(enabled: boolean): void {
     this.modLogEnabled = enabled;
+    this.modLog?.setModLogEnabled(enabled);
   }
 
-  /** Update the retention window in days. `0` or unset means unlimited. */
+  /** Update the retention window in days. `0` or unset means unlimited.
+   *  Forwards to the underlying ModLog so the next `pruneOldModLogRows()`
+   *  call uses the new window. */
   setModLogRetentionDays(days: number): void {
     this.modLogRetentionDays = days;
+    this.modLog?.setModLogRetentionDays(days);
   }
 
   /**

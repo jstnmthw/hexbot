@@ -4,7 +4,7 @@ import type { CommandHandler } from '../../command-handler';
 import type { BotDatabase } from '../../database';
 import { formatDuration, parseDuration } from '../../utils/duration';
 import { stripFormatting } from '../../utils/strip-formatting';
-import { tryAudit } from '../audit';
+import { auditActor, tryAudit } from '../audit';
 import type { BanStore } from '../ban-store';
 import type { BotLinkHub, SharedBanList } from '../botlink';
 import { parseBanArgs } from '../command-helpers';
@@ -131,23 +131,30 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
       }
 
       // 0 is the BanStore sentinel for "permanent" — no expiry sweep.
+      // Optional duration token only — trailing words after the
+      // duration are dropped. The .ban handler used to thread them as
+      // `reason` into a duplicate tryAudit row (audit 2026-05-10
+      // closed that); today the single mod_log row is written by
+      // IRCCommands.ban and inherits the actor only.
       let durationMs = 0;
-      let rest = parsed.rest;
+      const rest = parsed.rest;
       if (rest.length > 0) {
         const parsedDuration = parseDuration(rest[0]);
         if (parsedDuration !== null) {
           durationMs = parsedDuration;
-          rest = rest.slice(1);
         }
       }
-      const reason = rest.join(' ') || undefined;
 
       // Persist first, then push the MODE — the order matters because
       // BanStore is the source of truth for sticky-ban re-application
       // on rejoin. If the IRC send fails or the bot disconnects before
       // ircop reflects, the next reconnect still has the row to reapply.
+      // Pass the resolved actor so `IRCCommands.ban` writes the single
+      // attribution row — without it, two rows land for one action: one
+      // attributed to `system`/`bot`, one written here. Auditing wants
+      // exactly one row per action, attributed to the caller.
       banStore.storeBan(channel, mask, ctx.nick, durationMs);
-      ircCommands.ban(channel, mask);
+      ircCommands.ban(channel, mask, auditActor(ctx));
 
       // Propagate via botlink if hub is active — leaves apply the ban to
       // their local stores so a rejoin on another bot still bounces.
@@ -162,13 +169,6 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
       }
 
       const durStr = durationMs === 0 ? 'permanent' : formatDuration(durationMs);
-      tryAudit(db, ctx, {
-        action: 'ban',
-        channel,
-        target: mask,
-        reason: reason ?? null,
-        metadata: { durationMs },
-      });
       ctx.reply(`Banned ${mask} in ${channel} (${durStr}).`);
     },
   );
@@ -194,13 +194,15 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
       const { channel, mask } = parsed;
 
       banStore.removeBan(channel, mask);
-      ircCommands.unban(channel, mask);
+      // Single audit row from IRCCommands.unban with the caller as `by`
+      // — see the matching comment on `.ban` above. Avoids the
+      // double-row pattern that prior callers fell into.
+      ircCommands.unban(channel, mask, auditActor(ctx));
 
       if (hub) {
         hub.broadcast({ type: 'CHAN_BAN_DEL', channel, mask });
       }
 
-      tryAudit(db, ctx, { action: 'unban', channel, target: mask });
       ctx.reply(`Unbanned ${mask} in ${channel}.`);
     },
   );

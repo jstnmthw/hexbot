@@ -6,9 +6,6 @@
 // irc-framework's NOTICE-based CTCP reply (RFC 2812 §3.3.2). NOTICEs must
 // not auto-reply, so two HexBots staring at each other can't spiral into
 // a CTCP-flood. Do NOT reimplement these as PRIVMSG.
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 import type { PluginAPI } from '../../src/types';
 
 export const name = 'ctcp';
@@ -16,27 +13,18 @@ export const version = '1.0.0';
 export const description = 'Replies to CTCP VERSION, PING, and TIME requests.';
 
 /**
- * Plugin entry point. Reads `name` and `version` out of the bot's
- * `package.json` once (at load time) to construct the VERSION reply, then
- * registers ctcp binds for VERSION / PING / TIME.
+ * Plugin entry point. Reads `version` from the bot-supplied
+ * `api.botConfig.version` (sourced from `package.json` at boot by core)
+ * to construct the VERSION reply, then registers ctcp binds for VERSION /
+ * PING / TIME. SECURITY.md §4.1 prohibits plugin filesystem access — this
+ * plugin used to crack open `package.json` itself; routing through the
+ * api removes the last legitimate `node:fs` import in the plugin tree.
  */
 export function init(api: PluginAPI): void {
-  let versionString: string;
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(resolve('package.json'), 'utf-8'));
-    const pkg =
-      typeof parsed === 'object' && parsed !== null
-        ? (parsed as { name?: unknown; version?: unknown })
-        : /* v8 ignore next */ {};
-    const pkgName = typeof pkg.name === 'string' ? pkg.name : /* v8 ignore next */ 'HexBot';
-    const pkgVersion = typeof pkg.version === 'string' ? pkg.version : /* v8 ignore next */ '0.0.0';
-    versionString = `${pkgName} v${pkgVersion}`;
-  } catch {
-    // package.json missing or unreadable (test runs from temp dirs,
-    // bundled deployments) — fall back to a bare name so the bot still
-    // answers VERSION rather than going silent on the request.
-    versionString = 'HexBot';
-  }
+  // Lowercase bot name matches the prior `package.json`-derived behavior
+  // (`pkg.name` is "hexbot"). Keeping the casing stable avoids surprising
+  // downstream tooling that scrapes CTCP VERSION replies.
+  const versionString = `hexbot v${api.botConfig.version}`;
 
   api.bind('ctcp', '-', 'VERSION', (ctx) => {
     api.ctcpResponse(ctx.nick, 'VERSION', versionString);

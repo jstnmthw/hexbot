@@ -186,16 +186,27 @@ describe('validateFeedUrl', () => {
     stubLookup([{ address: '8.8.8.8', family: 4 }]);
     // URL() drops the scheme-default port: https://example.com:443/foo
     // round-trips with .port === ''. That empty string is in DEFAULT_ALLOWED_PORTS.
+    // Audit 2026-05-10: 8080/8443 dropped from defaults (admin panels live
+    // there). Operators who need them must opt in via `allowedPorts`.
     const cases: Array<{ input: string; expectedPort: string }> = [
       { input: 'https://example.com/feed', expectedPort: '' },
       { input: 'https://example.com:443/feed', expectedPort: '' },
-      { input: 'https://example.com:8443/feed', expectedPort: '8443' },
-      { input: 'https://example.com:8080/feed', expectedPort: '8080' },
+      { input: 'http://example.com:80/feed', expectedPort: '' },
     ];
     for (const { input, expectedPort } of cases) {
-      const result = await validateFeedUrl(input);
+      const result = await validateFeedUrl(input, { allowHttp: true });
       expect(result.url.port).toBe(expectedPort);
     }
+  });
+
+  it('rejects 8080 / 8443 by default (audit 2026-05-10)', async () => {
+    stubLookup([{ address: '8.8.8.8', family: 4 }]);
+    await expect(validateFeedUrl('https://example.com:8443/feed')).rejects.toThrow(
+      /port not allowed/,
+    );
+    await expect(validateFeedUrl('https://example.com:8080/feed')).rejects.toThrow(
+      /port not allowed/,
+    );
   });
 
   it('honors a caller-supplied allowedPorts set', async () => {

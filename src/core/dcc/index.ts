@@ -146,6 +146,30 @@ export interface DCCSessionManager {
   getStats(): BannerStats | null;
   onRelayEnd?: ((handle: string, targetBot: string) => void) | null;
   /**
+   * Re-fetch the live `password_hash` for `handle` from the underlying
+   * permissions store. DCCSession.handlePasswordLine() consults this at
+   * verify time so a `.chpass` rotation (or `user:removed`) that lands
+   * during the prompt window invalidates the captured hash from
+   * openSession() — without it, an attacker who learns the OLD password
+   * could authenticate against the rotated record. Returns `null` when
+   * the user no longer exists or has no hash on file.
+   *
+   * Optional so test mocks needn't implement it; DCCSession falls back
+   * to its captured hash when unset.
+   */
+  getCurrentPasswordHashForHandle?(handle: string): string | null;
+  /**
+   * Register a session that has not yet authenticated so the manager's
+   * eviction sweeps (`user:passwordChanged`, `user:removed`) can close
+   * it during the prompt window. Without this, sessions in
+   * `awaiting_password` live only as a closure inside `openSession()`
+   * — they're invisible to `closeSessionsForHandle()` until the
+   * password verification adds them to the live session map.
+   */
+  registerPendingSession?(session: DCCSessionEntry): void;
+  /** Counterpart: drop the session once it has transitioned out of `awaiting_password`. */
+  unregisterPendingSession?(session: DCCSessionEntry): void;
+  /**
    * Called when the password prompt succeeds. The session has entered the
    * `active` phase and should be announced to other sessions. Implementations
    * may also clear any rate-limit failure counters for the session's key.
@@ -864,9 +888,27 @@ export class DCCSession implements DCCSessionEntry {
       return;
     }
 
+    // Re-fetch the live password_hash so a `.chpass` rotation that landed
+    // mid-prompt invalidates this attempt — closes the TOCTOU between
+    // openSession()'s capture of `pending.user.password_hash` and the
+    // user's response. Manager returns null when the user was removed
+    // mid-prompt; treat that as auth failure (no record, no login).
+    // Falls back to the captured hash when the manager doesn't implement
+    // the lookup (test mocks).
+    const liveHash =
+      this.manager.getCurrentPasswordHashForHandle?.(this.handle) ?? this.passwordHash;
+    if (!liveHash) {
+      this.logger?.warn(
+        `DCC CHAT: rejecting ${this.handle} (${this._rateLimitKey}) — password_hash gone (user removed or rotated mid-prompt)`,
+      );
+      this.manager.onAuthFailure?.(this._rateLimitKey, this.handle);
+      this.socket.write('DCC CHAT: account no longer accessible.\r\n');
+      this.close('Account removed mid-prompt.');
+      return;
+    }
     // verifyPassword is total: no try/catch needed — scrypt/storage errors
     // surface as ok:false with a distinguishable reason for logging.
-    const result = await verifyPassword(candidate, this.passwordHash);
+    const result = await verifyPassword(candidate, liveHash);
 
     if (this.closed) return; // session may have been closed while awaiting scrypt
 
@@ -988,6 +1030,12 @@ export class DCCSession implements DCCSessionEntry {
   private teardownSession(logMessage: string): void {
     this.clearAllTimers();
     this.rl?.close();
+    // Drop from the pending set if we're still in `awaiting_password` —
+    // a socket disconnect during prompt never fires `onAuthSuccess` /
+    // `onAuthFailure`, so without this the entry leaks until the next
+    // process restart. Idempotent: Set.delete on a missing entry is a
+    // no-op, so the post-active path stays safe.
+    this.manager.unregisterPendingSession?.(this);
     this.manager.removeSession(this.nick);
     this.manager.announce(`*** ${this.handle} has left the console`);
     this.manager.notifyPartyPart(this.handle, this.nick);
@@ -1076,6 +1124,17 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   readonly authTracker: DCCAuthTracker;
 
   /**
+   * Sessions in `awaiting_password` phase — not yet in `sessionStore`.
+   * Tracked separately so {@link closeSessionsForHandle} can sweep them
+   * during a password rotation or user removal. Without this set, an
+   * in-flight prompt is invisible to eviction and an attacker who learns
+   * the old password can complete the prompt against a captured (stale)
+   * hash. Closes the TOCTOU together with the live-hash refetch in
+   * `DCCSession.handlePasswordLine`.
+   */
+  private readonly pendingSessions = new Set<DCCSessionEntry>();
+
+  /**
    * Per-manager 1-second sliding-window rate limiter for the IRC→DCC
    * console mirror. Per-instance (vs. a module-level array) so two
    * DCCManagers in the same process don't share a window and a future
@@ -1122,6 +1181,9 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   onAuthSuccess(session: DCCSessionEntry): number | null {
     const key = session.rateLimitKey;
     this.authTracker.recordSuccess(key);
+    // Promotion out of `awaiting_password`: drop from the pending set so
+    // the live session map is the only place it lives from here on.
+    this.pendingSessions.delete(session);
     // Emit the info log before registering the session so the DCC fanout
     // sink does not echo "session active" back to the joining user's own
     // console — they already saw the banner. Existing sessions and the
@@ -1171,6 +1233,15 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
   /** Called by DCCSession when the password prompt fails. */
   onAuthFailure(key: string, handle: string): void {
+    // The session is about to call close() which tears the socket down;
+    // drop it from the pending set up front so a concurrent
+    // closeSessionsForHandle sweep doesn't double-close it via .close().
+    for (const session of this.pendingSessions) {
+      if (session.rateLimitKey === key) {
+        this.pendingSessions.delete(session);
+        break;
+      }
+    }
     const status = this.authTracker.recordFailure(key);
     // Always emit an auth-fail row — never the attempted password, only the
     // remote-peer key (`ip:port`) and the handle that was being authenticated.
@@ -1679,12 +1750,19 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     // timer for the full session lifetime. Stored as a named function
     // so DCCSession.start() can socket.off() it once its own permanent
     // error handler is attached.
+    //
+    // Attached via `.once('error', ...)` so the handler self-removes after
+    // the first emission — under heavy lockout/no-password churn the
+    // earlier `.on(...)` attached handler stayed bound until the socket
+    // was GC'd, retaining the captured `pendingNick` / `logger` closure
+    // per rejected connection. `.once()` keeps the late-error catch
+    // (tests / TLS teardown races) without that residue.
     const pendingNick = pending.nick;
     const logger = this.logger;
     const preHandshakeErrorHandler = (err: Error): void => {
       logger?.debug(`DCC socket error for ${pendingNick}: ${err.message}`);
     };
-    socket.on('error', preHandshakeErrorHandler);
+    socket.once('error', preHandshakeErrorHandler);
 
     const key = `${pending.nick}!${pending.ident}@${pending.hostname}`;
 
@@ -1732,7 +1810,34 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
     this.logger?.info(`DCC CHAT: prompting ${pending.user.handle} (${pending.nick}) for password`);
 
+    // Track in-flight pending sessions so password-rotation eviction can
+    // reach them. `unregisterPendingSession` is called from `onAuthSuccess`
+    // (transition into active) and from the session's close path (auth
+    // failed / socket dropped) so the set never grows unbounded.
+    this.pendingSessions.add(session);
     session.start(this.version, this.botNick, preHandshakeErrorHandler);
+  }
+
+  /** Live password-hash lookup used by DCCSession to close the prompt-phase TOCTOU. */
+  getCurrentPasswordHashForHandle(handle: string): string | null {
+    // Permissions has a cheap by-handle accessor; falling through to
+    // findByHostmask would require synthesizing a hostmask. The internal
+    // path keeps the semantics tight: present-but-empty == null.
+    const recordPermissions = this.permissions as DCCPermissions & {
+      getPasswordHash?: (handle: string) => string | null;
+    };
+    if (typeof recordPermissions.getPasswordHash === 'function') {
+      return recordPermissions.getPasswordHash(handle);
+    }
+    return null;
+  }
+
+  registerPendingSession(session: DCCSessionEntry): void {
+    this.pendingSessions.add(session);
+  }
+
+  unregisterPendingSession(session: DCCSessionEntry): void {
+    this.pendingSessions.delete(session);
   }
 
   private closeAll(reason?: string): void {
@@ -1744,8 +1849,27 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
    * (case-insensitive). Triggered by `user:passwordChanged` and
    * `user:removed` so a compromised session that authenticated under the
    * old credentials cannot survive a rotation.
+   *
+   * Also walks `pendingSessions` so any in-flight `awaiting_password`
+   * prompt for the same handle is torn down — without this, an attacker
+   * holding the old password could complete the prompt during the
+   * rotation window. The live-hash refetch in `handlePasswordLine` is
+   * the primary defense; this set sweep closes the eviction gap.
    */
   private closeSessionsForHandle(handle: string, reason: string): void {
     this.sessionStore.closeForHandle(handle, reason, this.logger);
+    // Iterate a snapshot — `session.close()` triggers the close handler
+    // which calls `unregisterPendingSession`, mutating the set.
+    const lower = handle.toLowerCase();
+    for (const session of [...this.pendingSessions]) {
+      if (session.handle.toLowerCase() === lower) {
+        this.pendingSessions.delete(session);
+        const closable = session as DCCSessionEntry & { close?: (reason: string) => void };
+        closable.close?.(reason);
+        this.logger?.warn(
+          `DCC CHAT: closed pending session for ${session.handle} (${session.nick}) — ${reason}`,
+        );
+      }
+    }
   }
 }

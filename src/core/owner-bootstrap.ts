@@ -22,10 +22,26 @@ export interface EnsureOwnerDeps {
  * the env var on first boot, and emit a loud warning if DCC is enabled but
  * no password is available anywhere.
  */
+/**
+ * Match a recognizable hostmask shape — the full `nick!ident@host`
+ * form (with `*` wildcards permitted) or the IRCv3 account pattern
+ * `$a:account`. Anything else is a typo or a misconfiguration; we'd
+ * rather fail loudly than silently install a record that never matches.
+ */
+const OWNER_HOSTMASK_RE = /^(?:\$a:[^\s!@]+|[^\s!@]+![^\s!@]+@[^\s!@]+)$/;
+
 export async function ensureOwner(deps: EnsureOwnerDeps): Promise<void> {
   const { config, permissions, logger } = deps;
   const ownerCfg = config.owner;
   if (!ownerCfg?.handle || !ownerCfg?.hostmask) return;
+
+  if (!OWNER_HOSTMASK_RE.test(ownerCfg.hostmask)) {
+    throw new Error(
+      `[owner] config.owner.hostmask "${ownerCfg.hostmask}" is malformed — ` +
+        'expected `nick!ident@host` (wildcards `*` allowed) or `$a:account`. ' +
+        'Fix config/bot.json before retrying.',
+    );
+  }
 
   // Create or update the user record from config.
   const existing = permissions.getUser(ownerCfg.handle);

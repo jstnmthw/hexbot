@@ -72,7 +72,15 @@ export function requiresVerificationForFlags(
   if (thresholds.length === 0) return false;
   const minThreshold = Math.min(...thresholds);
 
+  // Strip flag-syntax punctuation explicitly before iterating each char
+  // so a future bind-flag extension (e.g. group syntax `n|m`, negation
+  // `!o`) doesn't accidentally produce a `FLAG_LEVEL[char]` match for the
+  // punctuation. Today no punctuation lands in `bindFlags` at runtime,
+  // but this insulates the lookup from the syntax surface.
+  const normalized = bindFlags.replace(/[+\-|!]/g, '');
+  if (normalized.length === 0) return false;
+
   // Find the highest flag level among the bind's required flags
-  const bindLevel = Math.max(...[...bindFlags].map((f) => FLAG_LEVEL[f] ?? 0));
+  const bindLevel = Math.max(...[...normalized].map((f) => FLAG_LEVEL[f] ?? 0));
   return bindLevel >= minThreshold;
 }

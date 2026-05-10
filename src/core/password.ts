@@ -86,6 +86,15 @@ export async function verifyPassword(
   plaintext: string,
   stored: string,
 ): Promise<VerifyPasswordResult> {
+  // Reject sub-minimum-length plaintext at the top — `hashPassword()`
+  // refuses to create a hash from such input, so verifying a short
+  // candidate against any stored hash can only ever fail. Returning
+  // `'mismatch'` (rather than a new reason) keeps the timing oracle
+  // closed — an attacker probing short candidates can't distinguish
+  // "below minimum" from "wrong password".
+  if (typeof plaintext !== 'string' || plaintext.length < MIN_PASSWORD_LENGTH) {
+    return { ok: false, reason: 'mismatch' };
+  }
   if (!isValidPasswordFormat(stored)) return { ok: false, reason: 'malformed' };
   const [, saltHex, hashHex] = stored.split('$');
   const salt = Buffer.from(saltHex, 'hex');

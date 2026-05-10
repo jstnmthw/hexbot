@@ -23,6 +23,7 @@ function makeDeps(): PluginApiDeps {
       findByHostmask: vi.fn().mockReturnValue(null),
       checkFlags: vi.fn().mockReturnValue(false),
     } as unknown as PluginApiDeps['permissions'],
+    botVersion: '0.0.0-test',
     botConfig: {
       irc: {
         host: 'h',

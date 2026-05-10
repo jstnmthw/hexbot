@@ -108,8 +108,14 @@ function enforceSecretFilePermissions(path: string, opts: { fatal: boolean }): v
  */
 function checkDotenvPermissions(): void {
   const env = process.env.NODE_ENV;
-  const candidates = ['.env', '.env.local'];
-  if (env) candidates.push(`.env.${env}`);
+  // Cover both root-level `.env` files and the `config/bot.env*` variants
+  // operators commonly use for hexbot-specific secrets. The set mirrors the
+  // resolution order documented in `config/bot.env.example`.
+  const candidates = ['.env', '.env.local', 'config/bot.env', 'config/bot.env.local'];
+  if (env) {
+    candidates.push(`.env.${env}`);
+    candidates.push(`config/bot.env.${env}`);
+  }
   for (const name of candidates) {
     const path = resolve(name);
     enforceSecretFilePermissions(path, { fatal: true });
@@ -860,6 +866,7 @@ export class Bot {
       db: this.db,
       permissions: this.permissions,
       botConfig: this.config,
+      botVersion: this.readPackageVersion(),
       ircClient: this.client,
       channelState: this.channelState,
       ircCommands: this.ircCommands,
@@ -934,6 +941,14 @@ export class Bot {
     // see the full picture up front.
     this.permissions.auditWeakHostmasks();
 
+    // Surface plaintext-NickServ risks at startup. The SASL-PLAIN-over-
+    // plaintext path is fatal in validateResolvedSecrets, but the non-SASL
+    // IDENTIFY and GHOST password paths are not — operators flipping
+    // `sasl: false` to support a legacy network (or enabling
+    // ghost_on_recover on a plaintext link) silently lose TLS protection of
+    // the password. Warn loudly. See SECURITY.md §3.2 / audit 2026-05-10.
+    this.warnServicesPlaintextRisks();
+
     this.registerCoreCommands();
 
     this.botLogger.info('Starting...');
@@ -974,6 +989,55 @@ export class Bot {
     await this.connect();
 
     this.startTime = Date.now();
+  }
+
+  /**
+   * Surface plaintext-NickServ risks at startup. SASL PLAIN over plaintext is
+   * fatal in `validateResolvedSecrets`, but two adjacent paths still ship the
+   * password in cleartext when `irc.tls=false`:
+   *   1. Non-SASL `IDENTIFY` — when `services.password` is set and
+   *      `services.sasl` is false, `services.identify()` PRIVMSGs the
+   *      password to NickServ on the unencrypted session.
+   *   2. `ghost_on_recover` GHOST — `services.ghostAndReclaim()` ships the
+   *      same password whenever the bot races a squatter, regardless of SASL.
+   * Both are valid configurations on legacy networks; both deserve a loud
+   * `[security]` warning so the operator knows.
+   */
+  private warnServicesPlaintextRisks(): void {
+    const cfg = this.config;
+    if (cfg.irc.tls) return;
+    if (cfg.services.type === 'none') return;
+
+    if (cfg.services.password && !cfg.services.sasl) {
+      this.botLogger.warn(
+        '[security] services.password is set with services.sasl=false and irc.tls=false — ' +
+          'NickServ IDENTIFY will ship the password in cleartext on every (re)connect. ' +
+          'Enable irc.tls or run the bot through an encrypted tunnel.',
+      );
+    }
+    if (cfg.irc.ghost_on_recover && cfg.services.password) {
+      this.botLogger.warn(
+        '[security] irc.ghost_on_recover=true with irc.tls=false — ' +
+          'NickServ GHOST will ship the password in cleartext whenever a nick collision triggers reclaim. ' +
+          'Enable irc.tls or set ghost_on_recover=false.',
+      );
+    }
+
+    // Empty `services_host_pattern` + a configured services password
+    // disables the defense-in-depth check that drops NickServ-nick
+    // notices from arbitrary hosts. On services-free networks this is
+    // unavoidable, but most networks have a stable services hostname
+    // (or hostmask) and operators who haven't set the pattern usually
+    // just forgot. See SECURITY.md §3.2.
+    const pattern = cfg.services.services_host_pattern;
+    if (cfg.services.password && (!pattern || pattern.trim().length === 0)) {
+      this.botLogger.warn(
+        '[security] services.password is set with services.services_host_pattern empty — ' +
+          'a NickServ-nick spoofer can craft fake "please identify" / ACC notices that ' +
+          "the bot will accept. Pin services.services_host_pattern to your network's services " +
+          'hostmask (e.g. "NickServ!*@services.libera.chat") to enable the defense-in-depth filter.',
+      );
+    }
   }
 
   /** Register the built-in core commands (permissions, dispatcher, admin, plugins, modlog). */

@@ -12,6 +12,7 @@ import {
   type BotLinkLeaf,
   type LinkFrame,
   type PartyLineUser,
+  isPrivateOrLoopback,
   isValidIP,
 } from '../botlink';
 import type { BotlinkDCCView } from '../dcc';
@@ -233,9 +234,24 @@ function handleBotlinkBan(
     }
   }
   const reason = reasonParts.join(' ') || 'manual ban';
+  // Banning a loopback / RFC1918 address is almost always a typo — those
+  // ranges are where leaves legitimately connect from. Surface a hint
+  // alongside the success reply so operators notice if they meant to ban
+  // a public IP. The base address (pre-CIDR) is what isPrivateOrLoopback
+  // expects; strip a `/<prefix>` suffix if present.
+  const baseAddr = banIp.includes('/') ? banIp.slice(0, banIp.indexOf('/')) : banIp;
+  const localScope = isPrivateOrLoopback(baseAddr);
   h.manualBan(banIp, durationMs, reason, ctx.nick);
   const durStr = durationMs === 0 ? 'permanent' : formatDuration(durationMs);
-  ctx.reply(`Banned ${banIp} (${durStr}): ${reason}`);
+  if (localScope) {
+    ctx.reply(
+      `Banned ${banIp} (${durStr}): ${reason} — ` +
+        'note: this address is in a loopback / RFC1918 range, which is where leaves typically connect from. ' +
+        'Use `.botlink unban <ip>` to undo.',
+    );
+  } else {
+    ctx.reply(`Banned ${banIp} (${durStr}): ${reason}`);
+  }
   tryAudit(db, ctx, {
     action: 'botlink-ban',
     target: banIp,

@@ -49,8 +49,10 @@ import type {
   PluginUtil,
   SettingsChangeCallback,
 } from './types';
+import { deepFreeze } from './utils/deep-freeze';
 import { sanitize } from './utils/sanitize';
 import { SlidingWindowCounter } from './utils/sliding-window';
+import { splitMessage } from './utils/split-message';
 import { stripFormatting } from './utils/strip-formatting';
 import { ircLower, wildcardMatch } from './utils/wildcard';
 
@@ -78,6 +80,12 @@ export interface PluginApiDeps {
   db: BotDatabase | null;
   permissions: Permissions;
   botConfig: BotConfig;
+  /**
+   * Bot version string surfaced to plugins via `api.botConfig.version`.
+   * Sourced by `Bot` from `package.json` at boot — passed in here so the
+   * factory has no filesystem dependencies of its own.
+   */
+  botVersion: string;
   ircClient: IRCClientForPlugins | null;
   channelState: ChannelState | null;
   ircCommands: IRCCommands | null;
@@ -222,7 +230,7 @@ export function createPluginApi(
   // `tls_cert` and `tls_key` (CertFP key paths) are the concrete motivation.
   // `owner` is omitted entirely: plugins have no legitimate need for the
   // owner handle/hostmask/password; the permissions API is the supported path.
-  const pluginBotConfig: PluginBotConfig = Object.freeze({
+  const pluginBotConfig = Object.freeze({
     irc: Object.freeze({
       host: botConfig.irc.host,
       port: botConfig.irc.port,
@@ -235,7 +243,14 @@ export function createPluginApi(
         botConfig.irc.channels.map((c) => (typeof c === 'string' ? c : c.name)),
       ),
     }),
-    identity: Object.freeze({ ...botConfig.identity }),
+    // Deep-freeze identity: `require_acc_for` is an array shared by reference
+    // with core. A shallow `Object.freeze({ ...x })` leaves the array mutable
+    // from inside any plugin — and a plugin emptying it disables the
+    // dispatcher's NickServ ACC gate bot-wide. See SECURITY.md §4.1, §3.2.
+    identity: Object.freeze({
+      ...botConfig.identity,
+      require_acc_for: Object.freeze([...botConfig.identity.require_acc_for]),
+    }),
     services: Object.freeze({
       type: botConfig.services.type,
       nickserv: botConfig.services.nickserv,
@@ -248,7 +263,8 @@ export function createPluginApi(
       const view = buildPluginChanmodView();
       return view ? Object.freeze(view) : undefined;
     })(),
-  });
+    version: deps.botVersion,
+  }) as PluginBotConfig;
 
   // Mutable cell shared by every guarded method returned from the factory.
   // `dispose()` flips this; every wrapped method early-returns `undefined`
@@ -532,6 +548,23 @@ function createPluginIrcActionsApi(
     if (messageQueue) messageQueue.enqueue(target, fn);
     else fn();
   }
+  // Shared helper: sanitize target and message, split into IRC-line-sized
+  // chunks (4-line cap, UTF-8 byte budget), and enqueue one send per line.
+  // Mirrors what `IRCBridge.reply` does — without it, a plugin that builds
+  // a 5KB string and calls `api.say(target, big)` ships the whole blob to
+  // irc-framework, which either truncates at the wire (mojibake) or
+  // triggers excess-flood disconnect. SECURITY.md §5.1.
+  function sendLines(
+    target: string,
+    message: string,
+    fn: (safeTarget: string, line: string) => void,
+  ): void {
+    const safeTarget = sanitize(target);
+    const lines = splitMessage(sanitize(message));
+    for (const line of lines) {
+      send(safeTarget, () => fn(safeTarget, line));
+    }
+  }
   // Default actor used when the plugin does not supply one. Frozen
   // per-plugin so a misbehaving plugin can't mutate it cross-plugin. Used
   // for plugin-autonomous actions (timers, reactions) where there is no
@@ -549,16 +582,13 @@ function createPluginIrcActionsApi(
     actor ? Object.freeze({ by: actor.by, source: 'plugin', plugin: pluginId }) : defaultActor;
   return {
     say(target: string, message: string): void {
-      const safe = sanitize(message);
-      send(target, () => ircClient?.say(target, safe));
+      sendLines(target, message, (safeTarget, line) => ircClient?.say(safeTarget, line));
     },
     action(target: string, message: string): void {
-      const safe = sanitize(message);
-      send(target, () => ircClient?.action(target, safe));
+      sendLines(target, message, (safeTarget, line) => ircClient?.action(safeTarget, line));
     },
     notice(target: string, message: string): void {
-      const safe = sanitize(message);
-      send(target, () => ircClient?.notice(target, safe));
+      sendLines(target, message, (safeTarget, line) => ircClient?.notice(safeTarget, line));
     },
     ctcpResponse(target: string, type: string, message: string): void {
       // NB: irc-framework's ctcpResponse() sends a NOTICE (not a PRIVMSG) —
@@ -614,7 +644,13 @@ function createPluginIrcActionsApi(
       ircCommands?.part(channel, message);
     },
     changeNick(nick: string): void {
-      ircClient?.raw?.(`NICK ${sanitize(nick)}`);
+      // Route through the message queue (via `send()`) so a plugin can't
+      // bypass flood protection by hammering NICK. The previous direct
+      // `ircClient.raw()` call shipped lines straight to the wire — fine
+      // for legitimate one-shot nick changes, but a misbehaving plugin
+      // looping on it would trigger excess-flood disconnect.
+      const safe = sanitize(nick);
+      send(safe, () => ircClient?.raw?.(`NICK ${safe}`));
     },
   };
 }
@@ -634,12 +670,52 @@ function createPluginAuditApi(
   if (!db) {
     return Object.freeze({ log() {} });
   }
+  // Per-plugin rate limit: at most `MAX_PER_WINDOW` audit writes per
+  // `WINDOW_MS`. A plugin loop hammering `api.audit.log()` could otherwise
+  // bloat `mod_log` faster than retention can prune (60 writes/min × ~7 KB
+  // ≈ 25 MB/hour). The cap is generous enough that legitimate plugins
+  // (chanmod, flood) stay well under it; abuse trips the limiter, which
+  // logs once per minute and silently drops the overflow.
+  const WINDOW_MS = 60_000;
+  const MAX_PER_WINDOW = 600;
+  const ACTION_MAX_LENGTH = 64;
+  let windowStart = 0;
+  let inWindow = 0;
+  let dropWarned = 0;
   return Object.freeze({
     log(action: string, options: PluginAuditOptions = {}): void {
+      // Defensive cap on `action` length to match `validateAction`'s
+      // 64-char ceiling; truncating here turns a malformed call into a
+      // dropped row with a debug breadcrumb instead of a thrown error
+      // that could escape the plugin's try/catch surface.
+      if (typeof action !== 'string' || action.length === 0) {
+        logger?.debug(`[plugin:${pluginId}] api.audit.log dropped: empty action`);
+        return;
+      }
+      const safeAction =
+        action.length > ACTION_MAX_LENGTH ? action.slice(0, ACTION_MAX_LENGTH) : action;
+
+      const now = Date.now();
+      if (now - windowStart > WINDOW_MS) {
+        windowStart = now;
+        inWindow = 0;
+        dropWarned = 0;
+      }
+      if (inWindow >= MAX_PER_WINDOW) {
+        if (dropWarned === 0) {
+          logger?.warn(
+            `[plugin:${pluginId}] api.audit.log rate limit hit (${MAX_PER_WINDOW}/${WINDOW_MS}ms) — dropping further rows this window`,
+          );
+        }
+        dropWarned++;
+        return;
+      }
+      inWindow++;
+
       tryLogModAction(
         db,
         {
-          action,
+          action: safeAction,
           source: 'plugin',
           plugin: pluginId,
           by: pluginId,
@@ -1006,7 +1082,12 @@ function createPluginSettingsApi(
   pluginId: string,
   jsonConfig: Record<string, unknown>,
 ): PluginSettings {
-  const frozenBootConfig = Object.freeze({ ...jsonConfig });
+  // Deep-freeze: `jsonConfig` is the merged plugins.json/config.json bag
+  // with nested objects (e.g. ai-chat.channel_characters, rss.feeds).
+  // Shallow freeze leaves nested values mutable, which would mask config
+  // drift bugs and contradict the `Readonly<...>` type contract on
+  // `PluginSettings.bootConfig`.
+  const frozenBootConfig = deepFreeze({ ...jsonConfig }) as Readonly<Record<string, unknown>>;
   if (!registry) {
     return Object.freeze({
       register(): void {},

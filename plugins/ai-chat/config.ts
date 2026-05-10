@@ -203,7 +203,20 @@ export function parseConfig(
   const tb = asRecord(raw.token_budgets);
   const perm = asRecord(raw.permissions);
   const output = asRecord(raw.output);
-  const channelCharacters = asRecord(raw.channel_characters);
+  // Lowercase channel keys at load so a config written with `"#Foo"` and
+  // an event arriving as `#foo` resolve identically without the
+  // case-as-given fallback that the runtime lookup currently performs.
+  // Operator-controlled, so a no-op for the mainline config but tightens
+  // the lookup contract.
+  const lowercaseChannelKeys = (rec: Record<string, unknown>): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(rec)) {
+      out[k.toLowerCase()] = v;
+    }
+    return out;
+  };
+  const channelCharacters = lowercaseChannelKeys(asRecord(raw.channel_characters));
+  const channelProfiles = lowercaseChannelKeys(asRecord(raw.channel_profiles));
 
   // Legacy config migration warnings. Retained values are ignored; the
   // replacement keys (`engagement.*`, always-on `!ai` console) are used.
@@ -244,7 +257,7 @@ export function parseConfig(
     character: asString(raw.character, 'friendly'),
     charactersDir: asString(raw.characters_dir, 'characters'),
     channelCharacters: channelCharacters as AiChatConfig['channelCharacters'],
-    channelProfiles: asRecord(raw.channel_profiles) as AiChatConfig['channelProfiles'],
+    channelProfiles: channelProfiles as AiChatConfig['channelProfiles'],
     triggers: {
       directAddress: asBool(triggers.direct_address, true),
       commandPrefix: asString(triggers.command_prefix, '!ai'),

@@ -2,6 +2,37 @@
 // Stores HelpEntry records registered by plugins. Cleared automatically on plugin unload.
 import type { LoggerLike } from '../logger';
 import type { HelpEntry } from '../types';
+import { stripFormatting } from '../utils/strip-formatting';
+
+/**
+ * Cap each plugin-supplied display string. Help text is fundamentally
+ * untrusted (a plugin author is "the user" from the bot's perspective),
+ * and any single help cell that exceeds this length will line-wrap
+ * unpredictably in DCC consoles and IRC clients alike.
+ */
+const HELP_FIELD_MAX = 256;
+
+/**
+ * Strip IRC formatting bytes (\x02 \x03 \x0f \x1f etc.) and truncate.
+ * Plugins must not be able to inject color codes that repaint other
+ * plugins' help output when `!help` lists them all in one block. Run on
+ * every plugin-supplied display field at register time so the cleaned
+ * value lives in storage rather than being re-cleaned on every lookup.
+ */
+function cleanHelpField(value: string): string {
+  const stripped = stripFormatting(value);
+  return stripped.length > HELP_FIELD_MAX ? `${stripped.slice(0, HELP_FIELD_MAX - 1)}…` : stripped;
+}
+
+function cleanHelpEntry(entry: HelpEntry): HelpEntry {
+  return {
+    ...entry,
+    usage: cleanHelpField(entry.usage),
+    description: cleanHelpField(entry.description),
+    detail: entry.detail?.map(cleanHelpField),
+    category: entry.category !== undefined ? cleanHelpField(entry.category) : entry.category,
+  };
+}
 
 /**
  * Strict storage/identity key — case-folded but prefix-preserving so
@@ -60,7 +91,8 @@ export class HelpRegistry {
       bucket = new Map();
       this.entries.set(pluginId, bucket);
     }
-    for (const entry of entries) {
+    for (const rawEntry of entries) {
+      const entry = cleanHelpEntry(rawEntry);
       const key = strictKey(entry.command);
       const owner = this.findExistingOwner(key, pluginId);
       if (owner) {
@@ -137,11 +169,20 @@ export class HelpRegistry {
       if (entry) return entry;
     }
 
-    // Fuzzy fallback — match on prefix-stripped name. Iterates across all
-    // buckets and entries; first match wins (insertion order = registration
-    // order, so core wins over plugins for legacy compatibility).
+    // Fuzzy fallback — match on prefix-stripped name. Walk core buckets
+    // first so a future refactor that loads plugins before core commands
+    // doesn't let plugin entries shadow `.help <name>`. Identifier `core`
+    // is the conventional core-registration owner (see
+    // `command-handler.ts:registerCommand`).
     const fuzzy = fuzzyKey(command);
-    for (const bucket of this.entries.values()) {
+    const coreBucket = this.entries.get('core');
+    if (coreBucket) {
+      for (const [storedKey, entry] of coreBucket) {
+        if (fuzzyKey(storedKey) === fuzzy) return entry;
+      }
+    }
+    for (const [pluginId, bucket] of this.entries) {
+      if (pluginId === 'core') continue;
       for (const [storedKey, entry] of bucket) {
         if (fuzzyKey(storedKey) === fuzzy) return entry;
       }

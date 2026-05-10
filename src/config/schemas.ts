@@ -91,8 +91,22 @@ const LoggingConfigSchema = z.strictObject({
 });
 
 const QueueConfigSchema = z.strictObject({
-  rate: z.number().optional().describe('@reload:live Outbound message rate (msgs/sec)'),
-  burst: z.number().optional().describe('@reload:live Outbound message burst size'),
+  // Cap rate at 1000 msgs/sec — above that, `Math.floor(1000 / rate)`
+  // collapses to 0 and the drain timer fires as fast as the event loop
+  // allows. The runtime queue clamps `costMs >= 1` defensively, but
+  // pinning the schema bound lets a typo (`rate: 10000`) fail loudly.
+  rate: z
+    .number()
+    .positive()
+    .max(1000)
+    .optional()
+    .describe('@reload:live Outbound message rate (msgs/sec, max 1000)'),
+  burst: z
+    .number()
+    .positive()
+    .max(100)
+    .optional()
+    .describe('@reload:live Outbound message burst size (max 100)'),
 });
 
 const FloodWindowConfigSchema = z.strictObject({
@@ -192,7 +206,11 @@ const BotlinkConfigOnDiskSchema = z.strictObject({
   auth_ip_whitelist: z
     .array(z.string())
     .optional()
-    .describe('@reload:live Auth rate-limit CIDR whitelist'),
+    .describe(
+      '@reload:live Auth rate-limit IPv4-CIDR whitelist. ' +
+        'Each entry MUST be IPv4 CIDR (`10.0.0.0/24`) or a bare IPv4 (`10.0.0.5`, expanded to /32 at runtime). ' +
+        'IPv6 entries and free-form host strings are not supported and are dropped at config load with a [security] warning.',
+    ),
   handshake_timeout_ms: z.number().optional().describe('@reload:live HELLO handshake timeout (ms)'),
   max_pending_handshakes: z
     .number()

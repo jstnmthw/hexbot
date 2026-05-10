@@ -324,8 +324,15 @@ export function checkModlogPermission(
   // matches how every other REPL-gated command treats the attached console.
   if (ctx.source === 'repl') return { allowed: true };
 
-  const fullHostmask = `${ctx.nick}!${ctx.ident ?? ''}@${ctx.hostname ?? ''}`;
-  const user = permissions.findByHostmask(fullHostmask);
+  // Botlink relay carries a synthetic hostmask (`<handle>!relay@<bot>`)
+  // that does not correspond to a real user record. Resolve directly by
+  // handle in that case, mirroring `permission-commands.ts:178-180`.
+  // Without this, `.modlog` over botlink fails with `permission denied`
+  // even when the relayed user is `+m` on the hub.
+  const user =
+    ctx.source === 'botlink'
+      ? permissions.getUser(ctx.nick)
+      : permissions.findByHostmask(`${ctx.nick}!${ctx.ident ?? ''}@${ctx.hostname ?? ''}`);
   if (!user) return { allowed: false, reason: 'permission denied' };
 
   if (user.global.includes(OWNER_FLAG)) return { allowed: true };

@@ -744,6 +744,11 @@ describe('Permissions', () => {
 
   describe('password hash persistence', () => {
     let db: BotDatabase;
+    // setPasswordHash defensively calls isValidPasswordFormat (audit
+    // 2026-05-10), so test fixtures must look like real scrypt output:
+    // 32 hex chars salt + 128 hex chars hash. The contents don't have
+    // to verify — these tests only cover storage round-trips, not auth.
+    const STUB_HASH = `scrypt$${'a'.repeat(32)}$${'b'.repeat(128)}`;
 
     beforeEach(() => {
       db = new BotDatabase(':memory:');
@@ -757,25 +762,25 @@ describe('Permissions', () => {
     it('setPasswordHash stores a hash on an existing user', () => {
       const p = new Permissions(db);
       p.addUser('admin', '*!a@h', 'n', 'REPL');
-      p.setPasswordHash('admin', 'scrypt$deadbeef$cafe', 'REPL');
+      p.setPasswordHash('admin', STUB_HASH, 'REPL');
 
-      expect(p.getPasswordHash('admin')).toBe('scrypt$deadbeef$cafe');
+      expect(p.getPasswordHash('admin')).toBe(STUB_HASH);
     });
 
     it('setPasswordHash round-trips through the database', () => {
       const p1 = new Permissions(db);
       p1.addUser('admin', '*!a@h', 'n', 'REPL');
-      p1.setPasswordHash('admin', 'scrypt$deadbeef$cafe', 'REPL');
+      p1.setPasswordHash('admin', STUB_HASH, 'REPL');
 
       const p2 = new Permissions(db);
       p2.loadFromDb();
 
-      expect(p2.getPasswordHash('admin')).toBe('scrypt$deadbeef$cafe');
+      expect(p2.getPasswordHash('admin')).toBe(STUB_HASH);
     });
 
     it('setPasswordHash throws for unknown user', () => {
       const p = new Permissions(db);
-      expect(() => p.setPasswordHash('nobody', 'scrypt$x$y', 'REPL')).toThrow('not found');
+      expect(() => p.setPasswordHash('nobody', STUB_HASH, 'REPL')).toThrow('not found');
     });
 
     it('getPasswordHash returns null for user with no hash', () => {
@@ -792,7 +797,7 @@ describe('Permissions', () => {
     it('clearPasswordHash removes the hash', () => {
       const p = new Permissions(db);
       p.addUser('admin', '*!a@h', 'n', 'REPL');
-      p.setPasswordHash('admin', 'scrypt$x$y', 'REPL');
+      p.setPasswordHash('admin', STUB_HASH, 'REPL');
       p.clearPasswordHash('admin', 'REPL');
       expect(p.getPasswordHash('admin')).toBeNull();
     });
@@ -830,7 +835,7 @@ describe('Permissions', () => {
       } as unknown as import('../../src/event-bus').BotEventBus;
       const p = new Permissions(db, undefined, eventBus);
       p.addUser('admin', '*!a@h', 'n', 'REPL');
-      p.setPasswordHash('admin', 'scrypt$x$y', 'REPL');
+      p.setPasswordHash('admin', STUB_HASH, 'REPL');
       expect(eventBus.emit).toHaveBeenCalledWith('user:passwordChanged', 'admin');
     });
 
@@ -848,15 +853,15 @@ describe('Permissions', () => {
 
       const p = new Permissions(db, mockLogger);
       p.addUser('admin', '*!a@h', 'n', 'REPL');
-      p.setPasswordHash('admin', 'scrypt$deadbeef$cafe', 'REPL');
+      p.setPasswordHash('admin', STUB_HASH, 'REPL');
       p.clearPasswordHash('admin', 'REPL');
 
       for (const line of logs) {
-        expect(line).not.toContain('scrypt$deadbeef$cafe');
+        expect(line).not.toContain(STUB_HASH);
       }
       const modLog = db.getModLog();
       const serialized = JSON.stringify(modLog);
-      expect(serialized).not.toContain('scrypt$deadbeef$cafe');
+      expect(serialized).not.toContain(STUB_HASH);
     });
   });
 
@@ -865,11 +870,12 @@ describe('Permissions', () => {
   // -------------------------------------------------------------------------
 
   describe('plugin-facing permissions strips password_hash', () => {
+    const STUB_HASH_2 = `scrypt$${'c'.repeat(32)}$${'d'.repeat(128)}`;
     it('createPluginPermissionsApi omits password_hash from findByHostmask', async () => {
       const { createPluginPermissionsApi } = await import('../../src/plugin-api-factory');
       const p = new Permissions();
       p.addUser('admin', '*!a@host', 'n', 'REPL');
-      p.setPasswordHash('admin', 'scrypt$secretsalt$secrethash', 'REPL');
+      p.setPasswordHash('admin', STUB_HASH_2, 'REPL');
 
       const pluginPerms = createPluginPermissionsApi(p);
       const record = pluginPerms.findByHostmask('anynick!a@host');
@@ -893,15 +899,16 @@ describe('Permissions', () => {
 
     it('mutating the plugin view does not alter the underlying record', async () => {
       const { createPluginPermissionsApi } = await import('../../src/plugin-api-factory');
+      const STUB = `scrypt$${'a'.repeat(32)}$${'b'.repeat(128)}`;
       const p = new Permissions();
       p.addUser('admin', '*!a@host', 'n', 'REPL');
-      p.setPasswordHash('admin', 'scrypt$s$h', 'REPL');
+      p.setPasswordHash('admin', STUB, 'REPL');
 
       const pluginPerms = createPluginPermissionsApi(p);
       const view = pluginPerms.findByHostmask('anynick!a@host')!;
       // Attempting to splat a hash onto the plugin view must not leak into the real record.
       (view as unknown as { password_hash: string }).password_hash = 'tampered';
-      expect(p.getPasswordHash('admin')).toBe('scrypt$s$h');
+      expect(p.getPasswordHash('admin')).toBe(STUB);
     });
   });
 

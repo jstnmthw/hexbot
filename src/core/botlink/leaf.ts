@@ -357,8 +357,13 @@ export class BotLinkLeaf {
           this.protocol?.close();
           return;
         }
+        // The hub generates the nonce via `crypto.randomBytes(32)` (see
+        // hub.ts), which always produces 64 hex chars. Tightening the
+        // regex from `[0-9a-fA-F]+` to exactly 64 chars closes a
+        // hypothetical attack where a compromised hub could downgrade
+        // entropy to a short / fixed value the leaf would still accept.
         const nonceHex = typeof frame.nonce === 'string' ? frame.nonce : '';
-        if (!/^[0-9a-fA-F]+$/.test(nonceHex) || nonceHex.length === 0) {
+        if (!/^[0-9a-fA-F]{64}$/.test(nonceHex)) {
           this.logger?.warn('Malformed HELLO_CHALLENGE nonce — closing');
           this.protocol?.close();
           return;

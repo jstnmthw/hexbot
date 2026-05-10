@@ -247,6 +247,36 @@ export function validateResolvedSecrets(cfg: BotConfig): void {
     );
   }
 
+  // SASL EXTERNAL (CertFP) requires TLS plus a client cert/key pair. Without
+  // these, irc-framework's TLS handshake will fail noisily — but the failure
+  // surfaces as an opaque "unable to verify"/"required" message at connect
+  // time. Failing at config load gives operators a clear, actionable error.
+  if (cfg.services.sasl && saslMech === 'EXTERNAL') {
+    if (!cfg.irc.tls) {
+      throw new Error(
+        '[config] SASL EXTERNAL requires irc.tls=true — CertFP only works on a TLS session.',
+      );
+    }
+    if (!cfg.irc.tls_cert || !cfg.irc.tls_key) {
+      throw new Error(
+        '[config] SASL EXTERNAL requires irc.tls_cert and irc.tls_key to point at the ' +
+          'client cert/key PEM files registered with NickServ CertFP.',
+      );
+    }
+  }
+
+  // Reject NickServ passwords that contain CR/LF — the password is interpolated
+  // into IDENTIFY/GHOST IRC commands. A malformed `.env` smuggling a newline
+  // would otherwise inject a second IRC command on the wire. The runtime
+  // services.ts paths sanitize defensively too, but failing fast at config
+  // load gives operators a clear error pointing at the env var.
+  if (cfg.services.password && /[\r\n\0]/.test(cfg.services.password)) {
+    throw new Error(
+      '[config] services.password (HEX_NICKSERV_PASSWORD) contains a CR/LF/NUL byte — ' +
+        'these characters cannot appear in a NickServ password. Check the .env value.',
+    );
+  }
+
   // BotLink shared secret — required when botlink enabled
   if (cfg.botlink?.enabled) {
     if (!cfg.botlink.password) {

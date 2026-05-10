@@ -339,7 +339,9 @@ describe('.flags owner escalation guard', () => {
     const ctx = makeCtx({ source: 'irc', nick: 'master', ident: 'master', hostname: 'host' });
     await handler.execute('.flags target +n', ctx);
 
-    expect(ctx.reply).toHaveBeenCalledWith('Only owners (+n) can grant master or higher flags.');
+    expect(ctx.reply).toHaveBeenCalledWith(
+      'Only owners (+n) can grant master (+m) or owner (+n) flags.',
+    );
     // Flags should remain unchanged
     expect(perms.getUser('target')!.global).toBe('o');
   });
@@ -366,7 +368,9 @@ describe('.flags owner escalation guard', () => {
     const ctx = makeCtx({ source: 'dcc', nick: 'dccmaster' });
     await handler.execute('.flags target +n', ctx);
 
-    expect(ctx.reply).toHaveBeenCalledWith('Only owners (+n) can grant master or higher flags.');
+    expect(ctx.reply).toHaveBeenCalledWith(
+      'Only owners (+n) can grant master (+m) or owner (+n) flags.',
+    );
     expect(perms.getUser('target')!.global).toBe('o');
   });
 
@@ -398,7 +402,9 @@ describe('.flags owner escalation guard', () => {
     });
     await handler.execute('.flags master +n', ctx);
 
-    expect(ctx.reply).toHaveBeenCalledWith('Only owners (+n) can grant master or higher flags.');
+    expect(ctx.reply).toHaveBeenCalledWith(
+      'Only owners (+n) can grant master (+m) or owner (+n) flags.',
+    );
     expect(perms.getUser('master')!.global).toBe('m');
   });
 
@@ -411,7 +417,9 @@ describe('.flags owner escalation guard', () => {
     });
     await handler.execute('.flags target +m', ctx);
 
-    expect(ctx.reply).toHaveBeenCalledWith('Only owners (+n) can grant master or higher flags.');
+    expect(ctx.reply).toHaveBeenCalledWith(
+      'Only owners (+n) can grant master (+m) or owner (+n) flags.',
+    );
     expect(perms.getUser('target')!.global).toBe('o');
   });
 

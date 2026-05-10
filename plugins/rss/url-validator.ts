@@ -21,13 +21,23 @@ import type { LookupAddress } from 'node:dns';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 
-/** Ports the validator will connect to by default. Operators can override via opts. */
+/**
+ * Ports the validator will connect to by default. Pinned to scheme
+ * defaults — `''` (no explicit port → 80/443), `80`, and `443`. Earlier
+ * defaults included `8080` / `8443`; those were dropped because they
+ * commonly host internal control panels (admin UIs, status pages, the
+ * bot-link hub itself), and an SSRF surface that walks past those by
+ * default conflicts with the validator's "be paranoid" posture.
+ *
+ * Operators who need alternate ports must explicitly opt in via the
+ * {@link UrlValidationOpts.allowedPorts} option per call site — making
+ * the choice visible in code review rather than relying on a permissive
+ * default.
+ */
 export const DEFAULT_ALLOWED_PORTS: ReadonlySet<string> = new Set([
   '', // no explicit port → scheme default (443 / 80)
   '80',
   '443',
-  '8080',
-  '8443',
 ]);
 
 export interface UrlValidationOpts {

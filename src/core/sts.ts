@@ -45,6 +45,16 @@ export interface STSRecord {
 
 export const STS_DB_NAMESPACE = '_sts';
 
+/**
+ * Lowercase the host so STSStore lookups are case-insensitive. Every code
+ * path that reads from or writes to `_sts` must funnel through here so a
+ * future direct DB read or new call site doesn't desync from
+ * `STSStore.get/put/delete`'s implicit lowercasing.
+ */
+export function normalizeHost(host: string): string {
+  return host.toLowerCase();
+}
+
 // ---------------------------------------------------------------------------
 // Parser
 // ---------------------------------------------------------------------------
@@ -68,7 +78,13 @@ export function parseSTSDirective(rawValue: string | undefined): STSDirective | 
     const val = (rawVal ?? '').trim();
     if (key === 'duration') {
       const n = parseInt(val, 10);
-      if (Number.isFinite(n) && n >= 0) duration = n;
+      // Cap duration at one year. The IRCv3 spec doesn't bound the field,
+      // but a multi-year lockout from a single misbehaving advertisement
+      // is operationally hostile, and no real network publishes anything
+      // longer than ~30 days. Without the clamp a server could pin the
+      // bot for `Number.MAX_SAFE_INTEGER` seconds (~285M years).
+      const STS_MAX_DURATION = 365 * 86400;
+      if (Number.isFinite(n) && n >= 0) duration = Math.min(n, STS_MAX_DURATION);
     } else if (key === 'port') {
       const n = parseInt(val, 10);
       if (Number.isFinite(n) && n > 0 && n < 65536) port = n;
@@ -95,7 +111,7 @@ export class STSStore {
 
   /** Return the active policy for `host`, or null if none / expired. */
   get(host: string, now: number = Date.now()): STSRecord | null {
-    const key = host.toLowerCase();
+    const key = normalizeHost(host);
     const raw = this.db.get(STS_DB_NAMESPACE, key);
     if (!raw) return null;
     let parsed: unknown;
@@ -137,7 +153,7 @@ export class STSStore {
    * and persist the record.
    */
   put(host: string, directive: STSDirective, now: number = Date.now()): STSRecord | null {
-    const key = host.toLowerCase();
+    const key = normalizeHost(host);
     if (directive.duration === 0) {
       this.db.del(STS_DB_NAMESPACE, key);
       return null;
@@ -154,7 +170,7 @@ export class STSStore {
 
   /** Delete any cached policy for `host`. Used by admin commands / tests. */
   delete(host: string): void {
-    this.db.del(STS_DB_NAMESPACE, host.toLowerCase());
+    this.db.del(STS_DB_NAMESPACE, normalizeHost(host));
   }
 }
 

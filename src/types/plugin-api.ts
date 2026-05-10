@@ -693,4 +693,12 @@ export interface PluginBotConfig {
   readonly logging: Readonly<LoggingConfig>;
   /** Chanmod plugin credentials from bot.json. Only exposed to chanmod — other plugins ignore this. */
   readonly chanmod?: Readonly<ChanmodBotConfig>;
+  /**
+   * Bot version string (semver), sourced from the project's `package.json`
+   * at boot. Use this for CTCP VERSION replies, banners, status output —
+   * anywhere a plugin would otherwise reach for `node:fs` to crack open
+   * `package.json`. Plugin filesystem access is forbidden per
+   * SECURITY.md §4.1.
+   */
+  readonly version: string;
 }

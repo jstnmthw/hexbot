@@ -290,6 +290,12 @@ function loadConfig(api: PluginAPI): RssPluginConfig {
       default: false,
       description: 'Permit unencrypted http:// feed URLs (https-only when false)',
     },
+    {
+      key: 'max_feeds',
+      type: 'int',
+      default: 100,
+      description: 'Hard cap on the number of active feeds — `!rss add` refuses past this',
+    },
   ]);
   const rawFeeds = api.settings.bootConfig.feeds;
   const feeds: FeedConfig[] = Array.isArray(rawFeeds) ? rawFeeds.filter(isFeedConfig) : [];
@@ -303,5 +309,6 @@ function loadConfig(api: PluginAPI): RssPluginConfig {
     max_per_poll: intOr('max_per_poll', 5),
     max_feed_bytes: intOr('max_feed_bytes', 5 * 1024 * 1024),
     allow_http: api.settings.getFlag('allow_http'),
+    max_feeds: intOr('max_feeds', 100),
   };
 }

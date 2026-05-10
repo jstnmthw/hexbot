@@ -9,6 +9,7 @@
 // Both helpers are intentionally small and read-only so they can be
 // snapshot-tested against an in-memory database without any DCC scaffolding.
 import type { BotDatabase, ModLogEntry } from '../../database';
+import { stripFormatting } from '../../utils/strip-formatting';
 
 /** Summary of failed auth activity against a single handle. */
 export interface LoginSummary {
@@ -84,11 +85,15 @@ export function buildLoginSummary(
 }
 
 function extractPeer(row: ModLogEntry): { timestamp: number; peer: string } {
-  const peer =
+  // mod_log scrubs `\r\n\0` at write time but preserves mIRC formatting
+  // bytes. Banner replay puts this string directly onto the user's
+  // terminal — strip color/control bytes so a stored `peer` value can't
+  // repaint the recipient's session.
+  const rawPeer =
     row.metadata && typeof row.metadata === 'object' && typeof row.metadata.peer === 'string'
       ? row.metadata.peer
       : '?';
-  return { timestamp: row.timestamp, peer };
+  return { timestamp: row.timestamp, peer: stripFormatting(rawPeer) };
 }
 
 /** Aggregate summary shown above the REPL prompt on startup. */

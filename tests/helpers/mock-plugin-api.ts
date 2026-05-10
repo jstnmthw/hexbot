@@ -93,6 +93,7 @@ export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginA
       identity: { method: 'hostmask' as const, require_acc_for: [] },
       services: { type: 'none' as const, nickserv: 'NickServ', sasl: false },
       logging: { level: 'info' as const, mod_actions: false },
+      version: '0.0.0-test',
     },
     getServerSupports: vi.fn().mockReturnValue({}),
     ircLower: vi.fn((s: string) => s.toLowerCase()),

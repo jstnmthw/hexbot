@@ -120,7 +120,13 @@ export function createReconnectDriver(deps: ReconnectDriverDeps): ReconnectDrive
       // consecutiveFailures starts at 1 when we compute (incremented in
       // onDisconnect before this is called), so 2^(n-1) keeps the first
       // retry at `initial`.
-      const exponent = Math.max(0, consecutiveFailures - 1);
+      // Cap the exponent symmetric to the rate-limited path — without
+      // this, `2 ** consecutiveFailures` overflows to `Infinity` once
+      // `consecutiveFailures > 1023` (a hot-loop reconnect spike during
+      // a network blackout), and `Math.min(Infinity, max)` returns the
+      // configured max but only after a redundant 64-bit multiply.
+      const TRANSIENT_DOUBLING_CAP = 20;
+      const exponent = Math.min(Math.max(0, consecutiveFailures - 1), TRANSIENT_DOUBLING_CAP);
       const base = config.transient_initial_ms * 2 ** exponent;
       return Math.min(base, config.transient_max_ms) + jitter;
     }

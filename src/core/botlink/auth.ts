@@ -75,8 +75,22 @@ export function isValidIP(input: string): boolean {
 export function isPrivateOrLoopback(host: string): boolean {
   const normalized = normalizeIP(host);
   if (normalized === '::1') return true;
+  // IPv6 unique-local (`fc00::/7`, RFC 4193) and link-local
+  // (`fe80::/10`, RFC 4291) are private-network ranges symmetric to
+  // RFC1918 IPv4. Operators binding the hub on a ULA address (Tailscale,
+  // WireGuard mesh) deserve the same "no warning" treatment as a 10.x
+  // bind. Match by lowercase prefix — `normalizeIP` lowercases the
+  // address before this point.
+  if (
+    normalized.startsWith('fc') ||
+    normalized.startsWith('fd') ||
+    normalized.startsWith('fe80:') ||
+    normalized.startsWith('fe80::')
+  ) {
+    return true;
+  }
   // If the string still contains ':' after normalizeIP, it's a non-mapped
-  // IPv6 address. Only ::1 is safe; everything else warns.
+  // IPv6 address that didn't match the prefixes above — public scope.
   if (normalized.includes(':')) return false;
   const num = ipv4ToNum(normalized);
   if (Number.isNaN(num)) return false;
@@ -104,10 +118,14 @@ export function isWhitelisted(ip: string, cidrs: string[]): boolean {
   if (Number.isNaN(ipNum)) return false; // non-IPv4 — not whitelisted
 
   for (const cidr of cidrs) {
+    // Accept bare IPv4 entries as if `/32` was specified — operators
+    // commonly drop the prefix on single-host whitelist entries
+    // (`10.0.0.5` rather than `10.0.0.5/32`). The config-load validator
+    // already warned about non-IPv4 strings; everything that survives
+    // to here is structurally either `<ip>` or `<ip>/<prefix>`.
     const slash = cidr.indexOf('/');
-    if (slash === -1) continue;
-    const baseIP = cidr.slice(0, slash);
-    const prefix = Number(cidr.slice(slash + 1));
+    const baseIP = slash === -1 ? cidr : cidr.slice(0, slash);
+    const prefix = slash === -1 ? 32 : Number(cidr.slice(slash + 1));
     if (prefix < 0 || prefix > 32 || !Number.isInteger(prefix)) continue;
     const baseNum = ipv4ToNum(baseIP);
     if (Number.isNaN(baseNum)) continue;
@@ -119,6 +137,50 @@ export function isWhitelisted(ip: string, cidrs: string[]): boolean {
     if ((ipNum & mask) === (baseNum & mask)) return true;
   }
   return false;
+}
+
+/**
+ * Validate `botlink.auth_ip_whitelist` at config load. Returns the cleaned
+ * list (with bare IPv4 promoted to `/32`) and emits a `[security]` warning
+ * for each entry that doesn't parse as IPv4. IPv6 / free-form host strings
+ * are silently dropped — they would otherwise produce confusing log output
+ * the first time a connection arrives from one of them.
+ */
+export function validateAuthIpWhitelist(
+  entries: ReadonlyArray<string>,
+  warn: (msg: string) => void,
+): string[] {
+  const cleaned: string[] = [];
+  for (const raw of entries) {
+    const entry = raw.trim();
+    if (entry.length === 0) continue;
+    const slash = entry.indexOf('/');
+    const baseIP = slash === -1 ? entry : entry.slice(0, slash);
+    const baseNum = ipv4ToNum(normalizeIP(baseIP));
+    if (Number.isNaN(baseNum)) {
+      warn(
+        `[security] botlink.auth_ip_whitelist entry "${raw}" is not an IPv4 address or CIDR; ` +
+          `IPv6 and host strings are not supported. Entry will be ignored.`,
+      );
+      continue;
+    }
+    if (slash !== -1) {
+      const prefix = Number(entry.slice(slash + 1));
+      if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) {
+        warn(
+          `[security] botlink.auth_ip_whitelist entry "${raw}" has an invalid /prefix (must be 0–32). ` +
+            `Entry will be ignored.`,
+        );
+        continue;
+      }
+      cleaned.push(entry);
+    } else {
+      // Bare IPv4 — expand to /32 so the runtime path doesn't have to
+      // special-case it on every admission check.
+      cleaned.push(`${baseIP}/32`);
+    }
+  }
+  return cleaned;
 }
 
 // ---------------------------------------------------------------------------
@@ -193,6 +255,21 @@ export class BotLinkAuthManager {
     this.logger = logger;
     this.eventBus = eventBus;
     this.db = db;
+    // Surface bad `auth_ip_whitelist` entries at the moment the hub is
+    // constructed — earlier than admission, so operators see one warning
+    // at startup rather than per-connection. The cleaned list (with
+    // bare IPv4 promoted to /32) replaces the raw config value so every
+    // downstream call to `isWhitelisted()` reads the validated form.
+    if (config.auth_ip_whitelist?.length) {
+      const warn = (msg: string): void => {
+        if (logger) logger.warn(msg);
+        else console.warn(msg);
+      };
+      this.config = {
+        ...config,
+        auth_ip_whitelist: validateAuthIpWhitelist(config.auth_ip_whitelist, warn),
+      };
+    }
     // `config.password` and `config.link_salt` are validated in
     // validateResolvedSecrets before the hub is constructed. The
     // non-null assertion reflects that contract — failing here would

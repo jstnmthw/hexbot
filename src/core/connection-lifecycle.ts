@@ -466,6 +466,12 @@ function ingestSTSDirective(deps: ConnectionLifecycleDeps): void {
   // something upstream went wrong — bail out loudly rather than quietly
   // extending the expiry or swapping the recorded port from the attacker-
   // controlled session.
+  // Note: this also blocks a *legitimate* `duration=0` retraction over
+  // plaintext. That's intentional — accepting any plaintext mutation
+  // (even a "delete the policy" one) under an active policy is the same
+  // surface a MITM would exploit. Operators who need to drop a stored
+  // STS policy can either reconnect over TLS first or remove the row
+  // from the `_sts` namespace manually.
   if (deps.config.irc.tls === false && deps.stsStore?.get(deps.config.irc.host)) {
     deps.logger.warn(
       `Refusing to ingest STS directive from plaintext session for ${deps.config.irc.host} — a policy already exists`,
@@ -490,6 +496,19 @@ function ingestSTSDirective(deps: ConnectionLifecycleDeps): void {
   const directive = parseSTSDirective(rawValue);
   if (!directive) {
     deps.logger.warn(`Ignoring malformed STS directive "${rawValue}"`);
+    return;
+  }
+  // Plaintext duration-only lockout guard: a directive with no `port=` field
+  // received over plaintext leaves `enforceSTS` no upgrade target — every
+  // subsequent reconnect refuses, locking the operator out for the policy
+  // window. Reject the directive outright; require operators to configure
+  // TLS up front (or the server to advertise a port over plaintext) before
+  // any STS pinning takes effect. See SECURITY.md / audit 2026-05-10.
+  if (deps.config.irc.tls === false && directive.port === undefined) {
+    deps.logger.warn(
+      `[security] Refusing to persist STS policy for ${deps.config.irc.host}: directive received over plaintext has no port=, ` +
+        `which would lock the bot out of the host for ${directive.duration}s. Reconnect over TLS to ingest this policy.`,
+    );
     return;
   }
   deps.logger.info(

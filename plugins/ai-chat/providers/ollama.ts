@@ -14,6 +14,27 @@ import {
 /** Short timeout for the startup /api/tags ping — we just want "is the daemon alive?". */
 const OLLAMA_TAGS_TIMEOUT_MS = 5_000;
 
+/**
+ * Best-effort check: is `hostname` loopback / RFC1918 / link-local?
+ * Used by the http://-without-TLS warning so we only nag operators when
+ * the cleartext leak actually crosses a network boundary. Hostname-only
+ * (no DNS lookup) — a hostname like `internal.example` is treated as
+ * "public" and warned, which is the conservative side of the call.
+ */
+function isLocalOrPrivateHost(hostname: string): boolean {
+  // Strip surrounding `[]` from IPv6 literals.
+  const host = hostname.replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+  if (host === 'localhost' || host === '::1' || host.startsWith('127.')) return true;
+  // RFC1918 IPv4 quick check via leading-octet match.
+  if (/^10\./.test(host)) return true;
+  if (/^192\.168\./.test(host)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
+  // Link-local IPv4 169.254/16, IPv6 fe80::/10, IPv6 ULA fc00::/7.
+  if (/^169\.254\./.test(host)) return true;
+  if (host.startsWith('fe80:') || host.startsWith('fc') || host.startsWith('fd')) return true;
+  return false;
+}
+
 /** 4 characters per token is the standard conservative heuristic for English
  *  (GPT-style tokenisers average ~3.8 chars/token). Rounding up keeps budget
  *  enforcement on the safe side of the true count. */
@@ -61,6 +82,41 @@ export class OllamaProvider implements AIProvider {
   async initialize(config: AIProviderConfig): Promise<void> {
     if (!config.baseUrl) {
       throw new AIProviderError('Ollama baseUrl is empty', 'other');
+    }
+    // Validate the URL up front so a misconfigured `base_url` (typo,
+    // missing scheme, smuggled credentials in `userinfo`) fails the init
+    // ping rather than later mid-request. `URL` throws on malformed input.
+    let parsed: URL;
+    try {
+      parsed = new URL(config.baseUrl);
+    } catch {
+      throw new AIProviderError(
+        `Ollama baseUrl is not a valid URL: ${JSON.stringify(config.baseUrl)}`,
+        'other',
+      );
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new AIProviderError(
+        `Ollama baseUrl must use http:// or https:// (got "${parsed.protocol}")`,
+        'other',
+      );
+    }
+    if (parsed.username || parsed.password) {
+      throw new AIProviderError(
+        'Ollama baseUrl must not embed userinfo (user:password@host)',
+        'other',
+      );
+    }
+    // SSRF / cleartext defense-in-depth: when the configured base URL
+    // points at a non-loopback / non-RFC1918 host over plaintext HTTP,
+    // every prompt and response transits the wire in clear. Warn loudly
+    // (not fatal — operators tunneling through localhost-bound proxies
+    // legitimately use `http://` to a non-loopback proxy address).
+    if (parsed.protocol === 'http:' && !isLocalOrPrivateHost(parsed.hostname)) {
+      this.logger?.warn(
+        `[security] Ollama base_url uses http:// to non-loopback host "${parsed.hostname}". ` +
+          'Every prompt/response transits the wire in cleartext. Switch to https:// or tunnel via a localhost-bound proxy.',
+      );
     }
     this.baseUrl = config.baseUrl.replace(/\/+$/, '');
     // SECURITY: `modelName` must only ever be set from operator config

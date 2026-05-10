@@ -1050,7 +1050,10 @@ describe('Services', () => {
           nickserv: 'NickServ',
           password: 'pw',
           sasl: false,
-          services_host_pattern: 'services.*',
+          // Audit 2026-05-10: services_host_pattern now matches against the
+          // full nick!ident@host hostmask. Tests use `*!*@services.*` to
+          // mirror the production recommendation in SECURITY.md §3.2.
+          services_host_pattern: '*!*@services.*',
         },
         eventBus,
       });
@@ -1075,7 +1078,10 @@ describe('Services', () => {
           nickserv: 'NickServ',
           password: 'pw',
           sasl: false,
-          services_host_pattern: 'services.*',
+          // Audit 2026-05-10: services_host_pattern now matches against the
+          // full nick!ident@host hostmask. Tests use `*!*@services.*` to
+          // mirror the production recommendation in SECURITY.md §3.2.
+          services_host_pattern: '*!*@services.*',
         },
         eventBus,
       });

@@ -104,7 +104,13 @@ export class MessageQueue {
   constructor(options: MessageQueueOptions = {}) {
     this.rate = options.rate ?? 2;
     this.burst = options.burst ?? 4;
-    this.costMs = Math.floor(1000 / this.rate);
+    // Clamp `costMs >= 1`. For `rate >= 1001`, `Math.floor(1000/rate)` is
+    // 0 and `setInterval(..., 0)` fires as fast as the event loop allows
+    // — pegging a CPU core for nothing. The token-bucket math is also
+    // undefined when costMs is 0, so we'd never deduct budget. The
+    // `core.queue.rate` Zod schema rejects values above 1000, but the
+    // runtime guard keeps the invariant local to this class.
+    this.costMs = Math.max(1, Math.floor(1000 / this.rate));
     // Capacity must allow at least 1 message so drain() can always accumulate enough budget
     this.capacityMs = Math.max(this.costMs, this.burst * this.costMs);
     this.budgetMs = this.burst * this.costMs;
@@ -168,7 +174,16 @@ export class MessageQueue {
   flush(): void {
     while (this.totalPending > 0) {
       const fn = this.popNext();
-      if (fn) fn();
+      if (!fn) break;
+      try {
+        fn();
+      } catch (err) {
+        // Per-message isolation matching `flushWithDeadline`. One bad
+        // send must not abort the flush loop on shutdown — the operator
+        // is mid-`.restart`, and dropping the rest of the queue would
+        // lose audit-relevant lines (kicks, mode changes) silently.
+        this.logger?.debug('flush() send failed:', err);
+      }
     }
   }
 
@@ -231,11 +246,16 @@ export class MessageQueue {
     if (!Number.isFinite(burst) || burst <= 0) return;
     this.rate = rate;
     this.burst = burst;
-    this.costMs = Math.floor(1000 / rate);
+    this.costMs = Math.max(1, Math.floor(1000 / rate));
     this.capacityMs = Math.max(this.costMs, burst * this.costMs);
     // Clamp the live budget to the new capacity so a shrink takes
     // effect immediately rather than waiting for the next refill.
     if (this.budgetMs > this.capacityMs) this.budgetMs = this.capacityMs;
+    // Restart the drain timer so the new `costMs` interval takes effect
+    // — without this, a `.set core queue.rate <new>` only applied to the
+    // budget math; the actual setInterval cadence stayed at the
+    // construction-time costMs until process restart.
+    this.start();
   }
 
   /**
@@ -336,7 +356,17 @@ export class MessageQueue {
   /** Start (or restart) the drain timer. */
   private start(): void {
     this.stop();
-    this.timer = setInterval(() => this.drain(), this.costMs);
+    // Wrap drain() in a try/catch so a misbehaving send callback (e.g.
+    // an irc-framework throw on a torn-down socket) can't kill the
+    // setInterval and silently freeze the queue. Without this, a single
+    // bad send leaves every subsequent enqueue stranded.
+    this.timer = setInterval(() => {
+      try {
+        this.drain();
+      } catch (err) {
+        this.logger?.debug('drain() failed:', err);
+      }
+    }, this.costMs);
     // Don't keep the process alive just for the queue timer
     if (this.timer && typeof this.timer === 'object' && 'unref' in this.timer) {
       this.timer.unref();

@@ -178,6 +178,10 @@ describe('validateResolvedSecrets', () => {
     cfg.services.sasl = true;
     cfg.services.sasl_mechanism = 'EXTERNAL';
     cfg.services.password = '';
+    // EXTERNAL requires TLS + cert/key per audit 2026-05-10 hardening.
+    cfg.irc.tls = true;
+    cfg.irc.tls_cert = '/etc/hexbot/cert.pem';
+    cfg.irc.tls_key = '/etc/hexbot/key.pem';
     expect(() => validateResolvedSecrets(cfg)).not.toThrow();
   });
 
@@ -199,15 +203,25 @@ describe('validateResolvedSecrets', () => {
     expect(() => validateResolvedSecrets(cfg)).toThrow(/SASL PLAIN requires irc\.tls=true/);
   });
 
-  it('passes when SASL EXTERNAL is configured without TLS key on the cfg shape', () => {
-    // EXTERNAL uses TLS client certs, so the plaintext-credential concern
-    // doesn't apply even though real deployments must still enable TLS.
+  it('rejects SASL EXTERNAL without TLS (audit 2026-05-10)', () => {
+    // EXTERNAL is CertFP — requires both TLS and cert/key files. Failing
+    // at config load gives a clear actionable error instead of an opaque
+    // TLS-handshake message at connect time.
     const cfg = baseConfig();
     cfg.irc.tls = false;
     cfg.services.sasl = true;
     cfg.services.sasl_mechanism = 'EXTERNAL';
     cfg.services.password = '';
-    expect(() => validateResolvedSecrets(cfg)).not.toThrow();
+    expect(() => validateResolvedSecrets(cfg)).toThrow(/SASL EXTERNAL requires irc\.tls=true/);
+  });
+
+  it('rejects SASL EXTERNAL without tls_cert/tls_key', () => {
+    const cfg = baseConfig();
+    cfg.irc.tls = true;
+    cfg.services.sasl = true;
+    cfg.services.sasl_mechanism = 'EXTERNAL';
+    cfg.services.password = '';
+    expect(() => validateResolvedSecrets(cfg)).toThrow(/tls_cert and irc\.tls_key/);
   });
 
   const TEST_SALT = '0'.repeat(64);

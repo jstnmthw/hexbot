@@ -2,11 +2,25 @@
 // Wraps AdminListStore<BanRecord> with IRC-aware key formatting and expiry logic.
 import type { BotDatabase } from '../database';
 import type { BanRecord, PluginDB } from '../types';
+import { sanitize } from '../utils/sanitize';
+import { stripFormatting } from '../utils/strip-formatting';
 import { AdminListStore } from './admin-list-store';
 
 export type { BanRecord } from '../types';
 
 const NAMESPACE = '_bans';
+
+/**
+ * Persistence-boundary input check for a ban mask. Mirrors the posture
+ * mod_log enforces on every text column at write time. Callers (chanmod's
+ * `!ban`, plugin `api.banStore`, bot-link relay paths) often validate at
+ * their own surface, but the store itself must not trust the inputs.
+ *
+ * Accepts: a non-empty `nick!ident@host` shape, whitespace-free, with
+ * `!` and `@` present. Rejects raw IRC formatting so a banner-injected
+ * mask can't smuggle color/control bytes into stored audit metadata.
+ */
+const BAN_MASK_RE = /^[^\s!@]+![^\s!@]+@[^\s!@]+$/;
 
 /** Runtime shape check — the JSON we load from the legacy plugin namespace is
  *  untrusted, so every field is validated before the record is persisted
@@ -43,13 +57,32 @@ export class BanStore {
 
   /** Store a ban with a duration in milliseconds (0 = permanent). */
   storeBan(channel: string, mask: string, by: string, durationMs: number): void {
+    // Persistence-boundary validation: callers should already have sanitized
+    // these values, but the store can't assume that — bot-link relay paths
+    // and plugin-callable surfaces both reach here. Strip formatting/CRLF
+    // and require a well-shaped mask before any DB write.
+    const cleanMask = sanitize(stripFormatting(mask));
+    const cleanBy = sanitize(stripFormatting(by));
+    if (cleanMask.length === 0 || !BAN_MASK_RE.test(cleanMask)) {
+      throw new Error(`BanStore.storeBan: invalid mask "${mask}" — expected nick!ident@host`);
+    }
+    if (cleanBy.length === 0) {
+      throw new Error('BanStore.storeBan: `by` cannot be empty');
+    }
+    // Duration normalization: NaN / Infinity / negative durations would
+    // otherwise produce an `expires` that's already in the past (lifting
+    // the ban on the next sweep) or a NaN sentinel that compares falsy.
+    if (!Number.isFinite(durationMs)) {
+      throw new Error(`BanStore.storeBan: durationMs must be finite (got ${durationMs})`);
+    }
+    const safeDuration = Math.max(0, Math.floor(durationMs));
     const now = Date.now();
-    const expires = durationMs === 0 ? 0 : now + durationMs;
-    const existing = this.getBan(channel, mask);
+    const expires = safeDuration === 0 ? 0 : now + safeDuration;
+    const existing = this.getBan(channel, cleanMask);
     const record: BanRecord = {
-      mask,
+      mask: cleanMask,
       channel: this.ircLower(channel),
-      by,
+      by: cleanBy,
       ts: now,
       expires,
       sticky: existing?.sticky,

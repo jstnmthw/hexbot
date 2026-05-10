@@ -61,13 +61,40 @@ function parseMetadataSafe(
   logger: LoggerLike | null,
 ): Record<string, unknown> | null {
   if (raw == null) return null;
+  let parsed: unknown;
   try {
-    return JSON.parse(raw) as Record<string, unknown>;
+    parsed = JSON.parse(raw);
   } catch (err) {
     logger?.warn(
       `mod_log row ${rowId} has malformed metadata JSON; returning null (${(err as Error).message})`,
     );
     return null;
+  }
+  // `JSON.parse` happily returns scalars/arrays/`null` — none are valid
+  // metadata payloads. Reject anything that isn't a plain object so a
+  // corrupt row (or a downstream consumer that wrote `JSON.stringify(42)`
+  // by mistake) doesn't poison every `.modlog` query that touches it.
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    logger?.warn(`mod_log row ${rowId} metadata is not a plain object; returning null`);
+    return null;
+  }
+  return parsed as Record<string, unknown>;
+}
+
+/**
+ * Match `LogModActionOptions.action`. Documented vocabulary is short
+ * lower-kebab tokens (`kick`, `ban`, `chanset-set`, `auth-fail`, ...);
+ * limit to that shape so a typo at a call site (`'KICK'`, `'kick:bad'`)
+ * fails fast instead of producing rows that never match `.modlog action`
+ * filters.
+ */
+const VALID_ACTION_RE = /^[a-z][a-z0-9-]{0,63}$/;
+
+function validateAction(action: string): void {
+  if (!VALID_ACTION_RE.test(action)) {
+    throw new Error(
+      `logModAction: invalid action "${action}" — must match ${VALID_ACTION_RE.source}`,
+    );
   }
 }
 
@@ -223,8 +250,12 @@ export interface ModLogOptions {
 export class ModLog {
   private readonly db: DatabaseType;
   private readonly logger: LoggerLike | null;
-  private readonly modLogEnabled: boolean;
-  private readonly modLogRetentionDays: number;
+  // Mutable so the BotDatabase forwarders for `core.logging.mod_actions`
+  // and `core.logging.mod_log_retention_days` can flip them at runtime.
+  // Initial value seeded from constructor options; thereafter the setters
+  // own the field.
+  private modLogEnabled: boolean;
+  private modLogRetentionDays: number;
   private eventBus: BotEventBus | null = null;
   /**
    * Flipped once SQLITE_FULL is observed on any write. While set, writes
@@ -341,6 +372,7 @@ export class ModLog {
       metadata = null,
     } = options;
 
+    validateAction(action);
     validateModActionOptions(source, plugin, outcome);
 
     // Scrub every display-bound text field on write. SQL injection is not
@@ -620,6 +652,20 @@ export class ModLog {
    */
   pruneOldModLogRows(): void {
     this.pruneModLogIfConfigured();
+  }
+
+  /**
+   * Runtime toggles invoked by `BotDatabase` setters when the operator
+   * flips `core.logging.mod_actions` or changes
+   * `core.logging.mod_log_retention_days`. Past rows aren't affected by
+   * the enable flip; the new retention value applies on the next prune.
+   */
+  setModLogEnabled(enabled: boolean): void {
+    this.modLogEnabled = enabled;
+  }
+
+  setModLogRetentionDays(days: number): void {
+    this.modLogRetentionDays = days;
   }
 
   private pruneModLogIfConfigured(): void {

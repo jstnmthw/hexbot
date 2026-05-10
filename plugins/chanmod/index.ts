@@ -86,6 +86,7 @@ export function init(api: PluginAPI): void {
       config.chanserv_nick,
       config.anope_recover_step_delay_ms,
       probeState,
+      config.chanserv_recover_cooldown_ms,
     );
     chain.addBackend(backend);
     concreteBackend = backend;

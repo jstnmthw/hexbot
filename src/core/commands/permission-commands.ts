@@ -179,9 +179,15 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
             ? permissions.getUser(ctx.nick)
             : permissions.findByHostmask(`${ctx.nick}!${ctx.ident ?? ''}@${ctx.hostname ?? ''}`);
         const callerIsOwner = caller?.global.includes(OWNER_FLAG) ?? false;
-        const grantsMasterOrHigher = flagsArg.includes(OWNER_FLAG) || flagsArg.includes('m');
+        // Strip leading `+`/`-` so a `-m` revoke isn't treated as a grant.
+        // The grammar accepts both `+m` (add) and `-m` (revoke); only
+        // additions need the owner gate. `flagsArg` arrives with at most
+        // one leading sign per parseCommandArgs.
+        const isRevoke = flagsArg.startsWith('-');
+        const grantsMasterOrHigher =
+          !isRevoke && (flagsArg.includes(OWNER_FLAG) || flagsArg.includes('m'));
         if (grantsMasterOrHigher && !callerIsOwner) {
-          ctx.reply('Only owners (+n) can grant master or higher flags.');
+          ctx.reply('Only owners (+n) can grant master (+m) or owner (+n) flags.');
           return;
         }
       }
@@ -203,11 +209,15 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
           source,
           ctx.source,
         );
-        ctx.reply(`Channel flags for "${handle}" in ${channel} set to "${flagsArg}"`);
+        ctx.reply(
+          `Channel flags for "${stripFormatting(handle)}" in ${stripFormatting(channel)} set to "${stripFormatting(flagsArg)}"`,
+        );
       } else {
         // Global flags
         permissions.setGlobalFlags(handle, flagsArg.replace(/^\+/, ''), source, ctx.source);
-        ctx.reply(`Global flags for "${handle}" set to "${flagsArg}"`);
+        ctx.reply(
+          `Global flags for "${stripFormatting(handle)}" set to "${stripFormatting(flagsArg)}"`,
+        );
       }
     },
   );

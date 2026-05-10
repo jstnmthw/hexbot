@@ -47,10 +47,12 @@ interface LeafConnection {
   partyJoinRate: RateCounter;
   partyPartRate: RateCounter;
   /**
-   * Once-per-connection log latch for BSAY drops — we warn on the first
-   * overflow in a given burst and then fall silent until the rate
-   * window resets. Keeps a flood from spamming the audit log while
-   * still surfacing the fact that the leaf hit the ceiling.
+   * Once-per-connection log latch for BSAY drops. We warn on the first
+   * overflow seen on the connection and stay silent for the rest of
+   * its lifetime — a leaf that floods BSAY once will otherwise produce
+   * a wall of warnings when the next batch hits the ceiling. The
+   * comment used to claim this resets per rate-window; it does not.
+   * Reconnecting the leaf is the only way to re-arm the latch.
    */
   bsayDropLogged: boolean;
   lastMessageAt: number;

@@ -41,6 +41,10 @@ const FATAL_PATTERNS: Array<[RegExp, string]> = [
   [/unable\s+to\s+verify\s+the\s+first\s+certificate/i, 'TLS certificate untrusted'],
   [/self[-\s]signed\s+certificate/i, 'TLS self-signed certificate'],
   [/CERT_HAS_EXPIRED/i, 'TLS certificate expired'],
+  [/CERT_REVOKED/i, 'TLS certificate revoked'],
+  [/ERR_TLS_CERT_ALTNAME_INVALID/i, 'TLS certificate altname mismatch'],
+  [/DEPTH_ZERO_SELF_SIGNED_CERT/i, 'TLS self-signed certificate'],
+  [/UNABLE_TO_GET_ISSUER_CERT/i, 'TLS certificate untrusted (no issuer)'],
 ];
 
 const RATE_LIMITED_PATTERNS: Array<[RegExp, string]> = [
