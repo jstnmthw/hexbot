@@ -94,6 +94,31 @@ export function handleBotSelfDeop(
             state.cycles.schedule(2000, () => {
               api.join(channel);
               state.enforcementCooldown.delete(cooldownKey);
+              // Post-cycle verification ladder. On services-free networks an
+              // attacker who set +i / +k between PART and JOIN can leave the
+              // bot AWOL — we wouldn't notice until the next presence-check
+              // sweep. Two retry windows give services a chance to grant
+              // INVITE; after that we log loudly and let the connection-level
+              // presence check pick it up. (W11.2)
+              const verify = (attempt: number, delayMs: number): void => {
+                state.cycles.schedule(delayMs, () => {
+                  const ch = api.getChannel(channel);
+                  if (ch) return; // Successfully rejoined — done.
+                  if (attempt < 2) {
+                    api.warn(
+                      `Cycle-rejoin verification failed for ${channel} (attempt ${attempt + 1}); retrying`,
+                    );
+                    api.join(channel);
+                    verify(attempt + 1, delayMs * 2);
+                  } else {
+                    api.error(
+                      `Cycle-rejoin failed for ${channel} after retries — likely +i/+k set during cycle window. ` +
+                        `Falling back to presence-check sweep / ChanServ INVITE recovery.`,
+                    );
+                  }
+                });
+              };
+              verify(0, 5000);
             });
           });
         }
@@ -145,7 +170,7 @@ export function handleBotOpped(
     const massReop = api.channelSettings.getFlag(channel, 'mass_reop_on_recovery');
     if (massReop) {
       state.scheduleEnforcement(recoveryDelay, () => {
-        performMassReop(api, config, channel);
+        performMassReop(api, config, channel, state);
       });
     }
 
@@ -169,7 +194,12 @@ export function handleBotOpped(
  * After the bot regains ops during an elevated threat, scan all channel
  * users and batch re-op/halfop/voice flagged users, deop unauthorized ops.
  */
-function performMassReop(api: PluginAPI, config: ChanmodConfig, channel: string): void {
+function performMassReop(
+  api: PluginAPI,
+  config: ChanmodConfig,
+  channel: string,
+  state?: SharedState,
+): void {
   const ch = api.getChannel(channel);
   if (!ch) return;
 
@@ -220,27 +250,54 @@ function performMassReop(api: PluginAPI, config: ChanmodConfig, channel: string)
     }
   }
 
-  // Send batched mode changes — api.mode() handles ISUPPORT MODES batching
-  if (toOp.length > 0) {
-    api.mode(channel, '+' + 'o'.repeat(toOp.length), ...toOp);
-    api.log(`Mass re-op: opping ${toOp.length} users in ${channel}: ${toOp.join(', ')}`);
-  }
-  if (toDeop.length > 0) {
-    api.mode(channel, '-' + 'o'.repeat(toDeop.length), ...toDeop);
+  // Cap each batch at MASS_REOP_BATCH_SIZE per tick. A 30-flagged-user
+  // channel under hostile recovery would otherwise produce 6-7 MODE lines
+  // (one per direction batch) on the same tick, plus deop/halfop/voice
+  // and `performHostileResponse` — easily 30+ MODE bytes in <100ms which
+  // trips Solanum/Charybdis Excess Flood. Spill remainder to a delayed
+  // second pass through `state.cycles` so teardown cancels it cleanly.
+  // Pairs with the IRCCommands queue (C-IRCCMDS); both are needed since
+  // even queued lines, taken together with hostile-response and bitch
+  // deops, can saturate the per-target depth cap.
+  emitReopBatch(api, channel, '+', 'o', toOp.slice(0, MASS_REOP_BATCH_SIZE), 'opping');
+  emitReopBatch(api, channel, '-', 'o', toDeop.slice(0, MASS_REOP_BATCH_SIZE), 'deopping');
+  emitReopBatch(api, channel, '+', 'h', toHalfop.slice(0, MASS_REOP_BATCH_SIZE), 'halfopping');
+  emitReopBatch(api, channel, '+', 'v', toVoice.slice(0, MASS_REOP_BATCH_SIZE), 'voicing');
+
+  const spillOp = toOp.slice(MASS_REOP_BATCH_SIZE);
+  const spillDeop = toDeop.slice(MASS_REOP_BATCH_SIZE);
+  const spillHalfop = toHalfop.slice(MASS_REOP_BATCH_SIZE);
+  const spillVoice = toVoice.slice(MASS_REOP_BATCH_SIZE);
+  const totalSpill = spillOp.length + spillDeop.length + spillHalfop.length + spillVoice.length;
+  if (totalSpill > 0 && state) {
     api.log(
-      `Mass re-op: deopping ${toDeop.length} unauthorized ops in ${channel}: ${toDeop.join(', ')}`,
+      `Mass re-op: ${totalSpill} actions deferred to second pass in ${channel} to avoid send-rate trip`,
     );
+    state.cycles.schedule(MASS_REOP_SPILL_DELAY_MS, () => {
+      emitReopBatch(api, channel, '+', 'o', spillOp, 'opping (spill)');
+      emitReopBatch(api, channel, '-', 'o', spillDeop, 'deopping (spill)');
+      emitReopBatch(api, channel, '+', 'h', spillHalfop, 'halfopping (spill)');
+      emitReopBatch(api, channel, '+', 'v', spillVoice, 'voicing (spill)');
+    });
   }
-  if (toHalfop.length > 0) {
-    api.mode(channel, '+' + 'h'.repeat(toHalfop.length), ...toHalfop);
-    api.log(
-      `Mass re-op: halfopping ${toHalfop.length} users in ${channel}: ${toHalfop.join(', ')}`,
-    );
-  }
-  if (toVoice.length > 0) {
-    api.mode(channel, '+' + 'v'.repeat(toVoice.length), ...toVoice);
-    api.log(`Mass re-op: voicing ${toVoice.length} users in ${channel}: ${toVoice.join(', ')}`);
-  }
+}
+
+/** Cap on actions per direction-mode emitted in one tick. Mirrors HOSTILE_BATCH_SIZE. */
+const MASS_REOP_BATCH_SIZE = 5;
+/** Delay before emitting the spilled remainder. Aligned with HOSTILE_SPILL_DELAY_MS. */
+const MASS_REOP_SPILL_DELAY_MS = 3000;
+
+function emitReopBatch(
+  api: PluginAPI,
+  channel: string,
+  direction: '+' | '-',
+  modeChar: 'o' | 'h' | 'v',
+  nicks: string[],
+  verb: string,
+): void {
+  if (nicks.length === 0) return;
+  api.mode(channel, direction + modeChar.repeat(nicks.length), ...nicks);
+  api.log(`Mass re-op: ${verb} ${nicks.length} users in ${channel}: ${nicks.join(', ')}`);
 }
 
 /**

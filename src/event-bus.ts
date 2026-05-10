@@ -163,6 +163,15 @@ export class BotEventBus extends EventEmitter {
     return super.emit(event, ...args);
   }
 
+  /**
+   * @deprecated for plugin / subsystem use — prefer {@link trackListener}
+   * which auto-cleans on `removeByOwner`. Direct `.on()` is still valid for
+   * core callers that already manage their own `.off()` lifecycle (Services,
+   * MemoManager, DCCManager, etc., which capture the listener ref into a
+   * field and detach explicitly). For any code path whose lifetime is
+   * shorter than the bus and that doesn't store the listener for explicit
+   * `.off()`, this is the wrong API — it leaks listeners across reloads.
+   */
   override on<K extends keyof BotEvents>(event: K, listener: (...args: BotEvents[K]) => void): this;
   override on(event: string | symbol, listener: (...args: unknown[]) => void): this {
     super.on(event, listener);

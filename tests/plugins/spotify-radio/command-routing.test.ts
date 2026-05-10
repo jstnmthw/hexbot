@@ -8,6 +8,19 @@ import {
 import type { BindHandler, BindType, ChannelHandlerContext, PluginAPI } from '../../../src/types';
 import { createMockPluginAPI } from '../../helpers/mock-plugin-api';
 
+/**
+ * Inject a default-success stub Spotify client so the `!radio on` pre-flight
+ * (token verify) succeeds without hitting the real Spotify API. Tests that
+ * specifically exercise the pre-flight refusal path should call
+ * `setSpotifyClient` themselves with a `verifyToken` that throws.
+ */
+function stubSpotifyClient(h: { instance: SpotifyRadio }): void {
+  h.instance[INTERNALS].setSpotifyClient({
+    getCurrentlyPlaying: vi.fn(async () => null),
+    verifyToken: vi.fn(async () => {}),
+  });
+}
+
 interface CapturedBind<T extends BindType = BindType> {
   type: T;
   flags: string;
@@ -155,6 +168,7 @@ describe('spotify-radio commands', () => {
   it('!radio on <valid-url> as owner — creates session and announces opening line', async () => {
     const h = harness();
     await h.instance.init(h.api);
+    stubSpotifyClient(h);
     await pubBind(h, '!radio')(makeCtx({ args: `on ${VALID}` }));
     expect(h.instance[INTERNALS].getState().session).not.toBeNull();
     expect(h.instance[INTERNALS].getState().session!.jamUrl).toBe(VALID);
@@ -167,6 +181,7 @@ describe('spotify-radio commands', () => {
   it('!radio on <valid-url> as non-owner — refused, session stays null', async () => {
     const h = harness({ ownerHasFlag: false });
     await h.instance.init(h.api);
+    stubSpotifyClient(h);
     await pubBind(h, '!radio')(makeCtx({ args: `on ${VALID}` }));
     expect(h.instance[INTERNALS].getState().session).toBeNull();
     expect(h.notices.some((n) => n.message.toLowerCase().includes('permission'))).toBe(true);
@@ -183,6 +198,7 @@ describe('spotify-radio commands', () => {
   it('!radio on <valid-url> when a session already exists — refused', async () => {
     const h = harness();
     await h.instance.init(h.api);
+    stubSpotifyClient(h);
     await pubBind(h, '!radio')(makeCtx({ args: `on ${VALID}` }));
     h.notices.length = 0;
     h.says.length = 0;
@@ -197,6 +213,7 @@ describe('spotify-radio commands', () => {
   it('!radio off as owner with active session — clears session and announces ended', async () => {
     const h = harness();
     await h.instance.init(h.api);
+    stubSpotifyClient(h);
     await pubBind(h, '!radio')(makeCtx({ args: `on ${VALID}` }));
     h.says.length = 0;
     await pubBind(h, '!radio')(makeCtx({ args: 'off' }));
@@ -215,6 +232,7 @@ describe('spotify-radio commands', () => {
   it('!listen prints status to the channel, not as a notice', async () => {
     const h = harness();
     await h.instance.init(h.api);
+    stubSpotifyClient(h);
     await pubBind(h, '!radio')(makeCtx({ args: `on ${VALID}` }));
     h.says.length = 0;
     h.notices.length = 0;
@@ -226,6 +244,7 @@ describe('spotify-radio commands', () => {
   it('!radio on with services available + verifyUser failing — refused', async () => {
     const h = harness({ servicesAvailable: true, verified: false });
     await h.instance.init(h.api);
+    stubSpotifyClient(h);
     await pubBind(h, '!radio')(makeCtx({ args: `on ${VALID}` }));
     expect(h.instance[INTERNALS].getState().session).toBeNull();
     expect(
@@ -236,6 +255,7 @@ describe('spotify-radio commands', () => {
   it('!radio on with services unavailable — proceeds with hostmask gating only', async () => {
     const h = harness({ servicesAvailable: false, verified: false });
     await h.instance.init(h.api);
+    stubSpotifyClient(h);
     await pubBind(h, '!radio')(makeCtx({ args: `on ${VALID}` }));
     expect(h.instance[INTERNALS].getState().session).not.toBeNull();
   });
@@ -243,6 +263,7 @@ describe('spotify-radio commands', () => {
   it('teardown mid-session clears session and a fresh init starts clean', async () => {
     const h = harness();
     await h.instance.init(h.api);
+    stubSpotifyClient(h);
     await pubBind(h, '!radio')(makeCtx({ args: `on ${VALID}` }));
     expect(h.instance[INTERNALS].getState().session).not.toBeNull();
     h.instance.teardown();
@@ -258,6 +279,7 @@ describe('spotify-radio commands', () => {
   it('strips utm tracking params on !radio on but preserves si', async () => {
     const h = harness();
     await h.instance.init(h.api);
+    stubSpotifyClient(h);
     await pubBind(
       h,
       '!radio',

@@ -78,6 +78,16 @@ export class OllamaProvider implements AIProvider {
    * old captured prompt/context closures. Entries are removed in `finally`.
    */
   private inflightControllers = new Set<AbortController>();
+  /**
+   * Epoch counter — bumped on every `abort()`. A fetch tags itself with the
+   * epoch at start; if its `finally` runs after `abort()` cleared the set
+   * (the AbortError takes a microtask to propagate through `fetch`), the
+   * mismatched epoch tells the cleanup code to skip touching state — the
+   * abort already cleared it. Without this, a stale completion could race
+   * a fresh fetch and yank its controller out of the set, leaving the
+   * fresh fetch unabortable on the next reload.
+   */
+  private epoch = 0;
 
   async initialize(config: AIProviderConfig): Promise<void> {
     if (!config.baseUrl) {
@@ -264,6 +274,7 @@ export class OllamaProvider implements AIProvider {
    * its semaphore permit and rateLimiter reservation cleanly.
    */
   abort(): void {
+    this.epoch++;
     for (const controller of this.inflightControllers) {
       controller.abort();
     }
@@ -277,6 +288,7 @@ export class OllamaProvider implements AIProvider {
    */
   private async fetchJson<T>(path: string, body: unknown, timeoutMs: number): Promise<T> {
     const controller = new AbortController();
+    const startEpoch = this.epoch;
     this.inflightControllers.add(controller);
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -296,7 +308,12 @@ export class OllamaProvider implements AIProvider {
       return (await response.json()) as T;
     } finally {
       clearTimeout(timer);
-      this.inflightControllers.delete(controller);
+      // Skip cleanup when the epoch advanced — abort() already cleared the
+      // set, and a stale delete here could remove a fresh fetch's controller
+      // that happened to land at the same identity.
+      if (startEpoch === this.epoch) {
+        this.inflightControllers.delete(controller);
+      }
     }
   }
 }

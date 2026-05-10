@@ -154,7 +154,13 @@ function installScriptedSpotify(responses: Array<CurrentlyPlaying | null | Error
     if (r instanceof Error) throw r;
     return r ?? null;
   });
-  return { client: { getCurrentlyPlaying: spy }, spy };
+  // `verifyToken` is the !radio on pre-flight; default-success so existing
+  // tests don't need to pre-populate it. Tests that want to exercise the
+  // refusal path can override the returned `client.verifyToken` directly.
+  return {
+    client: { getCurrentlyPlaying: spy, verifyToken: vi.fn(async () => {}) },
+    spy,
+  };
 }
 
 describe('spotify-radio poll loop', () => {
@@ -406,7 +412,10 @@ describe('spotify-radio poll loop', () => {
     const spy = vi.fn(async () => {
       throw new Error('not a Spotify error');
     });
-    h.instance[INTERNALS].setSpotifyClient({ getCurrentlyPlaying: spy });
+    h.instance[INTERNALS].setSpotifyClient({
+      getCurrentlyPlaying: spy,
+      verifyToken: vi.fn(async () => {}),
+    });
     await startSession(h);
     await tickBind(h)(timeCtx());
     expect(h.instance[INTERNALS].getState().session!.consecutiveErrors).toBe(1);

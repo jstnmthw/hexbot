@@ -301,6 +301,29 @@ export function createSpotifyRadio(): SpotifyRadio {
       return;
     }
 
+    // Pre-flight the Spotify token before announcing in-channel. Without this,
+    // an expired refresh-token / revoked credential / network outage produces
+    // an asymmetric flow: "Radio is on" lands immediately, then the poll loop
+    // fails 5 times and 50s later announces "Too many errors. Radio off." to
+    // the same channel. Failing to the invoker privately keeps the channel
+    // clean. Uses `verifyToken()` rather than `getCurrentlyPlaying()` so the
+    // pre-flight only exercises the oauth path — it doesn't consume a
+    // currently-playing fixture in tests, and it doesn't burn a track-read
+    // quota slot in production.
+    const sp = spotify;
+    if (sp) {
+      try {
+        await sp.verifyToken();
+      } catch (err) {
+        api.notice(
+          ctx.nick,
+          `Could not reach Spotify (token / network). Not starting the session: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        logCmd(api, ctx, 'on', 'rejected', 'spotify pre-flight failed');
+        return;
+      }
+    }
+
     session = {
       channel: ctx.channel,
       jamUrl: validated,

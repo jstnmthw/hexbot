@@ -68,7 +68,7 @@ export function registerDispatcherCommands(deps: DispatcherCommandsDeps): void {
           stripFormatting(b.type),
           stripFormatting(b.flags),
           `"${stripFormatting(b.mask)}"`,
-          `(hits: ${b.hits})`,
+          `(hits: ${b.hits})${b.tripped ? ' [tripped]' : ''}`,
         ]);
         lines.push(formatTable(rows));
       }

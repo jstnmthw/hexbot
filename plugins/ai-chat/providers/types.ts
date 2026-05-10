@@ -141,11 +141,17 @@ export interface AIProvider {
  * uses to decide retry vs. fail-fast vs. circuit-break. See
  * `providers/resilient.ts` for the routing matrix:
  *
- *   - `rate_limit` (429)      — retryable; counts toward breaker
- *   - `network`   (5xx, DNS)  — retryable; counts toward breaker
- *   - `safety`                — NOT retryable, does NOT trip breaker (policy)
- *   - `auth`                  — NOT retryable, does NOT trip breaker (config)
- *   - `other` (404/400/etc.)  — NOT retryable; counts toward breaker
+ *   - `rate_limit`    (429)      — retryable; counts toward breaker
+ *   - `network`       (5xx, DNS) — retryable; counts toward breaker
+ *   - `safety`                   — NOT retryable, does NOT trip breaker (policy)
+ *   - `auth`                     — NOT retryable, does NOT trip breaker (config)
+ *   - `circuit_open`             — emitted by Resilient when the breaker is open;
+ *                                  pipeline routes this through the same silent
+ *                                  path as `rate_limit` so a long upstream outage
+ *                                  doesn't spam every channel with "AI is
+ *                                  temporarily unavailable" on every triggered
+ *                                  message.
+ *   - `other` (404/400/etc.)     — NOT retryable; counts toward breaker
  *
  * Keeping this a blacklist in the breaker logic means any *new* transient
  * kind added later defaults to counting — safer than an allowlist.
@@ -153,7 +159,7 @@ export interface AIProvider {
 export class AIProviderError extends Error {
   constructor(
     message: string,
-    public readonly kind: 'rate_limit' | 'safety' | 'network' | 'auth' | 'other',
+    public readonly kind: 'rate_limit' | 'safety' | 'network' | 'auth' | 'circuit_open' | 'other',
     public readonly cause?: unknown,
   ) {
     super(message);
@@ -161,7 +167,14 @@ export class AIProviderError extends Error {
   }
 }
 
-const AI_PROVIDER_ERROR_KINDS = new Set(['rate_limit', 'safety', 'network', 'auth', 'other']);
+const AI_PROVIDER_ERROR_KINDS = new Set([
+  'rate_limit',
+  'safety',
+  'network',
+  'auth',
+  'circuit_open',
+  'other',
+]);
 
 /**
  * Cross-bundle-safe type guard. `instanceof AIProviderError` breaks when the

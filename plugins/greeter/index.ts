@@ -180,6 +180,20 @@ export function init(api: PluginAPI): void {
     },
   ]);
 
+  // --- Bot-PART / bot-KICK: drop massjoin state for the channel we just
+  // left so the map doesn't accumulate one entry per channel-ever-visited
+  // across the bot's lifetime. Mirrors chanmod's `dropChannelState` pattern.
+  const dropJoinRate = (channel: string): void => {
+    joinRates.delete(api.ircLower(channel));
+  };
+  api.bind('part', '-', '*', (ctx) => {
+    if (api.isBotNick(ctx.nick)) dropJoinRate(ctx.channel);
+  });
+  api.bind('kick', '-', '*', (ctx) => {
+    // `ctx.nick` is the *kicked* user on a 'kick' bind (per dispatch.ts).
+    if (api.isBotNick(ctx.nick)) dropJoinRate(ctx.channel);
+  });
+
   // --- Join handler ---
   api.bind('join', '-', '*', (ctx) => {
     // Don't greet ourselves when the bot rejoins (e.g. after a kick or a

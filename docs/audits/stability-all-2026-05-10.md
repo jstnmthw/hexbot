@@ -131,17 +131,17 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 
 - [x] **W2.1** — `dispatch()` iterates `this.binds` array without snapshot — handler-side `unbindAll` reentrancy is undefined (`dispatcher.ts:362-398`) [verified]. _Fix:_ `const snapshot = this.binds.slice()` at top of loop.
 - [ ] **W2.2** — `unloadAll()` partial-failure recovery silently force-deletes without dispatcher cleanup (`plugin-loader.ts:588-601`, `unload()` 552-569). Throwing teardown leaves binds/listeners attached, plugin removed from `loaded` map. Ghost handlers fire post-unload.
-- [ ] **W2.3** — No circuit breaker for non-timer handlers throwing on every event (`dispatcher.ts:389-396`). 100 msgs/min at a broken `pubm` handler = 100 stack traces/min in logs forever. Timer binds get auto-disable; pub/msg/raw don't.
+- [x] **W2.3** — No circuit breaker for non-timer handlers throwing on every event (`dispatcher.ts:389-396`). 100 msgs/min at a broken `pubm` handler = 100 stack traces/min in logs forever. Timer binds get auto-disable; pub/msg/raw don't.
 - [ ] **W2.4** — Disposed-API guard cannot reach the user-supplied handler closure (`plugin-api-factory.ts:282-294`). Plugin's own `setInterval` outliving teardown calls `myHandler` against a torn-down api. The doc/comment overstates the guard's reach.
 - [ ] **W2.5** — `setCommandRelay` re-wire doesn't track per-call eventBus reference (`hub.ts:236-298`) [latent]. Re-wire with a different bus reference leaks listeners on the original.
 - [ ] **W2.6** — Flood `warned` Set FIFO eviction breaks one-time-per-window guarantee under cap (`flood-limiter.ts:147-152`). 8193rd flooder evicts oldest warned nick → duplicate notice on rotation.
 
 ### Phase 3 — Database layer (8 items)
 
-- [ ] **W3.1** — `getAllBans()` and `liftExpiredBans()` are unbounded scans of monotonically growing namespace (`ban-store.ts:109-110,144`) [at-scale]. _Fix:_ min-heap on `(expires, key)` updated in `storeBan`/`removeBan`.
+- [x] **W3.1** — `getAllBans()` and `liftExpiredBans()` are unbounded scans of monotonically growing namespace (`ban-store.ts:109-110,144`) [at-scale]. _Fix:_ min-heap on `(expires, key)` updated in `storeBan`/`removeBan`. _(scope: scale-deferred — won't-fix until botnet deployment.)_
 - [ ] **W3.2** — `setAuditFallback` sink wired in type signature but never connected (`database.ts:139`, `mod-log.ts:272`). Disk-full writes drop silently with no fallback. Either delete the dead code or wire a default ring-buffer sink in `bot.ts`.
-- [ ] **W3.3** — Schema migration runs unconditionally inside constructor without batching (`mod-log.ts:255,558-581`) [at-scale]. 2M-row mod*log migration holds write lock and blocks bot for tens of seconds. \_Fix:* batched copy via `setImmediate`.
-- [ ] **W3.4** — `permissions.listUsers()` walks whole namespace; botlink replace path also linear (`permissions.ts:538,572`) [at-scale]. _Fix:_ `db.list(ns, prefix, { limit })` and stream.
+- [x] **W3.3** — Schema migration runs unconditionally inside constructor without batching (`mod-log.ts:255,558-581`) [at-scale]. 2M-row mod*log migration holds write lock and blocks bot for tens of seconds. \_Fix:* batched copy via `setImmediate`. _(scope: scale-deferred.)_
+- [x] **W3.4** — `permissions.listUsers()` walks whole namespace; botlink replace path also linear (`permissions.ts:538,572`) [at-scale]. _Fix:_ `db.list(ns, prefix, { limit })` and stream. _(scope: scale-deferred.)_
 - [ ] **W3.5** — `transaction()` does not short-circuit when `writesDisabled` (`database.ts:197`).
 - [ ] **W3.6** — `kv` table has no retention or pruning (`database.ts:243-251`). `seen`, `ai-chat`, `social-tracker`, `feed-store`, `ban:`, `tokens:` all grow forever. _Fix:_ per-namespace retention hook + periodic VACUUM.
 - [ ] **W3.7** — `parseMetadataSafe` returns `null` on read but `audit:log` already emitted parsed metadata (`mod-log.ts:58-72,439,470`). Asymmetric state for botlink relay observers.
@@ -170,7 +170,7 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 
 #### Demoted from CRITICAL
 
-- [ ] **[W-BOTLINK-SYNC] Botlink hub sync-frame flood blocks event loop and cascades reconnects** [at-scale]
+- [x] **[W-BOTLINK-SYNC] Botlink hub sync-frame flood blocks event loop and cascades reconnects** [at-scale] _(scope: scale-deferred — won't-fix until botnet deployment.)_
   - **File:** `src/core/botlink/hub.ts:680-691`, `src/core/botlink/relay-orchestrator.ts:157-163`
   - **Pattern:** Synchronous fanout / blocked event loop / cascading failure
   - **Anti-pattern:** Self-denial, dogpile/thundering herd
@@ -179,7 +179,7 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
   - **Demotion reason:** Doomsday scenario assumes 10k permission rows + 200 channels + 20+ leaves. Operator deployment is single-bot now with botnet-scale possible later. At 100 rows / 1-2 channels / single hub, the freeze is sub-millisecond. Worth fixing **before scaling**; not pre-deployment-blocking at current scale.
   - **Remediation:** Stream sync via `setImmediate`/`queueMicrotask` between batches of ~50 frames. Or have leaf request sync after WELCOME. Honor socket `'drain'`. Land R15/R16 as part of any future scale-out work.
 
-- [ ] **[W-BOTLINK-BP] Botlink sync ignores `socket.write` backpressure → silent state divergence** [at-scale]
+- [x] **[W-BOTLINK-BP] Botlink sync ignores `socket.write` backpressure → silent state divergence** [at-scale] _(scope: scale-deferred — won't-fix until botnet deployment.)_
   - **File:** `src/core/botlink/hub.ts:682,691`
   - **Pattern:** Silent failure / state divergence
   - **Scenario:** During the 10k-frame sync, the leaf's TCP receive buffer fills; `socket.write` returns false and bytes accumulate in the kernel's send buffer. The hub keeps calling `protocol.send(f)` regardless of the return value, then sends `SYNC_END` while late frames are still in flight (or dropped on the floor if the connection is closed).
@@ -189,14 +189,14 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 
 #### Original WARNINGs
 
-- [ ] **W5.1** — `RateCounter.check()` is O(n) per call (`botlink/rate-counter.ts:19-25`). `filter` reallocates on every check; under recovery storms compounds with sync-frame flood.
+- [x] **W5.1** — `RateCounter.check()` is O(n) per call (`botlink/rate-counter.ts:19-25`). `filter` reallocates on every check; under recovery storms compounds with sync-frame flood. _(scope: scale-deferred — recovery storms only matter past botnet-scale.)_
 - [ ] **W5.2** — `BotLinkLeaf.connect()` race: socket dangles if `disconnect()` arrives mid-DNS (`botlink/leaf.ts:120-145`). _Fix:_ `if (this.disconnecting) { socket.destroy(); return; }`.
 - [ ] **W5.3** — `disconnect()` zeros `linkKey`; subsequent `connect()` (vs `reconnect()`) silently fails (`botlink/leaf.ts:286-288,304`) [latent].
 - [ ] **W5.4** — Pre-handshake socket has no per-frame size cap; attacker can drive `JSON.parse` + `sanitizeFrame` on 64KB junk for 10s (`hub.ts:443-482`, `protocol.ts:213`). _Fix:_ cap pre-handshake frame to 4KB.
-- [ ] **W5.5** — `frameDispatchContext()` rebuilt per frame (`hub.ts:715-739,750`). 300 frames/s = 300 closures/s; major-GC pressure. _Fix:_ build once at `setCommandRelay`/`acceptHandshake`.
+- [x] **W5.5** — `frameDispatchContext()` rebuilt per frame (`hub.ts:715-739,750`). 300 frames/s = 300 closures/s; major-GC pressure. _Fix:_ build once at `setCommandRelay`/`acceptHandshake`. _(scope: scale-deferred — only matters at sustained ≥100 frames/s.)_
 - [ ] **W5.6** — `BotLinkProtocol`'s `'line'` listener has no max-queue check (`protocol.ts:216-252`).
-- [ ] **W5.7** — Sync replay relies on idempotent upsert but does not detect frame loss (`hub.ts:680-691`). Pair with W-BOTLINK-BP fix.
-- [ ] **W5.8** — Reconnect storm against per-IP `max_pending_handshakes=3` self-DoSes NAT'd fleets (`auth.ts:326`, `leaf.ts:519-542`).
+- [x] **W5.7** — Sync replay relies on idempotent upsert but does not detect frame loss (`hub.ts:680-691`). Pair with W-BOTLINK-BP fix. _(scope: scale-deferred.)_
+- [x] **W5.8** — Reconnect storm against per-IP `max_pending_handshakes=3` self-DoSes NAT'd fleets (`auth.ts:326`, `leaf.ts:519-542`). _(scope: scale-deferred — single-bot deploy doesn't have a fleet.)_
 
 ### Phase 6 — Services & identity (2 items)
 
@@ -256,7 +256,7 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 - [ ] **W8.3** — REPL `process.exit(0)` from `rl.on('close')` skips Promise.catch (`repl.ts:115-119`). `bot.shutdown()` rejection → unhandled; bot zombies.
 - [ ] **W8.4** — REPL has no `process.stdin.on('error')` handler (`repl.ts:51-122`). EPIPE on stdout crashes the bot.
 - [ ] **W8.5** — `.modlog`, `.bans`, `.users`, `.binds` reply with unbounded `lines.join('\n')` (`ban-commands.ts:84-101`, `modlog-commands.ts:730-734`, `permission-commands.ts:228-241`, `dispatcher-commands.ts:60-77`). Botlink-relayed dot-commands silent-truncate at per-target queue cap.
-- [ ] **W8.6** — `runEnd` (`.modlog end`) walks full result set with O(N/PAGE_SIZE) synchronous queries (`modlog-commands.ts:663-684`) [at-scale]. 1M-row mod_log → 100k SQLite queries blocks event loop.
+- [x] **W8.6** — `runEnd` (`.modlog end`) walks full result set with O(N/PAGE*SIZE) synchronous queries (`modlog-commands.ts:663-684`) [at-scale]. 1M-row mod_log → 100k SQLite queries blocks event loop. *(scope: scale-deferred.)\_
 - [ ] **W8.7** — `messageQueue.setRate(0, ...)` silently coerces 0 to default 2 (`message-queue.ts:229-239`, `bot.ts:570-572`).
 - [ ] **W8.8** — `IRCCommands.mode()` parse-failure throws to caller; ban-commands runs synchronously without try/catch (`irc-commands.ts:98-108,301-306,358-364`, `ban-commands.ts:154`).
 - [x] **W8.9** — `.bot <self> .<cmd>` recursion is not limited (`botlink-commands.ts:581-583`). _Fix:_ add `bot` to `BOT_RELAY_FORBIDDEN_COMMANDS`.
@@ -268,7 +268,7 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 - [ ] **W9.2** — Mode-array entries with missing `+`/`-` direction silently treated as remove (`channel-state.ts:411,576-602`). _Fix:_ skip-with-warn for malformed direction.
 - [ ] **W9.3** — Reconnect mid-353: race window where `clearAllChannels` runs but late lines re-create empty records (`channel-state.ts:280-308,498-533`).
 - [ ] **W9.4** — NICK collision overwrites without warning (`channel-state.ts:377-406`). Netsplit merge loses tracked account/away. Security-relevant under `$a:` matching.
-- [ ] **W9.5** — Per-PART O(channels) iteration to determine residual presence (`channel-state.ts:310-345`) [at-scale]. _Fix:_ reverse `nick → Set<channel>` index.
+- [x] **W9.5** — Per-PART O(channels) iteration to determine residual presence (`channel-state.ts:310-345`) [at-scale]. _Fix:_ reverse `nick → Set<channel>` index. _(scope: scale-deferred.)_
 - [ ] **W9.6** — Drift detection runs only against `configuredChannels` (`channel-presence-checker.ts:80-119`). Run-time `.join #help` is invisible.
 - [ ] **W9.7** — TARGMAX parser silently coerces malformed pairs (`isupport.ts:170-186`). `TARGMAX=PRIVMSG:` (empty) → `Infinity`; `:0` rejected silently.
 
@@ -276,7 +276,7 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 
 #### Demoted from CRITICAL
 
-- [ ] **[W-AICHAT-SPAM] ai-chat circuit-open spams "AI is temporarily unavailable" during real outages** [verified]
+- [x] **[W-AICHAT-SPAM] ai-chat circuit-open spams "AI is temporarily unavailable" during real outages** [verified]
   - **File:** `plugins/ai-chat/pipeline.ts:325-337`, `plugins/ai-chat/providers/resilient.ts:162`
   - **Pattern:** Cache for graceful degradation / user-visible blast radius
   - **Scenario:** Gemini returns 503 for 5 minutes. Resilient breaker opens after 5 failures. Subsequent `respond()` throws `'Circuit breaker open'` of kind `'other'`. Pipeline drops to else-branch and `ctx.reply('AI is temporarily unavailable.')` fires on user-addressed messages.
@@ -287,26 +287,26 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 #### Original WARNINGs
 
 - [ ] **W10.1** — RSS permanent error treated as transient on add path (`plugins/rss/commands.ts:284-313`). Persists feeds even on 404 seed; 5 doomed polls before circuit opens.
-- [ ] **W10.2** — RSS `!rss check` (manual all-feeds) bypasses circuit breaker (`plugins/rss/commands.ts:382-395`). DNS outage → 10 sequential failures → 50s blocking + 10 channel notices.
-- [ ] **W10.3** — ai-chat `inflightControllers.clear()` after abort doesn't await fetch unwind; stale completion can release semaphore on new instance (`providers/ollama.ts:266-271`, `providers/gemini.ts:144-149`).
-- [ ] **W10.4** — spotify-radio `!radio on` does not verify token via `getCurrentlyPlaying()` before announcing (`plugins/spotify-radio/index.ts:269-325`). Asymmetric "Radio is on" / 50s later "Too many errors. Radio off." channel announce.
+- [x] **W10.2** — RSS `!rss check` (manual all-feeds) bypasses circuit breaker (`plugins/rss/commands.ts:382-395`). DNS outage → 10 sequential failures → 50s blocking + 10 channel notices.
+- [x] **W10.3** — ai-chat `inflightControllers.clear()` after abort doesn't await fetch unwind; stale completion can release semaphore on new instance (`providers/ollama.ts:266-271`, `providers/gemini.ts:144-149`).
+- [x] **W10.4** — spotify-radio `!radio on` does not verify token via `getCurrentlyPlaying()` before announcing (`plugins/spotify-radio/index.ts:269-325`). Asymmetric "Radio is on" / 50s later "Too many errors. Radio off." channel announce.
 - [ ] **W10.5** — RSS per-feed staggering: feeds tick on same 60s boundary; concurrent feeds chunk-flood at minute boundary (`plugins/rss/feed-formatter.ts:109`). _Fix:_ jitter first poll within interval.
 
 ### Phase 11 — IRC-behavior plugins (9 items)
 
 - [ ] **W11.1** — `rejoin_attempts:<chan>` KV records never deleted (`plugins/chanmod/protection.ts:128,154`). KV bloat across reboots.
-- [ ] **W11.2** — Cycle-on-deop wedge on services-free networks (`plugins/chanmod/mode-enforce-recovery.ts:87-98`). PART succeeds, JOIN blocked by mode set during 2s window → bot AWOL until reload.
+- [x] **W11.2** — Cycle-on-deop wedge on services-free networks (`plugins/chanmod/mode-enforce-recovery.ts:87-98`). PART succeeds, JOIN blocked by mode set during 2s window → bot AWOL until reload.
 - [ ] **W11.3** — Stale `pendingRecoverCleanup` / `unbanRequested` fires `-im` on rejoin (`mode-enforce-recovery.ts:131-134`, `protection.ts:111-113`).
 - [ ] **W11.4** — `splitActive` / `splitExpiry` not pruned by 60s time bind (`plugins/chanmod/stopnethack.ts:99-106`).
-- [ ] **W11.5** — Mass re-op `+oooooooo...` not capped per recovery cycle (`mode-enforce-recovery.ts:225-241`). 30-flagged-user channel: 6-7 MODE lines + deop/halfop/voice + hostile response in one tick → flood K-line during recovery.
+- [x] **W11.5** — Mass re-op `+oooooooo...` not capped per recovery cycle (`mode-enforce-recovery.ts:225-241`). 30-flagged-user channel: 6-7 MODE lines + deop/halfop/voice + hostile response in one tick → flood K-line during recovery.
 - [ ] **W11.6** — Lockdown timer fires `-${mode}` after bot disconnect; if reconnect not complete, mode stranded on server forever (`plugins/flood/lockdown.ts:154-156,168-183`). _Fix:_ persist active locks in `api.db`; re-attempt on rejoin.
 - [ ] **W11.7** — `joinRates` / lockdown counters survive bot ops loss mid-window (`plugins/flood/lockdown.ts:48-58`).
 - [ ] **W11.8** — `enforcement-executor inFlight` Set has detached promise race against teardown (`plugins/flood/enforcement-executor.ts:276-281`). _Fix:_ `disposed` flag at top of teardown.
-- [ ] **W11.9** — Greeter `joinRates` per-channel map never pruned for departed channels (`plugins/greeter/index.ts:145,184`). _Fix:_ mirror chanmod's bot-PART/KICK pattern.
+- [x] **W11.9** — Greeter `joinRates` per-channel map never pruned for departed channels (`plugins/greeter/index.ts:145,184`). _Fix:_ mirror chanmod's bot-PART/KICK pattern.
 
 ### Phase 12 — Utilities & small plugins (4 items)
 
-- [ ] **W12.1** — `eventBus.on(...)` direct (vs `trackListener`) bypasses ownership tracking (`event-bus.ts:201-208`).
+- [x] **W12.1** — `eventBus.on(...)` direct (vs `trackListener`) bypasses ownership tracking (`event-bus.ts:201-208`). _(@deprecated JSDoc; full migration deferred.)_
 - [ ] **W12.2** — `help.cooldown_ms` snapshot at init time; live-config inconsistent with header/footer (`plugins/help/index.ts:82-87`).
 - [x] **W12.3** — `plugins/ctcp/index.ts` `CTCP PING` echoes `ctx.text` verbatim with no length cap (`plugins/ctcp/index.ts:35-37`).
 - [ ] **W12.4** — SOCKS5 connect timeout not configured end-to-end (`src/utils/socks.ts`). Black-holed proxy → half-open connect.
@@ -351,8 +351,8 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 
 - [ ] **I6.1** Verification cap (128 MAX_PENDING_VERIFIES) lacks priority — owner's command can be denied during a spam wave.
 - [ ] **I6.2** `_botIdentifyState='unidentified'` is sticky until next disconnect — momentary glitch locks bot for whole session.
-- [ ] **I6.3** `verifyUser` returns `verified:false` on `'unidentified'` with no operator-visible feedback — silent dispatch denial.
-- [ ] **I6.4** `permissions.findByHostmask` is O(users × hostmasks_per_user) per privileged event [at-scale].
+- [x] **I6.3** `verifyUser` returns `verified:false` on `'unidentified'` with no operator-visible feedback — silent dispatch denial.
+- [x] **I6.4** `permissions.findByHostmask` is O(users × hostmasks*per_user) per privileged event [at-scale]. *(scope: scale-deferred.)\_
 - [x] **I6.5** `accountLookup` not wrapped in try/catch in `checkFlags` — misbehaving lookup throws into dispatch.
 - [ ] **I6.6** Owner bootstrap is idempotent — verified, no fix needed; small forensic gap on re-seed.
 - [ ] **I6.7** scrypt is async (libuv pool) — DCC pre-handshake gate sits ahead of it; flooding-model well-mitigated.
@@ -482,38 +482,38 @@ Cross-references use symbolic IDs (`[C-XXX]`, `[W-XXX]`, `Wx.y`) that are stable
 
 - [x] **R13** — Route every mutating `IRCCommands` verb through `messageQueue` ([C-IRCCMDS]) — touches all `client.raw` sites + ordering tests.
 - [x] **R14** — Replace DB `process.exit(2)` with `DatabaseFatalError` flow ([C-DBEXIT] and [W-STS-EXIT]) — needs `bot.shutdown()` integration.
-- [ ] **R15** — Chunk botlink sync via `setImmediate`/`drain` ([W-BOTLINK-SYNC]) — small loop refactor with backpressure handling.
-- [ ] **R16** — Track botlink sync send-buffer for backpressure ([W-BOTLINK-BP]) — `socket.bufferedAmount` plus optional `SYNC_DIGEST` for divergence detection.
+- [x] **R15** — Chunk botlink sync via `setImmediate`/`drain` ([W-BOTLINK-SYNC]) — small loop refactor with backpressure handling. _(scope: scale-deferred.)_
+- [x] **R16** — Track botlink sync send-buffer for backpressure ([W-BOTLINK-BP]) — `socket.bufferedAmount` plus optional `SYNC_DIGEST` for divergence detection. _(scope: scale-deferred.)_
 - [x] **R17** — Restrict `ensureChannel` to JOIN/USERLIST/inject ([C-ENSURECHAN]) — small refactor at every call site.
 - [ ] **R18** — Resolve `Bot.start()` after first attempt scheduled ([W-BOTSTART]). Independent of R12 — this is about the REPL never starting and `main()` never completing on a rate-limited first boot, not about the healthcheck signal.
 - [ ] **R19** — DCC `pendingSessions` add-after-start ordering + re-attach fallback `'error'` listener (W4.1).
 - [ ] **R20** — DCC port-pool owner-token ([W-DCC-PORT]).
 - [ ] **R21** — `kv` table per-namespace retention hook + periodic VACUUM (W3.6).
-- [ ] **R22** — Batch mod_log migration via `setImmediate` (W3.3).
+- [x] **R22** — Batch mod*log migration via `setImmediate` (W3.3). *(scope: scale-deferred.)\_
 - [ ] **R23** — Persist flood lockdown active-locks in `api.db`; re-attempt `-mode` on rejoin (W11.6).
-- [ ] **R24** — Cap chanmod mass re-op per recovery cycle, mirroring `HOSTILE_BATCH_SIZE` (W11.5).
+- [x] **R24** — Cap chanmod mass re-op per recovery cycle, mirroring `HOSTILE_BATCH_SIZE` (W11.5).
 - [ ] **R25** — Pagination + caps on `.modlog`, `.bans`, `.users`, `.binds` reply lines (W8.5, W8.6).
 - [ ] **R26** — REPL `process.stdin/stdout` error handling + `Promise.catch` on shutdown (W8.3, W8.4).
-- [ ] **R27** — ai-chat surface `'circuit_open'` error kind and route to silent path ([W-AICHAT-SPAM]).
-- [ ] **R28** — ai-chat `inflightControllers` per-init epoch token (W10.3).
-- [ ] **R29** — Bound RSS retry / circuit on manual `!rss check` (W10.2).
-- [ ] **R30** — Spotify token verify before "Radio is on" announce (W10.4).
-- [ ] **R31** — Greeter `joinRates` per-channel prune on bot PART/KICK (W11.9).
-- [ ] **R32** — chanmod cycle-on-deop fallback ladder (W11.2).
-- [ ] **R33** — Run a focused follow-up audit pass over Phase 13 files (`audit.ts`, `memo.ts`, `relay-orchestrator.ts`, `seed-from-json.ts`, `deep-freeze.ts`, `database-errors.ts`); promote findings into this document.
+- [x] **R27** — ai-chat surface `'circuit_open'` error kind and route to silent path ([W-AICHAT-SPAM]).
+- [x] **R28** — ai-chat `inflightControllers` per-init epoch token (W10.3).
+- [x] **R29** — Bound RSS retry / circuit on manual `!rss check` (W10.2).
+- [x] **R30** — Spotify token verify before "Radio is on" announce (W10.4).
+- [x] **R31** — Greeter `joinRates` per-channel prune on bot PART/KICK (W11.9).
+- [x] **R32** — chanmod cycle-on-deop fallback ladder (W11.2).
+- [x] **R33** — Run a focused follow-up audit pass over Phase 13 files (`audit.ts`, `memo.ts`, `relay-orchestrator.ts`, `seed-from-json.ts`, `deep-freeze.ts`, `database-errors.ts`); promote findings into this document. _(scope: skipped — operator chose to close existing findings first; revisit if specific incident data points there.)_
 
 ### Architectural (design changes — flag for discussion)
 
-- [ ] **R34** — Reconcile loop for "intent vs reality": periodic check that bot is op'd in channels where config says it should be; mode `+t` enforced where chanset says so; lockdown not stranded. Currently fragmentary across plugins.
-- [ ] **R35** — Single-source-of-truth for queue config — `messageQueue.setRate` should restart timer to honor config changes live.
+- [x] **R34** — Reconcile loop for "intent vs reality": periodic check that bot is op'd in channels where config says it should be; mode `+t` enforced where chanset says so; lockdown not stranded. Currently fragmentary across plugins. _(scope: deferred — operator chose to keep per-plugin recovery rather than build a generic ReconcileManager. Revisit if recovery gaps are observed in production.)_
+- [x] **R35** — Single-source-of-truth for queue config — `messageQueue.setRate` should restart timer to honor config changes live. _(Verified at HEAD: `MessageQueue.setRate` already calls `this.start()` to restart the timer on rate change — see message-queue.ts:255-258. No-op.)_
 - [ ] **R36** — Pluggable namespace retention: per-plugin TTL for `kv` rows; long-uptime invariant.
-- [ ] **R37** — `eventBus.on()` deprecation — make `trackListener(owner, ...)` the only public surface (W12.1).
-- [ ] **R38** — `sd_notify` integration for `Type=notify` units; READY=1 on connected, STOPPING=1 on shutdown, optional WATCHDOG=1 (W7.3).
-- [ ] **R39** — Botlink reconnect-storm protection: per-IP whitelist exempts WireGuard exit; document NAT topology requirement (W5.8).
-- [ ] **R40** — Plugin handler circuit breaker for non-timer binds — `consecutiveFailures` counter with trip-state and `.binds` visibility (W2.3).
-- [ ] **R41** — `findByHostmask` per-dispatch memo cache — only matters at >1k user scale (I6.4).
-- [ ] **R42** — Operator-facing notice when verify denies a privileged command for `'unidentified'` (I6.3).
-- [ ] **R43** — Update `.claude/skills/stability` to spell out an "in-this-deployment realistic" CRITICAL bar AND make parent verification of CRITICAL claims the default in the audit process. Prevents the severity-inflation pattern that produced 14 CRITICALs in this round (operator-confirmed direction).
+- [x] **R37** — `eventBus.on()` deprecation — make `trackListener(owner, ...)` the only public surface (W12.1). _(Doc-only deprecation; full migration left as future refactor — flagged with @deprecated JSDoc.)_
+- [x] **R38** — `sd_notify` integration for `Type=notify` units; READY=1 on connected, STOPPING=1 on shutdown, optional WATCHDOG=1 (W7.3). _(scope: deferred — operator deploys via Docker, not systemd. The two-file healthcheck (R12) covers the same need for Docker / k8s.)_
+- [x] **R39** — Botlink reconnect-storm protection: per-IP whitelist exempts WireGuard exit; document NAT topology requirement (W5.8). _(scope: scale-deferred.)_
+- [x] **R40** — Plugin handler circuit breaker for non-timer binds — `consecutiveFailures` counter with trip-state and `.binds` visibility (W2.3).
+- [x] **R41** — `findByHostmask` per-dispatch memo cache — only matters at >1k user scale (I6.4). _(scope: scale-deferred.)_
+- [x] **R42** — Operator-facing notice when verify denies a privileged command for `'unidentified'` (I6.3).
+- [x] **R43** — Update `.claude/skills/stability` to spell out an "in-this-deployment realistic" CRITICAL bar AND make parent verification of CRITICAL claims the default in the audit process. Prevents the severity-inflation pattern that produced 14 CRITICALs in this round (operator-confirmed direction).
 
 ---
 
@@ -521,7 +521,7 @@ Cross-references use symbolic IDs (`[C-XXX]`, `[W-XXX]`, `Wx.y`) that are stable
 
 These were open during meta-review and have been answered. Captured here so future audits and `/build` can rely on the same context.
 
-- [ ] **Deployment scale:** Single-bot now, botnet possible later. [W-BOTLINK-SYNC] / [W-BOTLINK-BP] stay WARNING; treat `[at-scale]`-tagged items as "fix before scaling," not "fix before next deploy."
+- [x] **Deployment scale:** Single-bot now, botnet possible later. [W-BOTLINK-SYNC] / [W-BOTLINK-BP] stay WARNING; treat `[at-scale]`-tagged items as "fix before scaling," not "fix before next deploy." **Update 2026-05-10 (operator):** all `[at-scale]` items are _won't-fix until deployment posture changes_ — gate any future scale-out on revisiting them. The W- and R-items below carry an inline `_(scope: scale-deferred)_` annotation so downstream skills know not to act on them.
 - [x] **Healthcheck design intent:** The single-file signal conflated _liveness_ ("restart me if I'm wedged") with _readiness_ ("am I doing my job"). Resolution: two-file k8s-style model — `/tmp/.hexbot-alive` (always touched) + `/tmp/.hexbot-connected` (touched on connect, removed on disconnect). Default `docker-compose.yml` uses `-connected` for operator visibility; autoheal/k8s liveness adopters point at `-alive` to preserve the in-process backoff. R12 implements this; the supposed "incompatibility with autoheal" is dissolved. R18 (Bot.start await blocking) is independent.
 - [x] **DB `process.exit(2)` intent:** Unclear — but R14 preserves loud-fail semantics either way. Captured inline on [C-DBEXIT].
 - [x] **STS revocation:** Rare use case. [W-STS-REVOKE] demoted to INFO (now I1.5). R2 stays in quick-wins at low priority.

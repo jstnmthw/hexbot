@@ -182,6 +182,15 @@ export class Services {
    */
   private ghostTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /**
+   * Last-emitted-at for the "bot is unidentified — verify denied" notice.
+   * Rate-limits a sustained NickServ outage to one operator log per
+   * cooldown window so we don't spam the channel with the same warning
+   * on every privileged dispatch. (R42 / I6.3)
+   */
+  private lastUnidentifiedDenialNoticeAt = 0;
+  private static readonly UNIDENTIFIED_NOTICE_COOLDOWN_MS = 5 * 60_000;
+
   constructor(deps: ServicesDeps) {
     this.client = deps.client;
     this.servicesConfig = deps.servicesConfig;
@@ -320,6 +329,39 @@ export class Services {
   }
 
   /**
+   * Surface a one-shot operator notice (rate-limited) when a privileged
+   * command was denied because the bot itself is not identified to NickServ.
+   * Without this signal, an outage where SASL fails silently produces a
+   * stream of denied commands that the operator can't trace to its real
+   * cause without grepping logs at 3am.
+   */
+  private maybeEmitUnidentifiedDenialNotice(nick: string): void {
+    const now = Date.now();
+    if (now - this.lastUnidentifiedDenialNoticeAt < Services.UNIDENTIFIED_NOTICE_COOLDOWN_MS) {
+      return;
+    }
+    this.lastUnidentifiedDenialNoticeAt = now;
+    const message = `Privileged command from ${nick} denied — bot is not identified to NickServ, so no verification is possible. Check SASL / IDENTIFY config.`;
+    this.logger?.error(message);
+    // mod_log it too so the operator who runs `.modlog action verify-denied`
+    // sees the trail. Keyed by `bot-unidentified` rather than the user's
+    // nick so the cooldown protects the audit floor as well.
+    if (this.db) {
+      tryLogModAction(
+        this.db,
+        {
+          action: 'verify-denied-unidentified',
+          source: 'system',
+          target: nick,
+          outcome: 'failure',
+          metadata: { reason: 'bot-not-identified' },
+        },
+        this.logger,
+      );
+    }
+  }
+
+  /**
    * Authenticate the bot with NickServ (non-SASL fallback).
    * Call this after the bot is registered on the network.
    * SASL is handled by irc-framework at connect time — this is the fallback.
@@ -372,6 +414,13 @@ export class Services {
       this.logger?.warn(
         `Skipping NickServ verify for ${nick} — bot is not identified (will retry once bot identifies)`,
       );
+      // Emit a rate-limited operator-visible notice so a privileged user
+      // whose command is silently denied (because the bot itself can't
+      // verify them) sees *something*. Without this, the only signal is a
+      // log line nobody is watching at 3am. The cooldown prevents an
+      // outage from spamming the audit channel — once per 5 minutes is
+      // enough to surface "bot can't verify, fix me." (I6.3 / R42)
+      this.maybeEmitUnidentifiedDenialNotice(nick);
       return { verified: false, account: null };
     }
 

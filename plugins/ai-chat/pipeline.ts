@@ -326,10 +326,13 @@ export async function runPipeline(
       api.error(`provider error (${result.kind}): ${result.message}`);
       if (result.kind === 'safety') {
         ctx.reply("Sorry — I can't help with that.");
-      } else if (result.kind === 'rate_limit') {
+      } else if (result.kind === 'rate_limit' || result.kind === 'circuit_open') {
         // Stay silent in-channel — repeating "AI is temporarily unavailable"
         // on every triggered message during an outage is noisy and reveals
-        // upstream state to the channel. Tell ops privately instead.
+        // upstream state to the channel. Tell ops privately instead. Both
+        // 429s and an open breaker are sustained-outage signals; treating
+        // them the same closes W-AICHAT-SPAM (channel-visible spam during
+        // a 5+ minute Gemini outage).
         noticeOpsRateLimited(ctx.channel, result.message);
       } else {
         ctx.reply('AI is temporarily unavailable.');

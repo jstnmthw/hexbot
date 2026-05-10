@@ -37,6 +37,15 @@ export interface CurrentlyPlaying {
 
 export interface SpotifyClient {
   getCurrentlyPlaying(): Promise<CurrentlyPlaying | null>;
+  /**
+   * Pre-flight check used by `!radio on` to verify the refresh-token still
+   * works before announcing a new session in-channel. Resolves on success
+   * (token refreshed) and rejects with a SpotifyAuthError / SpotifyHttpError
+   * / SpotifyNetworkError on failure. Implementations should _not_ consume
+   * a `getCurrentlyPlaying` response (test stubs script those by call count
+   * and we don't want pre-flight to advance the script).
+   */
+  verifyToken(): Promise<void>;
 }
 
 export interface SpotifyClientOptions {
@@ -300,7 +309,19 @@ export function createSpotifyClient(opts: SpotifyClientOptions): SpotifyClient {
     }
   }
 
-  return { getCurrentlyPlaying };
+  /**
+   * Force a refresh-token round-trip to confirm the credential still works.
+   * Cheap (no Spotify-API call beyond `oauth/token`) and side-effect-free
+   * apart from updating the cached access token. Used by `!radio on` so a
+   * dead token surfaces privately to the operator instead of as a 50s-late
+   * "Too many errors" channel announce.
+   */
+  async function verifyToken(): Promise<void> {
+    cached = null; // Force a fresh refresh — don't trust an old cache.
+    await refreshAccessToken();
+  }
+
+  return { getCurrentlyPlaying, verifyToken };
 }
 
 // ---------------------------------------------------------------------------

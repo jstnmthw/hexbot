@@ -380,23 +380,50 @@ export async function handleCheck(
   }
 
   const fetchOpts = fetchOptsFor(cfg, deps.abortSignal());
+  const now = Date.now();
   let totalNew = 0;
+  let skipped = 0;
+  let failed = 0;
   for (const feed of targets) {
+    // Honor the circuit breaker on manual check too. Without this guard a
+    // DNS outage in a 10-feed deployment turns one `!rss check` into 10
+    // sequential timeouts (~50s of blocking) plus 10 NOTICEs to the
+    // invoker. The breaker already auto-suppresses the polling tick;
+    // mirroring it here keeps the manual path consistent. An operator
+    // who wants to retry a tripped feed has `!rss remove` + `!rss add`
+    // (or restart) to reset the breaker.
+    if (deps.circuitBreaker.isOpen(feed.id, now)) {
+      skipped++;
+      continue;
+    }
     try {
       const items = await pollFeed(api, parser, feed, 'announce', cfg.max_per_poll, fetchOpts);
+      deps.circuitBreaker.recordSuccess(feed.id);
       if (items.length > 0) {
         await announceItems(api, feed, items, cfg.max_title_length, deps.abortSignal());
         totalNew += items.length;
       }
     } catch (err) {
+      // Failures here count toward the breaker the same way the polling
+      // tick's failures do — a manual probe of a chronically broken feed
+      // shouldn't reset the breaker's failure count by side-channel.
+      deps.circuitBreaker.recordFailure(api, feed.id);
+      failed++;
       api.notice(ctx.nick, `Error checking "${feed.id}": ${errorMessage(err)}`);
       api.error(`Error checking feed "${feed.id}":`, errorMessage(err));
     }
   }
 
-  api.notice(
-    ctx.nick,
-    `Check complete — ${totalNew} new item(s) across ${targets.length} feed(s).`,
+  const summary =
+    skipped > 0 || failed > 0
+      ? `Check complete — ${totalNew} new item(s) across ${targets.length - skipped} feed(s); ${skipped} skipped (breaker open), ${failed} failed.`
+      : `Check complete — ${totalNew} new item(s) across ${targets.length} feed(s).`;
+  api.notice(ctx.nick, summary);
+  logCmd(
+    api,
+    ctx,
+    'check',
+    'ok',
+    `${targets.length} feed(s), ${totalNew} new item(s), ${skipped} skipped, ${failed} failed`,
   );
-  logCmd(api, ctx, 'check', 'ok', `${targets.length} feed(s), ${totalNew} new item(s)`);
 }

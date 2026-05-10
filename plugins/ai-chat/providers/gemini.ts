@@ -41,6 +41,12 @@ export class GeminiProvider implements AIProvider {
    * call finishes on its own and its result is dropped.
    */
   private inflightControllers = new Set<AbortController>();
+  /**
+   * Bumped on every {@link abort}; fetches tag themselves with the epoch at
+   * start and skip the cleanup-on-finish if it advanced. See ollama.ts for
+   * the full rationale (W10.3).
+   */
+  private epoch = 0;
 
   async initialize(config: AIProviderConfig): Promise<void> {
     if (!config.apiKey) {
@@ -82,6 +88,7 @@ export class GeminiProvider implements AIProvider {
     }
 
     const controller = new AbortController();
+    const startEpoch = this.epoch;
     this.inflightControllers.add(controller);
     try {
       const result = await withTimeout(
@@ -133,7 +140,10 @@ export class GeminiProvider implements AIProvider {
     } catch (err) {
       throw mapGeminiError(err);
     } finally {
-      this.inflightControllers.delete(controller);
+      // See ollama.ts for the epoch-mismatch skip rationale (W10.3).
+      if (startEpoch === this.epoch) {
+        this.inflightControllers.delete(controller);
+      }
     }
   }
 
@@ -142,6 +152,7 @@ export class GeminiProvider implements AIProvider {
    * Google SDK fetches keep running but their results are dropped on arrival.
    */
   abort(): void {
+    this.epoch++;
     for (const controller of this.inflightControllers) {
       controller.abort();
     }

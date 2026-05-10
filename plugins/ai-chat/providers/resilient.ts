@@ -163,7 +163,11 @@ export class ResilientProvider implements AIProvider {
 
   private assertCircuitClosed(): void {
     if (this.isOpen()) {
-      throw new AIProviderError('Circuit breaker open', 'other');
+      // Distinct kind so `pipeline.ts` can route this through the silent
+      // "tell ops privately" path instead of emitting per-message
+      // "AI is temporarily unavailable" notices to every triggered channel
+      // for the full openDurationMs (W-AICHAT-SPAM).
+      throw new AIProviderError('Circuit breaker open', 'circuit_open');
     }
   }
 

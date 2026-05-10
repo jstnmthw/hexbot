@@ -27,16 +27,31 @@ export interface BindEntry {
   /** Dispatch count (or timer fires for `time` binds). Surfaced via `.binds`. */
   hits: number;
   /**
-   * Consecutive timer-handler errors. Only used on `time` binds.
-   * After {@link TIMER_FAILURE_THRESHOLD} consecutive throws, the
-   * dispatcher auto-disables the interval so a broken plugin can't
-   * produce unbounded log spam.
+   * Consecutive handler errors. Used by both the timer auto-disable
+   * (interval-driven) and the dispatch circuit breaker (event-driven, R40)
+   * to trip a broken plugin off without unbounded log spam.
    */
   consecutiveFailures?: number;
+  /**
+   * True once the dispatch circuit breaker tripped this bind. Set by the
+   * dispatcher on `consecutiveFailures >= DISPATCH_FAILURE_THRESHOLD`.
+   * Surfaced via `.binds` (rendered as `[tripped]`) so operators can see
+   * which binds the breaker shut off; reload the plugin to reset.
+   */
+  tripped?: boolean;
 }
 
 /** Auto-disable a `time` bind after this many consecutive errors. */
 const TIMER_FAILURE_THRESHOLD = 10;
+
+/**
+ * Auto-trip an event-driven (`pub`/`pubm`/`msg`/`raw`/...) bind after this
+ * many consecutive throws. The threshold is higher than the timer one
+ * because event-driven binds get their `consecutiveFailures` reset on every
+ * successful dispatch — a real misbehaving handler will trip in seconds
+ * under traffic, while a flaky bind that throws once in a while won't.
+ */
+const DISPATCH_FAILURE_THRESHOLD = 25;
 
 /** Minimal bind management interface for consumers that only register/remove binds. */
 export interface BindRegistrar {
@@ -370,6 +385,7 @@ export class EventDispatcher {
     const snapshot = this.binds.slice();
     for (const entry of snapshot) {
       if (entry.type !== type) continue;
+      if (entry.tripped) continue; // breaker open — don't even match
       if (!this.matchesMask(type, entry.mask, ctx)) continue;
       // Ordering invariant: flag check FIRST, verification gate SECOND,
       // handler call THIRD. Reordering (or slipping a handler invocation
@@ -399,8 +415,22 @@ export class EventDispatcher {
         if (result instanceof Promise) {
           await result;
         }
+        // Reset on success — only consecutive failures count toward the trip.
+        entry.consecutiveFailures = 0;
       } catch (err) {
-        this.logger?.error(`Handler error (${entry.pluginId}, ${type}:${entry.mask}):`, err);
+        entry.consecutiveFailures = (entry.consecutiveFailures ?? 0) + 1;
+        this.logger?.error(
+          `Handler error (${entry.pluginId}, ${type}:${entry.mask}, ${entry.consecutiveFailures}/${DISPATCH_FAILURE_THRESHOLD}):`,
+          err,
+        );
+        if (entry.consecutiveFailures >= DISPATCH_FAILURE_THRESHOLD) {
+          entry.tripped = true;
+          this.logger?.error(
+            `Handler bind ${type}:${entry.mask} for plugin "${entry.pluginId}" auto-tripped after ` +
+              `${DISPATCH_FAILURE_THRESHOLD} consecutive errors. Reload the plugin to reset. ` +
+              `(visible in .binds as [tripped])`,
+          );
+        }
       }
     }
   }
