@@ -159,7 +159,9 @@ describe('spotify-radio commands', () => {
     expect(h.instance[INTERNALS].getState().session).not.toBeNull();
     expect(h.instance[INTERNALS].getState().session!.jamUrl).toBe(VALID);
     expect(h.instance[INTERNALS].getState().session!.lastTrackId).toBeNull();
-    expect(h.says.some((s) => s.target === '#radio' && s.message.includes(VALID))).toBe(true);
+    expect(
+      h.says.some((s) => s.target === '#radio' && s.message.endsWith(`Tune In: ${VALID}`)),
+    ).toBe(true);
   });
 
   it('!radio on <valid-url> as non-owner — refused, session stays null', async () => {
