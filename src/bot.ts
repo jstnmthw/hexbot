@@ -131,13 +131,13 @@ export class Bot {
   readonly stsStore: STSStore;
 
   private bridge: IRCBridge | null = null;
+  private botLogger: LoggerLike;
+  private configuredChannels: ChannelEntry[] = [];
   private _dccManager: DCCManager | null = null;
   private _relayOrchestrator: RelayOrchestrator | null = null;
   private _lifecycleHandle: ConnectionLifecycleHandle | null = null;
   private _reconnectDriver: ReconnectDriver | null = null;
-  private botLogger: LoggerLike;
   private _casemapping: Casemapping = 'rfc1459';
-  private configuredChannels: ChannelEntry[] = [];
 
   /**
    * Set on the first call to {@link shutdown}. Guards against a second
