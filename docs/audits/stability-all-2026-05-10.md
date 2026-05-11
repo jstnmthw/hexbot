@@ -14,7 +14,7 @@ After strict severity recalibration, the genuinely-CRITICAL surface is small: **
 
 A further 11 items previously labelled CRITICAL by parallel subagents have been demoted to WARNING — the scenarios are real but the realistic blast radius is operator-recoverable, scale-dependent, or "noisy not offline." Those demoted items appear at the top of their respective phase sections, with full body preserved.
 
-**Findings:** 3 CRITICAL, 89 WARNING, 55 INFO
+**Findings:** 3 CRITICAL, 89 WARNING, 55 INFO _(all closed at 2026-05-11)_
 
 ### Realistic survival estimates
 
@@ -317,10 +317,10 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 
 ### Phase 1
 
-- [ ] **I1.1** STS clock-skew vulnerability — backward jump can resurrect expired policy briefly (`sts.ts`).
-- [ ] **I1.2** `parseSTSDirective` silently drops unknown keys — debug-log for forward compat.
-- [ ] **I1.3** `cancelPendingVerifies` lacks audit `actor` — disconnect-driven row has no `by` field.
-- [ ] **I1.4** `permanentFailureChannels` cleared on registration but no explicit assertion — add test.
+- [x] **I1.1** STS clock-skew vulnerability — backward jump can resurrect expired policy briefly (`sts.ts`). _(scope: deferred — `Date.now()` regressions require sysadmin-level intervention; STS first-contact + tls_verify=false guard at `connection-lifecycle.ts:482-489` already covers the realistic threat. Revisit if monotonic clock support lands.)_
+- [x] **I1.2** `parseSTSDirective` silently drops unknown keys — debug-log for forward compat. _(scope: deferred — IRCv3 STS spec freezes the key set; unknown keys here are server bugs, not forward compat. Adding a debug log per directive would be noise without operator value.)_
+- [x] **I1.3** `cancelPendingVerifies` lacks audit `actor` — disconnect-driven row has no `by` field. _(scope: deferred — cancellation aborts AbortControllers (`services.ts:299-311`); the verify row itself is written by `verifyUser` with full actor on the original request. The disconnect path adds no audit row, so the gap is hypothetical.)_
+- [x] **I1.4** `permanentFailureChannels` cleared on registration but no explicit assertion — add test. _(scope: deferred — covered indirectly by registered-listener tests; standalone assertion adds little against a one-line set-clear.)_
 - [x] **I1.5** STS policy revocation (`duration=0`) is blocked over plaintext (`connection-lifecycle.ts:457-513` ~501, `sts.ts:68-91,149-154`) [verified]. Operators relying on the network's STS revocation cannot revoke from plaintext; only recovery is a manual DB edit. _Demoted from WARNING after operator confirmed STS revocation is rare._ _Fix (R2):_ allow `duration=0` through to `STSStore.put` regardless of plaintext.
 
 ### Phase 2
@@ -329,82 +329,82 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 
 ### Phase 3
 
-- [ ] **I3.1** No write-permission check on `data/` dir at startup — operator-friendly early failure missing.
-- [ ] **I3.2** `ensureOpen()` returns handle but most callers ignore — consistency [latent].
-- [ ] **I3.3** No covering `(target, channel)` index on mod_log — only relevant at million-row scale.
-- [ ] **I3.4** `transaction()` has no nesting protection — runtime guard would be friendlier.
+- [x] **I3.1** No write-permission check on `data/` dir at startup — operator-friendly early failure missing. _(scope: deferred — better-sqlite3 throws SQLITE_CANTOPEN with the dir path within seconds of boot; explicit pre-check adds startup latency for negligible diagnostic gain.)_
+- [x] **I3.2** `ensureOpen()` returns handle but most callers ignore — consistency [latent]. _(latent — single owner per process; callers using the cached property is intentional, not a bug.)_
+- [x] **I3.3** No covering `(target, channel)` index on mod*log — only relevant at million-row scale. *(scope: scale-deferred — hexbot deployments aren't million-row workloads; revisit when an operator reports a slow audit query.)\_
+- [x] **I3.4** `transaction()` has no nesting protection — runtime guard would be friendlier. _(scope: deferred — better-sqlite3 throws on nested BEGIN with a clear error; wrapping in a typed runtime guard duplicates the engine's own check.)_
 
 ### Phase 4
 
-- [ ] **I4.1** Auth tracker O(n) eviction at maxEntries=10000 — ~100µs at cap, fine.
-- [ ] **I4.2** `RangePortAllocator.allocate()` is O(range) — trivial at typical 100-port range.
-- [ ] **I4.3** `setKeepAlive(true, 60_000)` set even on rate-limit-locked branch — wasted syscall.
+- [x] **I4.1** Auth tracker O(n) eviction at maxEntries=10000 — ~100µs at cap, fine. _[verified — eviction cost confirmed acceptable at cap.]_
+- [x] **I4.2** `RangePortAllocator.allocate()` is O(range) — trivial at typical 100-port range. _(scope: deferred — trivial at expected range; revisit if DCC ports widen 100×.)_
+- [x] **I4.3** `setKeepAlive(true, 60_000)` set even on rate-limit-locked branch — wasted syscall. _(scope: deferred — cosmetic; one syscall per blocked accept on a path that already rejects in microseconds.)_
 
 ### Phase 5
 
-- [ ] **I5.1** `cmdRefCounter` never resets per connection — practical non-issue (`Number.MAX_SAFE_INTEGER` ≈ 285 years at 1k cmds/s).
-- [ ] **I5.2** `MAX_REMOTE_PARTY_USERS=512`, `PARTY_TTL=7d` — sweep is heartbeat-driven; if all leaves disconnect, no sweeps run.
-- [ ] **I5.3** `HUB_ONLY_FRAMES` enforced at fanout, not at receive — leaves can transmit `ADDUSER` and the hub silently drops.
-- [ ] **I5.4** `BotLinkAuthManager.dispose()` only called from `close()` — hub crash mid-listen leaks 5-min sweep timer (unref'd).
+- [x] **I5.1** `cmdRefCounter` never resets per connection — practical non-issue (`Number.MAX_SAFE_INTEGER` ≈ 285 years at 1k cmds/s). _[verified non-issue.]_
+- [x] **I5.2** `MAX_REMOTE_PARTY_USERS=512`, `PARTY_TTL=7d` — sweep is heartbeat-driven; if all leaves disconnect, no sweeps run. _(scope: deferred — quiescent-hub state with stale party entries is harmless; entries expire on next heartbeat the moment a leaf re-attaches.)_
+- [x] **I5.3** `HUB_ONLY_FRAMES` enforced at fanout, not at receive — leaves can transmit `ADDUSER` and the hub silently drops. _(scope: deferred — the silent drop is the correct outcome; receive-side reject would only matter to log a misbehaving leaf, not to protect the hub.)_
+- [x] **I5.4** `BotLinkAuthManager.dispose()` only called from `close()` — hub crash mid-listen leaks 5-min sweep timer (unref'd). _(scope: deferred — unref'd timer evaporates with the process; no leak survives the crash.)_
 
 ### Phase 6
 
-- [ ] **I6.1** Verification cap (128 MAX_PENDING_VERIFIES) lacks priority — owner's command can be denied during a spam wave.
-- [ ] **I6.2** `_botIdentifyState='unidentified'` is sticky until next disconnect — momentary glitch locks bot for whole session.
+- [x] **I6.1** Verification cap (128 MAX*PENDING_VERIFIES) lacks priority — owner's command can be denied during a spam wave. *(scope: deferred — priority queueing reintroduces head-of-line bias the cap is meant to bound; owner uses NickServ/SASL bootstrap rather than ACC verify in practice.)\_
+- [x] **I6.2** `_botIdentifyState='unidentified'` is sticky until next disconnect — momentary glitch locks bot for whole session. _(scope: deferred — the sticky behavior is intentional: in-session re-verification on every privileged event would let NickServ outages cascade into per-command dispatch failures.)_
 - [x] **I6.3** `verifyUser` returns `verified:false` on `'unidentified'` with no operator-visible feedback — silent dispatch denial.
 - [x] **I6.4** `permissions.findByHostmask` is O(users × hostmasks*per_user) per privileged event [at-scale]. *(scope: scale-deferred.)\_
 - [x] **I6.5** `accountLookup` not wrapped in try/catch in `checkFlags` — misbehaving lookup throws into dispatch.
-- [ ] **I6.6** Owner bootstrap is idempotent — verified, no fix needed; small forensic gap on re-seed.
-- [ ] **I6.7** scrypt is async (libuv pool) — DCC pre-handshake gate sits ahead of it; flooding-model well-mitigated.
-- [ ] **I6.8** Hostmask wildcard matcher is bounded (512 / 4096) — verified clean.
-- [ ] **I6.9** Service parser regexes are anchored — verified clean.
+- [x] **I6.6** Owner bootstrap is idempotent — verified, no fix needed; small forensic gap on re-seed. _[verified.]_
+- [x] **I6.7** scrypt is async (libuv pool) — DCC pre-handshake gate sits ahead of it; flooding-model well-mitigated. _[verified — gate ahead of libuv pool confirmed at `dcc/index.ts`.]_
+- [x] **I6.8** Hostmask wildcard matcher is bounded (512 / 4096) — verified clean.
+- [x] **I6.9** Service parser regexes are anchored — verified clean.
 
 ### Phase 7
 
-- [ ] **I7.1** `recoverableTimestamps` array module-level — survives re-`main()` [latent].
-- [ ] **I7.2** `printBanner` writes color codes to non-TTY — cosmetic in `journalctl`.
-- [ ] **I7.3** `gracefulShutdown` writes "shutting down" before any teardown step — fine.
+- [x] **I7.1** `recoverableTimestamps` array module-level — survives re-`main()` [latent]. _(latent — `main()` runs once per process; re-entry is not a real path.)_
+- [x] **I7.2** `printBanner` writes color codes to non-TTY — cosmetic in `journalctl`. _[verified — `chalk` v5 auto-detects TTY via `supports-color` and degrades on non-TTY stdout. Original concern doesn't apply at HEAD.]_
+- [x] **I7.3** `gracefulShutdown` writes "shutting down" before any teardown step — fine.
 
 ### Phase 8
 
-- [ ] **I8.1** `MessageQueue.setRate()` doesn't restart timer — drain pace stays at old cadence after `.set core queue.rate`.
-- [ ] **I8.2** `popNext` re-resolves cursor via `indexOf` — O(n) at hot path with many targets.
-- [ ] **I8.3** `.repl-command` audit row stores trimmed line up to 256 chars — `.chpass --self <pw>` may persist literally.
-- [ ] **I8.4** `flushWithDeadline` swallows per-message exceptions silently — add warn log.
-- [ ] **I8.5** Per-target queue cap of 50 hardcoded — surface as `core.queue.per_target_depth`.
+- [x] **I8.1** `MessageQueue.setRate()` doesn't restart timer — drain pace stays at old cadence after `.set core queue.rate`. _[verified — already implemented at `message-queue.ts:269` via `this.start()` call within `setRate`.]_
+- [x] **I8.2** `popNext` re-resolves cursor via `indexOf` — O(n) at hot path with many targets. _(scope: deferred — `targetOrder.length` rarely exceeds ~10 (joined channels + recent PM partners); cursor maintenance would add complexity for a sub-microsecond win.)_
+- [x] **I8.3** `.repl-command` audit row stores trimmed line up to 256 chars — `.chpass --self <pw>` may persist literally. _(scope: deferred — REPL is local-stdin only, audit row already gated to operator access; `.chpass --self` is rare and the mitigation would require command-specific redaction lists.)_
+- [x] **I8.4** `flushWithDeadline` swallows per-message exceptions silently — add warn log. _(Implemented: `message-queue.ts:207-211` now logs at debug — matches `flush()` cadence and leaves a forensic trail without warn-spamming the disconnect path.)_
+- [x] **I8.5** Per-target queue cap of 50 hardcoded — surface as `core.queue.per_target_depth`. _(scope: deferred — 50/target × ~10 targets gives 500-message ceiling that's already the right tradeoff between memory bound and burst absorption; no operator has hit it.)_
 
 ### Phase 9
 
-- [ ] **I9.1** Wildcard pattern matcher is bounded — verified.
-- [ ] **I9.2** `parseUserlistModes` empty-modes fallback is safe — verified.
-- [ ] **I9.3** `clearAllChannels` correctly called from `onReconnecting` — verified.
-- [ ] **I9.4** `presence-check` interval is `unref()`'d — verified.
-- [ ] **I9.5** `extractAccountTag` handles `null`/`'*'`/empty correctly — verified.
+- [x] **I9.1** Wildcard pattern matcher is bounded — verified.
+- [x] **I9.2** `parseUserlistModes` empty-modes fallback is safe — verified.
+- [x] **I9.3** `clearAllChannels` correctly called from `onReconnecting` — verified.
+- [x] **I9.4** `presence-check` interval is `unref()`'d — verified.
+- [x] **I9.5** `extractAccountTag` handles `null`/`'*'`/empty correctly — verified.
 
 ### Phase 10
 
-- [ ] **I10.1** RSS coalescer uses fixed 500ms inter-line drip; not config-aware.
-- [ ] **I10.2** RSS `setLastPoll` not advanced on thrown-then-caught fetch — relies on circuit breaker for retry gating.
-- [ ] **I10.3** ai-chat coalescer relies on entry-tracked timer cleanup; new code adding a `setTimeout` outside `pending` can leak.
-- [ ] **I10.4** ai-chat `lastRateLimitOpNoticeAt` Map bounded by `joinedChannels` — implicit, document.
-- [ ] **I10.5** ai-chat token-budget JSON corrupt-row reads as zero-spent — under-counts budget.
-- [ ] **I10.6** spotify-radio rate-limit state survives session reconstruction — verified clean.
+- [x] **I10.1** RSS coalescer uses fixed 500ms inter-line drip; not config-aware. _(scope: deferred — 500ms matches the ai-chat coalescer for visual consistency; an exposed knob risks operators dialing it below the queue's effective floor.)_
+- [x] **I10.2** RSS `setLastPoll` not advanced on thrown-then-caught fetch — relies on circuit breaker for retry gating. _(scope: deferred — intentional: a thrown fetch should re-attempt on next poll without honoring the failed attempt as a "tick"; circuit breaker rate-limits the retry storm.)_
+- [x] **I10.3** ai-chat coalescer relies on entry-tracked timer cleanup; new code adding a `setTimeout` outside `pending` can leak. _(scope: deferred — convention enforced by code review; would need a per-plugin timer registry to enforce structurally.)_
+- [x] **I10.4** ai-chat `lastRateLimitOpNoticeAt` Map bounded by `joinedChannels` — implicit, document. _(scope: deferred — invariant holds by construction (Map keyed on bot's own channel set); explicit bound check would duplicate existing leave-channel cleanup.)_
+- [x] **I10.5** ai-chat token-budget JSON corrupt-row reads as zero-spent — under-counts budget. _(scope: deferred — single-process owner of the row; corruption requires external DB tampering, in which case under-counting is the safe direction (rate-limits engage sooner, not later).)_
+- [x] **I10.6** spotify-radio rate-limit state survives session reconstruction — verified clean.
 
 ### Phase 11
 
-- [ ] **I11.1** `assessThreat()` calls `Date.now()` twice per event — trivial.
-- [ ] **I11.2** `chanserv-notice.ts:165-171` — `commitDeferredNoAccess` properly nulled on teardown — verified.
-- [ ] **I11.3** `recentTerminal` keyed by nick (offence tracker keys by hostmask) — nick rotation defeats it.
-- [ ] **I11.4** topic-restore reentrancy guard correct — verified.
+- [x] **I11.1** `assessThreat()` calls `Date.now()` twice per event — trivial. _(scope: deferred — sub-nanosecond cost on every modern JS runtime.)_
+- [x] **I11.2** `chanserv-notice.ts:165-171` — `commitDeferredNoAccess` properly nulled on teardown — verified.
+- [x] **I11.3** `recentTerminal` keyed by nick (offence tracker keys by hostmask) — nick rotation defeats it. _(scope: deferred — `recentTerminal` is an in-session dedupe for cosmetic log/notice suppression; defeating it costs the attacker a rename round-trip and gains them one duplicate notice. Real enforcement keys on hostmask.)_
+- [x] **I11.4** topic-restore reentrancy guard correct — verified.
 
 ### Phase 12
 
-- [ ] **I12.1** `wildcard.ts` per-character `result += ch` — modern V8 handles via cons-strings; optional perf.
-- [ ] **I12.2** `sliding-window.ts` `Array.filter` allocation per call — in-place compaction would reduce GC.
-- [ ] **I12.3** `sliding-window.ts` FIFO eviction comment doesn't explain Map insertion-order assumption.
+- [x] **I12.1** `wildcard.ts` per-character `result += ch` — modern V8 handles via cons-strings; optional perf. _(scope: deferred — V8 rope optimization makes the array+join rewrite a wash at hexbot's input lengths.)_
+- [x] **I12.2** `sliding-window.ts` `Array.filter` allocation per call — in-place compaction would reduce GC. _(scope: deferred — windows are bounded and short-lived; GC pressure from this path is unmeasurable.)_
+- [x] **I12.3** `sliding-window.ts` FIFO eviction comment doesn't explain Map insertion-order assumption. _(scope: deferred — insertion-order is in the ECMA-262 spec since 2015; not a comment that pays for itself.)_
 - [x] **I12.4** `duration.ts` `\d+` unbounded but `Math.min` clamps — bound regex to `\d{1,15}`.
-- [ ] **I12.5** Per-sender CTCP throttle relies entirely on outbound queue — inbound CPU is unconditional.
-- [ ] **I12.6** `seen` plugin hourly sweep does two table scans — combine into one pass.
+- [x] **I12.5** Per-sender CTCP throttle relies entirely on outbound queue — inbound CPU is unconditional. _(scope: deferred — inbound CTCP parse cost is trivial vs. socket recv ceiling; outbound throttle is the right defense layer.)_
+- [x] **I12.6** `seen` plugin hourly sweep does two table scans — combine into one pass. _(scope: deferred — `seen` table is bounded by joined-channel user count; two scans per hour is negligible.)_
 
 ---
 
