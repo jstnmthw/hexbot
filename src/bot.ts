@@ -1133,12 +1133,14 @@ export class Bot {
    *     sweeps (seen, ai-chat) keep theirs; this is the safety net for
    *     long-running deployments where ad-hoc plugin state otherwise
    *     accumulates forever.
-   *   - monthly VACUUM: reclaims pages freed by the prune. Holds an
-   *     exclusive lock for the duration, so we run it 03:00-aligned to
-   *     coincide with the typical low-traffic window.
+   *   - ~monthly VACUUM: reclaims pages freed by the prune. Folded into
+   *     the daily handler with an elapsed-time check because a literal
+   *     30-day setInterval overflows Node's 32-bit timer cap (TIMEOUT_MAX
+   *     = 2147483647 ms ≈ 24.8 days), which clamps the delay to 1ms and
+   *     fires the callback continuously.
    */
   private kvDailyTimer: ReturnType<typeof setInterval> | null = null;
-  private kvMonthlyTimer: ReturnType<typeof setInterval> | null = null;
+  private kvLastVacuumAt = 0;
   private static readonly KV_RETENTION_DAYS: ReadonlyArray<{ ns: string; days: number }> = [
     // ai-chat per-channel rate-limit / mood / token-budget rows: 30 days
     // is well past any active conversation window.
@@ -1159,7 +1161,9 @@ export class Bot {
   ];
   private scheduleKvMaintenance(): void {
     const ONE_DAY = 24 * 60 * 60 * 1000;
-    const dailyPrune = (): void => {
+    const VACUUM_INTERVAL = 30 * ONE_DAY;
+    this.kvLastVacuumAt = Date.now();
+    const dailyMaintenance = (): void => {
       let totalPruned = 0;
       for (const { ns, days } of Bot.KV_RETENTION_DAYS) {
         try {
@@ -1171,20 +1175,18 @@ export class Bot {
       if (totalPruned > 0) {
         this.botLogger.info(`kv daily prune: removed ${totalPruned} stale row(s)`);
       }
-    };
-    this.kvDailyTimer = setInterval(dailyPrune, ONE_DAY);
-    this.kvDailyTimer.unref?.();
-
-    const monthlyVacuum = (): void => {
-      try {
-        this.db.vacuum();
-        this.botLogger.info('kv VACUUM complete');
-      } catch (err) {
-        this.botLogger.warn('kv VACUUM failed:', err);
+      if (Date.now() - this.kvLastVacuumAt >= VACUUM_INTERVAL) {
+        try {
+          this.db.vacuum();
+          this.kvLastVacuumAt = Date.now();
+          this.botLogger.info('kv VACUUM complete');
+        } catch (err) {
+          this.botLogger.warn('kv VACUUM failed:', err);
+        }
       }
     };
-    this.kvMonthlyTimer = setInterval(monthlyVacuum, 30 * ONE_DAY);
-    this.kvMonthlyTimer.unref?.();
+    this.kvDailyTimer = setInterval(dailyMaintenance, ONE_DAY);
+    this.kvDailyTimer.unref?.();
   }
 
   /**
@@ -1551,10 +1553,6 @@ export class Bot {
       if (this.kvDailyTimer !== null) {
         clearInterval(this.kvDailyTimer);
         this.kvDailyTimer = null;
-      }
-      if (this.kvMonthlyTimer !== null) {
-        clearInterval(this.kvMonthlyTimer);
-        this.kvMonthlyTimer = null;
       }
     });
 
