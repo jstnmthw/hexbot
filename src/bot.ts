@@ -3,18 +3,14 @@
 // pieces but delegates all real work to the individual modules.
 import chalk from 'chalk';
 import { Client as IrcClient } from 'irc-framework';
-import { accessSync, constants as fsConstants, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { type Bootstrap, loadBootstrap } from './bootstrap';
 import { CommandHandler } from './command-handler';
-import {
-  parseBotConfigOnDisk,
-  resolveSecrets,
-  validateChannelKeys,
-  validateResolvedSecrets,
-} from './config';
+import { loadBotConfig, readBotJsonAsRecord, readPluginsJsonAsRecord } from './config/loader';
+import { AuditFallbackBuffer } from './core/audit-fallback';
 import { BanStore } from './core/ban-store';
 import type { BotLinkHub, BotLinkLeaf } from './core/botlink';
 import { ChannelSettings } from './core/channel-settings';
@@ -24,19 +20,23 @@ import { registerBotlinkCommands } from './core/commands/botlink-commands';
 import { registerChannelCommands } from './core/commands/channel-commands';
 import { registerDccConsoleCommands } from './core/commands/dcc-console-commands';
 import { registerDispatcherCommands } from './core/commands/dispatcher-commands';
-import { registerIRCAdminCommands } from './core/commands/irc-commands-admin';
+import { type AdminBotInfo, registerIRCAdminCommands } from './core/commands/irc-commands-admin';
 import { registerModlogCommands, shutdownModLogCommands } from './core/commands/modlog-commands';
 import { registerPasswordCommands } from './core/commands/password-commands';
 import { registerPermissionCommands } from './core/commands/permission-commands';
 import { registerPluginCommands } from './core/commands/plugin-commands';
 import { registerSettingsCommands } from './core/commands/settings-commands';
 import {
+  type ConnectionLifecycleDeps,
   type ConnectionLifecycleHandle,
   registerConnectionEvents,
 } from './core/connection-lifecycle';
+import { buildCoreSettingEntries } from './core/core-settings-defs';
 import { DCCManager } from './core/dcc';
 import { HelpRegistry } from './core/help-registry';
 import { IRCCommands } from './core/irc-commands';
+import type { ServerCapabilities } from './core/isupport';
+import { type KvMaintenanceHandle, scheduleKvMaintenance } from './core/kv-maintenance';
 import { MemoManager } from './core/memo';
 import { MessageQueue } from './core/message-queue';
 import type { LogModActionOptions } from './core/mod-log';
@@ -51,7 +51,7 @@ import { RelayOrchestrator } from './core/relay-orchestrator';
 import { seedFromJson } from './core/seed-from-json';
 import { Services } from './core/services';
 import { SettingsRegistry } from './core/settings-registry';
-import { STSStore, enforceSTS } from './core/sts';
+import { type STSDirective, STSRefusalError, STSStore, enforceSTS } from './core/sts';
 import { BotDatabase } from './database';
 import { EventDispatcher } from './dispatcher';
 import type { VerificationProvider } from './dispatcher';
@@ -64,85 +64,45 @@ import { buildSocksOptions } from './utils/socks';
 import { requiresVerificationForFlags, validateRequireAccFor } from './utils/verify-flags';
 import { ircLower } from './utils/wildcard';
 
-// ---------------------------------------------------------------------------
-// Secret file permission checks
-// ---------------------------------------------------------------------------
+// Re-export so `src/index.ts` keeps importing `STSRefusalError` from `./bot`
+// — its `instanceof` check on the top-level catch needs the same class identity.
+export { STSRefusalError };
 
-/**
- * Enforce POSIX-mode permissions on a file that holds credentials. World-
- * readable is always fatal (other local users can cat the file); group-
- * readable is a warning unless `fatal` is true. Silent when the file is
- * unreadable — `accessSync` already handled "not found" at the config
- * path.
- */
-function enforceSecretFilePermissions(path: string, opts: { fatal: boolean }): void {
-  let mode: number;
-  try {
-    mode = statSync(path).mode;
-  } catch {
-    // stat failed — caller's readability check already ran or the file
-    // simply doesn't exist. Not our job to report that here.
-    return;
-  }
-  const octal = (mode & 0o777).toString(8);
-  if (mode & 0o004) {
-    console.error(`[bot] SECURITY: ${path} is world-readable (mode ${octal})`);
-    console.error(`[bot] Run: chmod 600 ${path}`);
-    if (opts.fatal) process.exit(1);
-    return;
-  }
-  if (mode & 0o040) {
-    console.error(
-      `[security] ${path} is group-readable (mode ${octal}) — consider chmod 600 ${path}`,
-    );
-  }
-}
+// ISUPPORT tokens exposed to plugins via `api.getServerSupports`. The
+// list is intentionally explicit (rather than `network.supports.dump()`)
+// so plugins can grep for the keys they consume and so an unknown token
+// never leaks into a plugin's state.
+const KNOWN_ISUPPORT_KEYS = [
+  'CASEMAPPING',
+  'MODES',
+  'MAXCHANNELS',
+  'CHANTYPES',
+  'PREFIX',
+  'CHANLIMIT',
+  'NICKLEN',
+  'TOPICLEN',
+  'KICKLEN',
+  'NETWORK',
+  'CHANMODES',
+] as const;
 
-/**
- * Check `.env`, `.env.local`, and `.env.<NODE_ENV>` in the project root for
- * overly permissive modes. These aren't consumed directly by hexbot (secrets
- * land in config via `_env` fields), but operators typically keep
- * credentials there and the shell that launched the bot has already
- * sourced them into the process env. A world-readable file on a shared
- * host is functionally a credential leak, so we abort; group-readable
- * earns a `[security]` warning.
- */
-function checkDotenvPermissions(): void {
-  const env = process.env.NODE_ENV;
-  // Cover both root-level `.env` files and the `config/bot.env*` variants
-  // operators commonly use for hexbot-specific secrets. The set mirrors the
-  // resolution order documented in `config/bot.env.example`.
-  const candidates = ['.env', '.env.local', 'config/bot.env', 'config/bot.env.local'];
-  if (env) {
-    candidates.push(`.env.${env}`);
-    candidates.push(`config/bot.env.${env}`);
-  }
-  for (const name of candidates) {
-    const path = resolve(name);
-    enforceSecretFilePermissions(path, { fatal: true });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// STS refusal error
-// ---------------------------------------------------------------------------
-
-/**
- * Thrown from `Bot.connect()` when a stored IRCv3 STS policy refuses the
- * current connection (typically plaintext-with-existing-TLS-policy or
- * downgrade detection). The thrower wants exit code 2 — a permanent-failure
- * tier the supervisor must not restart-loop on — but going through this
- * typed error rather than `process.exit(2)` lets `Bot.start()` run the
- * normal graceful shutdown chain first (db.close, plugin teardown, queue
- * drain) instead of leaking WAL files and dangling sockets.
- */
-export class STSRefusalError extends Error {
-  readonly exitCode = 2;
-  constructor(message: string) {
-    super(message);
-    this.name = 'STSRefusalError';
-  }
-}
+// Intentional irc-framework overrides applied to every connection. Lifted
+// to module scope so the rationale lives next to the values and isn't
+// interleaved with config-derived fields in `buildClientOptions`.
+const BASE_CLIENT_OPTIONS = {
+  // HexBot owns the reconnect loop via src/core/reconnect-driver.ts —
+  // irc-framework's auto_reconnect gives up when a reconnect reaches
+  // TCP-connected but fails to complete IRC registration, leaving the
+  // process as a zombie (2026-04-13 incident).
+  auto_reconnect: false,
+  // Disable irc-framework's built-in CTCP VERSION reply — we handle it
+  // ourselves in irc-bridge.ts via the dispatcher.
+  version: null,
+  // IRCv3: request chghost capability so channel-state receives real-time
+  // hostmask updates. account-notify and extended-join are requested
+  // automatically by irc-framework.
+  enable_chghost: true,
+} as const;
 
 // ---------------------------------------------------------------------------
 // Bot
@@ -157,12 +117,9 @@ export class Bot {
   readonly eventBus: BotEventBus;
   readonly client: InstanceType<typeof IrcClient>;
   readonly logger: LoggerLike;
-
   readonly pluginLoader: PluginLoader;
   readonly channelSettings: ChannelSettings;
-  /** Core-scope settings registry — bot-wide live config. Owner: `'bot'`. */
   readonly coreSettings: SettingsRegistry;
-  /** Per-plugin settings registries, keyed by pluginId. Created lazily by the loader. */
   readonly pluginSettings: Map<string, SettingsRegistry> = new Map();
   readonly channelState: ChannelState;
   readonly ircCommands: IRCCommands;
@@ -180,6 +137,8 @@ export class Bot {
   private _reconnectDriver: ReconnectDriver | null = null;
   private botLogger: LoggerLike;
   private _casemapping: Casemapping = 'rfc1459';
+  private configuredChannels: ChannelEntry[] = [];
+
   /**
    * Set on the first call to {@link shutdown}. Guards against a second
    * SIGINT/SIGTERM (or a direct test-harness invocation) racing the first
@@ -188,6 +147,7 @@ export class Bot {
    * double-close the db after one already ran.
    */
   private _isShuttingDown = false;
+
   /**
    * True after {@link start} has run to completion. Symmetric with
    * `_isShuttingDown` so a double-`start()` no-ops instead of restamping
@@ -195,6 +155,13 @@ export class Bot {
    * running the connect/attach plumbing.
    */
   private _isStarted = false;
+
+  /**
+   * Latched true on the first fatal-DB observer fire so a flurry of
+   * subsequent fatal errors collapses into a single shutdown path. Read
+   * by `scheduleFatalShutdown()` only.
+   */
+  private _fatalShutdownScheduled = false;
 
   /** Bot config path captured during construction so `.rehash` can re-read it on demand. */
   private readonly _botConfigPath: string;
@@ -214,7 +181,7 @@ export class Bot {
    * mutations. Used by `.status` and ops triage.
    */
   getAuditFallbackBuffer(): LogModActionOptions[] {
-    return this.auditFallbackBuffer.slice();
+    return this.auditFallback.snapshot();
   }
 
   /**
@@ -223,20 +190,7 @@ export class Bot {
    * the bot's lifetime — it does not reset when the buffer is read.
    */
   getAuditFallbackStats(): { held: number; dropped: number } {
-    return { held: this.auditFallbackBuffer.length, dropped: this.auditFallbackOverflowCount };
-  }
-
-  /**
-   * Append an audit-fallback entry. FIFO-evicts the oldest entry once
-   * the buffer is full so memory cannot grow unbounded during a long
-   * degraded period.
-   */
-  private pushAuditFallback(options: LogModActionOptions): void {
-    if (this.auditFallbackBuffer.length >= Bot.AUDIT_FALLBACK_CAPACITY) {
-      this.auditFallbackBuffer.shift();
-      this.auditFallbackOverflowCount++;
-    }
-    this.auditFallbackBuffer.push(options);
+    return this.auditFallback.stats();
   }
 
   /** The active DCC manager, if DCC is enabled. Used by the REPL to announce activity. */
@@ -253,7 +207,7 @@ export class Bot {
   get botLinkLeaf(): BotLinkLeaf | null {
     return this._relayOrchestrator?.leaf ?? null;
   }
-  private startTime: number = Date.now();
+
   /**
    * Bot start time as a unix-epoch ms timestamp. Exposed so the REPL
    * startup summary and DCC login-summary banner can anchor "since bot
@@ -263,7 +217,9 @@ export class Bot {
   get startedAt(): number {
     return this.startTime;
   }
-  private configuredChannels: ChannelEntry[] = [];
+
+  private startTime: number = Date.now();
+
   /**
    * Plugin names that failed to load at startup. Surfaced via
    * `.status` so operators can see degraded plugin state without
@@ -275,14 +231,11 @@ export class Bot {
    * In-memory ring buffer of audit-log writes that the SQLite layer
    * could not persist (SQLITE_BUSY/FULL/IOERR). Wired as the database's
    * `setAuditFallback` sink so disk-full or fatal-DB conditions don't
-   * silently lose audit rows. The buffer is bounded — old entries are
-   * dropped FIFO when the cap is reached so a long degraded period
-   * doesn't bloat memory. Operators see the count via `.status`; the
+   * silently lose audit rows. Operators see the count via `.status`; the
    * raw entries can be retrieved by core commands for triage.
    */
-  private static readonly AUDIT_FALLBACK_CAPACITY = 256;
-  private auditFallbackBuffer: LogModActionOptions[] = [];
-  private auditFallbackOverflowCount = 0;
+  private readonly auditFallback = new AuditFallbackBuffer();
+
   /**
    * Bootstrap settings captured in the constructor and consumed at start()
    * — only the env-only flags (e.g. `HEX_FAIL_ON_PLUGIN_LOAD_FAILURE`) live
@@ -310,7 +263,7 @@ export class Bot {
 
     const cfgPath = resolve(configPath ?? './config/bot.json');
     this._botConfigPath = cfgPath;
-    this.config = this.loadConfig(cfgPath, bootstrap);
+    this.config = loadBotConfig(cfgPath, bootstrap);
 
     // Create root logger from config level
     this.logger = createLogger(this.config.logging.level);
@@ -325,6 +278,7 @@ export class Bot {
     // intermediate locals keeps TypeScript's "definitely assigned" analysis
     // happy for the class's `readonly` fields without weakening their types.
     const services = this.createServices();
+
     this.db = services.db;
     this.eventBus = services.eventBus;
     this.permissions = services.permissions;
@@ -353,6 +307,7 @@ export class Bot {
       scopeSummary: 'Bot-wide singletons (logging, queue, flood, services, dcc, ...)',
       commandPrefix: this.config.command_prefix ?? '.',
     });
+
     this.registerCoreSettings();
 
     // SQLITE_CORRUPT / NOTADB / IOERR* used to call process.exit(2) directly
@@ -368,10 +323,10 @@ export class Bot {
   /**
    * Schedule an asynchronous `shutdown()` followed by `process.exit(2)`.
    * Fired from a fatal-DB observer; reentrancy is guarded by both the
-   * `_fatalShutdownScheduled` flag here and `_isShuttingDown` inside
-   * {@link shutdown}, so multiple fatal errors collapse into one exit.
+   * `_fatalShutdownScheduled` flag (declared near the lifecycle guards)
+   * and `_isShuttingDown` inside {@link shutdown}, so multiple fatal
+   * errors collapse into one exit.
    */
-  private _fatalShutdownScheduled = false;
   private scheduleFatalShutdown(): void {
     if (this._fatalShutdownScheduled) return;
     this._fatalShutdownScheduled = true;
@@ -384,374 +339,42 @@ export class Bot {
 
   /**
    * Register every core-scope setting def + its onChange listener.
-   * Mirrors the matrix in docs/plans/live-config-updates.md §4: live
-   * keys apply on the spot, reload keys reattach a subsystem, restart
-   * keys warn the operator that a process restart is needed.
    *
-   * Defs are registered directly (rather than via Zod schema
-   * reflection) so each onChange listener can close over the bot's
-   * wired subsystems. Reload classes still match the Zod `.describe`
-   * tokens in `src/config/schemas.ts` so introspection sees the same
-   * contract.
-   *
-   * Skipped here (handled out-of-band): array-typed settings
-   * (`irc.channels`, `channel_retry_schedule_ms`, `identity.require_acc_for`,
-   * `botlink.auth_ip_whitelist`) and tuple-typed `dcc.port_range`. These
-   * read from `this.config` directly until typed-array support lands.
+   * Defs and their live-apply handlers are co-located in
+   * `core-settings-defs.ts` — adding a new core setting touches one
+   * record. The registry receives the bare defs; the central onChange
+   * dispatcher below looks each key up in the entry table and calls the
+   * paired handler. The `plugins.<id>.enabled` fan-out is a dynamic
+   * key pattern that lives outside the entry table.
    */
   private registerCoreSettings(): void {
-    // Live keys — apply via onChange dispatch below.
-    this.coreSettings.register('bot', [
-      {
-        key: 'logging.level',
-        type: 'string',
-        default: 'info',
-        description: 'Minimum log level',
-        allowedValues: ['debug', 'info', 'warn', 'error'],
-        reloadClass: 'live',
-      },
-      {
-        key: 'logging.mod_actions',
-        type: 'flag',
-        default: true,
-        description: 'Persist privileged actions to mod_log',
-        reloadClass: 'live',
-      },
-      {
-        key: 'logging.mod_log_retention_days',
-        type: 'int',
-        default: 0,
-        description: 'mod_log retention window in days (0 = unlimited)',
-        reloadClass: 'live',
-      },
-      {
-        key: 'queue.rate',
-        type: 'int',
-        default: 2,
-        description: 'Outbound message rate (msgs/sec)',
-        reloadClass: 'live',
-      },
-      {
-        key: 'queue.burst',
-        type: 'int',
-        default: 4,
-        description: 'Outbound message burst size',
-        reloadClass: 'live',
-      },
-      {
-        key: 'flood.pub.count',
-        type: 'int',
-        default: 0,
-        description: 'Pub/pubm flood window count (0 = disabled)',
-        reloadClass: 'live',
-      },
-      {
-        key: 'flood.pub.window',
-        type: 'int',
-        default: 0,
-        description: 'Pub/pubm flood window seconds',
-        reloadClass: 'live',
-      },
-      {
-        key: 'flood.msg.count',
-        type: 'int',
-        default: 0,
-        description: 'Msg/msgm flood window count (0 = disabled)',
-        reloadClass: 'live',
-      },
-      {
-        key: 'flood.msg.window',
-        type: 'int',
-        default: 0,
-        description: 'Msg/msgm flood window seconds',
-        reloadClass: 'live',
-      },
-      {
-        key: 'memo.memoserv_relay',
-        type: 'flag',
-        default: true,
-        description: 'Relay MemoServ notices to console',
-        reloadClass: 'live',
-      },
-      {
-        key: 'memo.memoserv_nick',
-        type: 'string',
-        default: 'MemoServ',
-        description: 'MemoServ service nick',
-        reloadClass: 'live',
-      },
-      {
-        key: 'memo.delivery_cooldown_seconds',
-        type: 'int',
-        default: 60,
-        description: 'Per-user join-delivery cooldown (sec)',
-        reloadClass: 'live',
-      },
-      {
-        key: 'quit_message',
-        type: 'string',
-        default: '',
-        description: 'Server-visible QUIT message',
-        reloadClass: 'live',
-      },
-      {
-        key: 'channel_rejoin_interval_ms',
-        type: 'int',
-        default: 30000,
-        description: 'Periodic presence-check interval (ms)',
-        reloadClass: 'live',
-      },
-      {
-        key: 'services.identify_before_join',
-        type: 'flag',
-        default: false,
-        description: 'Wait for bot:identified before JOIN',
-        reloadClass: 'live',
-      },
-      {
-        key: 'services.identify_before_join_timeout_ms',
-        type: 'int',
-        default: 10000,
-        description: 'Identify-before-join timeout (ms)',
-        reloadClass: 'live',
-      },
-      {
-        key: 'services.services_host_pattern',
-        type: 'string',
-        default: '',
-        description: 'NickServ services-host wildcard match',
-        reloadClass: 'live',
-      },
-      {
-        key: 'dcc.require_flags',
-        type: 'string',
-        default: 'm',
-        description: 'Flags required to open a DCC session',
-        reloadClass: 'live',
-      },
-      {
-        key: 'dcc.max_sessions',
-        type: 'int',
-        default: 5,
-        description: 'Max concurrent DCC sessions',
-        reloadClass: 'live',
-      },
-      {
-        key: 'dcc.idle_timeout_ms',
-        type: 'int',
-        default: 300000,
-        description: 'DCC idle disconnect (ms)',
-        reloadClass: 'live',
-      },
-      // Reload-class keys — onReload reattaches the relevant subsystem.
-      {
-        key: 'irc.nick',
-        type: 'string',
-        default: '',
-        description: 'Primary nick (live: triggers NICK)',
-        reloadClass: 'reload',
-        onReload: (value) => {
-          if (typeof value === 'string' && value.length > 0) {
-            this.client.changeNick(value);
-          }
-        },
-      },
-      // Restart-class keys — read at boot only. The onRestartRequired
-      // closures explain why so the operator-facing reply is specific.
-      {
-        key: 'irc.host',
-        type: 'string',
-        default: '',
-        description: 'IRC server host (effective on next connect)',
-        reloadClass: 'restart',
-      },
-      {
-        key: 'irc.port',
-        type: 'int',
-        default: 0,
-        description: 'IRC server port (effective on next connect)',
-        reloadClass: 'restart',
-      },
-      {
-        key: 'irc.tls',
-        type: 'flag',
-        default: true,
-        description: 'TLS for the IRC connection (effective on next connect)',
-        reloadClass: 'restart',
-      },
-      {
-        key: 'irc.username',
-        type: 'string',
-        default: '',
-        description: 'USER ident (sent at registration)',
-        reloadClass: 'restart',
-      },
-      {
-        key: 'irc.realname',
-        type: 'string',
-        default: '',
-        description: 'GECOS / realname (sent at registration)',
-        reloadClass: 'restart',
-      },
-      {
-        key: 'identity.method',
-        type: 'string',
-        default: 'hostmask',
-        description: 'Identity verification method',
-        allowedValues: ['hostmask'],
-        reloadClass: 'restart',
-      },
-      {
-        key: 'services.type',
-        type: 'string',
-        default: 'none',
-        description: 'Services flavor',
-        allowedValues: ['atheme', 'anope', 'dalnet', 'none'],
-        reloadClass: 'restart',
-      },
-      {
-        key: 'services.nickserv',
-        type: 'string',
-        default: 'NickServ',
-        description: 'NickServ target',
-        reloadClass: 'restart',
-      },
-      {
-        key: 'services.sasl',
-        type: 'flag',
-        default: false,
-        description: 'SASL at registration',
-        reloadClass: 'restart',
-      },
-      {
-        key: 'services.sasl_mechanism',
-        type: 'string',
-        default: 'PLAIN',
-        description: 'SASL mechanism',
-        allowedValues: ['PLAIN', 'EXTERNAL'],
-        reloadClass: 'restart',
-      },
-      {
-        key: 'pluginsConfig',
-        type: 'string',
-        default: '',
-        description: 'plugins.json path (read at loadAll)',
-        reloadClass: 'restart',
-      },
-      {
-        key: 'command_prefix',
-        type: 'string',
-        default: '.',
-        description: 'Built-in admin command prefix',
-        reloadClass: 'restart',
-      },
-    ]);
-
-    // Single onChange dispatcher — the registry fans every change
-    // here so subsystem reattach + state rebuilds live in one place.
-    this.coreSettings.onChange('bot', (_instance, key, value) => {
-      this.applyCoreSettingChange(key, value);
-    });
-  }
-
-  /**
-   * Dispatch a `core.<key>` change to the relevant subsystem. Restart-
-   * class keys land here too but no-op (the `restart` reload class on
-   * the def handles operator messaging via the registry's outcome).
-   */
-  private applyCoreSettingChange(key: string, value: unknown): void {
-    switch (key) {
-      case 'logging.level':
-        if (typeof value === 'string') this.logger.setLevel(value as LogLevel);
-        return;
-      case 'logging.mod_actions':
-        if (typeof value === 'boolean') this.db.setModLogEnabled(value);
-        return;
-      case 'logging.mod_log_retention_days':
-        if (typeof value === 'number') this.db.setModLogRetentionDays(value);
-        return;
-      case 'queue.rate':
-      case 'queue.burst': {
-        const rate = this.coreSettings.getInt('', 'queue.rate') || this.config.queue?.rate || 2;
-        const burst = this.coreSettings.getInt('', 'queue.burst') || this.config.queue?.burst || 4;
-        this.messageQueue.setRate(rate, burst);
-        return;
-      }
-      case 'flood.pub.count':
-      case 'flood.pub.window':
-      case 'flood.msg.count':
-      case 'flood.msg.window': {
-        const pubCount = this.coreSettings.getInt('', 'flood.pub.count');
-        const pubWindow = this.coreSettings.getInt('', 'flood.pub.window');
-        const msgCount = this.coreSettings.getInt('', 'flood.msg.count');
-        const msgWindow = this.coreSettings.getInt('', 'flood.msg.window');
-        const next: {
-          pub?: { count: number; window: number };
-          msg?: { count: number; window: number };
-        } = {};
-        if (pubCount > 0 && pubWindow > 0) next.pub = { count: pubCount, window: pubWindow };
-        if (msgCount > 0 && msgWindow > 0) next.msg = { count: msgCount, window: msgWindow };
-        this.dispatcher.setFloodConfig(next);
-        return;
-      }
-      case 'memo.memoserv_relay':
-      case 'memo.memoserv_nick':
-      case 'memo.delivery_cooldown_seconds':
-        this.memo.setConfig({
-          memoserv_relay: this.coreSettings.getFlag('', 'memo.memoserv_relay'),
-          memoserv_nick: this.coreSettings.getString('', 'memo.memoserv_nick') || 'MemoServ',
-          delivery_cooldown_seconds: this.coreSettings.getInt('', 'memo.delivery_cooldown_seconds'),
-        });
-        return;
-      case 'channel_rejoin_interval_ms':
-        // The lifecycle handle isn't built until connect(); on next
-        // reconnect it picks up this.config.channel_rejoin_interval_ms.
-        // Update the in-memory config too so a mid-session reconnect
-        // sees the new value.
-        if (typeof value === 'number') this.config.channel_rejoin_interval_ms = value;
-        return;
-      case 'quit_message':
-        if (typeof value === 'string') this.config.quit_message = value;
-        return;
-      case 'services.services_host_pattern':
-        if (typeof value === 'string' && this.services) {
-          // Services reads this on every NickServ NOTICE; mutating the
-          // config record is enough — no rebuild needed.
-          this.config.services.services_host_pattern = value;
-        }
-        return;
-      case 'services.identify_before_join':
-        if (typeof value === 'boolean') this.config.services.identify_before_join = value;
-        return;
-      case 'services.identify_before_join_timeout_ms':
-        if (typeof value === 'number') this.config.services.identify_before_join_timeout_ms = value;
-        return;
-      case 'dcc.require_flags':
-        if (typeof value === 'string' && this.config.dcc) this.config.dcc.require_flags = value;
-        return;
-      case 'dcc.max_sessions':
-        if (typeof value === 'number' && this.config.dcc) this.config.dcc.max_sessions = value;
-        return;
-      case 'dcc.idle_timeout_ms':
-        if (typeof value === 'number' && this.config.dcc) this.config.dcc.idle_timeout_ms = value;
-        return;
-      default:
-        // Plugin lifecycle: `core.plugins.<id>.enabled` toggles the plugin
-        // load state at runtime. `.set core plugins.<id>.enabled false`
-        // stops and unloads the plugin; `true` loads it. The state
-        // persists in KV, so a restart preserves the operator's choice.
-        if (key.startsWith('plugins.') && key.endsWith('.enabled')) {
-          const pluginId = key.slice('plugins.'.length, -'.enabled'.length);
-          if (typeof value === 'boolean') {
-            void this.applyPluginEnabled(pluginId, value);
-          }
-          return;
-        }
-        // Restart-class keys land here — no live action; the `restart`
-        // reload class on the def is what surfaces the warning to the
-        // operator via the registry's `applyReloadClass` outcome.
-        return;
+    const entries = buildCoreSettingEntries(this);
+    const handlers = new Map<string, (value: unknown) => void>();
+    for (const entry of entries) {
+      if (entry.onChange) handlers.set(entry.def.key, entry.onChange);
     }
+    this.coreSettings.register(
+      'bot',
+      entries.map((e) => e.def),
+    );
+    this.coreSettings.onChange('bot', (_instance, key, value) => {
+      const handler = handlers.get(key);
+      if (handler) {
+        handler(value);
+        return;
+      }
+      // Plugin lifecycle: `core.plugins.<id>.enabled` toggles the plugin
+      // load state at runtime. The state persists in KV, so a restart
+      // preserves the operator's choice. Restart-class keys land here too
+      // but no-op — the `restart` reload class on the def surfaces the
+      // warning via the registry's `applyReloadClass` outcome.
+      if (key.startsWith('plugins.') && key.endsWith('.enabled')) {
+        const pluginId = key.slice('plugins.'.length, -'.enabled'.length);
+        if (typeof value === 'boolean') {
+          void this.applyPluginEnabled(pluginId, value);
+        }
+      }
+    });
   }
 
   /**
@@ -984,21 +607,8 @@ export class Bot {
       logger: this.logger,
       getCasemapping: () => this.getCasemapping(),
       getServerSupports: () => {
-        const known = [
-          'CASEMAPPING',
-          'MODES',
-          'MAXCHANNELS',
-          'CHANTYPES',
-          'PREFIX',
-          'CHANLIMIT',
-          'NICKLEN',
-          'TOPICLEN',
-          'KICKLEN',
-          'NETWORK',
-          'CHANMODES',
-        ];
         const result: Record<string, string> = {};
-        for (const k of known) {
+        for (const k of KNOWN_ISUPPORT_KEYS) {
           const v = this.client.network.supports(k);
           if (v !== false) result[k] = String(v);
         }
@@ -1016,20 +626,55 @@ export class Bot {
     this._isStarted = true;
     this.printBanner();
 
+    await this.bootSubsystems();
+    this.registerCoreCommands();
+
+    this.botLogger.info('Starting...');
+
+    // Attach listeners BEFORE connect so handlers are ready when the server
+    // starts sending events. DCC/memo slot in here because registerDccConsoleCommands
+    // depends on an attached DCCManager.
+    this.attachBridge();
+    this.attachDcc();
+    this.attachMemo();
+
+    await this.startBotLink();
+
+    this.registerPostLinkCommands();
+    this.wireMemoDccNotify();
+
+    await this.bootPlugins();
+
+    this.kvMaintenance = scheduleKvMaintenance(this.db, this.botLogger);
+
+    // Connect to IRC (all handlers are registered — safe to receive events).
+    // NickServ IDENTIFY (non-SASL fallback) is triggered from the `registered`
+    // handler in connection-lifecycle, BEFORE joinConfiguredChannels: this
+    // ensures channels with mode +r (registered-nicks-only) accept us on the
+    // first JOIN attempt rather than bouncing us with a 477 numeric.
+    await this.connect();
+  }
+
+  /**
+   * Phase 1 of start(): bring up the database, seed KV from bot.json, run
+   * one-shot identity audits, and surface plaintext-NickServ risks. Runs
+   * before any IRC listener is attached.
+   */
+  private async bootSubsystems(): Promise<void> {
     this.db.open();
     this.botLogger.info('Database opened');
-    // Wire audit fallback: when an audit row cannot be persisted to
-    // SQLite (busy/full/fatal), spill it into a bounded in-memory ring
-    // buffer instead of dropping it silently. Surfaced via `.status`
-    // so operators see the count during a degraded period.
-    this.db.setAuditFallback((options) => this.pushAuditFallback(options));
+    // Wire audit fallback: when an audit row cannot be persisted to SQLite
+    // (busy/full/fatal), spill it into a bounded in-memory ring buffer
+    // instead of dropping it silently. Surfaced via `.status` so operators
+    // see the count during a degraded period.
+    this.db.setAuditFallback((options) => this.auditFallback.push(options));
     this.permissions.loadFromDb();
 
     // Boot-time seed: any registered core-scope key that has no stored
     // value yet pulls its initial value from bot.json. KV is canonical
-    // after first boot; an operator-set value never gets clobbered by
-    // a routine restart. `.rehash` is the deliberate path to pull JSON
-    // edits in — see docs/plans/live-config-updates.md §1.
+    // after first boot; an operator-set value never gets clobbered by a
+    // routine restart. `.rehash` is the deliberate path to pull JSON edits
+    // in — see docs/plans/live-config-updates.md §1.
     seedFromJson(this.coreSettings, this.config as unknown as Record<string, unknown>, {
       seedOnly: true,
     });
@@ -1057,40 +702,33 @@ export class Bot {
     // ghost_on_recover on a plaintext link) silently lose TLS protection of
     // the password. Warn loudly. See SECURITY.md §3.2.
     this.warnServicesPlaintextRisks();
+  }
 
-    this.registerCoreCommands();
-
-    this.botLogger.info('Starting...');
-
-    // Attach listeners BEFORE connect so handlers are ready when the server
-    // starts sending events. DCC/memo slot in here because registerDccConsoleCommands
-    // depends on an attached DCCManager.
-    this.attachBridge();
-    this.attachDcc();
-    this.attachMemo();
-
-    await this.startBotLink();
-
-    this.registerPostLinkCommands();
-    this.wireMemoDccNotify();
-
-    // Load plugins (sets up binds before connection so all handlers are
-    // ready when the server starts sending JOIN/MODE/etc responses)
+  /**
+   * Phase 2 of start(): load every enabled plugin, track failures for
+   * `.status`, and anchor uptime to the first `bot:connected` event.
+   *
+   * Plugins are loaded before `connect()` so all binds are in place when
+   * the server starts sending JOIN/MODE/etc. responses. The uptime anchor
+   * listener is one-shot — every subsequent reconnect leaves `startTime`
+   * anchored to the original first-connect moment.
+   */
+  private async bootPlugins(): Promise<void> {
     const pluginResults = await this.pluginLoader.loadAll(
       this.config.pluginsConfig ? resolve(this.config.pluginsConfig) : undefined,
     );
-    // Track plugin-load failures for the startup banner and `.status`
-    // observability surface. A silent "one plugin failed" was the
-    // dominant reason operators didn't notice degraded functionality
-    // until a user report landed.
+    // Track plugin-load failures for the startup banner and `.status`.
+    // A silent "one plugin failed" was the dominant reason operators didn't
+    // notice degraded functionality until a user report landed.
     this.failedPlugins = pluginResults.filter((r) => r.status === 'error').map((r) => r.name);
     if (this.failedPlugins.length > 0) {
       this.botLogger.error(
         `===== STARTUP BANNER: ${this.failedPlugins.length} plugin(s) FAILED to load: ${this.failedPlugins.join(', ')} — the bot is running with degraded functionality. Check the error lines above for details. =====`,
       );
-      // Fail-fast for CI/staging: when HEX_FAIL_ON_PLUGIN_LOAD_FAILURE is set
-      // we'd rather take the bot down than ship a regression to production.
-      // Default off so a single bad plugin doesn't take prod offline.
+      // Fail-fast for CI/staging: when HEX_FAIL_ON_PLUGIN_LOAD_FAILURE is
+      // set we'd rather take the bot down than ship a regression to
+      // production. Default off so a single bad plugin doesn't take prod
+      // offline.
       if (this.bootstrap.failOnPluginLoadFailure) {
         throw new Error(
           `Plugin load failed (${this.failedPlugins.length}: ${this.failedPlugins.join(', ')}); ` +
@@ -1099,95 +737,21 @@ export class Bot {
       }
     }
 
-    // Re-anchor uptime to the first `bot:connected` event so `.status`
-    // reports the connected-window. `connect()` resolves before
-    // registration succeeds; we defer the anchor to the actual event
-    // so a long initial backoff doesn't make uptime show "negative"
-    // values. The listener is one-shot — every subsequent reconnect leaves
-    // `startTime` anchored to the original first-connect moment, which
-    // matches operator expectations for "uptime since the bot started
-    // serving."
+    // Re-anchor uptime to the first `bot:connected` event. `connect()`
+    // resolves before registration succeeds; deferring the anchor to the
+    // actual event so a long initial backoff doesn't make uptime show
+    // "negative" values matches operator expectations for "uptime since
+    // the bot started serving."
     let startTimeAnchored = false;
     this.eventBus.trackListener('bot', 'bot:connected', () => {
       if (startTimeAnchored) return;
       startTimeAnchored = true;
       this.startTime = Date.now();
     });
-
-    this.scheduleKvMaintenance();
-
-    // Connect to IRC (all handlers are registered — safe to receive events).
-    // NickServ IDENTIFY (non-SASL fallback) is triggered from the `registered`
-    // handler in connection-lifecycle, BEFORE joinConfiguredChannels: this
-    // ensures channels with mode +r (registered-nicks-only) accept us on the
-    // first JOIN attempt rather than bouncing us with a 477 numeric.
-    await this.connect();
   }
 
-  /**
-   * Long-uptime hygiene for the `kv` table. Two timers (both `unref`'d so
-   * they never block shutdown):
-   *
-   *   - daily prune: walks a known-namespace retention table and drops
-   *     rows older than the per-namespace TTL. Plugins with their own
-   *     sweeps (seen, ai-chat) keep theirs; this is the safety net for
-   *     long-running deployments where ad-hoc plugin state otherwise
-   *     accumulates forever.
-   *   - ~monthly VACUUM: reclaims pages freed by the prune. Folded into
-   *     the daily handler with an elapsed-time check because a literal
-   *     30-day setInterval overflows Node's 32-bit timer cap (TIMEOUT_MAX
-   *     = 2147483647 ms ≈ 24.8 days), which clamps the delay to 1ms and
-   *     fires the callback continuously.
-   */
-  private kvDailyTimer: ReturnType<typeof setInterval> | null = null;
-  private kvLastVacuumAt = 0;
-  private static readonly KV_RETENTION_DAYS: ReadonlyArray<{ ns: string; days: number }> = [
-    // ai-chat per-channel rate-limit / mood / token-budget rows: 30 days
-    // is well past any active conversation window.
-    { ns: 'plugin:ai-chat', days: 30 },
-    // seen plugin: enforced cap is 10000 + size cap; this is the
-    // belt-and-braces for ancient idle channels the cap never reaches.
-    { ns: 'plugin:seen', days: 90 },
-    // social-tracker / spotify-radio / topic / chanmod: each plugin
-    // holds onto state by user / channel. 90d covers active operator
-    // tenure without dropping a still-active record.
-    { ns: 'plugin:social-tracker', days: 90 },
-    { ns: 'plugin:spotify-radio', days: 90 },
-    { ns: 'plugin:topic', days: 365 },
-    { ns: 'plugin:chanmod', days: 90 },
-    { ns: 'plugin:flood', days: 30 },
-    { ns: 'plugin:greeter', days: 365 },
-    { ns: 'plugin:rss', days: 7 },
-  ];
-  private scheduleKvMaintenance(): void {
-    const ONE_DAY = 24 * 60 * 60 * 1000;
-    const VACUUM_INTERVAL = 30 * ONE_DAY;
-    this.kvLastVacuumAt = Date.now();
-    const dailyMaintenance = (): void => {
-      let totalPruned = 0;
-      for (const { ns, days } of Bot.KV_RETENTION_DAYS) {
-        try {
-          totalPruned += this.db.pruneOlderThan(ns, days);
-        } catch (err) {
-          this.botLogger.warn(`kv prune failed for ${ns}:`, err);
-        }
-      }
-      if (totalPruned > 0) {
-        this.botLogger.info(`kv daily prune: removed ${totalPruned} stale row(s)`);
-      }
-      if (Date.now() - this.kvLastVacuumAt >= VACUUM_INTERVAL) {
-        try {
-          this.db.vacuum();
-          this.kvLastVacuumAt = Date.now();
-          this.botLogger.info('kv VACUUM complete');
-        } catch (err) {
-          this.botLogger.warn('kv VACUUM failed:', err);
-        }
-      }
-    };
-    this.kvDailyTimer = setInterval(dailyMaintenance, ONE_DAY);
-    this.kvDailyTimer.unref?.();
-  }
+  /** Handle for the daily KV prune + monthly VACUUM. See `core/kv-maintenance.ts`. */
+  private kvMaintenance: KvMaintenanceHandle | null = null;
 
   /**
    * Surface plaintext-NickServ risks at startup. SASL PLAIN over plaintext is
@@ -1238,6 +802,38 @@ export class Bot {
     }
   }
 
+  /**
+   * Snapshot getters surfaced to `registerIRCAdminCommands` for the
+   * `.status` command. Lifted to its own method so `registerCoreCommands`
+   * stays scannable — every getter closes over `this`.
+   */
+  private buildBotInfo(): AdminBotInfo {
+    return {
+      getUptime: () => Date.now() - this.startTime,
+      getChannels: () => this.configuredChannels.map((c) => c.name),
+      getBindCount: () => this.dispatcher.listBinds().length,
+      getUserCount: () => this.permissions.listUsers().length,
+      getReconnectState: () => this.getReconnectState(),
+      // Stability metrics. These give operators a .status-visible signal
+      // about services degradation and plugin-load failures without
+      // trawling logs.
+      getStabilityMetrics: () => {
+        const auditStats = this.getAuditFallbackStats();
+        return {
+          servicesTimeoutCount: this.services.getServicesTimeoutCount(),
+          pendingVerifyCount: this.services.getPendingVerifyCount(),
+          pendingCapRejections: this.services.getPendingCapRejectionCount(),
+          botIdentified: this.services.isBotIdentified(),
+          loadedPluginCount: this.pluginLoader.list().length,
+          failedPluginCount: this.failedPlugins.length,
+          failedPluginNames: this.failedPlugins,
+          auditFallbackHeld: auditStats.held,
+          auditFallbackDropped: auditStats.dropped,
+        };
+      },
+    };
+  }
+
   /** Register the built-in core commands (permissions, dispatcher, admin, plugins, modlog). */
   private registerCoreCommands(): void {
     registerPermissionCommands({
@@ -1256,30 +852,7 @@ export class Bot {
     registerIRCAdminCommands({
       handler: this.commandHandler,
       client: this.client,
-      botInfo: {
-        getUptime: () => Date.now() - this.startTime,
-        getChannels: () => this.configuredChannels.map((c) => c.name),
-        getBindCount: () => this.dispatcher.listBinds().length,
-        getUserCount: () => this.permissions.listUsers().length,
-        getReconnectState: () => this.getReconnectState(),
-        // Stability metrics. These give operators a .status-visible signal
-        // about services degradation and plugin-load failures without
-        // trawling logs.
-        getStabilityMetrics: () => {
-          const auditStats = this.getAuditFallbackStats();
-          return {
-            servicesTimeoutCount: this.services.getServicesTimeoutCount(),
-            pendingVerifyCount: this.services.getPendingVerifyCount(),
-            pendingCapRejections: this.services.getPendingCapRejectionCount(),
-            botIdentified: this.services.isBotIdentified(),
-            loadedPluginCount: this.pluginLoader.list().length,
-            failedPluginCount: this.failedPlugins.length,
-            failedPluginNames: this.failedPlugins,
-            auditFallbackHeld: auditStats.held,
-            auditFallbackDropped: auditStats.dropped,
-          };
-        },
-      },
+      botInfo: this.buildBotInfo(),
       db: this.db,
     });
     registerPluginCommands({
@@ -1299,8 +872,8 @@ export class Bot {
       channelSettings: this.channelSettings,
       pluginSettings: this.pluginSettings,
       db: this.db,
-      readBotJson: () => this.readBotJsonAsRecord(),
-      readPluginsJson: () => this.readPluginsJsonAsRecord(),
+      readBotJson: () => readBotJsonAsRecord(this._botConfigPath, this.botLogger),
+      readPluginsJson: () => readPluginsJsonAsRecord(this.config.pluginsConfig, this.botLogger),
       // `.restart` raises SIGTERM at ourselves so the same graceful path the
       // signal handler in src/index.ts runs (heartbeat cleanup → shutdown
       // steps → process.exit) fires here too. A direct `process.exit(0)`
@@ -1477,9 +1050,9 @@ export class Bot {
     // teardown must not block the ones after it. Previously, every step
     // ran sequentially without catches, so a single bad `close()` skipped
     // `db.close()` and leaked everything downstream.
-    const step = (name: string, fn: () => void): void => {
+    const step = async (name: string, fn: () => void | Promise<void>): Promise<void> => {
       try {
-        fn();
+        await fn();
       } catch (err) {
         this.botLogger.error(`Shutdown step "${name}" threw:`, err);
       }
@@ -1524,11 +1097,7 @@ export class Bot {
     // on process exit. Without this, plugin-owned timers / DB cursors /
     // listeners would only get the dispatcher's auto-unbind step at
     // shutdown — never the plugin's own cleanup hook.
-    try {
-      await this.pluginLoader.unloadAll();
-    } catch (err) {
-      this.botLogger.error('Shutdown step "plugin-loader.unloadAll" threw:', err);
-    }
+    await step('plugin-loader.unloadAll', () => this.pluginLoader.unloadAll());
 
     step('memo.detach', () => this.memo.detach());
     step('services.detach', () => this.services.detach());
@@ -1550,9 +1119,9 @@ export class Bot {
     });
 
     step('kv-maintenance.cancel', () => {
-      if (this.kvDailyTimer !== null) {
-        clearInterval(this.kvDailyTimer);
-        this.kvDailyTimer = null;
+      if (this.kvMaintenance !== null) {
+        this.kvMaintenance.stop();
+        this.kvMaintenance = null;
       }
     });
 
@@ -1563,7 +1132,9 @@ export class Bot {
     // disappear. The 2s budget is generous for normal traffic but bounded so
     // a queue full of mode lines (200+ entries) doesn't burst at the server's
     // anti-flood threshold pre-QUIT and earn a K-line for the next reconnect.
-    step('message-queue.flush', () => this.messageQueue.flushWithDeadline(2000));
+    step('message-queue.flush', () => {
+      this.messageQueue.flushWithDeadline(2000);
+    });
     step('message-queue.stop', () => this.messageQueue.stop());
 
     if (this.client.connected) {
@@ -1606,18 +1177,56 @@ export class Bot {
   // -------------------------------------------------------------------------
 
   private connect(): Promise<void> {
-    // Enforce any stored IRCv3 STS policy BEFORE we touch the socket. If
-    // the policy upgrades us, mutate the in-memory config so downstream
-    // code (message-queue cost calcs, logging, Services) sees a
-    // TLS-consistent view for the rest of the session.
-    //
-    // STS refusal is a fatal configuration condition — we must exit with
-    // code 2 (permanent-failure tier) so supervisors do not restart-loop
-    // on an unreachable/misconfigured host. Throw `STSRefusalError`
-    // rather than `process.exit(2)` so the caller (`Bot.start()`) can
-    // run the normal `shutdown()` chain (db.close, plugin teardown,
-    // queue drain) before the supervisor sees the failure — otherwise
-    // the WAL files and DB just opened above leak across restart.
+    this.enforceSTSAtConnect();
+    this.teardownPriorConnection();
+
+    const options = this.buildClientOptions();
+    this.botLogger.info(`Connecting to ${this.config.irc.host}:${this.config.irc.port}...`);
+
+    this._reconnectDriver = this.buildReconnectDriver();
+    // Resolve as soon as `client.connect()` is invoked.
+    // Previously we awaited the first `registered` event, which on a
+    // K-line / DNSBL / Throttled rate-limited tier would park `Bot.start()`
+    // for 5–30 minutes — main() blocks, the REPL never starts, and the
+    // healthcheck never gets a chance to attach to `bot:connected`. The
+    // in-process driver still owns retry/backoff; downstream code that
+    // needs to observe connection state subscribes to `bot:connected`.
+    this._lifecycleHandle = registerConnectionEvents(
+      this.buildLifecycleHandlers(),
+      () => {},
+      () => {},
+    );
+
+    // Catch a synchronous throw from `client.connect()` (TLS factory rejecting
+    // a malformed cert path, irc-framework option validation throwing on a
+    // bogus port). Without this guard, the 'connecting' event never fires,
+    // the registration timer never starts, and main() exits. Surface it to
+    // the driver instead so the configured backoff applies.
+    try {
+      this.client.connect(options);
+    } catch (err) {
+      this.botLogger.error('client.connect() threw synchronously:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      this.eventBus.emit('bot:disconnected', `connect threw: ${msg}`);
+    }
+    return Promise.resolve();
+  }
+
+  /**
+   * Enforce any stored IRCv3 STS policy BEFORE we touch the socket. If the
+   * policy upgrades us, mutate the in-memory config so downstream code
+   * (message-queue cost calcs, logging, Services) sees a TLS-consistent
+   * view for the rest of the session.
+   *
+   * STS refusal is a fatal configuration condition — we must exit with code
+   * 2 (permanent-failure tier) so supervisors do not restart-loop on an
+   * unreachable/misconfigured host. Throw `STSRefusalError` rather than
+   * `process.exit(2)` so `Bot.start()` can run the normal `shutdown()`
+   * chain (db.close, plugin teardown, queue drain) before the supervisor
+   * sees the failure — otherwise the WAL files and DB just opened above
+   * leak across restart.
+   */
+  private enforceSTSAtConnect(): void {
     try {
       this.applySTSPolicyToConfig();
     } catch (err) {
@@ -1628,10 +1237,14 @@ export class Bot {
       this.eventBus.emit('bot:disconnected', `fatal: sts-refused`);
       throw new STSRefusalError(msg);
     }
+  }
 
-    // Defensive idempotency: if connect() is ever called twice (future STS
-    // path, manual .reconnect command), tear down the prior driver and
-    // lifecycle handle so we don't stack listeners or leak a retry timer.
+  /**
+   * Defensive idempotency: if connect() is ever called twice (future STS
+   * path, manual .reconnect command), tear down the prior driver and
+   * lifecycle handle so we don't stack listeners or leak a retry timer.
+   */
+  private teardownPriorConnection(): void {
     if (this._reconnectDriver) {
       this._reconnectDriver.cancel();
       this._reconnectDriver = null;
@@ -1641,14 +1254,16 @@ export class Bot {
       this._lifecycleHandle.removeListeners();
       this._lifecycleHandle = null;
     }
+  }
 
-    const options = this.buildClientOptions();
-    this.botLogger.info(`Connecting to ${this.config.irc.host}:${this.config.irc.port}...`);
-    // Construct the reconnect driver lazily here so `.start()` owns its
-    // lifecycle. The driver's connect callback re-opens the socket using
-    // the latest options (STS upgrades mutate this.config between retries).
+  /**
+   * Construct the reconnect driver lazily so `.start()` owns its lifecycle.
+   * The driver's connect callback re-opens the socket using the latest
+   * options (STS upgrades mutate this.config between retries).
+   */
+  private buildReconnectDriver(): ReconnectDriver {
     const reconnectLogger = this.logger.child('reconnect');
-    const reconnectDriver = createReconnectDriver({
+    return createReconnectDriver({
       connect: () => {
         reconnectLogger.info(
           `Reconnect attempt to ${this.config.irc.host}:${this.config.irc.port}`,
@@ -1666,126 +1281,110 @@ export class Bot {
       },
       exit: (code) => process.exit(code),
     });
-    this._reconnectDriver = reconnectDriver;
-    // Resolve as soon as `client.connect()` is invoked.
-    // Previously we awaited the first `registered` event, which on a
-    // K-line / DNSBL / Throttled rate-limited tier would park `Bot.start()`
-    // for 5–30 minutes — main() blocks, the REPL never starts, and the
-    // healthcheck never gets a chance to attach to `bot:connected`. The
-    // in-process driver still owns retry/backoff; downstream code that
-    // needs to observe connection state subscribes to `bot:connected`.
-    return new Promise<void>((resolve, reject) => {
-      this._lifecycleHandle = registerConnectionEvents(
-        {
-          client: this.client,
-          config: this.config,
-          configuredChannels: this.configuredChannels,
-          eventBus: this.eventBus,
-          reconnectDriver,
-          // Lifecycle consults the store on ingestion so a plaintext session
-          // can never mutate an existing policy — see sts.ts / connection-
-          // lifecycle.ts for the short-circuit.
-          stsStore: this.stsStore,
-          applyCasemapping: (cm) => {
-            this._casemapping = cm;
-            this.channelState.setCasemapping(cm);
-            this.permissions.setCasemapping(cm);
-            this.dispatcher.setCasemapping(cm);
-            this.services.setCasemapping(cm);
-            if (this._dccManager) this._dccManager.setCasemapping(cm);
-            this.memo.setCasemapping(cm);
-          },
-          getCasemapping: () => this._casemapping,
-          applyServerCapabilities: (caps) => {
-            this.channelState.setCapabilities(caps);
-            this.ircCommands.setCapabilities(caps);
-            this.bridge?.setCapabilities(caps);
-            // Feed TARGMAX into the message queue. It's advisory (hexbot
-            // never sends multi-target PRIVMSG lines) but surfaced so
-            // plugins can inspect it via the queue for future multi-target
-            // logic.
-            this.messageQueue.setTargmax(caps.targmax);
-          },
-          onReconnecting: () => {
-            // Drop cached services-account state so a user who took a
-            // recognized nick between sessions can't inherit its flags on
-            // the new connection. Fresh account data will arrive via
-            // extended-join / account-notify / account-tag on rejoin.
-            this.channelState.clearNetworkAccounts();
-            // Drop every tracked channel — if the autojoin set shrinks
-            // across reconnects, residual ChannelInfo/UserInfo graphs
-            // would otherwise sit in memory forever. NAMES will repopulate
-            // fresh state on the new session.
-            this.channelState.clearAllChannels();
-            // Fail any in-flight NickServ verifications fast rather than
-            // letting them age out to a misleading `nickserv-verify-timeout`
-            // audit row.
-            this.services.cancelPendingVerifies('disconnected');
-          },
-          onSTSDirective: (directive, currentTls) => {
-            // Persist the directive so future startups inherit the policy.
-            const record = this.stsStore.put(this.config.irc.host, directive);
-            if (record) {
-              this.botLogger.info(
-                `STS policy for ${this.config.irc.host} stored until ` +
-                  new Date(record.expiresAt).toISOString(),
-              );
-            }
-            // If we're still on plaintext and the directive names a TLS
-            // port, reconnect immediately via TLS. This matches the IRCv3
-            // spec: clients SHOULD upgrade the current session on first
-            // contact rather than waiting for the next run.
-            if (!currentTls && directive.port !== undefined) {
-              this.botLogger.warn(
-                `STS upgrade: reconnecting ${this.config.irc.host} on port ${directive.port} via TLS`,
-              );
-              this.config.irc.tls = true;
-              this.config.irc.port = directive.port;
-              // Drop the outbound queue BEFORE quit so the
-              // onClose `flushWithDeadline(100)` doesn't drain queued
-              // PRIVMSGs out over the cleartext socket between the
-              // upgrade decision and the TLS reconnect. A queued
-              // `.adduser nick *!*@host` (password material) or a
-              // plugin reply containing token material could otherwise
-              // hit a passive observer during the 100ms window.
-              this.messageQueue.clear();
-              // Drop the current session; the reconnect lifecycle will kick
-              // back in and the next connect picks up the mutated config.
-              this.client.quit('STS upgrade to TLS');
-            }
-          },
-          messageQueue: this.messageQueue,
-          dispatcher: this.dispatcher,
-          channelState: this.channelState,
-          logger: this.logger.child('connection'),
-          identifyWithServices: () => this.services.identify(),
-        },
-        resolve,
-        reject,
+  }
+
+  /**
+   * Assemble the dependency struct passed to `registerConnectionEvents`.
+   * The callback fields are tiny adapters that delegate to named private
+   * methods so the lifecycle wiring stays readable in `connect()`.
+   */
+  private buildLifecycleHandlers(): ConnectionLifecycleDeps {
+    return {
+      client: this.client,
+      config: this.config,
+      configuredChannels: this.configuredChannels,
+      eventBus: this.eventBus,
+      // The reconnect driver is set in `connect()` immediately before this
+      // helper runs; non-null assertion is safe at this call site.
+      reconnectDriver: this._reconnectDriver!,
+      // Lifecycle consults the store on ingestion so a plaintext session
+      // can never mutate an existing policy — see sts.ts /
+      // connection-lifecycle.ts for the short-circuit.
+      stsStore: this.stsStore,
+      applyCasemapping: (cm) => this.applyCasemappingToBot(cm),
+      getCasemapping: () => this._casemapping,
+      applyServerCapabilities: (caps) => this.applyServerCapabilitiesToBot(caps),
+      onReconnecting: () => this.onBeforeReconnect(),
+      onSTSDirective: (directive, currentTls) => this.handleSTSDirective(directive, currentTls),
+      messageQueue: this.messageQueue,
+      dispatcher: this.dispatcher,
+      channelState: this.channelState,
+      logger: this.logger.child('connection'),
+      identifyWithServices: () => this.services.identify(),
+    };
+  }
+
+  /** Fan a server-reported casemapping out to every subsystem that needs it. */
+  private applyCasemappingToBot(cm: Casemapping): void {
+    this._casemapping = cm;
+    this.channelState.setCasemapping(cm);
+    this.permissions.setCasemapping(cm);
+    this.dispatcher.setCasemapping(cm);
+    this.services.setCasemapping(cm);
+    if (this._dccManager) this._dccManager.setCasemapping(cm);
+    this.memo.setCasemapping(cm);
+  }
+
+  /**
+   * Fan a parsed ISUPPORT snapshot out to capability-aware subsystems.
+   * TARGMAX is advisory (hexbot never sends multi-target PRIVMSG lines)
+   * but surfaced so plugins can inspect it via the queue for future
+   * multi-target logic.
+   */
+  private applyServerCapabilitiesToBot(caps: ServerCapabilities): void {
+    this.channelState.setCapabilities(caps);
+    this.ircCommands.setCapabilities(caps);
+    this.bridge?.setCapabilities(caps);
+    this.messageQueue.setTargmax(caps.targmax);
+  }
+
+  /**
+   * Reset session-scoped state immediately before a reconnect attempt.
+   * Drops cached account map (a user who took a recognized nick between
+   * sessions can't inherit its flags on the new connection — fresh data
+   * arrives via extended-join / account-notify / account-tag on rejoin),
+   * drops tracked channels (NAMES repopulates), and fails any in-flight
+   * NickServ verifications so they don't age out to a misleading
+   * `nickserv-verify-timeout` audit row.
+   */
+  private onBeforeReconnect(): void {
+    this.channelState.clearNetworkAccounts();
+    this.channelState.clearAllChannels();
+    this.services.cancelPendingVerifies('disconnected');
+  }
+
+  /**
+   * Handle an IRCv3 STS directive received on the live connection. Persist
+   * the policy and, if we're still on plaintext and the directive names a
+   * TLS port, reconnect immediately via TLS. Matches the IRCv3 spec:
+   * clients SHOULD upgrade the current session on first contact rather
+   * than waiting for the next run.
+   */
+  private handleSTSDirective(directive: STSDirective, currentTls: boolean): void {
+    const record = this.stsStore.put(this.config.irc.host, directive);
+    if (record) {
+      this.botLogger.info(
+        `STS policy for ${this.config.irc.host} stored until ` +
+          new Date(record.expiresAt).toISOString(),
       );
-      // Catch a synchronous throw from `client.connect()` (TLS
-      // factory rejecting a malformed cert path, irc-framework option
-      // validation throwing on a bogus port). Without this guard, the
-      // 'connecting' event never fires, the registration timer is
-      // never started, and the lifecycle handle's `removeListeners()`
-      // is the only path back — but the bot's `_lifecycleHandle` got
-      // set above, so the throw escapes through the Promise reject
-      // and main() exits. Surface it to the driver instead so the
-      // configured backoff applies.
-      try {
-        this.client.connect(options);
-      } catch (err) {
-        this.botLogger.error('client.connect() threw synchronously:', err);
-        // Fire `bot:disconnected` so the driver sees a failed attempt
-        // and can schedule a retry. Use the error message as the close
-        // reason so close-reason-classifier picks the right tier.
-        const msg = err instanceof Error ? err.message : String(err);
-        this.eventBus.emit('bot:disconnected', `connect threw: ${msg}`);
-      }
-      // Resolve immediately — see comment above. The lifecycle's
-      // `_resolve`/`_reject` parameters are now vestigial.
-      resolve();
-    });
+    }
+    if (!currentTls && directive.port !== undefined) {
+      this.botLogger.warn(
+        `STS upgrade: reconnecting ${this.config.irc.host} on port ${directive.port} via TLS`,
+      );
+      this.config.irc.tls = true;
+      this.config.irc.port = directive.port;
+      // Drop the outbound queue BEFORE quit so the onClose
+      // `flushWithDeadline(100)` doesn't drain queued PRIVMSGs out over
+      // the cleartext socket between the upgrade decision and the TLS
+      // reconnect. A queued `.adduser nick *!*@host` (password material)
+      // or a plugin reply containing token material could otherwise hit
+      // a passive observer during the 100ms window.
+      this.messageQueue.clear();
+      // Drop the current session; the reconnect lifecycle picks back in
+      // and the next connect picks up the mutated config.
+      this.client.quit('STS upgrade to TLS');
+    }
   }
 
   /**
@@ -1830,6 +1429,7 @@ export class Bot {
     }
 
     const options: Record<string, unknown> = {
+      ...BASE_CLIENT_OPTIONS,
       host: cfg.host,
       port: cfg.port,
       tls: cfg.tls,
@@ -1837,17 +1437,6 @@ export class Bot {
       nick: cfg.nick,
       username: cfg.username,
       gecos: cfg.realname,
-      // HexBot owns the reconnect loop via src/core/reconnect-driver.ts —
-      // irc-framework's auto_reconnect gives up when a reconnect reaches
-      // TCP-connected but fails to complete IRC registration, leaving the
-      // process as a zombie (2026-04-13 incident).
-      auto_reconnect: false,
-      // Disable irc-framework's built-in CTCP VERSION reply —
-      // we handle it ourselves in irc-bridge.ts via the dispatcher
-      version: null,
-      // IRCv3: request chghost capability so channel-state receives real-time hostmask updates.
-      // account-notify and extended-join are requested automatically by irc-framework.
-      enable_chghost: true,
     };
 
     // Let irc-framework use the configured alt_nick on collision, rather
@@ -1884,82 +1473,6 @@ export class Bot {
   }
 
   // -------------------------------------------------------------------------
-  // Config loading
-  // -------------------------------------------------------------------------
-
-  private loadConfig(configPath: string, bootstrap: Bootstrap): BotConfig {
-    // Probe readability separately from the open() so we can emit a
-    // friendlier "did you copy the example?" hint before the JSON parser
-    // even runs. The logger isn't constructed yet (the log level lives in
-    // the config we're loading), so write to console directly.
-    try {
-      accessSync(configPath, fsConstants.R_OK);
-    } catch {
-      // `<3>` is the systemd / journald priority for ERR — journalctl -p err
-      // surfaces this without needing a structured logger (we don't have one
-      // yet; the log level lives in the config we just failed to read).
-      console.error(`<3>[bootstrap] Config file not found: ${configPath}`);
-      console.error('<3>[bootstrap] Copy config/bot.example.json to config/bot.json and edit it.');
-      process.exit(1);
-    }
-
-    // Refuse to load if the config file is world-readable (mode & 0o004) —
-    // fatal because config is the primary secrets source.
-    enforceSecretFilePermissions(configPath, { fatal: true });
-
-    // Also check any `.env*` files in the project root. These aren't consumed
-    // directly by hexbot (the config uses `_env` fields that read from
-    // process.env), but operators commonly keep credentials there and the
-    // shell that launched the process has already read them. A world-readable
-    // `.env*` file is fatal; group-readable (mode & 0o040) is a `[security]`
-    // warning — matching the advice in SECURITY.md for POSIX-mode secrets.
-    checkDotenvPermissions();
-
-    try {
-      const raw = readFileSync(configPath, 'utf-8');
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(raw);
-      } catch (err) {
-        const m = err instanceof Error ? err.message : String(err);
-        throw new Error(`[config] Failed to parse JSON in ${configPath}: ${m}`, { cause: err });
-      }
-      // Shape validation: rejects unknown keys, missing required fields, and
-      // wrong primitive types. Catches typos that would otherwise silently
-      // load as undefined and surface as confusing runtime errors later.
-      const onDisk = parseBotConfigOnDisk(parsed);
-      // Resolve `_env` suffix fields from process.env into their sibling
-      // non-suffixed fields. The on-disk shape excludes the bootstrap-
-      // sourced fields (database, pluginDir, owner.handle, owner.hostmask),
-      // so the resolved object is BotConfig-shaped except for those keys —
-      // we fold them in from the bootstrap layer below to satisfy the
-      // runtime BotConfig type the rest of the bot consumes.
-      const resolved = resolveSecrets(onDisk);
-      const merged: BotConfig = {
-        ...resolved,
-        database: bootstrap.dbPath,
-        pluginDir: bootstrap.pluginDir,
-        owner: {
-          handle: bootstrap.ownerHandle,
-          hostmask: bootstrap.ownerHostmask,
-          ...(resolved.owner?.password !== undefined ? { password: resolved.owner.password } : {}),
-        },
-      };
-      validateResolvedSecrets(merged);
-      // Channels keyed via key_env need their own post-resolution check —
-      // the resolver drops unset env vars, so validateResolvedSecrets can't
-      // tell the difference between "never had a key" and "env var unset".
-      validateChannelKeys(onDisk.irc.channels, merged.irc.channels);
-      return merged;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      // `<3>` priority prefix — see the readability check above for rationale.
-      console.error(`<3>[bootstrap] ${message}`);
-      process.exit(1);
-    }
-  }
-
-  // -------------------------------------------------------------------------
   // Startup banner
   // -------------------------------------------------------------------------
 
@@ -1979,45 +1492,6 @@ export class Bot {
     console.log(`${dim('-')} Channels:    ${channels}`);
     console.log(`${dim('-')} Plugins:     ${this.config.pluginDir}`);
     console.log();
-  }
-
-  /**
-   * Re-read bot.json on demand for `.rehash`. Runs the same parse +
-   * resolveSecrets pipeline as the boot path so both routes apply
-   * identical coercions; bootstrap fields are folded back into the
-   * resulting record so seed-from-json walkers see the same shape they
-   * see at boot time.
-   */
-  private readBotJsonAsRecord(): Record<string, unknown> | null {
-    try {
-      const raw = readFileSync(this._botConfigPath, 'utf-8');
-      const parsed = JSON.parse(raw) as unknown;
-      const onDisk = parseBotConfigOnDisk(parsed);
-      const resolved = resolveSecrets(onDisk) as unknown as Record<string, unknown>;
-      return resolved;
-    } catch (err) {
-      this.botLogger.warn('Failed to re-read bot.json for .rehash:', err);
-      return null;
-    }
-  }
-
-  /**
-   * Re-read plugins.json on demand for `.rehash`. Returns the bare
-   * plugins map; `.rehash` reaches into each plugin's `config` block
-   * to seed that plugin's settings registry.
-   */
-  private readPluginsJsonAsRecord(): Record<
-    string,
-    { config?: Record<string, unknown> } | undefined
-  > | null {
-    if (!this.config.pluginsConfig) return null;
-    try {
-      const raw = readFileSync(resolve(this.config.pluginsConfig), 'utf-8');
-      return JSON.parse(raw) as Record<string, { config?: Record<string, unknown> } | undefined>;
-    } catch (err) {
-      this.botLogger.warn('Failed to re-read plugins.json for .rehash:', err);
-      return null;
-    }
   }
 
   /**

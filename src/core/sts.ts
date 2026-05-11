@@ -46,6 +46,23 @@ export interface STSRecord {
 export const STS_DB_NAMESPACE = '_sts';
 
 /**
+ * Thrown from `Bot.connect()` when a stored IRCv3 STS policy refuses the
+ * current connection (typically plaintext-with-existing-TLS-policy or
+ * downgrade detection). The thrower wants exit code 2 — a permanent-failure
+ * tier the supervisor must not restart-loop on — but going through this
+ * typed error rather than `process.exit(2)` lets `Bot.start()` run the
+ * normal graceful shutdown chain first (db.close, plugin teardown, queue
+ * drain) instead of leaking WAL files and dangling sockets.
+ */
+export class STSRefusalError extends Error {
+  readonly exitCode = 2;
+  constructor(message: string) {
+    super(message);
+    this.name = 'STSRefusalError';
+  }
+}
+
+/**
  * Lowercase the host so STSStore lookups are case-insensitive. Every code
  * path that reads from or writes to `_sts` must funnel through here so a
  * future direct DB read or new call site doesn't desync from
