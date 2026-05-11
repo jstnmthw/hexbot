@@ -41,7 +41,8 @@ export type BindType =
   | 'notice' // NOTICE received, stackable
   | 'topic' // Topic change (suppressed during startup burst), stackable
   | 'quit' // User quit the network (not channel-scoped), stackable
-  | 'invite'; // Bot invited to a channel, stackable
+  | 'invite' // Bot invited to a channel, stackable
+  | 'join_error'; // Bot failed to join a channel (banned, invite-only, bad key, etc.), stackable
 
 // ---------------------------------------------------------------------------
 // Handler context
@@ -90,6 +91,15 @@ export interface HandlerContext {
   ident: string;
   /** Hostname of the event source. */
   hostname: string;
+  /**
+   * Services account name for the triggering user, when IRCv3 `account-tag`
+   * was present on the inbound message.
+   * - `string`    — server confirmed this account sent the message
+   * - `null`      — server confirmed the sender is not identified
+   * - `undefined` — tag not available (cap not negotiated, non-PRIVMSG event,
+   *                 or the server didn't include the tag)
+   */
+  account?: string | null;
   /**
    * Channel the event occurred in. `null` for private messages, CTCP, nick
    * changes, quit events, and timer ticks.
@@ -160,6 +170,13 @@ export interface ChannelUser {
    * Use `api.services.verifyUser(nick)` as a fallback when this is `undefined`.
    */
   accountName?: string | null;
+  /**
+   * Away state from IRCv3 `away-notify`.
+   * - `true`      — user has set an AWAY message
+   * - `false`     — user is explicitly back
+   * - `undefined` — no away-notify data received yet for this user
+   */
+  away?: boolean;
 }
 
 /** State for a single channel, as seen by plugins. */
@@ -170,6 +187,10 @@ export interface ChannelState {
   topic: string;
   /** Active channel modes as a string (e.g. `'+mnt'`). */
   modes: string;
+  /** Current channel key, or `''` if unset. */
+  key: string;
+  /** Current channel user limit, or `0` if unset. */
+  limit: number;
   /** Users currently in the channel, keyed by lowercased nick (using server CASEMAPPING). */
   users: Map<string, ChannelUser>;
 }

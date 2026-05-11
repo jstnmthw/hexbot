@@ -368,6 +368,8 @@ export interface BotConfig {
   database: string;
   /** Path to the plugins directory. Default `'./plugins'`. */
   pluginDir: string;
+  /** Optional path to plugins.json (overrides plugin-shipped defaults). */
+  pluginsConfig?: string;
   logging: LoggingConfig;
   queue?: QueueConfig;
   flood?: FloodConfig;
@@ -375,6 +377,26 @@ export interface BotConfig {
   dcc?: DccConfig;
   /** QUIT message sent when the bot shuts down. */
   quit_message?: string;
+  /** Interval in ms for the periodic channel presence check. Default `30000`. Set to `0` to disable. */
+  channel_rejoin_interval_ms?: number;
+  /** Backoff schedule (ms) for rejoining channels that failed with a permanent-error numeric. */
+  channel_retry_schedule_ms?: number[];
+  /** Prefix for built-in admin commands. Default `"."`. */
+  command_prefix?: string;
+  /** Chanmod plugin credentials (passwords belong here, not in plugins.json). */
+  chanmod?: ChanmodBotConfig;
+}
+
+/**
+ * Chanmod plugin credentials stored in bot.json (per SECURITY.md §6 — secrets
+ * must live in env-backed bot.json, never in the plugin-config file).
+ *
+ * Only the chanmod plugin itself sees `nick_recovery_password`; other plugins
+ * receive this object with the password field stripped.
+ */
+export interface ChanmodBotConfig {
+  /** NickServ password for GHOST command during nick recovery. Never logged. */
+  nick_recovery_password?: string;
 }
 
 // ---------------------------------------------------------------------------

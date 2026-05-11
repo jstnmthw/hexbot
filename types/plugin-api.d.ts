@@ -3,8 +3,17 @@
  *
  * Defines every interface a plugin interacts with via the `api` object
  * received in `init()`. All objects on the API are frozen at runtime.
+ *
+ * Hand-mirrored from `src/types/plugin-api.ts` — keep in sync when the
+ * scoped API surface changes.
  */
-import type { IdentityConfig, IrcConfig, LoggingConfig, ServicesConfig } from './config.d.ts';
+import type {
+  ChanmodBotConfig,
+  IdentityConfig,
+  IrcConfig,
+  LoggingConfig,
+  ServicesConfig,
+} from './config.d.ts';
 import type {
   BindHandler,
   BindType,
@@ -18,10 +27,19 @@ import type {
 // ---------------------------------------------------------------------------
 
 /**
- * `IrcConfig` as exposed to plugins — channels is always `string[]` (keys stripped),
- * and all properties are readonly.
+ * `IrcConfig` as exposed to plugins — an explicit allowlist of public fields.
+ * `tls_cert` / `tls_key` (CertFP key paths) and any other filesystem/secret
+ * material are deliberately excluded. `channels` is narrowed to `readonly
+ * string[]` — the factory flattens `{name, key}` entries so plugins never
+ * see channel keys.
  */
-export interface PluginIrcConfig extends Readonly<Omit<IrcConfig, 'channels'>> {
+export interface PluginIrcConfig {
+  readonly host: IrcConfig['host'];
+  readonly port: IrcConfig['port'];
+  readonly tls: IrcConfig['tls'];
+  readonly nick: IrcConfig['nick'];
+  readonly username: IrcConfig['username'];
+  readonly realname: IrcConfig['realname'];
   readonly channels: readonly string[];
 }
 
@@ -29,15 +47,22 @@ export interface PluginIrcConfig extends Readonly<Omit<IrcConfig, 'channels'>> {
  * Read-only bot config exposed to plugins via `api.botConfig`.
  *
  * The NickServ/SASL password is always omitted. Filesystem paths
- * (`database`, `pluginDir`) are also omitted.
+ * (`database`, `pluginDir`) and `owner` are also omitted.
  */
 export interface PluginBotConfig {
   readonly irc: PluginIrcConfig;
-  readonly owner: Readonly<{ handle: string; hostmask: string }>;
   readonly identity: Readonly<IdentityConfig>;
   /** NickServ config with `password` omitted. */
   readonly services: Readonly<Pick<ServicesConfig, 'type' | 'nickserv' | 'sasl'>>;
   readonly logging: Readonly<LoggingConfig>;
+  /** Chanmod plugin credentials from bot.json. Only exposed to the chanmod plugin — other plugins see this with `nick_recovery_password` stripped. */
+  readonly chanmod?: Readonly<ChanmodBotConfig>;
+  /**
+   * Bot version string (semver), sourced from `package.json` at boot.
+   * Use this for CTCP VERSION replies, banners, status output — anywhere
+   * a plugin would otherwise reach for `node:fs` to crack open `package.json`.
+   */
+  readonly version: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -48,15 +73,16 @@ export interface PluginBotConfig {
  * Single-character permission flags. Flags are hierarchical: `n` implies all
  * lower flags; `-` matches anyone regardless of registration.
  *
- * | Flag | Name   | Description                                |
- * |------|--------|--------------------------------------------|
- * | `n`  | owner  | Full control — implies m, o, v             |
- * | `m`  | master | Elevated admin — implies o, v              |
- * | `o`  | op     | Channel operator level                     |
- * | `v`  | voice  | Voiced user level                          |
- * | `-`  | anyone | No flag check — handler fires for everyone |
+ * | Flag | Name        | Description                                       |
+ * |------|-------------|---------------------------------------------------|
+ * | `n`  | owner       | Full control — implies m, o, v                    |
+ * | `m`  | master      | Elevated admin — implies o, v                     |
+ * | `o`  | op          | Channel operator level                            |
+ * | `v`  | voice       | Voiced user level                                 |
+ * | `d`  | deop        | Suppress auto-op / halfop                         |
+ * | `-`  | anyone      | No flag check — handler fires for everyone        |
  */
-export type Flag = 'n' | 'm' | 'o' | 'v' | '-';
+export type Flag = 'n' | 'm' | 'o' | 'v' | 'd' | '-';
 
 // ---------------------------------------------------------------------------
 // User record
@@ -68,17 +94,6 @@ export type Flag = 'n' | 'm' | 'o' | 'v' | '-';
  * Users are identified by hostmask patterns (`nick!ident@hostname`), which
  * support `*` and `?` wildcards. Multiple hostmasks may be registered for
  * the same user.
- *
- * @example
- * // Example user record
- * {
- *   handle: 'alice',
- *   hostmasks: ['*!alice@trusted.host.com', '*!*@user/alice'],
- *   global: 'o',        // has +o globally
- *   channels: {
- *     '#dev': 'n',      // has +n (owner) in #dev specifically
- *   }
- * }
  */
 export interface UserRecord {
   /** Unique identifier for this user. */
@@ -89,6 +104,34 @@ export interface UserRecord {
   global: string;
   /** Per-channel flag overrides. Keys are lowercased channel names; values are flag strings. */
   channels: Record<string, string>;
+  /**
+   * Per-user scrypt password hash. Required to open a DCC CHAT session.
+   * Stripped from every plugin-facing view — see {@link PublicUserRecord}.
+   */
+  password_hash?: string;
+}
+
+/**
+ * Plugin-facing view of {@link UserRecord} with `password_hash` omitted.
+ * Returned by {@link PluginPermissions.findByHostmask}.
+ */
+export type PublicUserRecord = Omit<UserRecord, 'password_hash'>;
+
+// ---------------------------------------------------------------------------
+// Mod-log actor
+// ---------------------------------------------------------------------------
+
+/**
+ * `{by, source, plugin}` triple a plugin hands to mutating `api.*` methods
+ * (op/ban/kick/mode/...) so the resulting `mod_log` row attributes the
+ * action to the user who triggered the plugin handler rather than to the
+ * plugin itself. Produced by {@link PluginAPI.auditActor}; the factory
+ * forces `source='plugin'` and `plugin=<pluginId>`.
+ */
+export interface PluginModActor {
+  readonly by: string;
+  readonly source: 'plugin';
+  readonly plugin: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -98,40 +141,50 @@ export interface UserRecord {
 /**
  * Namespaced key-value database for a single plugin.
  *
- * All operations are scoped to the plugin's namespace automatically — no
- * namespace prefix is needed in keys. The underlying store is SQLite with
- * WAL mode and synchronous reads.
- *
- * @example
- * // Store a value
- * api.db.set('last_seen:alice', String(Date.now()));
- *
- * // Retrieve it
- * const ts = api.db.get('last_seen:alice');
- *
- * // List all last_seen entries
- * const entries = api.db.list('last_seen:');
+ * All operations are scoped to the plugin's namespace automatically.
+ * The underlying store is SQLite with WAL mode and synchronous reads.
  */
 export interface PluginDB {
-  /**
-   * Retrieve a value by key.
-   * @returns The stored string value, or `undefined` if the key does not exist.
-   */
+  /** Retrieve a value by key. Returns `undefined` if the key does not exist. */
   get(key: string): string | undefined;
-  /**
-   * Store a value. Creates or overwrites the entry.
-   * @param key   Storage key. Use `:` as a namespace separator by convention.
-   * @param value String value to store.
-   */
+  /** Store a value. Creates or overwrites the entry. */
   set(key: string, value: string): void;
   /** Delete a key. No-op if the key does not exist. */
   del(key: string): void;
-  /**
-   * List all entries whose key starts with `prefix`.
-   * @param prefix Optional prefix filter. Omit to list all plugin keys.
-   * @returns Array of `{ key, value }` pairs, ordered by key.
-   */
+  /** List all entries whose key starts with `prefix` (or all entries if `prefix` is omitted). */
   list(prefix?: string): Array<{ key: string; value: string }>;
+}
+
+// ---------------------------------------------------------------------------
+// Core ban store
+// ---------------------------------------------------------------------------
+
+/** Ban record stored in the core ban store. */
+export interface BanRecord {
+  mask: string;
+  channel: string;
+  by: string;
+  ts: number;
+  /** `0` = permanent; otherwise unix timestamp ms when the ban expires. */
+  expires: number;
+  sticky?: boolean;
+}
+
+/** Core-owned ban store API, shared across all plugins (namespace `_bans`). */
+export interface PluginBanStore {
+  storeBan(channel: string, mask: string, by: string, durationMs: number): void;
+  removeBan(channel: string, mask: string): void;
+  getBan(channel: string, mask: string): BanRecord | null;
+  getChannelBans(channel: string): BanRecord[];
+  getAllBans(): BanRecord[];
+  setSticky(channel: string, mask: string, sticky: boolean): boolean;
+  liftExpiredBans(
+    hasOps: (channel: string) => boolean,
+    mode: (channel: string, modes: string, param: string) => void,
+    isTracked?: (channel: string) => boolean,
+  ): number;
+  /** Migrate ban records from a plugin's old namespace to the core `_bans` namespace. */
+  migrateFromPluginNamespace(pluginDb: PluginDB): number;
 }
 
 // ---------------------------------------------------------------------------
@@ -140,22 +193,19 @@ export interface PluginDB {
 
 /**
  * Read-only view of the permissions system provided to plugins.
- * Plugins may look up users and check flags, but cannot mutate the database.
- * Use the built-in `.adduser` / `.flags` dot commands for mutations.
+ * Mutations go through the `.adduser` / `.flags` / `.addhostmask` dot commands.
  */
 export interface PluginPermissions {
   /**
-   * Find a registered user by their full hostmask (`nick!ident@hostname`).
-   * Wildcards in registered hostmask patterns are matched against the provided value.
-   * @returns The matching `UserRecord`, or `null` if no registered user matches.
+   * Look up a user by `nick!ident@host`. The optional `account` argument lets
+   * the caller pass an authoritative IRCv3 account name (from `account-tag`
+   * or services verification) so `$a:account` patterns match without a
+   * round-trip. Returns `null` when no registered user matches.
    */
-  findByHostmask(hostmask: string): UserRecord | null;
+  findByHostmask(hostmask: string, account?: string | null): PublicUserRecord | null;
   /**
-   * Check whether a user has the required flags to trigger a handler.
-   * Respects per-channel overrides and the flag hierarchy (`n` implies `m` implies `o` implies `v`).
-   * @param requiredFlags A flag character (`'n'`, `'m'`, `'o'`, `'v'`) or `'-'` for anyone.
-   * @param ctx           The handler context supplying nick/ident/hostname/channel.
-   * @returns `true` if the user has sufficient flags.
+   * Check whether the user described by `ctx` has the required flags.
+   * Respects per-channel overrides and the flag hierarchy.
    */
   checkFlags(requiredFlags: string, ctx: HandlerContext): boolean;
 }
@@ -175,40 +225,26 @@ export interface VerifyResult {
 /**
  * NickServ identity verification API provided to plugins.
  *
- * Prefer checking `ChannelUser.accountName` first (zero-latency, populated
+ * Prefer reading `ChannelUser.accountName` first (zero-latency, populated
  * via IRCv3 `account-notify` / `extended-join`). Fall back to `verifyUser()`
- * when `accountName` is `undefined` (no account-notify data available yet).
+ * when `accountName` is `undefined`.
  */
 export interface PluginServices {
-  /**
-   * Asynchronously verify a nick's NickServ identity via ACC/STATUS query.
-   *
-   * This sends a PRIVMSG to NickServ and waits for the response. If the
-   * server supports `account-notify` / `extended-join`, prefer reading
-   * `ChannelUser.accountName` directly (synchronous, no network round-trip).
-   *
-   * @param nick The IRC nick to verify.
-   * @returns Promise resolving to a `VerifyResult`.
-   *
-   * @example
-   * api.bind('join', 'o', '*', async (ctx) => {
-   *   const u = api.getUsers(ctx.channel!).find(u => u.nick === ctx.nick);
-   *   if (u?.accountName !== undefined) {
-   *     // Fast path: already know account status from extended-join
-   *     if (u.accountName) api.op(ctx.channel!, ctx.nick);
-   *   } else {
-   *     // Slow path: query NickServ
-   *     const { verified } = await api.services.verifyUser(ctx.nick);
-   *     if (verified) api.op(ctx.channel!, ctx.nick);
-   *   }
-   * });
-   */
+  /** Query NickServ ACC/STATUS to verify a nick's identity. */
   verifyUser(nick: string): Promise<VerifyResult>;
-  /**
-   * Returns `true` if a services adapter is configured (`services.type` is not `'none'`).
-   * When `false`, `verifyUser()` always resolves `{ verified: true, account: null }`.
-   */
+  /** `true` if a services adapter is configured (`services.type` is not `'none'`). */
   isAvailable(): boolean;
+  /**
+   * `true` if the given IRC notice matches a NickServ ACC/STATUS reply shape
+   * from the configured NickServ target. Used to filter internal verification
+   * chatter from operator consoles.
+   */
+  isNickServVerificationReply(nick: string, message: string): boolean;
+  /**
+   * `true` if the bot's own NickServ identity has been confirmed for the
+   * current session (SASL account-notify or "You are now identified" notice).
+   */
+  isBotIdentified(): boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -218,34 +254,27 @@ export interface PluginServices {
 /** Supported value types for per-channel settings. */
 export type ChannelSettingType = 'flag' | 'string' | 'int';
 
-/** Runtime value returned by `ChannelSettings.get()`. */
+/** Runtime value type returned from `ChannelSettings.get()`. */
 export type ChannelSettingValue = boolean | string | number;
 
 /**
  * Definition of a per-channel setting registered by a plugin.
- *
- * @example
- * api.channelSettings.register([
- *   { key: 'greet', type: 'flag', default: true,  description: 'Enable join greetings' },
- *   { key: 'greet_msg', type: 'string', default: 'Welcome, {nick}!', description: 'Greeting text' },
- *   { key: 'max_lines', type: 'int', default: 3, description: 'Max output lines' },
- * ]);
  */
 export interface ChannelSettingDef {
-  /**
-   * Globally unique key for this setting. Use your plugin ID as a prefix to
-   * avoid collisions: `'myplugin_setting'`.
-   */
+  /** Globally unique key for this setting. Use your plugin ID as a prefix. */
   key: string;
   type: ChannelSettingType;
-  /**
-   * Default value returned when no operator has explicitly set this setting.
-   * Must match the declared `type`: `boolean` for `'flag'`, `string` for
-   * `'string'`, `number` for `'int'`.
-   */
+  /** Default value. Must match the declared `type`. */
   default: ChannelSettingValue;
   /** Human-readable description shown in `.chaninfo` output. */
   description: string;
+  /** For `'string'` settings: reject values not present in this list. */
+  allowedValues?: string[];
+}
+
+/** ChannelSettingDef with its owning plugin attached (internal + PluginAPI). */
+export interface ChannelSettingEntry extends ChannelSettingDef {
+  pluginId: string;
 }
 
 /** Callback signature for channel setting change notifications. */
@@ -255,41 +284,156 @@ export type ChannelSettingChangeCallback = (
   value: ChannelSettingValue,
 ) => void;
 
-/**
- * Per-channel settings API for plugins.
- *
- * Settings are declared once in `init()` via `register()` and then accessed
- * per-channel with `get()` / `set()`. Values persist to the database and
- * are editable by operators via `.chanset`.
- */
+/** Per-channel settings API for plugins. */
 export interface PluginChannelSettings {
-  /**
-   * Declare this plugin's per-channel settings. Call once in `init()`.
-   * @param defs Array of setting definitions.
-   */
+  /** Declare this plugin's per-channel settings. Call once in `init()`. */
   register(defs: ChannelSettingDef[]): void;
-  /**
-   * Get the current value of a setting for a specific channel.
-   * Returns the `def.default` value if an operator has not set it explicitly.
-   * @param channel Lowercased channel name (e.g. `'#general'`).
-   * @param key     The setting key as declared in `register()`.
-   */
+  /** Read a per-channel setting (untyped union). Returns `def.default` if not set. */
   get(channel: string, key: string): ChannelSettingValue;
-  /**
-   * Write a setting value for a channel. Use for plugin-managed state
-   * (e.g. storing topic text). For operator-set values, use `.chanset` instead.
-   */
+  /** Read a flag (boolean) setting. Returns `false` for unknown keys. */
+  getFlag(channel: string, key: string): boolean;
+  /** Read a string setting. Returns `''` for unknown keys. */
+  getString(channel: string, key: string): string;
+  /** Read an int setting. Returns `0` for unknown keys. */
+  getInt(channel: string, key: string): number;
+  /** Write a per-channel setting (for plugin-managed state). Operator-set values go through `.chanset`. */
   set(channel: string, key: string, value: ChannelSettingValue): void;
-  /**
-   * Returns `true` if an operator has explicitly set this value (not relying on default).
-   */
+  /** `true` if an operator has explicitly set this value (not relying on default). */
   isSet(channel: string, key: string): boolean;
+  /** Register a callback that fires when any per-channel setting changes. Auto-cleaned on unload. */
+  onChange(callback: ChannelSettingChangeCallback): void;
+}
+
+// ---------------------------------------------------------------------------
+// Core/plugin scope settings
+// ---------------------------------------------------------------------------
+
+/** Reload class declared on each setting def. */
+export type ReloadClass = 'live' | 'reload' | 'restart';
+
+/**
+ * Plugin-scope setting definition. Same shape as {@link ChannelSettingDef}
+ * plus an optional reload class (defaults to `'live'`).
+ */
+export interface PluginSettingDef extends ChannelSettingDef {
+  reloadClass?: ReloadClass;
   /**
-   * Register a callback that fires whenever any per-channel setting is set or unset.
-   * Automatically cleaned up on plugin unload.
-   * @param callback Receives the channel, key, and new effective value.
+   * Marks a plugin-scope key whose value is the bot-wide default for a
+   * channel-scope key of the same name. Operators override per-channel via
+   * `.chanset`.
    */
-  onChange(callback: (channel: string, key: string, value: ChannelSettingValue) => void): void;
+  channelOverridable?: boolean;
+}
+
+/** Callback signature for core/plugin scope setting changes. */
+export type SettingsChangeCallback = (key: string, value: ChannelSettingValue) => void;
+
+/**
+ * Read-only view of the bot's core-scope settings. Mutation is reserved for
+ * operator commands and the bot's own subsystems.
+ */
+export interface PluginCoreSettingsView {
+  get(key: string): ChannelSettingValue;
+  getFlag(key: string): boolean;
+  getString(key: string): string;
+  getInt(key: string): number;
+  /** `true` if an operator has explicitly stored a value for this key. */
+  isSet(key: string): boolean;
+  /** Register a callback that fires when any core setting changes. Auto-cleaned on unload. */
+  onChange(callback: SettingsChangeCallback): void;
+  /** Remove the registered callback. No-op when not registered. */
+  offChange(callback: SettingsChangeCallback): void;
+}
+
+/**
+ * Plugin's own scoped settings registry. Reads/writes the per-plugin KV
+ * namespace (`plugin:<pluginId>`) — operators see and mutate the same store
+ * via `.set <plugin-id> <key> <value>`.
+ */
+export interface PluginSettings {
+  /** Declare typed setting definitions for this plugin. Call once in `init()`. */
+  register(defs: PluginSettingDef[]): void;
+  get(key: string): ChannelSettingValue;
+  getFlag(key: string): boolean;
+  getString(key: string): string;
+  getInt(key: string): number;
+  /** Write a value to the plugin's scope (mirrors operator `.set <plugin> <key> <value>`). */
+  set(key: string, value: ChannelSettingValue): void;
+  /** Delete a value, reverting reads to the registered default. */
+  unset(key: string): void;
+  /** `true` if an explicit value is stored. */
+  isSet(key: string): boolean;
+  /** Register a callback that fires when any plugin-scope setting changes. Auto-cleaned on unload. */
+  onChange(callback: SettingsChangeCallback): void;
+  /** Remove the registered callback. No-op when not registered. */
+  offChange(callback: SettingsChangeCallback): void;
+  /**
+   * Frozen snapshot of the merged `plugins.json` / `config.json` bag the
+   * loader handed this plugin at load time. Escape hatch for deeply-nested
+   * config that doesn't flatten cleanly to typed settings.
+   */
+  readonly bootConfig: Readonly<Record<string, unknown>>;
+}
+
+// ---------------------------------------------------------------------------
+// Audit + utility sub-APIs
+// ---------------------------------------------------------------------------
+
+/**
+ * Options for {@link PluginAudit.log}. The factory injects `by`, `source`,
+ * and `plugin` so a plugin cannot spoof another plugin's identity.
+ */
+export interface PluginAuditOptions {
+  channel?: string | null;
+  target?: string | null;
+  outcome?: 'success' | 'failure';
+  reason?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+/**
+ * Scoped audit writer. `api.audit.log('action', ...)` writes a `mod_log` row
+ * with `source='plugin'`, `plugin=<pluginId>`, and `by=<pluginId>`. Use for
+ * plugin-specific events that don't map to an `api.*` IRC command (those
+ * already auto-audit through the underlying wrappers).
+ */
+export interface PluginAudit {
+  log(action: string, options?: PluginAuditOptions): void;
+}
+
+/**
+ * Sliding-window rate counter obtained from
+ * {@link PluginUtil.createSlidingWindowCounter}.
+ */
+export interface PluginSlidingWindowCounter {
+  /** Record one event for `key` and return `true` if the count in the last `windowMs` exceeds `limit`. */
+  check(key: string, windowMs: number, limit: number): boolean;
+  /** Read the current count for `key` without recording. */
+  peek(key: string, windowMs: number): number;
+  /** Drop all history for a specific key. */
+  clear(key: string): void;
+  /** Drop history for all keys. */
+  reset(): void;
+  /** Prune keys whose timestamps have all expired outside `windowMs`. */
+  sweep(windowMs: number): void;
+  /** Number of tracked keys. */
+  readonly size: number;
+}
+
+/** General-purpose helpers exposed on `api.util`. */
+export interface PluginUtil {
+  /**
+   * Match `text` against a wildcard `pattern` — `*` matches any string,
+   * `?` matches exactly one character. Defaults to IRC-aware case folding.
+   */
+  matchWildcard(pattern: string, text: string, opts?: { caseInsensitive?: boolean }): boolean;
+  /**
+   * Score a hostmask/account pattern's specificity. The "weak" threshold is
+   * 100 — patterns below that are flagged by the startup sweep.
+   */
+  patternSpecificity(pattern: string): number;
+  /** Create a fresh sliding-window rate counter. */
+  createSlidingWindowCounter(): PluginSlidingWindowCounter;
 }
 
 // ---------------------------------------------------------------------------
@@ -298,21 +442,11 @@ export interface PluginChannelSettings {
 
 /**
  * A single help entry registered by a plugin.
- *
- * @example
- * api.registerHelp([{
- *   command: '!seen',
- *   flags: '-',
- *   usage: '!seen <nick>',
- *   description: 'Show when a nick was last active.',
- *   detail: ['Returns the timestamp of the last message or join from <nick>.'],
- *   category: 'info',
- * }]);
  */
 export interface HelpEntry {
-  /** Command trigger including `!` prefix (e.g. `'!op'`). */
+  /** Command trigger including `!` or `.` prefix (e.g. `'!op'`, `'.set'`). */
   command: string;
-  /** Required flags to use this command. Same format as `bind()` flags (`'o'`, `'-'`, etc.). */
+  /** Required flags. Same format as `bind()` flags (`'o'`, `'n|m'`, `'-'`). */
   flags: string;
   /** Concise usage line (e.g. `'!op [nick]'`). */
   usage: string;
@@ -320,10 +454,21 @@ export interface HelpEntry {
   description: string;
   /** Extended description lines shown in `!help <command>`. */
   detail?: string[];
-  /** Grouping category shown in `!help`. Defaults to the plugin ID if unset. */
+  /** Grouping category. Defaults to the plugin ID if unset. */
   category?: string;
   /** Populated automatically by the help registry — do not set manually. */
   pluginId?: string;
+}
+
+/**
+ * Read-only window onto the unified help corpus. Plugins register entries
+ * through `api.registerHelp` so the factory can stamp `pluginId`.
+ */
+export interface HelpRegistryView {
+  /** Look up an entry by command name with namespaced + strict + fuzzy fallback. */
+  get(command: string): HelpEntry | undefined;
+  /** All entries across every owner bucket. */
+  getAll(): HelpEntry[];
 }
 
 // ---------------------------------------------------------------------------
@@ -333,8 +478,9 @@ export interface HelpEntry {
 /**
  * The scoped API object every plugin receives in `init()`.
  *
- * All properties are frozen at runtime. Attempting to mutate the API or its
- * nested objects will throw in strict mode.
+ * All properties are frozen at runtime. After the plugin is unloaded, every
+ * method on the api (and its sub-API namespaces) becomes a no-op so stale
+ * closures cannot fan out to the bot's core graph.
  *
  * @example
  * import type { PluginAPI } from '../../types/index.d.ts';
@@ -347,14 +493,10 @@ export interface HelpEntry {
  *   api.bind('pub', '-', '!hello', (ctx) => {
  *     ctx.reply(`Hello, ${api.stripFormatting(ctx.nick)}!`);
  *   });
- *   api.log('Loaded');
  * }
  */
 export interface PluginAPI {
-  /**
-   * This plugin's registered name. Matches the `name` export.
-   * All binds, database entries, and log messages are scoped to this ID.
-   */
+  /** This plugin's registered ID. Matches the `name` export. */
   readonly pluginId: string;
 
   // -------------------------------------------------------------------------
@@ -362,335 +504,192 @@ export interface PluginAPI {
   // -------------------------------------------------------------------------
 
   /**
-   * Register a handler for an IRC event.
-   *
-   * @param type    The event type to listen for.
-   * @param flags   Required permission flags. Use `'-'` for public commands.
-   *                The dispatcher checks flags before calling the handler —
-   *                the handler only fires if the user has sufficient privileges.
-   * @param mask    Event mask. Semantics vary by type:
-   *                - `pub`/`msg`: exact command (e.g. `'!op'`); case-insensitive
-   *                - `pubm`/`msgm`: wildcard pattern on full text (e.g. `'*hello*'`)
-   *                - `join`/`part`/`kick`: `'#channel nick!ident@host'` or `'*'` for all
-   *                - `mode`: `'#channel +o'` or `'*'` for all modes
-   *                - `ctcp`: CTCP type (e.g. `'VERSION'`); case-insensitive
-   *                - `time`: interval in seconds as a string (min `'10'`)
-   *                - all others: `'*'` to match everything
-   * @param handler The function to call when the event fires.
-   *
-   * @example
-   * // Public !hello command
-   * api.bind('pub', '-', '!hello', ctx => ctx.reply('Hello!'));
-   *
-   * // Op-only !kick command
-   * api.bind('pub', 'o', '!kick', async (ctx) => {
-   *   const nick = ctx.args.split(' ')[0];
-   *   if (nick) api.kick(ctx.channel!, nick, 'Requested');
-   * });
-   *
-   * // Timer: run every 60 seconds
-   * api.bind('time', '-', '60', () => {
-   *   api.log('Tick!');
-   * });
+   * Register a handler for an IRC event. `ctx` is narrowed at the call site
+   * to the per-bind-type shape — e.g. `api.bind('pub', ...)` hands the
+   * handler a context with `channel: string`, `api.bind('msg', ...)` with
+   * `channel: null`.
    */
-  bind(type: BindType, flags: string, mask: string, handler: BindHandler): void;
+  bind<T extends BindType>(type: T, flags: string, mask: string, handler: BindHandler<T>): void;
 
-  /**
-   * Remove a previously registered handler. The `handler` reference must be
-   * the same function object passed to `bind()`. Generally unnecessary — the
-   * plugin loader removes all binds automatically on unload.
-   */
-  unbind(type: BindType, mask: string, handler: BindHandler): void;
+  /** Remove a previously registered handler. The loader cleans these up on unload. */
+  unbind<T extends BindType>(type: T, mask: string, handler: BindHandler<T>): void;
 
   // -------------------------------------------------------------------------
   // IRC output
   // -------------------------------------------------------------------------
 
-  /**
-   * Send a PRIVMSG to a channel or nick.
-   * Output is rate-limited through the message queue.
-   * @param target Channel name (e.g. `'#general'`) or nick.
-   * @param message Message text. Long messages are NOT automatically split here
-   *                (use `ctx.reply()` for automatic splitting).
-   */
+  /** Send a PRIVMSG to a channel or nick. Long messages are split and rate-limited. */
   say(target: string, message: string): void;
-
-  /**
-   * Send a `/me` action PRIVMSG (CTCP ACTION).
-   * @param target Channel name or nick.
-   * @param message Action text (without the `/me ` prefix).
-   */
+  /** Send a CTCP ACTION (`/me`). */
   action(target: string, message: string): void;
-
-  /**
-   * Send a NOTICE to a channel or nick.
-   * @param target Channel name or nick.
-   * @param message Notice text.
-   */
+  /** Send a NOTICE. */
   notice(target: string, message: string): void;
-
-  /**
-   * Send a CTCP reply (e.g. in response to a VERSION request).
-   * @param target Nick to reply to.
-   * @param type   CTCP type (e.g. `'VERSION'`, `'PING'`).
-   * @param message CTCP reply payload.
-   */
+  /** Send a CTCP reply. Always uses NOTICE per RFC 2812 §3.3.2. */
   ctcpResponse(target: string, type: string, message: string): void;
 
   // -------------------------------------------------------------------------
   // Channel management
+  //
+  // The optional `actor` argument attributes the resulting `mod_log` row to
+  // the triggering user rather than to the plugin itself — obtain one from
+  // `api.auditActor(ctx)`. Omit for plugin-autonomous actions.
   // -------------------------------------------------------------------------
 
-  /** Join a channel, optionally with a key. */
   join(channel: string, key?: string): void;
-
-  /** Part a channel with an optional reason message. */
   part(channel: string, message?: string): void;
-
-  /** Give channel operator status to a nick. */
-  op(channel: string, nick: string): void;
-
-  /** Remove channel operator status from a nick. */
-  deop(channel: string, nick: string): void;
-
-  /** Give voice status to a nick. */
-  voice(channel: string, nick: string): void;
-
-  /** Remove voice status from a nick. */
-  devoice(channel: string, nick: string): void;
-
-  /** Give half-operator status to a nick (server must support `+h`). */
-  halfop(channel: string, nick: string): void;
-
-  /** Remove half-operator status from a nick. */
-  dehalfop(channel: string, nick: string): void;
-
-  /**
-   * Kick a nick from a channel.
-   * @param reason Optional kick reason shown to the user.
-   */
-  kick(channel: string, nick: string, reason?: string): void;
-
-  /**
-   * Ban a hostmask from a channel (`MODE #chan +b mask`).
-   * @param mask Full hostmask to ban (e.g. `'*!*@evil.host'`).
-   */
-  ban(channel: string, mask: string): void;
-
-  /**
-   * Set one or more channel modes.
-   * Mode changes are automatically batched to respect the server's MODES limit.
-   * @param modes Mode string (e.g. `'+im'`, `'-o'`).
-   * @param params Optional mode parameters (one per parameterised mode).
-   *
-   * @example
-   * api.mode('#general', '+m');           // Set moderated
-   * api.mode('#general', '+o', 'alice');  // Op alice
-   */
+  op(channel: string, nick: string, actor?: PluginModActor): void;
+  deop(channel: string, nick: string, actor?: PluginModActor): void;
+  voice(channel: string, nick: string, actor?: PluginModActor): void;
+  devoice(channel: string, nick: string, actor?: PluginModActor): void;
+  halfop(channel: string, nick: string, actor?: PluginModActor): void;
+  dehalfop(channel: string, nick: string, actor?: PluginModActor): void;
+  kick(channel: string, nick: string, reason?: string, actor?: PluginModActor): void;
+  ban(channel: string, mask: string, actor?: PluginModActor): void;
+  /** Set one or more channel modes. Batched to respect the server's MODES limit. */
   mode(channel: string, modes: string, ...params: string[]): void;
-
-  /**
-   * Request the current channel modes from the server.
-   * Triggers RPL_CHANNELMODEIS (324) which populates channel-state and emits `channel:modesReady`.
-   * @param channel Channel to query.
-   */
+  /** Request RPL_CHANNELMODEIS (324); fires `channel:modesReady` when received. */
   requestChannelModes(channel: string): void;
-
-  /**
-   * Set the channel topic.
-   * @param text New topic text.
-   */
-  topic(channel: string, text: string): void;
-
-  /**
-   * Invite a user to a channel (`INVITE <nick> <channel>`).
-   * @param channel Channel to invite the user to.
-   * @param nick    Nick to invite.
-   */
-  invite(channel: string, nick: string): void;
-
-  /**
-   * Change the bot's own IRC nick (e.g. for nick recovery).
-   * @param nick The new nick to request.
-   */
+  topic(channel: string, text: string, actor?: PluginModActor): void;
+  invite(channel: string, nick: string, actor?: PluginModActor): void;
+  /** Change the bot's own IRC nick. Routes through the message queue for flood protection. */
   changeNick(nick: string): void;
 
   // -------------------------------------------------------------------------
   // Channel state
   // -------------------------------------------------------------------------
 
+  /** Get the current state of a channel, or `undefined` if the bot is not in it. */
+  getChannel(name: string): ChannelState | undefined;
+  /** All users currently in a channel. */
+  getUsers(channel: string): ChannelUser[];
+  /** Full hostmask for a user in a channel, or `undefined` if not present. */
+  getUserHostmask(channel: string, nick: string): string | undefined;
   /**
-   * Register a callback for when channel modes are received from the server (RPL_CHANNELMODEIS).
-   * Fires after `requestChannelModes()` reply arrives. Auto-cleaned on plugin unload.
-   * @param callback Called with the channel name when its mode state is ready.
+   * Names of every channel the bot is currently tracking — the union of
+   * startup-config channels that joined successfully and channels joined at
+   * runtime. Prefer this over `botConfig.irc.channels` for live state.
    */
+  getJoinedChannels(): string[];
+
+  /** Fires after `requestChannelModes()` reply arrives. Auto-cleaned on unload. */
   onModesReady(callback: (channel: string) => void): void;
+  /** Remove a callback previously registered with {@link onModesReady}. */
+  offModesReady(callback: (channel: string) => void): void;
 
   /**
-   * Register a callback for when a bot user's permissions record changes in a
-   * way that might affect mode placement. Fires on `user:added`,
-   * `user:flagsChanged`, and `user:hostmaskAdded` with the handle of the
-   * changed user. Auto-cleaned on plugin unload.
-   *
-   * Use this to react immediately to `.adduser`, `.flags`, and `.addhostmask`
-   * instead of waiting for the user to rejoin (e.g. auto-voice a user you
-   * just granted +v, without needing them to PART/JOIN).
-   *
-   * @param callback Called with the handle of the changed user.
+   * Fires when a bot user's permissions record changes (`user:added`,
+   * `user:flagsChanged`, `user:hostmaskAdded`).
    */
   onPermissionsChanged(callback: (handle: string) => void): void;
+  offPermissionsChanged(callback: (handle: string) => void): void;
 
   /**
-   * Get the current state of a channel.
-   * @param name Channel name (case-insensitive).
-   * @returns Channel state object, or `undefined` if the bot is not in the channel.
-   *
-   * @example
-   * const ch = api.getChannel('#general');
-   * if (ch) {
-   *   api.log(`${ch.users.size} users in ${ch.name}`);
-   * }
+   * Fires on IRCv3 `account-notify` (null → account) and explicit
+   * `verifyUser()` success.
    */
-  getChannel(name: string): ChannelState | undefined;
+  onUserIdentified(callback: (nick: string, account: string) => void): void;
+  offUserIdentified(callback: (nick: string, account: string) => void): void;
+
+  /** Fires on IRCv3 `account-notify` (account → null). */
+  onUserDeidentified(callback: (nick: string, previousAccount: string) => void): void;
+  offUserDeidentified(callback: (nick: string, previousAccount: string) => void): void;
 
   /**
-   * Get all users currently in a channel as a flat array.
-   * @param channel Channel name (case-insensitive).
-   * @returns Array of `ChannelUser` objects, or `[]` if the bot is not in the channel.
+   * Fires when the bot's own NickServ identity is confirmed for the current
+   * session — via SASL account-notify or a "You are now identified" notice.
    */
-  getUsers(channel: string): ChannelUser[];
-
-  /**
-   * Get the full hostmask (`nick!ident@hostname`) for a user in a channel.
-   * @returns The hostmask string, or `undefined` if the user is not in the channel.
-   */
-  getUserHostmask(channel: string, nick: string): string | undefined;
+  onBotIdentified(callback: () => void): void;
+  offBotIdentified(callback: () => void): void;
 
   // -------------------------------------------------------------------------
-  // Permissions, services, and database
+  // Sub-APIs
   // -------------------------------------------------------------------------
 
   /** Read-only access to the permissions database. */
   readonly permissions: PluginPermissions;
-
   /** NickServ identity verification. */
   readonly services: PluginServices;
-
-  /**
-   * Namespaced key-value database scoped to this plugin.
-   * All keys are automatically prefixed — no namespace management needed.
-   */
+  /** Namespaced key-value database scoped to this plugin. */
   readonly db: PluginDB;
+  /** Core ban store, shared across all plugins (namespace `_bans`). */
+  readonly banStore: PluginBanStore;
+  /** Per-channel settings API. Declare settings once in `init()` via `register()`. */
+  readonly channelSettings: PluginChannelSettings;
+  /** Read-only view of bot-wide core settings (`logging.level`, `command_prefix`, etc.). */
+  readonly coreSettings: PluginCoreSettingsView;
+  /** Plugin's own settings registry, scoped to `plugin:<pluginId>`. */
+  readonly settings: PluginSettings;
+  /** Scoped audit-log writer for non-IRC plugin events. */
+  readonly audit: PluginAudit;
+  /** General-purpose helpers (wildcard matching, sliding-window counters). */
+  readonly util: PluginUtil;
 
   // -------------------------------------------------------------------------
   // Configuration
   // -------------------------------------------------------------------------
 
-  /**
-   * The bot's core configuration (`config/bot.json`), read-only and deep-frozen.
-   * The NickServ/SASL password and filesystem paths are omitted.
-   */
+  /** The bot's core configuration, read-only and deep-frozen. Password and filesystem paths are omitted. */
   readonly botConfig: PluginBotConfig;
 
-  /**
-   * This plugin's merged configuration. Values come from the plugin's own
-   * `config.json` defaults, overridden by the `config` key in
-   * `config/plugins.json`.
-   *
-   * @example
-   * // In init():
-   * const greeting = (api.config.greeting as string) ?? 'Hello!';
-   */
-  readonly config: Record<string, unknown>;
-
   // -------------------------------------------------------------------------
-  // Server capabilities
+  // Server capabilities + utilities
   // -------------------------------------------------------------------------
 
-  /**
-   * Get the server's ISUPPORT (005) capabilities.
-   * @returns Key-value map of all ISUPPORT tokens received from the server.
-   *
-   * @example
-   * const modes = api.getServerSupports()['MODES']; // e.g. '4'
-   * const casemapping = api.getServerSupports()['CASEMAPPING']; // e.g. 'rfc1459'
-   */
+  /** ISUPPORT (005) capability map (e.g. `MODES`, `CASEMAPPING`, `CHANTYPES`). */
   getServerSupports(): Record<string, string>;
-
-  /**
-   * Lowercase a nick or channel name using the server's CASEMAPPING setting.
-   * Use when comparing or storing nicks/channel names as map keys.
-   *
-   * @example
-   * const key = api.ircLower('#General'); // '#general' on most networks
-   */
+  /** Lowercase a nick or channel name using the server's CASEMAPPING. */
   ircLower(text: string): string;
-
-  // -------------------------------------------------------------------------
-  // Per-channel settings
-  // -------------------------------------------------------------------------
-
-  /** Per-channel settings API. Declare settings once in `init()` via `register()`. */
-  readonly channelSettings: PluginChannelSettings;
+  /** Build `nick!ident@hostname` from any object carrying those three fields. */
+  buildHostmask(source: { nick: string; ident: string; hostname: string }): string;
+  /** `true` if `nick` case-folds to the bot's own configured nick. */
+  isBotNick(nick: string): boolean;
+  /** Configured channel key (from bot.json), or `undefined` if none. */
+  getChannelKey(channel: string): string | undefined;
 
   // -------------------------------------------------------------------------
   // Help system
   // -------------------------------------------------------------------------
 
-  /**
-   * Register help entries for this plugin's commands.
-   * Entries appear in `!help` listings and `!help <command>` detail.
-   * Call once in `init()`.
-   */
+  /** Register help entries. Call once in `init()`. */
   registerHelp(entries: HelpEntry[]): void;
-
-  /** Get all currently registered help entries (from all plugins). */
-  getHelpEntries(): HelpEntry[];
+  /** Read-only view of the unified help corpus. */
+  getHelpRegistry(): HelpRegistryView;
 
   // -------------------------------------------------------------------------
-  // Utilities
+  // Output helpers
   // -------------------------------------------------------------------------
 
-  /**
-   * Strip IRC formatting and control characters from a string.
-   *
-   * Removes bold (`\x02`), color (`\x03`), italic (`\x1D`), underline (`\x1F`),
-   * strikethrough (`\x1E`), monospace (`\x11`), reverse (`\x16`), and reset (`\x0F`),
-   * including any color code parameters.
-   *
-   * **Use whenever user-controlled values appear in security-relevant output**
-   * (permission grants, op/kick/ban announcements, log messages) to prevent IRC
-   * color codes from visually hiding or spoofing messages.
-   *
-   * @example
-   * api.say(channel, `Ops granted to ${api.stripFormatting(ctx.nick)}`);
-   */
+  /** Strip IRC formatting and control characters. Use for user-controlled values in security-relevant output. */
   stripFormatting(text: string): string;
 
   // -------------------------------------------------------------------------
   // Logging
   // -------------------------------------------------------------------------
 
-  /**
-   * Log at INFO level. Output is prefixed with `[plugin:<pluginId>]`.
-   */
+  /** Log at INFO level. Output is prefixed with `[plugin:<pluginId>]`. */
   log(...args: unknown[]): void;
-
-  /**
-   * Log at ERROR level. Output is prefixed with `[plugin:<pluginId>]`.
-   */
+  /** Log at ERROR level. */
   error(...args: unknown[]): void;
-
-  /**
-   * Log at WARN level. Output is prefixed with `[plugin:<pluginId>]`.
-   */
+  /** Log at WARN level. */
   warn(...args: unknown[]): void;
+  /** Log at DEBUG level (only shown when `logging.level` is `'debug'`). */
+  debug(...args: unknown[]): void;
+
+  // -------------------------------------------------------------------------
+  // Audit actor
+  // -------------------------------------------------------------------------
 
   /**
-   * Log at DEBUG level (only shown when `logging.level` is `'debug'`).
-   * Output is prefixed with `[plugin:<pluginId>]`.
+   * Derive a {@link PluginModActor} from a bind-handler `ctx` so mutating
+   * `api.*` calls attribute their `mod_log` row to the triggering user
+   * instead of to the plugin itself.
+   *
+   * @example
+   * api.bind('pub', 'o', '!op', (ctx) => {
+   *   api.op(ctx.channel, ctx.nick, api.auditActor(ctx));
+   * });
    */
-  debug(...args: unknown[]): void;
+  auditActor(ctx: HandlerContext): PluginModActor;
 }
 
 // ---------------------------------------------------------------------------
@@ -700,9 +699,6 @@ export interface PluginAPI {
 /**
  * Required and optional exports for a HexBot plugin module.
  *
- * A plugin is a directory under `plugins/` containing an `index.ts` that
- * exports at least `name`, `version`, `description`, and `init`.
- *
  * @example
  * // plugins/my-plugin/index.ts
  * import type { PluginAPI } from '../../types/index.d.ts';
@@ -711,33 +707,26 @@ export interface PluginAPI {
  * export const version = '1.0.0';
  * export const description = 'An example plugin.';
  *
- * let intervalId: ReturnType<typeof setInterval> | null = null;
- *
  * export function init(api: PluginAPI): void {
  *   api.bind('pub', '-', '!ping', ctx => ctx.reply('pong'));
- *   api.log('Loaded');
  * }
  *
  * export function teardown(): void {
- *   if (intervalId) clearInterval(intervalId);
+ *   // Clean up bare-global timers, listeners, etc.
  * }
  */
 export interface PluginExports {
-  /** Plugin identifier — must be unique. Alphanumeric, hyphens, underscores. */
+  /** Plugin identifier — must be unique. */
   name: string;
-  /** Semantic version string (e.g. `'1.2.3'`). */
+  /** Semantic version string. */
   version: string;
-  /** One-line description of the plugin. */
+  /** One-line description. */
   description: string;
-  /**
-   * Called when the plugin is loaded (or hot-reloaded). Register all binds here.
-   * May be async.
-   */
+  /** Called when the plugin is loaded (or hot-reloaded). Register all binds here. */
   init(api: PluginAPI): void | Promise<void>;
   /**
-   * Called when the plugin is unloaded or hot-reloaded. Clean up any external
-   * resources (timers, open connections, etc.). Binds are removed automatically
-   * by the loader — no need to call `api.unbind()` here.
+   * Called when the plugin is unloaded or hot-reloaded. Clean up bare-global
+   * timers, listeners, and connections — binds are removed automatically.
    */
   teardown?(): void | Promise<void>;
 }

@@ -22,9 +22,8 @@
  * ## Module layout
  *
  * - `events.d.ts`    — `BindType`, `HandlerContext`, `BindHandler`, `ChannelUser`, `ChannelState`
- * - `plugin-api.d.ts` — `PluginAPI`, `PluginExports`, `PluginDB`, `PluginPermissions`,
- *                        `PluginServices`, `PluginChannelSettings`, `HelpEntry`, `VerifyResult`
- * - `config.d.ts`    — `BotConfig`, `IrcConfig`, `ServicesConfig`, and all other config shapes
+ * - `plugin-api.d.ts` — `PluginAPI`, `PluginExports`, and every sub-API surface
+ * - `config.d.ts`    — `BotConfig` and the rest of the runtime config shapes
  * - `index.d.ts`     — This file — re-exports everything above
  */
 
@@ -39,20 +38,35 @@ export type {
 
 // Plugin API
 export type {
+  BanRecord,
   ChannelSettingChangeCallback,
   ChannelSettingDef,
+  ChannelSettingEntry,
   ChannelSettingType,
   ChannelSettingValue,
   Flag,
   HelpEntry,
+  HelpRegistryView,
   PluginAPI,
+  PluginAudit,
+  PluginAuditOptions,
+  PluginBanStore,
   PluginBotConfig,
   PluginChannelSettings,
+  PluginCoreSettingsView,
   PluginDB,
   PluginExports,
   PluginIrcConfig,
+  PluginModActor,
   PluginPermissions,
   PluginServices,
+  PluginSettingDef,
+  PluginSettings,
+  PluginSlidingWindowCounter,
+  PluginUtil,
+  PublicUserRecord,
+  ReloadClass,
+  SettingsChangeCallback,
   UserRecord,
   VerifyResult,
 } from './plugin-api.d.ts';
@@ -60,6 +74,7 @@ export type {
 // Configuration
 export type {
   BotConfig,
+  ChanmodBotConfig,
   ChannelEntry,
   DccConfig,
   FloodConfig,
