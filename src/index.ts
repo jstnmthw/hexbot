@@ -4,7 +4,7 @@ import { closeSync, openSync, readFileSync, unlinkSync, utimesSync } from 'node:
 import net from 'node:net';
 import { basename } from 'node:path';
 
-import { Bot } from './bot';
+import { Bot, STSRefusalError } from './bot';
 import { isRecoverableSocketError, shutdownWithTimeout } from './process-handlers';
 import { BotREPL } from './repl';
 
@@ -158,6 +158,11 @@ async function runBotShutdown(): Promise<void> {
   const result = await shutdownWithTimeout(() => currentBot.shutdown(), SHUTDOWN_TIMEOUT_MS);
   if (result === 'timeout') {
     console.error(`[bot] Shutdown timed out after ${SHUTDOWN_TIMEOUT_MS}ms — forcing exit`);
+  } else if (result === 'failed') {
+    // The inner shutdown() rejection was already logged by
+    // shutdownWithTimeout. The fatalExit chain will continue to
+    // process.exit; we just don't re-throw and re-enter unhandledRejection.
+    console.error('[bot] Shutdown threw — continuing exit chain anyway');
   }
 }
 
@@ -298,7 +303,19 @@ async function main(): Promise<void> {
 // and a tsconfig `module: "node20"` — for now keep the .catch() so a startup
 // rejection produces a clean exit-1 instead of a default unhandled-rejection
 // kill that confuses operators staring at the supervisor logs.
-main().catch((err) => {
+main().catch(async (err) => {
   console.error('[bot] Fatal error during startup:', err);
+  // STS refusal carries a `permanent-failure` exit code (2). Without the
+  // typed channel, this would propagate as the default exit-1, which a
+  // supervisor with restart-on-failure semantics would interpret as
+  // "transient — try again," producing a restart-loop on an unreachable
+  // host. Drain the partially-started bot through the normal shutdown
+  // chain before we let the process die so DB / sockets / plugin teardown
+  // run instead of leaking WAL files.
+  if (err instanceof STSRefusalError) {
+    stopAllHealthSignals();
+    await runBotShutdown();
+    process.exit(err.exitCode);
+  }
   process.exit(1);
 });

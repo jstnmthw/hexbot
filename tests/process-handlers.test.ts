@@ -83,9 +83,18 @@ describe('shutdownWithTimeout', () => {
     }
   });
 
-  it('propagates rejection from shutdown', async () => {
-    const boom = new Error('shutdown blew up');
-    const shutdown = vi.fn().mockRejectedValue(boom);
-    await expect(shutdownWithTimeout(shutdown, 1_000)).rejects.toBe(boom);
+  it("resolves 'failed' when shutdown rejects (W-FATALEXIT)", async () => {
+    // Inner try/catch converts the rejection into a sentinel so the
+    // fatalExit chain doesn't re-enter unhandledRejection.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const boom = new Error('shutdown blew up');
+      const shutdown = vi.fn().mockRejectedValue(boom);
+      const result = await shutdownWithTimeout(shutdown, 1_000);
+      expect(result).toBe('failed');
+      expect(errorSpy).toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });

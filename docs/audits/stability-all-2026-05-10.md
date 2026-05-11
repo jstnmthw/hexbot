@@ -90,13 +90,13 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 
 #### Demoted from CRITICAL
 
-- [ ] **[W-STS-EXIT] `process.exit(2)` from inside `Bot.connect()` STS gate skips full teardown** [verified]
+- [x] **[W-STS-EXIT] `process.exit(2)` from inside `Bot.connect()` STS gate skips full teardown** [verified]
   - **File:** `src/bot.ts:1370-1375`
   - **Pattern:** Shutdown ordering / partial-init failure
   - **Scenario:** Plaintext first contact to a server with an existing STS policy in `_sts`. `applySTSPolicyToConfig` throws a refusal. `bot.ts` calls `process.exit(2)` directly inside `connect()`.
   - **Impact:** DB just opened, permissions loaded, plugins loaded, botlink hub started — none get torn down. SQLite WAL files dangle. Hub leaves get TCP RST instead of graceful shutdown. Plugins' open file descriptors leak. The `bot:disconnected` event is emitted right before exit but listeners don't get to run before the process dies.
   - **Demotion reason:** Trigger requires an _operator config error_ (plaintext `tls=false` + persistent STS policy). Once-per-deployment event. The supervisor restarts cleanly; FD/WAL leak on already-exiting process is recoverable.
-  - **Remediation:** Throw a typed `STSRefusalError`. Catch in `Bot.start()`, run `gracefulShutdown` with desired exit code (2). Or call `await this.shutdown()` before `process.exit(2)`.
+  - **Remediation:** Throw a typed `STSRefusalError`. Catch in `Bot.start()`, run `gracefulShutdown` with desired exit code (2). Or call `await this.shutdown()` before `process.exit(2)`. _(Closed: `STSRefusalError` added in `src/bot.ts`; `connect()` throws it instead of `process.exit(2)`; `main().catch` in `src/index.ts` detects the type, runs `runBotShutdown()` (db.close, plugin teardown, queue drain), then exits with `err.exitCode === 2`.)_
 
 - [x] **[W-BOTSTART] `Bot.start()` does not resolve until first registration succeeds** [verified]
   - **File:** `src/core/connection-lifecycle.ts:174-184,319-322`, `src/bot.ts:1415`
@@ -215,13 +215,13 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
   - **Demotion reason:** The inner work is already idempotent (acknowledged by the original analysis). The race against `process.exit(0)` is theoretical; worst case is a slightly-uncleaner exit on operator double-Ctrl-C.
   - **Remediation:** Top-of-handler `if (signalHandled) return; signalHandled = true;`. Same for SIGINT.
 
-- [ ] **[W-FATALEXIT] `unhandledRejection` → `fatalExit` chain re-rejects when `bot.shutdown()` throws**
+- [x] **[W-FATALEXIT] `unhandledRejection` → `fatalExit` chain re-rejects when `bot.shutdown()` throws**
   - **File:** `src/index.ts:152-158`, `src/process-handlers.ts:35-51`
   - **Pattern:** Detached promise / shutdown ordering
   - **Scenario:** A plugin's `unhandledRejection` triggers `fatalExit`. `runBotShutdown().finally(() => process.exit(1))`. If `bot.shutdown()` throws, `shutdownWithTimeout`'s `Promise.race` rejects, becoming a _new_ `unhandledRejection`.
   - **Impact:** Diagnosis confusion at 3am during incident response. Operators see two stack traces in the journal and the original error is buried.
   - **Demotion reason:** Diagnostic clarity is real but it's not "takes the bot offline." Triggers a fresh `unhandledRejection` only if a plugin's teardown throws AND `fatalExit` was already in flight.
-  - **Remediation:** Inner try/catch in `shutdownWithTimeout`: convert reject to resolve; log the inner failure on a dedicated channel.
+  - **Remediation:** Inner try/catch in `shutdownWithTimeout`: convert reject to resolve; log the inner failure on a dedicated channel. _(Closed: inner try/catch in `shutdownWithTimeout` (`src/process-handlers.ts`) returns sentinel `'failed'` and logs to `console.error` instead of re-rejecting. `runBotShutdown` in `src/index.ts` handles the sentinel and continues the exit chain.)_
 
 - [x] **[W-HEALTHCHECK] Single-file healthcheck conflates liveness with readiness — split into a two-file model**
   - **File:** `src/index.ts:113-116`, `docker-compose.yml`, `docs/multi-instance/docker-compose.yml`
@@ -264,13 +264,13 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 
 ### Phase 9 — Channel state & ISUPPORT (7 items)
 
-- [ ] **W9.1** — RPL*CHANNELMODEIS (324) parses `+l` param without finite/positive guard (`channel-state.ts:577,591`) [verified]. Server with non-numeric param sets `ch.limit = NaN`. \_Fix:* reuse `parseInt + Number.isFinite` guard from `processChannelMode`.
-- [ ] **W9.2** — Mode-array entries with missing `+`/`-` direction silently treated as remove (`channel-state.ts:411,576-602`). _Fix:_ skip-with-warn for malformed direction.
-- [ ] **W9.3** — Reconnect mid-353: race window where `clearAllChannels` runs but late lines re-create empty records (`channel-state.ts:280-308,498-533`).
-- [ ] **W9.4** — NICK collision overwrites without warning (`channel-state.ts:377-406`). Netsplit merge loses tracked account/away. Security-relevant under `$a:` matching.
+- [x] **W9.1** — RPL*CHANNELMODEIS (324) parses `+l` param without finite/positive guard (`channel-state.ts:577,591`) [verified]. Server with non-numeric param sets `ch.limit = NaN`. \_Fix:* reuse `parseInt + Number.isFinite` guard from `processChannelMode`. _(Guard added in `onChannelInfo` at `channel-state.ts:670` — non-positive params now logged and ignored rather than producing NaN.)_
+- [x] **W9.2** — Mode-array entries with missing `+`/`-` direction silently treated as remove (`channel-state.ts:411,576-602`). _Fix:_ skip-with-warn for malformed direction. _(Direction guard in `onMode` at `channel-state.ts:466-467` — malformed entries skipped with warn.)_
+- [x] **W9.3** — Reconnect mid-353: race window where `clearAllChannels` runs but late lines re-create empty records (`channel-state.ts:280-308,498-533`). _(`disconnecting` flag set in `clearAllChannels`, drops late JOIN/NAMES for un-tracked channels, reset on first JOIN/userlist of new session — `channel-state.ts:68-74,302-308,559-563`.)_
+- [x] **W9.4** — NICK collision overwrites without warning (`channel-state.ts:377-406`). Netsplit merge loses tracked account/away. Security-relevant under `$a:` matching. _(Warn emitted at `channel-state.ts:437-440` when `oldLower→newLower` rekey would clobber a distinct existing user record.)_
 - [x] **W9.5** — Per-PART O(channels) iteration to determine residual presence (`channel-state.ts:310-345`) [at-scale]. _Fix:_ reverse `nick → Set<channel>` index. _(scope: scale-deferred.)_
-- [ ] **W9.6** — Drift detection runs only against `configuredChannels` (`channel-presence-checker.ts:80-119`). Run-time `.join #help` is invisible.
-- [ ] **W9.7** — TARGMAX parser silently coerces malformed pairs (`isupport.ts:170-186`). `TARGMAX=PRIVMSG:` (empty) → `Infinity`; `:0` rejected silently.
+- [x] **W9.6** — Drift detection runs only against `configuredChannels` (`channel-presence-checker.ts:80-119`). Run-time `.join #help` is invisible. _(Sweep now adds tracked-but-not-configured ad-hoc channels — `channel-presence-checker.ts:83-96`.)_
+- [x] **W9.7** — TARGMAX parser silently coerces malformed pairs (`isupport.ts:170-186`). `TARGMAX=PRIVMSG:` (empty) → `Infinity`; `:0` rejected silently. _(Parser at `isupport.ts:179-201` rejects colon-less pairs, treats empty value as `Infinity` (server's "unlimited" encoding), clamps positive integers to `TARGMAX_HARD_CEILING=10_000`, and silently skips non-positive/NaN.)_
 
 ### Phase 10 — External-call plugins (6 items)
 

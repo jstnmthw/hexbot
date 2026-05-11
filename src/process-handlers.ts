@@ -29,13 +29,17 @@ export function isRecoverableSocketError(value: unknown): boolean {
 
 /**
  * Run `shutdown()` with a hard deadline. Resolves `'ok'` if shutdown
- * completes first, `'timeout'` if the deadline fires first. Prevents a
- * stuck shutdown from leaving the process in limbo.
+ * completes first, `'timeout'` if the deadline fires first, `'failed'`
+ * if `shutdown()` threw. Prevents a stuck shutdown from leaving the
+ * process in limbo, and prevents a thrown shutdown from re-rejecting up
+ * through `process.on('unhandledRejection')` and re-entering the very
+ * fatalExit chain that called us (W-FATALEXIT: at 3am during an
+ * incident, the second stack trace buries the original error).
  */
 export async function shutdownWithTimeout(
   shutdown: () => Promise<void>,
   timeoutMs: number,
-): Promise<'ok' | 'timeout'> {
+): Promise<'ok' | 'timeout' | 'failed'> {
   // Definite-assignment: the Promise executor runs synchronously, so `timer`
   // is always set before the race begins.
   let timer!: ReturnType<typeof setTimeout>;
@@ -43,8 +47,20 @@ export async function shutdownWithTimeout(
     timer = setTimeout(() => resolve('timeout'), timeoutMs);
     timer.unref();
   });
+  // Inner try/catch on shutdown's own rejection. Returning a sentinel
+  // (`'failed'`) lets the caller log on a dedicated channel without
+  // bouncing the failure back through unhandledRejection.
+  const wrapped = (async (): Promise<'ok' | 'failed'> => {
+    try {
+      await shutdown();
+      return 'ok';
+    } catch (err) {
+      console.error('[bot] shutdown() rejected during exit chain:', err);
+      return 'failed';
+    }
+  })();
   try {
-    return await Promise.race([shutdown().then(() => 'ok' as const), timeout]);
+    return await Promise.race([wrapped, timeout]);
   } finally {
     clearTimeout(timer);
   }

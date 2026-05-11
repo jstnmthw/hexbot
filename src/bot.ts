@@ -124,6 +124,27 @@ function checkDotenvPermissions(): void {
 }
 
 // ---------------------------------------------------------------------------
+// STS refusal error
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown from `Bot.connect()` when a stored IRCv3 STS policy refuses the
+ * current connection (typically plaintext-with-existing-TLS-policy or
+ * downgrade detection). The thrower wants exit code 2 — a permanent-failure
+ * tier the supervisor must not restart-loop on — but going through this
+ * typed error rather than `process.exit(2)` lets `Bot.start()` run the
+ * normal graceful shutdown chain first (db.close, plugin teardown, queue
+ * drain) instead of leaking WAL files and dangling sockets.
+ */
+export class STSRefusalError extends Error {
+  readonly exitCode = 2;
+  constructor(message: string) {
+    super(message);
+    this.name = 'STSRefusalError';
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Bot
 // ---------------------------------------------------------------------------
 
@@ -1596,16 +1617,20 @@ export class Bot {
     //
     // STS refusal is a fatal configuration condition — we must exit with
     // code 2 (permanent-failure tier) so supervisors do not restart-loop
-    // on an unreachable/misconfigured host. A default `throw` would
-    // propagate as code 1 (transient), spinning forever.
+    // on an unreachable/misconfigured host. Throw `STSRefusalError`
+    // rather than `process.exit(2)` so the caller (`Bot.start()`) can
+    // run the normal `shutdown()` chain (db.close, plugin teardown,
+    // queue drain) before the supervisor sees the failure — otherwise
+    // the WAL files and DB just opened above leak across restart.
     try {
       this.applySTSPolicyToConfig();
     } catch (err) {
+      const msg = (err as Error).message;
       this.botLogger.error(
-        `FATAL: STS enforcement refused connection — exiting with code 2 so the supervisor does not restart-loop: ${(err as Error).message}`,
+        `FATAL: STS enforcement refused connection — will exit with code 2 after graceful shutdown: ${msg}`,
       );
       this.eventBus.emit('bot:disconnected', `fatal: sts-refused`);
-      process.exit(2);
+      throw new STSRefusalError(msg);
     }
 
     // Defensive idempotency: if connect() is ever called twice (future STS
