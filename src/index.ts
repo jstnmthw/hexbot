@@ -137,38 +137,16 @@ const instanceName = configPath ? basename(configPath, '.json') : 'default';
 process.title = `hexbot (v${pkgVersion}) - ${instanceName}`;
 
 // ---------------------------------------------------------------------------
-// Boot
-// ---------------------------------------------------------------------------
-
-let bot: Bot | null = null;
-
-async function main(): Promise<void> {
-  // Liveness heartbeat starts immediately and runs unconditionally — its job
-  // is to prove the event loop is responsive, not that IRC is reachable. It
-  // ticks during reconnect backoff, plugin reloads, and the cold-start
-  // window before `bot:connected` ever fires.
-  startAliveHeartbeat();
-
-  bot = new Bot(configPath);
-
-  // Wire readiness signal to connection events before start() so the initial
-  // bot:connected is not missed. Track under the 'bot' owner so shutdown's
-  // removeByOwner unwires us — the closures live for the bot's lifetime by
-  // design.
-  bot.eventBus.trackListener('bot', 'bot:connected', markConnected);
-  bot.eventBus.trackListener('bot', 'bot:disconnected', markDisconnected);
-
-  await bot.start();
-
-  if (useRepl) {
-    const repl = new BotREPL(bot, bot.logger);
-    repl.start();
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Signal / error handlers
 // ---------------------------------------------------------------------------
+//
+// Handlers register BEFORE main() so a SIGTERM that lands during the cold-start
+// window (a fast-and-angry orchestrator that kills the container while
+// loadAll() is still walking the plugin directory) hits a real handler,
+// not Node's default. `bot` is null until main() assigns it; the handlers
+// already null-check it so a pre-bot signal just exits cleanly.
+
+let bot: Bot | null = null;
 
 // Hard cap on any shutdown path — prevents the process hanging indefinitely
 // when a subsystem's cleanup stalls (stuck socket drain, blocked flush, etc).
@@ -217,6 +195,12 @@ process.on('SIGINT', () => {
 process.on('SIGTERM', () => {
   gracefulShutdown('SIGTERM');
 });
+
+// Surface MaxListenersExceededWarning and similar so a leaked-listener
+// regression is visible without grepping debug logs. `'beforeExit'` rarely
+// fires usefully in this process shape (timers + sockets pin the loop), so
+// we deliberately skip it.
+process.on('warning', (w) => console.warn('[node-warning]', w.name, w.message));
 
 // Bounded rate limiter on recoverable socket-read swallowing. If the bot
 // ever ends up in a tight error loop (server is hanging up immediately
@@ -277,6 +261,34 @@ process.on('unhandledRejection', (reason) => {
   }
   fatalExit('Unhandled rejection', reason);
 });
+
+// ---------------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------------
+
+async function main(): Promise<void> {
+  // Liveness heartbeat starts immediately and runs unconditionally — its job
+  // is to prove the event loop is responsive, not that IRC is reachable. It
+  // ticks during reconnect backoff, plugin reloads, and the cold-start
+  // window before `bot:connected` ever fires.
+  startAliveHeartbeat();
+
+  bot = new Bot(configPath);
+
+  // Wire readiness signal to connection events before start() so the initial
+  // bot:connected is not missed. Track under the 'bot' owner so shutdown's
+  // removeByOwner unwires us — the closures live for the bot's lifetime by
+  // design.
+  bot.eventBus.trackListener('bot', 'bot:connected', markConnected);
+  bot.eventBus.trackListener('bot', 'bot:disconnected', markDisconnected);
+
+  await bot.start();
+
+  if (useRepl) {
+    const repl = new BotREPL(bot, bot.logger);
+    repl.start();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Start

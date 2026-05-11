@@ -73,15 +73,19 @@ export function init(api: PluginAPI): void {
     },
   ]);
 
-  // Snapshot the cooldown / reply mode at init so the cooldown map and
-  // sweep tick agree on the same window for the life of this load. The
-  // `header` / `footer` / `compact_index` reads happen per-request so a
-  // `.set help compact_index false` takes effect on the next !help.
-  // `cooldown_ms` honours an explicit `0` (cooldown disabled) — `||` would
-  // collapse 0 onto the default and silently re-enable the gate.
-  const cooldownMs = api.settings.isSet('cooldown_ms')
-    ? api.settings.getInt('cooldown_ms')
-    : DEFAULT_COOLDOWN_MS;
+  /**
+   * Read `cooldown_ms` from settings on every check rather than snapshotting
+   * at init. A `.set help cooldown_ms <new>` should take effect immediately
+   * on the next `!help` — snapshotting would otherwise leave the cooldown
+   * stuck at the load-time value while the header/footer/compact_index reads
+   * (which are per-request) diverge against it. Honours an explicit `0`
+   * (cooldown disabled) — `||` would collapse onto the default.
+   */
+  function getCooldownMs(): number {
+    return api.settings.isSet('cooldown_ms')
+      ? api.settings.getInt('cooldown_ms')
+      : DEFAULT_COOLDOWN_MS;
+  }
   const rawReplyType = api.settings.getString('reply_type');
   const replyType: ReplyType =
     rawReplyType === 'privmsg' || rawReplyType === 'channel_notice' ? rawReplyType : 'notice';
@@ -140,6 +144,7 @@ export function init(api: PluginAPI): void {
     // can spoof ident on non-identd networks, but on an identd network or
     // against a services cloak this is effectively per-user.
     const now = Date.now();
+    const cooldownMs = getCooldownMs();
     const cooldownKey = `${ctx.ident}@${api.ircLower(ctx.hostname)}`;
     const last = cooldowns.get(cooldownKey);
     if (last !== undefined && now - last < cooldownMs) {
@@ -182,6 +187,7 @@ export function init(api: PluginAPI): void {
   // regardless of volume.
   api.bind('time', '-', '300', () => {
     const now = Date.now();
+    const cooldownMs = getCooldownMs();
     for (const [k, t] of cooldowns) {
       if (now - t >= cooldownMs) cooldowns.delete(k);
     }

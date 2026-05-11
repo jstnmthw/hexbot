@@ -23,6 +23,15 @@ import type { LinkFrame } from './types.js';
 /** Maximum frame size in bytes. Frames exceeding this are protocol errors. */
 export const MAX_FRAME_SIZE = 64 * 1024;
 
+/**
+ * Per-frame cap during the pre-handshake window. A hostile peer cannot
+ * otherwise drive `JSON.parse` + `sanitizeFrame` on 64 KB junk for the
+ * full handshake-timeout duration — at line rate this is unbounded CPU
+ * before any authentication has occurred. 4 KB is far above any
+ * legitimate HELLO_CHALLENGE / HELLO frame (~ a few hundred bytes).
+ */
+export const MAX_PRE_HANDSHAKE_FRAME_SIZE = 4096;
+
 /** Frames handled exclusively by the hub — never fanned out to other leaves.
  *  SECURITY: Permission-mutation frames (ADDUSER, SETFLAGS, DELUSER) MUST be
  *  hub-only. The hub is the single source of truth for permissions and broadcasts
@@ -193,18 +202,60 @@ export function sanitizeFrame(obj: Record<string, unknown>, depth = 0): void {
 // BotLinkProtocol — socket wrapper with JSON frame serialization
 // ---------------------------------------------------------------------------
 
+/**
+ * Soft cap on frames in flight per protocol instance. Inbound frames past
+ * this depth are dropped with a warn log until the in-flight count drains.
+ * Protects against a peer (or a slow consumer) that produces frames faster
+ * than they can be handled — without this the readline `'line'` queue
+ * grows unbounded inside Node's internal buffers and the closed-side cleanup
+ * path takes longer to converge.
+ */
+const MAX_PENDING_FRAMES = 1000;
+
 export class BotLinkProtocol {
   private socket: Socket;
   private rl: import('readline').Interface | null = null;
   private logger: LoggerLike | null;
   private closed = false;
+  /**
+   * When true, inbound frames larger than {@link MAX_PRE_HANDSHAKE_FRAME_SIZE}
+   * are dropped without parsing and {@link onPreHandshakeOversize} fires.
+   * Switched off via {@link clearPreHandshake} once the handshake has
+   * accepted, after which the standard 64 KB cap takes over.
+   */
+  private preHandshake = false;
+  /**
+   * In-flight inbound frames — incremented on enqueue (before onFrame
+   * runs), decremented on dispatch completion. Goes to zero between
+   * synchronous consumers; an async (Promise-returning) `onFrame` keeps
+   * the counter raised until the Promise settles, providing real
+   * back-pressure once any consumer takes work off-thread.
+   */
+  private pendingFrames = 0;
+  /**
+   * Once-per-overflow latch. We warn when the cap is first exceeded and
+   * stay silent for the rest of the overflow burst — under sustained
+   * overload an unlatched warn would itself flood the logs. Cleared when
+   * the in-flight count drains back below the cap.
+   */
+  private overflowLogged = false;
 
   /** Fired when a valid frame is received. */
-  onFrame: ((frame: LinkFrame) => void) | null = null;
+  // Return type is `unknown` so synchronous handlers that incidentally
+  // return a value (e.g. `push()`'s number) still type-check; the only
+  // shape the queue logic actually inspects is `Promise`-shape via a
+  // duck-typed `.then` check.
+  onFrame: ((frame: LinkFrame) => unknown) | null = null;
   /** Fired when the connection closes (explicit or remote). */
   onClose: (() => void) | null = null;
   /** Fired on socket error. */
   onError: ((err: Error) => void) | null = null;
+  /**
+   * Fired when an inbound frame exceeds the pre-handshake cap. The hub
+   * uses this hook to record an `auth-fail` audit row before the socket
+   * is destroyed, since the connection has not yet identified a botname.
+   */
+  onPreHandshakeOversize: ((bytes: number) => void) | null = null;
 
   constructor(socket: Socket, logger?: LoggerLike | null) {
     this.socket = socket;
@@ -217,14 +268,44 @@ export class BotLinkProtocol {
       /* v8 ignore next -- race guard: socket may deliver buffered lines after close */
       if (this.closed) return;
 
+      const lineBytes = Buffer.byteLength(line, 'utf8');
+
+      // Pre-handshake cap (4 KB). Any frame this size before authentication
+      // is either malformed or hostile — destroy immediately so we don't
+      // burn CPU on JSON.parse + sanitizeFrame for an attacker streaming
+      // junk during the handshake-timeout window.
+      if (this.preHandshake && lineBytes > MAX_PRE_HANDSHAKE_FRAME_SIZE) {
+        this.logger?.warn(
+          `Pre-handshake frame exceeds ${MAX_PRE_HANDSHAKE_FRAME_SIZE}B — destroying socket`,
+        );
+        this.onPreHandshakeOversize?.(lineBytes);
+        this.close();
+        return;
+      }
+
       // Per-line cap before JSON.parse — keeps a hostile peer from forcing
       // us to allocate (and walk) a multi-MB string just to reject it as
       // oversized. Matches the outbound cap below so both sides agree on
       // the wire-level frame ceiling.
-      if (Buffer.byteLength(line, 'utf8') > MAX_FRAME_SIZE) {
+      if (lineBytes > MAX_FRAME_SIZE) {
         this.logger?.error('Frame exceeds 64KB limit, dropping connection');
         this.send({ type: 'ERROR', code: 'FRAME_TOO_LARGE', message: 'Frame exceeds 64KB limit' });
         this.close();
+        return;
+      }
+
+      // Pending-frame queue cap. With a synchronous `onFrame` consumer
+      // the counter only ever sits at 1; with an async consumer it
+      // climbs while Promises are in flight. Either way, dropping past
+      // 1000 in-flight frames keeps a slow consumer or a hostile peer
+      // from growing the readline-internal queue past a sane bound.
+      if (this.pendingFrames >= MAX_PENDING_FRAMES) {
+        if (!this.overflowLogged) {
+          this.overflowLogged = true;
+          this.logger?.warn(
+            `Pending-frame queue exceeded ${MAX_PENDING_FRAMES} — dropping inbound frames until drained`,
+          );
+        }
         return;
       }
 
@@ -245,7 +326,35 @@ export class BotLinkProtocol {
           return;
         }
         sanitizeFrame(frame);
-        this.onFrame?.(frame);
+        const handler = this.onFrame;
+        if (!handler) return;
+        this.pendingFrames++;
+        const decrement = (): void => {
+          this.pendingFrames = Math.max(0, this.pendingFrames - 1);
+          if (this.pendingFrames < MAX_PENDING_FRAMES) this.overflowLogged = false;
+        };
+        let result: unknown;
+        try {
+          result = handler(frame);
+        } catch (err) {
+          // Synchronous throw: decrement immediately and re-throw so the
+          // caller's catch (above) can log it as malformed.
+          decrement();
+          throw err;
+        }
+        // Duck-typed Promise check: if `onFrame` is async, await the
+        // settle to keep `pendingFrames` raised for the in-flight work.
+        const maybePromise = result as { then?: unknown; finally?: (cb: () => void) => unknown };
+        if (
+          maybePromise &&
+          typeof maybePromise === 'object' &&
+          typeof maybePromise.then === 'function' &&
+          typeof maybePromise.finally === 'function'
+        ) {
+          maybePromise.finally(decrement);
+        } else {
+          decrement();
+        }
       } catch {
         this.logger?.warn('Malformed JSON frame');
       }

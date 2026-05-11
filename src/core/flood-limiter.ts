@@ -143,13 +143,18 @@ export class FloodLimiter {
 
     // User is flooding.
     if (!this.warned.has(key)) {
-      // FIFO-evict the oldest entry before adding when capped. JavaScript Sets
-      // preserve insertion order (ES2015 §23.2 — `[[SetData]]` iteration), so
-      // `values().next()` yields the earliest-warned key without us having to
-      // track insertion order separately.
+      // Cap-hit short-circuit: when the warned set is full, skip adding
+      // a new entry rather than FIFO-evicting an existing one. The
+      // periodic prune sweep (`prune()`) drops stale entries so the cap
+      // is temporary, and a missed warning is far less harmful than the
+      // duplicate-notice loop FIFO eviction creates: evicting an
+      // already-warned flooder lets them trip the warning notice again
+      // on rotation, breaking the once-per-window contract (W2.6).
       if (this.warned.size >= MAX_WARNED_KEYS) {
-        const oldest = this.warned.values().next().value;
-        if (oldest !== undefined) this.warned.delete(oldest);
+        this.logger?.debug(
+          `[dispatcher] flood: warned-set at cap (${MAX_WARNED_KEYS}); skipping notice for ${key} (${kind})`,
+        );
+        return { blocked: true, firstBlock: false };
       }
       this.warned.add(key);
       this.noticeProvider?.sendNotice(

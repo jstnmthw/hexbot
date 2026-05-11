@@ -50,6 +50,10 @@ class MockChannelState {
   getChannel(name: string): unknown | undefined {
     return this.channels.has(name.toLowerCase()) ? { name } : undefined;
   }
+
+  getAllChannels(): Array<{ name: string }> {
+    return Array.from(this.channels).map((name) => ({ name }));
+  }
 }
 
 // ---------------------------------------------------------------------------

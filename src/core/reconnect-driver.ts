@@ -115,6 +115,13 @@ export function createReconnectDriver(deps: ReconnectDriverDeps): ReconnectDrive
   let attemptCount = 0;
   let nextAttemptAt: number | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  // W1.2: a single SASL/auth-fatal close used to take the bot down with no
+  // retry budget. SASL races on services restart / lag are real but
+  // transient — give the policy 3 consecutive fatals (without an
+  // intervening successful registration) before honoring the exit. The
+  // counter resets on `onConnected()`.
+  let consecutiveFatals = 0;
+  const FATAL_BUDGET = 3;
 
   function clearRetryTimer(): void {
     if (retryTimer !== null) {
@@ -181,12 +188,34 @@ export function createReconnectDriver(deps: ReconnectDriverDeps): ReconnectDrive
       lastError = 'label' in policy && policy.label ? policy.label : null;
 
       if (policy.tier === 'fatal') {
-        logger.error(`FATAL: ${policy.label} — exiting with code ${policy.exitCode}`);
+        consecutiveFatals++;
+        if (consecutiveFatals < FATAL_BUDGET) {
+          // W1.2: under the budget — treat as rate-limited so the next
+          // attempt waits the long backoff while services / cert / DNS
+          // either heal or surface a definitive cause. The driver still
+          // exits if the same fatal class persists across the budget.
+          logger.warn(
+            `Fatal-class disconnect (${policy.label}) — attempt ${consecutiveFatals}/${FATAL_BUDGET} ` +
+              `under retry budget; treating as rate-limited.`,
+          );
+          eventBus.emit('bot:disconnected', `fatal-budget: ${policy.label}`);
+          status = 'reconnecting';
+          scheduleRetry('rate-limited', `fatal-budget: ${policy.label}`);
+          return;
+        }
+        logger.error(
+          `FATAL: ${policy.label} (${consecutiveFatals}/${FATAL_BUDGET} consecutive fatals) — ` +
+            `exiting with code ${policy.exitCode}`,
+        );
         eventBus.emit('bot:disconnected', `fatal: ${policy.label}`);
         status = 'stopped';
         nextAttemptAt = null;
         exit(policy.exitCode);
         return;
+      } else {
+        // Non-fatal disconnect — reset the fatal budget so a future fatal
+        // gets a fresh 3-attempt budget.
+        consecutiveFatals = 0;
       }
 
       // rate-limited flips to `degraded` after DEGRADED_THRESHOLD failures.
@@ -207,6 +236,7 @@ export function createReconnectDriver(deps: ReconnectDriverDeps): ReconnectDrive
       lastError = null;
       lastErrorTier = null;
       consecutiveFailures = 0;
+      consecutiveFatals = 0;
       attemptCount = 0;
       nextAttemptAt = null;
     },

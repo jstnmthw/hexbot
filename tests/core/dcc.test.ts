@@ -1939,7 +1939,9 @@ describe('DCCManager.openSession prompt integration', () => {
     mgr.onAuthFailure('Eve!eve@evil.host', 'eve');
     mgr.onAuthFailure('Eve!eve@evil.host', 'eve');
 
-    expect(db.getModLog({ action: 'auth-fail' })).toHaveLength(2);
+    // Per-identity rate gate (60s window) collapses repeat failures to one
+    // auth-fail row; the suppressed count rolls into the auth-lockout row.
+    expect(db.getModLog({ action: 'auth-fail' })).toHaveLength(1);
     const lockoutRows = db.getModLog({ action: 'auth-lockout' });
     expect(lockoutRows).toHaveLength(1);
     expect(lockoutRows[0].target).toBe('eve');

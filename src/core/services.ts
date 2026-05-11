@@ -861,7 +861,17 @@ export class Services {
           clearTimeout(this.ghostTimer);
           this.ghostTimer = null;
         }
-        if (this.pendingGhostResolver === finish) this.pendingGhostResolver = null;
+        // Always null `pendingGhostResolver` on finish — both the
+        // ack-arrival path and the timeout path. If a second reclaim
+        // has already replaced the resolver between timer-fire and
+        // here, the equality check skips the null (we don't clobber
+        // the new race's resolver). If we're still the active race,
+        // null so a late NickServ notice that races past the timer
+        // sees `pendingGhostResolver === null` and skips its
+        // invocation. (W6.2)
+        if (this.pendingGhostResolver === finish) {
+          this.pendingGhostResolver = null;
+        }
         resolve();
       };
       this.pendingGhostResolver = finish;
@@ -877,6 +887,13 @@ export class Services {
    * cleared when either the ack arrives or the timeout fires. The notice
    * handler matches GHOST-success / already-offline phrases and calls this
    * to unblock the reclaim early.
+   *
+   * The reclaim's `finish()` closure nulls this on both fast-path (ack)
+   * and slow-path (timer) so a NickServ notice that arrives after the
+   * race has resolved sees `pendingGhostResolver === null` and short-
+   * circuits at the handler-side null check (W6.2). The equality guard
+   * on finish protects against the rare case where a second reclaim
+   * has already replaced the resolver between ack-arrival and finish.
    */
   private pendingGhostResolver: (() => void) | null = null;
 

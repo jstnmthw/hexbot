@@ -287,6 +287,16 @@ export function pruneExpiredState(state: SharedState, takeoverWindowMs?: number)
       state.lastKnownModes.delete(key);
     }
   }
+  // Stopnethack split window: the inline check in `stopnethack.ts` only
+  // fires when a `+o` mode event happens to arrive. On a quiet network
+  // with no further mode events after the split, `splitActive` would
+  // sit `true` past its expiry and the `splitOpsSnapshot` map would
+  // pin the pre-split op set indefinitely. The 60s sweep is the
+  // backstop.
+  if (state.splitActive && now >= state.splitExpiry) {
+    state.splitActive = false;
+    state.splitOpsSnapshot.clear();
+  }
   state.cycles.pruneExpired(now, PENDING_STATE_TTL_MS);
 }
 

@@ -135,6 +135,14 @@ export class RangePortAllocator implements PortAllocator {
   }
 }
 
+/**
+ * Bot-side connection-state snapshot surfaced to DCC sessions. Mirrors the
+ * subset of `ReconnectState` that the prompt path actually needs. Modelled
+ * locally (rather than re-exported from `reconnect-driver.ts`) to keep
+ * `dcc/index.ts`'s import surface minimal.
+ */
+export type DCCReconnectStatus = 'connected' | 'reconnecting' | 'degraded' | 'stopped';
+
 /** The subset of DCCManager that DCCSession depends on. */
 export interface DCCSessionManager {
   getSessionList(): Array<{ handle: string; nick: string; connectedAt: number }>;
@@ -144,6 +152,14 @@ export interface DCCSessionManager {
   notifyPartyPart(handle: string, nick: string): void;
   getBotName(): string;
   getStats(): BannerStats | null;
+  /**
+   * Snapshot of the bot's IRC reconnect state — surfaced to DCC sessions
+   * so an operator on a still-open console can see `[disconnected]`
+   * while the bot is mid-reconnect rather than discovering it via a
+   * silently-failing command. `null` when the manager has no reconnect
+   * driver wired up (test fixtures, dev preview).
+   */
+  getReconnectStatus?(): DCCReconnectStatus | null;
   onRelayEnd?: ((handle: string, targetBot: string) => void) | null;
   /**
    * Re-fetch the live `password_hash` for `handle` from the underlying
@@ -306,6 +322,13 @@ export interface DCCManagerDeps {
    * working, but the production wiring in `bot.ts` always passes it.
    */
   eventBus?: BotEventBus | null;
+  /**
+   * Snapshot getter for the bot's IRC reconnect state. Surfaced to DCC
+   * sessions so the prompt path can render `[disconnected]` while the
+   * bot is mid-reconnect. Returns `null` when the bot has no driver
+   * (e.g. early init or dev preview) — DCC then assumes connected.
+   */
+  getReconnectStatus?: () => DCCReconnectStatus | null;
 }
 
 export interface PendingDCC {
@@ -820,6 +843,13 @@ export class DCCSession implements DCCSessionEntry {
       return;
     }
 
+    // Surface bot-side IRC reconnect state on each input line. An operator
+    // on a still-open DCC console would otherwise issue commands silently
+    // into the void while the bot is mid-reconnect. The notice is emitted
+    // once per line (not as a sticky prompt — DCC has no readline-style
+    // prompt the bot can paint).
+    this.maybeWriteReconnectNotice();
+
     // Bot command
     if (trimmed.startsWith('.')) {
       await this.commandHandler.execute(trimmed, {
@@ -841,6 +871,19 @@ export class DCCSession implements DCCSessionEntry {
     // Party line broadcast
     this.writeLine(`<${this.handle}> ${trimmed}`);
     this.manager.broadcast(this.handle, trimmed);
+  }
+
+  /**
+   * Emit a one-line `[disconnected]` notice when the bot is mid-reconnect.
+   * Called from the active-phase line handler so the operator sees the
+   * state on every command they type while IRC is down. Silent when the
+   * manager has no reconnect-status hook (test fixtures) or the bot is
+   * connected.
+   */
+  private maybeWriteReconnectNotice(): void {
+    const status = this.manager.getReconnectStatus?.() ?? null;
+    if (status === null || status === 'connected') return;
+    this.writeLine(`*** [${status}] bot is not currently connected to IRC.`);
   }
 
   private resetIdle(): void {
@@ -1085,6 +1128,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   private version: string;
   private logger: LoggerLike | null;
   private getStatsFn: (() => BannerStats) | null;
+  private getReconnectStatusFn: (() => DCCReconnectStatus | null) | null;
   private db: BotDatabase | null;
   private eventBus: BotEventBus | null;
   // The typed `BotEvents` signatures collide with `BotEventBus.off`'s
@@ -1142,6 +1186,22 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
    */
   private readonly mirrorRateLimiter: MirrorRateLimiter = createMirrorRateLimiter();
 
+  /**
+   * Per-identity rate gate on the `auth-fail` mod_log write. A brute-force
+   * attacker cycling 5 attempts per window would otherwise produce 5
+   * synchronous SQLite inserts per identity per attempt cycle. We collapse
+   * those to at most one row per identity per 60s window; the suppressed
+   * count is folded into the `auth-lockout` row so audit history still
+   * shows the total attempts. Cleared on lockout-lift and on the periodic
+   * sweep alongside the auth tracker.
+   */
+  private readonly authFailGate: Map<
+    string,
+    { lastWriteTs: number; suppressedSinceWrite: number }
+  > = new Map();
+  /** Sliding window for the auth-fail gate. Matches the audit's prescribed 60s. */
+  private static readonly AUTH_FAIL_GATE_WINDOW_MS = 60_000;
+
   private getBootTs: (() => number) | null;
 
   constructor(deps: DCCManagerDeps) {
@@ -1155,6 +1215,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     this.botNick = deps.botNick;
     this.logger = deps.logger?.child('dcc') ?? null;
     this.getStatsFn = deps.getStats ?? null;
+    this.getReconnectStatusFn = deps.getReconnectStatus ?? null;
     this.sessionStore = new DCCSessionStore(deps.sessions ?? new Map());
     this.portAllocator = deps.portAllocator ?? new RangePortAllocator(deps.config.port_range);
     this.pending = deps.pending ?? new Map();
@@ -1163,6 +1224,17 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     this.db = deps.db ?? null;
     this.eventBus = deps.eventBus ?? null;
     this.getBootTs = deps.getBootTs ?? null;
+  }
+
+  /**
+   * Snapshot of the bot's IRC reconnect state — surfaced to DCC sessions
+   * so the prompt path can render `[disconnected]` while the bot is
+   * mid-reconnect. Returns `null` when no driver is wired (test fixtures,
+   * dev preview); DCCSession defaults to "connected" semantics in that
+   * case so the prefix stays out of fixture output.
+   */
+  getReconnectStatus(): DCCReconnectStatus | null {
+    return this.getReconnectStatusFn?.() ?? null;
   }
 
   /** Read-only access to the console flag store — used by `.console <handle>`. */
@@ -1243,26 +1315,42 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
       }
     }
     const status = this.authTracker.recordFailure(key);
-    // Always emit an auth-fail row — never the attempted password, only the
-    // remote-peer key (`ip:port`) and the handle that was being authenticated.
-    tryLogModAction(
-      this.db,
-      {
-        action: 'auth-fail',
-        source: 'dcc',
-        target: handle,
-        outcome: 'failure',
-        metadata: { peer: key, failures: status.failures },
-      },
-      this.logger,
-    );
+    // Per-identity rate gate: at most one `auth-fail` row per 60s window.
+    // A brute-force storm against a single identity would otherwise drive
+    // O(maxFailures) synchronous SQLite inserts per cycle; collapsing them
+    // here keeps the audit log meaningful without amplifying the storm.
+    const now = Date.now();
+    const gate = this.authFailGate.get(key);
+    const windowMs = DCCManager.AUTH_FAIL_GATE_WINDOW_MS;
+    if (gate && now - gate.lastWriteTs < windowMs) {
+      gate.suppressedSinceWrite++;
+    } else {
+      // Either no prior write or the window has lapsed — emit the row and
+      // reset the suppression counter. Never logs the attempted password,
+      // only the remote-peer key (`ip:port`) and the handle.
+      tryLogModAction(
+        this.db,
+        {
+          action: 'auth-fail',
+          source: 'dcc',
+          target: handle,
+          outcome: 'failure',
+          metadata: { peer: key, failures: status.failures },
+        },
+        this.logger,
+      );
+      this.authFailGate.set(key, { lastWriteTs: now, suppressedSinceWrite: 0 });
+    }
     if (status.locked) {
       const seconds = Math.ceil((status.lockedUntil - Date.now()) / 1000);
       this.logger?.warn(
         `DCC auth lockout: ${key} (handle=${handle}) locked for ~${seconds}s after repeated failures`,
       );
       // A distinct auth-lockout row makes brute-force attempts queryable as
-      // a single event instead of one row per individual failure.
+      // a single event instead of one row per individual failure. Fold
+      // the suppressed count into the metadata so audit reviewers can see
+      // the total attempts that fed into the lockout, not just the rows.
+      const totalSuppressed = this.authFailGate.get(key)?.suppressedSinceWrite ?? 0;
       tryLogModAction(
         this.db,
         {
@@ -1271,10 +1359,19 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
           target: handle,
           outcome: 'failure',
           reason: `locked for ~${seconds}s`,
-          metadata: { peer: key, lockedUntil: status.lockedUntil },
+          metadata: {
+            peer: key,
+            lockedUntil: status.lockedUntil,
+            suppressedFailRows: totalSuppressed,
+          },
         },
         this.logger,
       );
+      // Lockout fired — drop the gate so the post-lockout window starts
+      // fresh. Subsequent attempts after the lockout lifts will get their
+      // own `auth-fail` row again (matches the audit's "cleared via
+      // lockout-lift" prescription).
+      this.authFailGate.delete(key);
     }
   }
 
@@ -1304,7 +1401,18 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
 
     // Periodic sweep of the auth tracker — mirrors BotLinkAuthManager.
     // Without this, failed-DCC-auth hostmasks accumulate forever.
-    this.authSweepTimer = setInterval(() => this.authTracker.sweep(), 300_000);
+    // Also drains expired entries from the auth-fail mod_log gate so
+    // long-idle identities don't pin gate state forever.
+    this.authSweepTimer = setInterval(() => {
+      this.authTracker.sweep();
+      const now = Date.now();
+      const windowMs = DCCManager.AUTH_FAIL_GATE_WINDOW_MS;
+      for (const [key, entry] of this.authFailGate) {
+        if (now - entry.lastWriteTs >= windowMs) {
+          this.authFailGate.delete(key);
+        }
+      }
+    }, 300_000);
     this.authSweepTimer.unref();
 
     // Subscribe to the global logger so every log line gets a chance to
@@ -1785,10 +1893,20 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     const status = this.authTracker.check(key);
     if (status.locked) {
       const seconds = Math.max(1, Math.ceil((status.lockedUntil - Date.now()) / 1000));
-      socket.write(
-        `DCC CHAT: too many failed password attempts — locked for ~${seconds}s. Try again later.\r\n`,
-      );
-      socket.destroy();
+      // Wrap the rejection write + destroy in try/catch: a late RST during
+      // the handshake window can fire `'error'` after the once-listener
+      // self-removes, so a `socket.write` throw on the rejection path would
+      // escape as an unhandled error.
+      try {
+        socket.write(
+          `DCC CHAT: too many failed password attempts — locked for ~${seconds}s. Try again later.\r\n`,
+        );
+        socket.destroy();
+      } catch (err) {
+        this.logger?.debug(
+          `DCC CHAT: lockout-rejection write failed for ${key}: ${(err as Error).message}`,
+        );
+      }
       this.logger?.warn(
         `DCC CHAT: rejected ${pending.user.handle} (${key}) — locked out for ${seconds}s`,
       );
@@ -1798,11 +1916,19 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     // Migration gate — no password means no DCC until an admin runs .chpass.
     const passwordHash = pending.user.password_hash;
     if (!passwordHash) {
-      socket.write(
-        'DCC CHAT: this handle has no password set. Ask an admin to run ' +
-          '.chpass <handle> <newpass> from the REPL, then reconnect.\r\n',
-      );
-      socket.destroy();
+      // Same posture as the lockout path above — a late RST during the
+      // pre-handshake window must not escape as an unhandled error.
+      try {
+        socket.write(
+          'DCC CHAT: this handle has no password set. Ask an admin to run ' +
+            '.chpass <handle> <newpass> from the REPL, then reconnect.\r\n',
+        );
+        socket.destroy();
+      } catch (err) {
+        this.logger?.debug(
+          `DCC CHAT: no-password rejection write failed for ${key}: ${(err as Error).message}`,
+        );
+      }
       this.logger?.info(
         `DCC CHAT: rejected ${pending.user.handle} (${key}) — no password_hash on file`,
       );

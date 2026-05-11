@@ -240,10 +240,21 @@ export class MessageQueue {
    * applies to the running drain loop without a process restart. Never
    * exceeds the in-flight budget — pending sends already accounted
    * against the previous capacity continue to drain at the new pace.
+   *
+   * Invalid inputs (zero, negative, non-finite) are loudly logged and
+   * dropped — silently coercing them used to leave the queue running at
+   * the constructor default, which surprised operators who set a deliberate
+   * value via `.set core queue.rate 0` and saw 2 msg/s on the wire instead.
    */
   setRate(rate: number, burst: number): void {
-    if (!Number.isFinite(rate) || rate <= 0) return;
-    if (!Number.isFinite(burst) || burst <= 0) return;
+    if (!Number.isFinite(rate) || rate <= 0) {
+      this.logger?.warn(`setRate: rate of ${rate} rejected, keeping current ${this.rate} msg/s`);
+      return;
+    }
+    if (!Number.isFinite(burst) || burst <= 0) {
+      this.logger?.warn(`setRate: burst of ${burst} rejected, keeping current ${this.burst}`);
+      return;
+    }
     this.rate = rate;
     this.burst = burst;
     this.costMs = Math.max(1, Math.floor(1000 / rate));

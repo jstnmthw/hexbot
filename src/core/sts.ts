@@ -130,8 +130,16 @@ export class STSStore {
     /* v8 ignore next */
     if (typeof v.expiresAt !== 'number' || typeof v.duration !== 'number') return null;
     if (v.expiresAt <= now) {
-      // Expired — prune lazily so we stop returning it.
-      this.db.del(STS_DB_NAMESPACE, key);
+      // Expired — prune lazily so we stop returning it. A transient
+      // SQLITE_BUSY at boot (concurrent reader / WAL checkpoint) would
+      // otherwise propagate out of `get()` and through `Bot.start()`,
+      // wedging start on a recoverable contention. The lazy prune is
+      // cosmetic; the next call retries. (W1.4)
+      try {
+        this.db.del(STS_DB_NAMESPACE, key);
+      } catch {
+        /* ignore — next get() will retry the prune */
+      }
       return null;
     }
     const result: STSRecord = {

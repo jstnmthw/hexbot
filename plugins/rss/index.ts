@@ -62,6 +62,21 @@ function errorMessage(err: unknown): string {
   return raw.replace(/[\x00-\x1F\x7F]/g, '');
 }
 
+/**
+ * Deterministic per-feed millisecond offset within `intervalMs`. djb2 hash
+ * keeps the calculation stable across reloads (same feed id → same offset)
+ * and cheap (no crypto). Used to stagger the first announce poll so a
+ * batch of feeds added in one operator session don't tick on the same
+ * boundary every interval.
+ */
+function feedOffsetMs(id: string, intervalMs: number): number {
+  let hash = 5381;
+  for (let i = 0; i < id.length; i++) {
+    hash = (hash * 33) ^ id.charCodeAt(i);
+  }
+  return Math.abs(hash) % Math.max(1, intervalMs);
+}
+
 // ---------------------------------------------------------------------------
 // Plugin exports
 // ---------------------------------------------------------------------------
@@ -139,6 +154,12 @@ export async function init(api: PluginAPI): Promise<void> {
     }
   }
 
+  // Track whether each feed has done at least one announce poll since
+  // init. Until then, the eligibility test uses the per-feed `offset`
+  // rather than the full interval so sibling feeds drift apart. Once a
+  // feed polls, its `lastPoll` timestamp diverges naturally and the
+  // regular `now - lastPoll >= interval` cadence preserves the stagger.
+  const firstPollDone = new Set<string>();
   // Single 60s time bind — checks which feeds are due on each tick.
   //
   // Guards:
@@ -148,12 +169,27 @@ export async function init(api: PluginAPI): Promise<void> {
   //     500 for a week) doesn't flood the log stream. After N
   //     consecutive failures, the next attempt is deferred with
   //     exponential backoff.
+  //  3. Deterministic per-feed offset so feeds with the same interval
+  //     don't all tick on the same boundary. Adding 10 hourly feeds at
+  //     once would otherwise produce a 10-feed concurrent fetch every
+  //     hour on the dot — same DNS, same upstream, same announce burst
+  //     on IRC. The offset is derived from the feed id so it stays
+  //     stable across reloads, and only applies until the first
+  //     announce poll runs.
   api.bind('time', '-', '60', async () => {
     const now = Date.now();
     for (const feed of activeFeeds.values()) {
       const lastPoll = getLastPoll(api, feed.id);
       const interval = (feed.interval ?? 3600) * 1000;
-      if (now - lastPoll < interval) continue;
+      // First-announce-poll stagger: require `offset` ms (a deterministic
+      // value in `[0, interval)`) of elapsed time instead of the full
+      // interval. Two feeds with the same interval but different ids
+      // become eligible at different points within the first interval,
+      // so their lastPoll timestamps diverge once they actually fire.
+      // After the first poll the natural `lastPoll + interval` rule
+      // preserves the stagger.
+      const required = firstPollDone.has(feed.id) ? interval : feedOffsetMs(feed.id, interval);
+      if (now - lastPoll < required) continue;
       if (activePolls.has(feed.id)) {
         api.debug(`Skipping tick for "${feed.id}" — previous poll still in flight`);
         continue;
@@ -165,6 +201,11 @@ export async function init(api: PluginAPI): Promise<void> {
       try {
         const items = await pollFeed(api, parser, feed, 'announce', cfg.max_per_poll, fetchOpts);
         circuitBreaker.recordSuccess(feed.id);
+        // Drop the offset gate after the first announce poll lands —
+        // subsequent ticks fall through to the `now - lastPoll < interval`
+        // path, which is naturally staggered now that lastPoll has
+        // diverged across feeds.
+        firstPollDone.add(feed.id);
         const elapsed = Date.now() - startMs;
         api.log(`Polled "${feed.id}" — ${items.length} new item(s) in ${elapsed}ms`);
         if (items.length > 0) {

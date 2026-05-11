@@ -148,14 +148,28 @@ export function handleBotOpped(
   if (modeStr !== '+o' || !api.isBotNick(target)) return false;
 
   const chanKey = api.ircLower(channel);
+  const now = Date.now();
 
-  // Atheme RECOVER cleanup: remove +i +m
-  if (state.pendingRecoverCleanup.has(chanKey)) {
+  // Atheme RECOVER cleanup: remove +i +m. Drop the entry without acting
+  // if it's already expired — a bot that lost ops, RECOVERed, then was
+  // re-opped via natural means many minutes later would otherwise fire
+  // a stale `-im` against a channel that may have been deliberately set
+  // to +i +m by a real op in the interim. The 60s `pruneExpiredState`
+  // sweep drops the entry eventually but a re-op inside the gap was the
+  // race vector.
+  const cleanupExpiresAt = state.pendingRecoverCleanup.get(chanKey);
+  if (cleanupExpiresAt !== undefined) {
     state.pendingRecoverCleanup.delete(chanKey);
-    api.log(`Post-RECOVER cleanup: removing +i +m on ${channel}`);
-    state.scheduleEnforcement(config.enforce_delay_ms, () => {
-      api.mode(channel, '-im');
-    });
+    if (now < cleanupExpiresAt) {
+      api.log(`Post-RECOVER cleanup: removing +i +m on ${channel}`);
+      state.scheduleEnforcement(config.enforce_delay_ms, () => {
+        api.mode(channel, '-im');
+      });
+    } else {
+      api.debug(
+        `Skipping stale post-RECOVER cleanup for ${channel} (expired ${now - cleanupExpiresAt}ms ago)`,
+      );
+    }
   }
 
   // Clear last-known modes after recovery

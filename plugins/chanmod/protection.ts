@@ -153,8 +153,16 @@ export function setupProtection(
     record.count++;
     api.db.set(dbKey, JSON.stringify(record));
 
-    // Use shorter delay when backend handled UNBAN (services need processing time)
-    const useBackendDelay = state.unbanRequested.has(chanKey);
+    // Use shorter delay when backend handled UNBAN (services need processing time).
+    // Skip a stale record — if the prior unban request is past its TTL, services
+    // either never processed it (and won't now) or processed it long enough ago
+    // that we shouldn't shortcut the normal rejoin delay on its account.
+    const unbanExpiresAt = state.unbanRequested.get(chanKey);
+    const useBackendDelay = unbanExpiresAt !== undefined && Date.now() < unbanExpiresAt;
+    if (unbanExpiresAt !== undefined && !useBackendDelay) {
+      // Drop the stale entry now rather than waiting for the next sweep.
+      state.unbanRequested.delete(chanKey);
+    }
     const rejoinDelay = useBackendDelay ? SERVICES_PROCESSING_MS : config.rejoin_delay_ms;
 
     // Schedule rejoin
@@ -246,6 +254,22 @@ export function setupProtection(
         }
       });
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Drop rejoin-attempt KV on successful bot rejoin
+  //
+  // Without this, every successful rejoin-after-kick leaves a per-channel
+  // record in `kv` that's never cleaned up. The map grows monotonically
+  // across reboots — after months of operation against a chronically
+  // hostile channel, it's a pile of dead state. The window-expiry check
+  // in the kick handler does still work (records past
+  // `rejoin_attempt_window_ms` reset to count=0) but the row itself sticks.
+  // ---------------------------------------------------------------------------
+
+  api.bind('join', '-', '*', (ctx) => {
+    if (!api.isBotNick(ctx.nick)) return;
+    api.db.del(`rejoin_attempts:${api.ircLower(ctx.channel)}`);
   });
 
   // ---------------------------------------------------------------------------

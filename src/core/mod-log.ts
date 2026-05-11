@@ -422,14 +422,55 @@ export class ModLog {
     // payloads into metadata; without a cap a single misbehaving
     // plugin can balloon the mod_log table. The truncated marker keeps
     // queries that scan for `truncated:true` discoverable.
-    let metadataJson = metadata == null ? null : JSON.stringify(metadata);
-    if (metadataJson != null && metadataJson.length > 8192) {
-      metadataJson = JSON.stringify({
-        truncated: true,
-        original_bytes: metadataJson.length,
-        head: metadataJson.slice(0, 1024),
-      });
+    //
+    // Wrap the stringify in try/catch so a circular reference, BigInt,
+    // or other non-serializable value can't kill the audit row entirely
+    // — we coerce to a marker shape that's still valid JSON instead. This
+    // also keeps the audit:log event payload in lockstep with what
+    // `parseMetadataSafe` would yield on read (W3.7): both produce a
+    // plain object (or null) so botlink relay observers see exactly
+    // what a follow-up `getModLogById` would return.
+    let metadataJson: string | null = null;
+    let emittedMetadata: Record<string, unknown> | null = null;
+    if (metadata != null) {
+      try {
+        metadataJson = JSON.stringify(metadata);
+      } catch (err) {
+        this.logger?.warn(
+          `logModAction: metadata for action "${action}" is not JSON-serializable (${(err as Error).message}); persisting marker shape`,
+        );
+        metadataJson = JSON.stringify({
+          unserializable: true,
+          reason: (err as Error).message,
+        });
+      }
+      if (metadataJson != null && metadataJson.length > 8192) {
+        metadataJson = JSON.stringify({
+          truncated: true,
+          original_bytes: metadataJson.length,
+          head: metadataJson.slice(0, 1024),
+        });
+      }
+      // Mirror the read-side validation: only a plain object (not array,
+      // not scalar) survives `parseMetadataSafe`. The TS type already
+      // narrows `metadata` to `Record<string, unknown>`, but we re-parse
+      // the canonical JSON we just produced so the emit payload is
+      // exactly what a `getModLogById` would return on the same row —
+      // any truncation/coercion above is reflected in the event.
+      try {
+        const parsed: unknown = metadataJson == null ? null : JSON.parse(metadataJson);
+        if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          emittedMetadata = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Should be unreachable — we just stringified this — but if
+        // the JSON.parse round-trips fails for any reason we drop the
+        // event metadata to null rather than emitting an inconsistent
+        // payload.
+        emittedMetadata = null;
+      }
     }
+
     let result;
     try {
       result = this.runClassified('logModAction', () =>
@@ -467,7 +508,7 @@ export class ModLog {
         target: scrubbedTarget,
         outcome,
         reason: scrubbedReason,
-        metadata,
+        metadata: emittedMetadata,
       });
     }
 

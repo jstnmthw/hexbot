@@ -238,9 +238,19 @@ export class BotDatabase {
    * multi-statement atomicity (e.g. permissions full-namespace replace).
    * SQLite transactions don't nest, so don't call transactional methods
    * from inside `fn`.
+   *
+   * Short-circuits with `DatabaseFullError` when writes have been
+   * disabled by a prior SQLITE_FULL — opening a transaction would
+   * acquire the write lock and immediately fail anyway, but the lock
+   * acquisition still costs round-trips and produces a misleading
+   * SQLITE_FULL stack from inside `BEGIN`. Mirrors the guard in
+   * `set()` and `del()` (W3.5).
    */
   transaction<T>(fn: () => T): T {
     const db = this.ensureOpen();
+    if (this.writesDisabled) {
+      throw new DatabaseFullError('transaction', new SqliteError('writes disabled', 'SQLITE_FULL'));
+    }
     return this.runClassified('transaction', () => db.transaction(fn)());
   }
 

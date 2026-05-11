@@ -8,6 +8,7 @@ import type { BotConfig, Casemapping } from '../types';
 import type { BindHandler, BindType } from '../types';
 import { toEventObject } from '../utils/irc-event';
 import { ListenerGroup } from '../utils/listener-group';
+import { armSocksConnectTimeout } from '../utils/socks';
 import { ircLower } from '../utils/wildcard';
 import {
   type PermanentFailureEntry,
@@ -58,6 +59,8 @@ export interface LifecycleIRCClient {
 /** Minimal channel-state interface for presence checks (avoids importing the full class). */
 export interface PresenceCheckChannelState {
   getChannel(name: string): unknown | undefined;
+  /** All currently-tracked channels — used by the drift sweep to cover ad-hoc joins. */
+  getAllChannels(): Array<{ name: string }>;
 }
 
 export interface ConnectionLifecycleDeps {
@@ -180,10 +183,26 @@ export function registerConnectionEvents(
   const { client, config, logger, reconnectDriver } = deps;
   const cfg = config.irc;
   let presenceTimer: ReturnType<typeof setInterval> | null = null;
+  // Locked once `lastCloseReason` is set to a definitive operator-driven
+  // reason — currently only the registration-timeout path. Without this
+  // guard a late `'irc error'` event firing between `client.quit()` and
+  // `'close'` would overwrite the reason and re-classify the disconnect
+  // as `rate-limited` (5 min initial backoff) when the actual cause was
+  // `transient` (1s). (W1.1)
+  let lastCloseReasonLocked = false;
+  // Cancellation hook for the `identify_before_join` await. Set when the
+  // await is in flight; cleared when it resolves. `removeListeners()`
+  // calls this on shutdown so a torn-down lifecycle doesn't leave the
+  // promise pending for up to 60s while the bus is being drained. (W1.3)
+  let cancelIdentifyAwait: (() => void) | null = null;
   // Captures the last IRC ERROR reason or socket error so we can classify
   // it when 'close' fires — irc-framework's 'close' event only passes a boolean.
   let lastCloseReason: string | null = null;
   let registrationTimer: ReturnType<typeof setTimeout> | null = null;
+  // Disarm hook for the SOCKS5 connect-timeout watchdog. Armed on
+  // `raw socket connected` when the proxy is enabled; cleared on
+  // `registered` (legitimate connect completed) or on shutdown.
+  let disarmSocksTimeout: (() => void) | null = null;
 
   const listeners = new ListenerGroup(client, logger);
 
@@ -210,6 +229,7 @@ export function registerConnectionEvents(
     registrationTimer = setTimeout(() => {
       registrationTimer = null;
       lastCloseReason = 'registration timeout';
+      lastCloseReasonLocked = true;
       logger.warn(
         `IRC registration timeout — no greeting received within ${REGISTRATION_TIMEOUT_MS / 1000}s`,
       );
@@ -233,10 +253,17 @@ export function registerConnectionEvents(
 
   const onRegistered = async (): Promise<void> => {
     lastCloseReason = null;
+    lastCloseReasonLocked = false;
     // Registration succeeded, cancel the stall timeout.
     if (registrationTimer !== null) {
       clearTimeout(registrationTimer);
       registrationTimer = null;
+    }
+    // Registration also disarms the SOCKS connect-timeout watchdog —
+    // we proved the tunnel is alive end-to-end.
+    if (disarmSocksTimeout !== null) {
+      disarmSocksTimeout();
+      disarmSocksTimeout = null;
     }
     reconnectDriver.onConnected();
 
@@ -283,23 +310,33 @@ export function registerConnectionEvents(
       const rawTimeout = svcCfg.identify_before_join_timeout_ms ?? 10_000;
       const timeoutMs = Math.min(Math.max(rawTimeout, 0), 60_000);
       await new Promise<void>((resolve) => {
-        const onIdentified = (): void => {
+        const cleanup = (): void => {
           clearTimeout(timer);
+          deps.eventBus.off('bot:identified', onIdentified);
           deps.eventBus.off('bot:disconnected', onDisconnect);
+          cancelIdentifyAwait = null;
+        };
+        const onIdentified = (): void => {
+          cleanup();
           resolve();
         };
         const onDisconnect = (): void => {
-          clearTimeout(timer);
-          deps.eventBus.off('bot:identified', onIdentified);
+          cleanup();
           resolve();
         };
         const timer = setTimeout(() => {
-          deps.eventBus.off('bot:identified', onIdentified);
-          deps.eventBus.off('bot:disconnected', onDisconnect);
+          cleanup();
           resolve();
         }, timeoutMs).unref();
         deps.eventBus.once('bot:identified', onIdentified);
         deps.eventBus.once('bot:disconnected', onDisconnect);
+        // Expose a cancel hook for `removeListeners()` so shutdown
+        // doesn't have to wait the full timeoutMs for the join pass
+        // to unblock.
+        cancelIdentifyAwait = (): void => {
+          cleanup();
+          resolve();
+        };
       });
     }
 
@@ -321,8 +358,16 @@ export function registerConnectionEvents(
     const e = toEventObject(event);
     if (String(e.error ?? '') === 'irc') {
       const reason = String(e.reason ?? '');
-      lastCloseReason = reason;
       logger.warn(`Server ERROR: ${reason}`);
+      // W1.1: a late `'irc error'` arriving after we've committed to a
+      // registration-timeout disconnect must not re-classify the close.
+      // The driver picks the backoff curve from `lastCloseReason` —
+      // overwriting "registration timeout" (transient, 1s retry) with
+      // a stale server reason (rate-limited, 5min) parks the bot on
+      // the wrong tier.
+      if (!lastCloseReasonLocked) {
+        lastCloseReason = reason;
+      }
     }
   };
 
@@ -330,6 +375,9 @@ export function registerConnectionEvents(
     const reason = lastCloseReason ?? 'connection closed';
     const policy = classifyCloseReason(lastCloseReason);
     lastCloseReason = null;
+    // Release the W1.1 lock now that this disconnect cycle is finishing.
+    // The next attempt's registration-timeout path will set it fresh.
+    lastCloseReasonLocked = false;
 
     // Run each step under its own try/catch. A throw from any one of them —
     // most realistically a `messageQueue.clear()` that hits a wedged DB on
@@ -393,9 +441,36 @@ export function registerConnectionEvents(
     // Stash the message so the subsequent 'close' classifier (TLS verify
     // failures, ECONNRESET, registration timeout) can name the cause in the
     // log instead of falling through to the generic "connection closed".
-    lastCloseReason = error.message;
+    if (!lastCloseReasonLocked) {
+      lastCloseReason = error.message;
+    }
     logger.error('Socket error:', error.message);
     deps.eventBus.emit('bot:error', error);
+    // W1.9: schedule a fail-safe watchdog. A TLS handshake-stage RST
+    // can produce 'socket error' without a follow-up 'close' (TLS
+    // wraps the socket and may swallow the close on early errors),
+    // stranding the bot with no reconnect. After SOCKET_DESTROY_GRACE_MS
+    // we forcibly destroy the underlying socket so 'close' fires and
+    // the driver picks up.
+    setTimeout(() => {
+      if (lastCloseReason !== error.message) return; // a clean close already advanced state
+      const socket = getInternalTlsSocket(client);
+      if (
+        socket &&
+        typeof (socket as { destroyed?: boolean }).destroyed !== 'undefined' &&
+        !(socket as { destroyed: boolean }).destroyed &&
+        typeof (socket as { destroy?: unknown }).destroy === 'function'
+      ) {
+        try {
+          (socket as { destroy: (err?: Error) => void }).destroy(
+            new Error('socket error stranded — forcing destroy'),
+          );
+          logger.warn('Forced socket destroy after stranded socket-error');
+        } catch (destroyErr) {
+          logger.error('Failed to destroy stranded socket:', destroyErr);
+        }
+      }
+    }, SOCKET_DESTROY_GRACE_MS).unref();
     // Note: no reject() — the driver will retry on the subsequent 'close'.
   };
 
@@ -404,6 +479,32 @@ export function registerConnectionEvents(
   listeners.on('irc error', onIrcError);
   listeners.on('close', onClose);
   listeners.on('socket error', onSocketError);
+
+  // SOCKS5 connect-timeout watchdog. Only relevant when the proxy is
+  // enabled — without it, a black-holed proxy can leave the socket
+  // dangling past irc-framework's registration window. The handler
+  // arms `setTimeout` on the raw socket; `onRegistered` disarms.
+  if (config.proxy?.enabled) {
+    listeners.on('raw socket connected', (socket: unknown) => {
+      // irc-framework emits `'raw socket connected'` with the underlying
+      // net.Socket as the first argument. Defensive shape-check before
+      // poking `setTimeout` on it.
+      const sock = socket as { setTimeout?: unknown; once?: unknown; destroy?: unknown };
+      if (
+        typeof sock?.setTimeout === 'function' &&
+        typeof sock?.once === 'function' &&
+        typeof sock?.destroy === 'function'
+      ) {
+        if (disarmSocksTimeout !== null) disarmSocksTimeout();
+        // Cast: armSocksConnectTimeout's typed shape is net.Socket; the
+        // duck-type guard above proves the contract holds at runtime.
+        disarmSocksTimeout = armSocksConnectTimeout(
+          socket as Parameters<typeof armSocksConnectTimeout>[0],
+        );
+        logger.debug('SOCKS5 connect-timeout armed (30s); will disarm on registration');
+      }
+    });
+  }
 
   return {
     stopPresenceCheck(): void {
@@ -419,9 +520,38 @@ export function registerConnectionEvents(
         clearTimeout(registrationTimer);
         registrationTimer = null;
       }
+      // W1.3: cancel the identify_before_join await so a torn-down
+      // lifecycle doesn't leave that promise hanging for up to 60s.
+      if (cancelIdentifyAwait !== null) {
+        cancelIdentifyAwait();
+        cancelIdentifyAwait = null;
+      }
+      // Disarm any in-flight SOCKS5 connect-timeout watchdog so a stale
+      // `'timeout'` event after listeners are removed doesn't destroy a
+      // socket the new lifecycle is using.
+      if (disarmSocksTimeout !== null) {
+        disarmSocksTimeout();
+        disarmSocksTimeout = null;
+      }
     },
     cancelReconnect(): void {
       reconnectDriver.cancel();
+      // W1.7: also clear the registration-timeout and presence-check
+      // timers. `cancelReconnect` is called from the bot's shutdown
+      // path; without these clears, a pending registration-timer
+      // fires `client.quit()` mid-shutdown and the presence-check
+      // intervals tick during teardown, both producing spurious
+      // log lines and (for the registration-timer) a redundant
+      // close attempt against a socket the shutdown is already
+      // tearing down.
+      if (registrationTimer !== null) {
+        clearTimeout(registrationTimer);
+        registrationTimer = null;
+      }
+      if (presenceTimer !== null) {
+        clearInterval(presenceTimer);
+        presenceTimer = null;
+      }
     },
   };
 }

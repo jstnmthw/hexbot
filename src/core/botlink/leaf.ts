@@ -148,6 +148,18 @@ export class BotLinkLeaf {
     // reference even after a successful transition to the protocol layer.
     const onConnect = () => {
       socket.removeListener('error', onError);
+      // Mid-DNS / mid-TCP-handshake disconnect race: `disconnect()` may
+      // have arrived after the socket was created but before the
+      // `'connect'` callback fired. The `connecting` early-return at the
+      // top of this function guards subsequent connect() calls, but a
+      // socket that's already in flight still completes its handshake.
+      // Tear it down here so we never proceed to `initProtocol` after
+      // an explicit shutdown.
+      if (this.disconnecting) {
+        this.connecting = false;
+        socket.destroy();
+        return;
+      }
       this.connecting = false;
       this.initProtocol(socket);
     };
@@ -305,10 +317,6 @@ export class BotLinkLeaf {
       this.protocol.close();
       this.protocol = null;
     }
-    // Zero the cached key — Node's GC is not zeroing, but dropping the
-    // reference ties key lifetime to the current connection lifecycle
-    // and keeps a future key-rotation story straightforward.
-    this.linkKey = null;
   }
 
   /** Force a reconnect to the hub. */
@@ -322,9 +330,10 @@ export class BotLinkLeaf {
       this.protocol.close();
       this.protocol = null;
     }
-    // Re-derive the link key — the previous one was zeroed on
-    // disconnect, and reconnect() is the canonical path to reset
-    // any post-v2 key-rotation state.
+    // Re-derive the link key. reconnect() is the canonical path that
+    // resets connection state and (in a future key-rotation story) drops
+    // any cached secrets — so it owns the key refresh. disconnect() now
+    // preserves the key so a plain connect() afterwards still works.
     this.linkKey = deriveLinkKey(this.config.password, this.config.link_salt!);
     this.reconnectDelay = this.reconnectDelayMs;
     this.connect();
@@ -394,8 +403,9 @@ export class BotLinkLeaf {
         }
         const nonce = Buffer.from(nonceHex, 'hex');
         if (!this.linkKey) {
-          // Should not happen — linkKey is set in the constructor and only
-          // zeroed in disconnect()/reconnect(). Fail closed.
+          // Should not happen — linkKey is set in the constructor and
+          // re-derived in reconnect(). disconnect() leaves it in place.
+          // Fail closed.
           this.logger?.error('linkKey missing when responding to CHALLENGE');
           this.protocol?.close();
           return;

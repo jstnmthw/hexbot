@@ -15,7 +15,33 @@ describe('loadBootstrap', () => {
       pluginDir: './plugins',
       ownerHandle: 'admin',
       ownerHostmask: '*!*@*',
+      failOnPluginLoadFailure: false,
     });
+  });
+
+  it('reads HEX_FAIL_ON_PLUGIN_LOAD_FAILURE as a permissive bool', () => {
+    const base = {
+      HEX_DB_PATH: './data/hexbot.db',
+      HEX_PLUGIN_DIR: './plugins',
+      HEX_OWNER_HANDLE: 'admin',
+      HEX_OWNER_HOSTMASK: '*!*@*',
+    };
+    expect(
+      loadBootstrap({ ...base, HEX_FAIL_ON_PLUGIN_LOAD_FAILURE: '1' }).failOnPluginLoadFailure,
+    ).toBe(true);
+    expect(
+      loadBootstrap({ ...base, HEX_FAIL_ON_PLUGIN_LOAD_FAILURE: 'true' }).failOnPluginLoadFailure,
+    ).toBe(true);
+    expect(
+      loadBootstrap({ ...base, HEX_FAIL_ON_PLUGIN_LOAD_FAILURE: 'YES' }).failOnPluginLoadFailure,
+    ).toBe(true);
+    expect(
+      loadBootstrap({ ...base, HEX_FAIL_ON_PLUGIN_LOAD_FAILURE: '0' }).failOnPluginLoadFailure,
+    ).toBe(false);
+    expect(
+      loadBootstrap({ ...base, HEX_FAIL_ON_PLUGIN_LOAD_FAILURE: '' }).failOnPluginLoadFailure,
+    ).toBe(false);
+    expect(loadBootstrap(base).failOnPluginLoadFailure).toBe(false);
   });
 
   it('throws naming the missing var when HEX_DB_PATH is unset', () => {

@@ -128,7 +128,42 @@ describe('createReconnectDriver', () => {
   });
 
   describe('fatal tier', () => {
-    it('calls exit with the policy code, emits bot:disconnected, and does not schedule', () => {
+    it('calls exit with the policy code on the third consecutive fatal (W1.2 budget)', () => {
+      const { driver, exit, eventBus } = makeHarness();
+      const disconnectSpy = vi.fn();
+      eventBus.on('bot:disconnected', disconnectSpy);
+
+      const fatal = {
+        tier: 'fatal' as const,
+        label: 'SASL authentication failed',
+        exitCode: 2,
+      };
+      // Under-budget — should treat as rate-limited.
+      driver.onDisconnect(fatal);
+      expect(exit).not.toHaveBeenCalled();
+      driver.onDisconnect(fatal);
+      expect(exit).not.toHaveBeenCalled();
+      // Third fatal trips the budget and exits.
+      driver.onDisconnect(fatal);
+
+      expect(exit).toHaveBeenCalledWith(2);
+      expect(disconnectSpy).toHaveBeenCalledWith('fatal: SASL authentication failed');
+    });
+
+    it('sets status to stopped on the third consecutive fatal', () => {
+      const { driver } = makeHarness();
+      const fatal = {
+        tier: 'fatal' as const,
+        label: 'SASL mechanism not supported',
+        exitCode: 2,
+      };
+      driver.onDisconnect(fatal);
+      driver.onDisconnect(fatal);
+      driver.onDisconnect(fatal);
+      expect(driver.getState().status).toBe('stopped');
+    });
+
+    it('treats under-budget fatals as rate-limited reconnects (W1.2)', () => {
       const { driver, connect, exit, eventBus } = makeHarness();
       const disconnectSpy = vi.fn();
       eventBus.on('bot:disconnected', disconnectSpy);
@@ -139,21 +174,29 @@ describe('createReconnectDriver', () => {
         exitCode: 2,
       });
 
-      expect(exit).toHaveBeenCalledWith(2);
-      expect(disconnectSpy).toHaveBeenCalledWith('fatal: SASL authentication failed');
-      // Advance a long time — must not schedule anything.
-      vi.advanceTimersByTime(60 * 60 * 1000);
-      expect(connect).not.toHaveBeenCalled();
+      expect(exit).not.toHaveBeenCalled();
+      expect(disconnectSpy).toHaveBeenCalledWith('fatal-budget: SASL authentication failed');
+      expect(driver.getState().status).toBe('reconnecting');
+      // Advance past rate-limited initial delay; the driver should retry.
+      vi.advanceTimersByTime(10 * 60 * 1000);
+      expect(connect).toHaveBeenCalled();
     });
 
-    it('sets status to stopped', () => {
-      const { driver } = makeHarness();
-      driver.onDisconnect({
-        tier: 'fatal',
-        label: 'SASL mechanism not supported',
+    it('resets the fatal budget after a successful registration', () => {
+      const { driver, exit } = makeHarness();
+      const fatal = {
+        tier: 'fatal' as const,
+        label: 'SASL authentication failed',
         exitCode: 2,
-      });
-      expect(driver.getState().status).toBe('stopped');
+      };
+      driver.onDisconnect(fatal);
+      driver.onDisconnect(fatal);
+      // Recover, resetting the counter.
+      driver.onConnected();
+      // Two more fatals — still under the fresh budget of 3.
+      driver.onDisconnect(fatal);
+      driver.onDisconnect(fatal);
+      expect(exit).not.toHaveBeenCalled();
     });
   });
 

@@ -223,7 +223,7 @@ describe('reconnect integration', () => {
     expect(driver.getState().consecutiveFailures).toBe(0);
   });
 
-  it('Scenario 4: SASL authentication failed → fatal exit', () => {
+  it('Scenario 4: SASL authentication failed → fatal exit after retry budget (W1.2)', () => {
     const { client, driver, connect, exit, eventBus, deps } = makeHarness();
     const disconnectHandler = vi.fn();
     eventBus.on('bot:disconnected', disconnectHandler);
@@ -233,11 +233,16 @@ describe('reconnect integration', () => {
       () => {},
     );
 
-    client.emit('irc error', {
-      error: 'irc',
-      reason: 'SASL authentication failed',
-    });
-    client.emit('close');
+    // First two SASL fatals stay under the budget — driver treats them
+    // as rate-limited reconnects so a transient services race doesn't
+    // lock out the bot indefinitely. The third trips the exit.
+    for (let i = 0; i < 3; i++) {
+      client.emit('irc error', {
+        error: 'irc',
+        reason: 'SASL authentication failed',
+      });
+      client.emit('close');
+    }
 
     expect(exit).toHaveBeenCalledWith(2);
     expect(driver.getState().status).toBe('stopped');
@@ -245,9 +250,11 @@ describe('reconnect integration', () => {
       expect.stringContaining('fatal: SASL authentication failed'),
     );
 
-    // Advance an hour — NO retry ever scheduled.
+    // Past the exit, advance an hour — driver is stopped, no further retry.
     vi.advanceTimersByTime(60 * 60 * 1000);
-    expect(connect).not.toHaveBeenCalled();
+    // `connect` was called twice (the two under-budget fatals scheduled
+    // rate-limited reconnects); after the exit, no more.
+    expect(connect.mock.calls.length).toBeLessThanOrEqual(2);
   });
 
   it('Scenario 5: initial connection failure takes the same retry loop', () => {

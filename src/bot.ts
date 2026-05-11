@@ -39,6 +39,7 @@ import { HelpRegistry } from './core/help-registry';
 import { IRCCommands } from './core/irc-commands';
 import { MemoManager } from './core/memo';
 import { MessageQueue } from './core/message-queue';
+import type { LogModActionOptions } from './core/mod-log';
 import { ensureOwner } from './core/owner-bootstrap';
 import { Permissions } from './core/permissions';
 import {
@@ -186,6 +187,37 @@ export class Bot {
     return this._casemapping;
   }
 
+  /**
+   * Snapshot of audit rows that could not be persisted to SQLite. Returns
+   * a defensive copy so callers can iterate without seeing concurrent
+   * mutations. Used by `.status` and ops triage. See W3.2.
+   */
+  getAuditFallbackBuffer(): LogModActionOptions[] {
+    return this.auditFallbackBuffer.slice();
+  }
+
+  /**
+   * Number of audit rows currently held in the fallback ring buffer plus
+   * how many were dropped due to overflow. `dropped` is monotonic for
+   * the bot's lifetime — it does not reset when the buffer is read.
+   */
+  getAuditFallbackStats(): { held: number; dropped: number } {
+    return { held: this.auditFallbackBuffer.length, dropped: this.auditFallbackOverflowCount };
+  }
+
+  /**
+   * Append an audit-fallback entry. FIFO-evicts the oldest entry once
+   * the buffer is full so memory cannot grow unbounded during a long
+   * degraded period.
+   */
+  private pushAuditFallback(options: LogModActionOptions): void {
+    if (this.auditFallbackBuffer.length >= Bot.AUDIT_FALLBACK_CAPACITY) {
+      this.auditFallbackBuffer.shift();
+      this.auditFallbackOverflowCount++;
+    }
+    this.auditFallbackBuffer.push(options);
+  }
+
   /** The active DCC manager, if DCC is enabled. Used by the REPL to announce activity. */
   get dccManager(): DCCManager | null {
     return this._dccManager;
@@ -218,6 +250,25 @@ export class Bot {
    */
   private failedPlugins: string[] = [];
 
+  /**
+   * In-memory ring buffer of audit-log writes that the SQLite layer
+   * could not persist (SQLITE_BUSY/FULL/IOERR). Wired as the database's
+   * `setAuditFallback` sink so disk-full or fatal-DB conditions don't
+   * silently lose audit rows. The buffer is bounded — old entries are
+   * dropped FIFO when the cap is reached so a long degraded period
+   * doesn't bloat memory. Operators see the count via `.status`; the
+   * raw entries can be retrieved by core commands for triage. (W3.2)
+   */
+  private static readonly AUDIT_FALLBACK_CAPACITY = 256;
+  private auditFallbackBuffer: LogModActionOptions[] = [];
+  private auditFallbackOverflowCount = 0;
+  /**
+   * Bootstrap settings captured in the constructor and consumed at start()
+   * — only the env-only flags (e.g. `HEX_FAIL_ON_PLUGIN_LOAD_FAILURE`) live
+   * here; the other fields are folded into BotConfig and accessed from there.
+   */
+  private bootstrap: Bootstrap;
+
   constructor(configPath?: string) {
     // Bootstrap MUST run before loadConfig: the database path, plugin
     // directory, and initial owner identity are env-sourced now (they
@@ -228,9 +279,13 @@ export class Bot {
       bootstrap = loadBootstrap();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(message);
+      // Prefix with `<3>` (systemd / journald priority for ERR) so
+      // `journalctl -p err` surfaces this without a structured logger —
+      // the logger needs config that we just failed to load.
+      console.error(`<3>[bootstrap] ${message}`);
       process.exit(1);
     }
+    this.bootstrap = bootstrap;
 
     const cfgPath = resolve(configPath ?? './config/bot.json');
     this._botConfigPath = cfgPath;
@@ -942,6 +997,11 @@ export class Bot {
 
     this.db.open();
     this.botLogger.info('Database opened');
+    // Wire audit fallback: when an audit row cannot be persisted to
+    // SQLite (busy/full/fatal), spill it into a bounded in-memory ring
+    // buffer instead of dropping it silently. Surfaced via `.status`
+    // so operators see the count during a degraded period (W3.2).
+    this.db.setAuditFallback((options) => this.pushAuditFallback(options));
     this.permissions.loadFromDb();
 
     // Boot-time seed: any registered core-scope key that has no stored
@@ -1007,6 +1067,15 @@ export class Bot {
       this.botLogger.error(
         `===== STARTUP BANNER: ${this.failedPlugins.length} plugin(s) FAILED to load: ${this.failedPlugins.join(', ')} — the bot is running with degraded functionality. Check the error lines above for details. =====`,
       );
+      // Fail-fast for CI/staging: when HEX_FAIL_ON_PLUGIN_LOAD_FAILURE is set
+      // we'd rather take the bot down than ship a regression to production.
+      // Default off so a single bad plugin doesn't take prod offline.
+      if (this.bootstrap.failOnPluginLoadFailure) {
+        throw new Error(
+          `Plugin load failed (${this.failedPlugins.length}: ${this.failedPlugins.join(', ')}); ` +
+            `HEX_FAIL_ON_PLUGIN_LOAD_FAILURE is set — exiting non-zero.`,
+        );
+      }
     }
 
     // Re-anchor uptime to the first `bot:connected` event so `.status`
@@ -1173,15 +1242,20 @@ export class Bot {
         // Stability metrics. These give operators a .status-visible signal
         // about services degradation and plugin-load failures without
         // trawling logs.
-        getStabilityMetrics: () => ({
-          servicesTimeoutCount: this.services.getServicesTimeoutCount(),
-          pendingVerifyCount: this.services.getPendingVerifyCount(),
-          pendingCapRejections: this.services.getPendingCapRejectionCount(),
-          botIdentified: this.services.isBotIdentified(),
-          loadedPluginCount: this.pluginLoader.list().length,
-          failedPluginCount: this.failedPlugins.length,
-          failedPluginNames: this.failedPlugins,
-        }),
+        getStabilityMetrics: () => {
+          const auditStats = this.getAuditFallbackStats();
+          return {
+            servicesTimeoutCount: this.services.getServicesTimeoutCount(),
+            pendingVerifyCount: this.services.getPendingVerifyCount(),
+            pendingCapRejections: this.services.getPendingCapRejectionCount(),
+            botIdentified: this.services.isBotIdentified(),
+            loadedPluginCount: this.pluginLoader.list().length,
+            failedPluginCount: this.failedPlugins.length,
+            failedPluginNames: this.failedPlugins,
+            auditFallbackHeld: auditStats.held,
+            auditFallbackDropped: auditStats.dropped,
+          };
+        },
       },
       db: this.db,
     });
@@ -1204,12 +1278,14 @@ export class Bot {
       db: this.db,
       readBotJson: () => this.readBotJsonAsRecord(),
       readPluginsJson: () => this.readPluginsJsonAsRecord(),
-      // `.restart` exits the process cleanly so the supervisor restarts
-      // the container. Delegate the actual exit to a tiny hook so tests
-      // can stub it out — production wiring uses `process.exit(0)`.
-      restartProcess: async () => {
-        await this.shutdown();
-        process.exit(0);
+      // `.restart` raises SIGTERM at ourselves so the same graceful path the
+      // signal handler in src/index.ts runs (heartbeat cleanup → shutdown
+      // steps → process.exit) fires here too. A direct `process.exit(0)`
+      // would skip `stopAllHealthSignals()` and leave a stale
+      // `/tmp/.hexbot-alive` file on disk for the next instance to inherit.
+      // Delegated through a hook so tests can stub it out.
+      restartProcess: () => {
+        process.kill(process.pid, 'SIGTERM');
       },
     });
     registerModlogCommands({
@@ -1287,6 +1363,11 @@ export class Bot {
         uptime: Date.now() - this.startTime,
       }),
       getBootTs: () => Math.floor(this.startTime / 1000),
+      // Surface the bot's reconnect-driver status to DCC sessions so an
+      // operator on a still-open console sees `[reconnecting]` while
+      // the bot is mid-reconnect, instead of issuing commands silently
+      // into the void.
+      getReconnectStatus: () => this.getReconnectState()?.status ?? null,
     });
     this._dccManager.attach();
     registerDccConsoleCommands({
@@ -1458,18 +1539,28 @@ export class Bot {
       }
     });
 
-    // flush() drains the pending-send buffer through the IRC client one last
-    // time; stop() then halts the drain timer and rejects any new enqueues.
-    // Order matters — stopping first would strand whatever was queued, so a
-    // last-second `.say` from a teardown hook would silently disappear.
-    step('message-queue.flush', () => this.messageQueue.flush());
+    // flushWithDeadline drains the pending-send buffer through the IRC client
+    // one last time; stop() then halts the drain timer and rejects any new
+    // enqueues. Order matters — stopping first would strand whatever was
+    // queued, so a last-second `.say` from a teardown hook would silently
+    // disappear. The 2s budget is generous for normal traffic but bounded so
+    // a queue full of mode lines (200+ entries) doesn't burst at the server's
+    // anti-flood threshold pre-QUIT and earn a K-line for the next reconnect.
+    step('message-queue.flush', () => this.messageQueue.flushWithDeadline(2000));
     step('message-queue.stop', () => this.messageQueue.stop());
 
     if (this.client.connected) {
       try {
         const quitMsg = this.config.quit_message ?? `HexBot v${this.readPackageVersion()}`;
+        // Defer the QUIT to the next tick so any in-flight irc-framework
+        // writes from the queue flush above have time to land on the wire
+        // before QUIT goes out. Without this, a flushWithDeadline() that
+        // drained 80 mode lines could see QUIT race past the tail of the
+        // batch and the server cuts the socket on QUIT before the trailing
+        // sends are framed.
+        await new Promise<void>((r) => setImmediate(r));
         this.client.quit(quitMsg);
-        // Give the QUIT message a moment to send
+        // Give the QUIT message a moment to send.
         await new Promise<void>((r) => setTimeout(r, 500));
       } catch (err) {
         this.botLogger.error('Shutdown step "client.quit" threw:', err);
@@ -1643,7 +1734,25 @@ export class Bot {
         resolve,
         reject,
       );
-      this.client.connect(options);
+      // W1.5: catch a synchronous throw from `client.connect()` (TLS
+      // factory rejecting a malformed cert path, irc-framework option
+      // validation throwing on a bogus port). Without this guard, the
+      // 'connecting' event never fires, the registration timer is
+      // never started, and the lifecycle handle's `removeListeners()`
+      // is the only path back — but the bot's `_lifecycleHandle` got
+      // set above, so the throw escapes through the Promise reject
+      // and main() exits. Surface it to the driver instead so the
+      // configured backoff applies.
+      try {
+        this.client.connect(options);
+      } catch (err) {
+        this.botLogger.error('client.connect() threw synchronously:', err);
+        // Fire `bot:disconnected` so the driver sees a failed attempt
+        // and can schedule a retry. Use the error message as the close
+        // reason so close-reason-classifier picks the right tier.
+        const msg = err instanceof Error ? err.message : String(err);
+        this.eventBus.emit('bot:disconnected', `connect threw: ${msg}`);
+      }
       // Resolve immediately — see comment above. The lifecycle's
       // `_resolve`/`_reject` parameters are now vestigial.
       resolve();
@@ -1757,8 +1866,11 @@ export class Bot {
     try {
       accessSync(configPath, fsConstants.R_OK);
     } catch {
-      console.error(`[bot] Config file not found: ${configPath}`);
-      console.error('[bot] Copy config/bot.example.json to config/bot.json and edit it.');
+      // `<3>` is the systemd / journald priority for ERR — journalctl -p err
+      // surfaces this without needing a structured logger (we don't have one
+      // yet; the log level lives in the config we just failed to read).
+      console.error(`<3>[bootstrap] Config file not found: ${configPath}`);
+      console.error('<3>[bootstrap] Copy config/bot.example.json to config/bot.json and edit it.');
       process.exit(1);
     }
 
@@ -1812,7 +1924,8 @@ export class Bot {
       return merged;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(message);
+      // `<3>` priority prefix — see the readability check above for rationale.
+      console.error(`<3>[bootstrap] ${message}`);
       process.exit(1);
     }
   }

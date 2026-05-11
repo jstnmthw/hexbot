@@ -166,15 +166,25 @@ export function parseISupport(client: SupportsProvider): ServerCapabilities {
         ? ctRaw
         : '#&';
 
-  // TARGMAX — raw string of the form `PRIVMSG:4,NOTICE:4,JOIN:`; empty
-  // value = unlimited. Cap each per-command limit at a sane ceiling so a
-  // hostile server can't coerce downstream code into allocating per-target
-  // arrays at pathological scale.
+  // TARGMAX — raw string of the form `PRIVMSG:4,NOTICE:4,JOIN:`; the
+  // `JOIN:` shape (colon present, value empty) is RPL_ISUPPORT's encoding
+  // for "unlimited". A pair without a colon at all (`JOIN`) is malformed,
+  // and a non-positive integer (`PRIVMSG:0`, `JOIN:-1`) is nonsense. Cap
+  // each per-command limit at a sane ceiling so a hostile server can't
+  // coerce downstream code into allocating per-target arrays at
+  // pathological scale.
   const TARGMAX_HARD_CEILING = 10_000;
   const targmaxRaw = supports('TARGMAX');
   const targmax: Record<string, number> = {};
   if (typeof targmaxRaw === 'string' && targmaxRaw.length > 0) {
     for (const pair of targmaxRaw.split(',')) {
+      if (!pair.includes(':')) {
+        // Missing colon: malformed pair — skip rather than store a bogus
+        // entry. `JOIN` alone (no colon) never appears in well-formed
+        // RPL_ISUPPORT and would silently coerce to `Infinity` if we
+        // accepted it.
+        continue;
+      }
       const [rawCmd, rawVal] = pair.split(':');
       if (!rawCmd) continue;
       const cmd = rawCmd.toUpperCase();
@@ -183,6 +193,9 @@ export function parseISupport(client: SupportsProvider): ServerCapabilities {
       } else {
         const n = parseInt(rawVal, 10);
         if (Number.isFinite(n) && n > 0) targmax[cmd] = Math.min(TARGMAX_HARD_CEILING, n);
+        // Non-positive or non-finite: skip silently. Storing 0 would
+        // make every send refuse; storing NaN would propagate through
+        // `< limit` comparisons and behave as `false`.
       }
     }
   }

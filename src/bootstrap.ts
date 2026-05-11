@@ -14,6 +14,12 @@
 //   HEX_OWNER_HOSTMASK  — Hostmask for the initial owner; consumed once
 //                         on first boot to seed the owner record.
 //
+// Optional env vars:
+//   HEX_FAIL_ON_PLUGIN_LOAD_FAILURE — `1`/`true` to exit non-zero when any
+//                         plugin fails to load at startup. Default off so
+//                         a single bad plugin doesn't take the bot offline.
+//                         CI/staging deployments flip this on.
+//
 // `_env`-resolved secrets (e.g. `HEX_NICKSERV_PASSWORD`,
 // `HEX_OWNER_PASSWORD`) are not bootstrap concerns — they continue to
 // flow through `<field>_env` references in bot.json + resolveSecrets().
@@ -27,6 +33,13 @@ export interface Bootstrap {
   ownerHandle: string;
   /** Owner hostmask, used only on first boot to seed the owner record. */
   ownerHostmask: string;
+  /**
+   * When true, abort startup if any plugin fails to load. Default false —
+   * a single bad plugin shouldn't take the bot offline in production.
+   * CI/staging operators set `HEX_FAIL_ON_PLUGIN_LOAD_FAILURE=1` to surface
+   * regressions at deploy time instead of in user reports.
+   */
+  failOnPluginLoadFailure: boolean;
 }
 
 /**
@@ -39,7 +52,8 @@ export function loadBootstrap(env: NodeJS.ProcessEnv = process.env): Bootstrap {
   const pluginDir = requireEnv(env, 'HEX_PLUGIN_DIR');
   const ownerHandle = requireEnv(env, 'HEX_OWNER_HANDLE');
   const ownerHostmask = requireEnv(env, 'HEX_OWNER_HOSTMASK');
-  return { dbPath, pluginDir, ownerHandle, ownerHostmask };
+  const failOnPluginLoadFailure = parseBool(env['HEX_FAIL_ON_PLUGIN_LOAD_FAILURE']);
+  return { dbPath, pluginDir, ownerHandle, ownerHostmask, failOnPluginLoadFailure };
 }
 
 function requireEnv(env: NodeJS.ProcessEnv, name: string): string {
@@ -51,4 +65,15 @@ function requireEnv(env: NodeJS.ProcessEnv, name: string): string {
     );
   }
   return value;
+}
+
+/**
+ * Parse a permissive bool env var. `1`, `true`, `yes`, `on` (case-insensitive)
+ * are truthy; everything else (including unset) is false. Mirrors the shape
+ * operators expect from POSIX env conventions.
+ */
+function parseBool(raw: string | undefined): boolean {
+  if (typeof raw !== 'string') return false;
+  const v = raw.trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
 }

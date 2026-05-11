@@ -15,9 +15,12 @@ export interface PresenceCheckerClient {
   join(channel: string, key?: string): void;
 }
 
-/** Minimal ChannelState surface the checker needs — just "are we in X?". */
+/** Minimal ChannelState surface the checker needs — "are we in X?" plus
+ *  enumeration so the drift sweep covers ad-hoc-joined channels too. */
 export interface PresenceCheckerChannelState {
   getChannel(name: string): unknown;
+  /** All currently-tracked channels — used to discover ad-hoc joins. */
+  getAllChannels(): Array<{ name: string }>;
 }
 
 /**
@@ -78,7 +81,20 @@ export function startChannelPresenceCheck(
   const warnedChannels = new Set<string>();
 
   const handle = setInterval(() => {
-    for (const ch of configuredChannels) {
+    // Build the sweep set: every configured channel plus every tracked
+    // channel that isn't in the configured list. The latter covers
+    // ad-hoc `.join #help` cases — without them, a runtime-joined
+    // channel that the bot silently fell out of would sit broken
+    // forever because the configured list never sees it.
+    const configuredKeys = new Set(configuredChannels.map((c) => ircLower(c.name, 'rfc1459')));
+    const adHoc: ChannelEntry[] = [];
+    for (const tracked of channelState.getAllChannels()) {
+      if (!configuredKeys.has(ircLower(tracked.name, 'rfc1459'))) {
+        adHoc.push({ name: tracked.name });
+      }
+    }
+    const sweepList: ChannelEntry[] = [...configuredChannels, ...adHoc];
+    for (const ch of sweepList) {
       const inChannel = channelState.getChannel(ch.name) !== undefined;
       if (inChannel) {
         warnedChannels.delete(ch.name);

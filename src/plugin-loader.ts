@@ -551,11 +551,16 @@ export class PluginLoader {
   /**
    * Unload a plugin by name.
    *
-   * @throws when `teardown()` itself throws — the plugin stays in the
-   *   loaded map so operators can retry teardown or restart the bot.
-   *   Silently dropping a plugin whose teardown failed leaves ghost
-   *   state (listeners, timers, DB cursors) that the next reload would
-   *   then duplicate.
+   * If `teardown()` throws, dispatcher binds, event-bus listeners, help
+   * entries, channel-settings entries, and the scoped api are still
+   * cleaned up so no ghost handlers remain wired against a torn-down
+   * plugin (W2.2). The teardown error is logged loudly and re-thrown so
+   * callers see the failure, but the plugin is removed from the loaded
+   * map regardless — leaving binds attached to a half-torn-down plugin
+   * is worse than incomplete teardown of plugin-internal state (timers,
+   * file handles) that the operator can clear by restarting the bot.
+   *
+   * @throws the original `teardown()` error after cleanup completes.
    */
   async unload(pluginName: string): Promise<void> {
     const plugin = this.loaded.get(pluginName);
@@ -563,7 +568,7 @@ export class PluginLoader {
       throw new Error(`Plugin "${pluginName}" is not loaded`);
     }
 
-    // Call teardown if it exists
+    let teardownError: unknown;
     if (plugin.teardown) {
       try {
         const result = plugin.teardown();
@@ -572,33 +577,38 @@ export class PluginLoader {
         }
       } catch (err) {
         plugin.teardownFailed = true;
+        teardownError = err;
         this.logger?.error(
-          `[plugin-loader] WARNING: teardown() for ${pluginName} threw — resources may not have been released cleanly. Plugin stays marked loaded; fix the teardown path or restart the bot.`,
+          `[plugin-loader] WARNING: teardown() for ${pluginName} threw — plugin-internal resources (timers, file handles) may not have been released cleanly. Cleaning up dispatcher binds and event-bus listeners anyway to prevent ghost handlers; restart the bot to fully reclaim plugin-internal state.`,
           err,
         );
-        // Hard stop the unload: do NOT call cleanupPluginResources, do
-        // NOT delete from the loaded map. The previous behavior deleted
-        // regardless, which papered over the problem and caused the
-        // next reload to double-register listeners against ghost state.
-        throw err;
       }
     }
 
+    // Always clean up dispatcher / event-bus state, even if teardown
+    // threw. Skipping this would leave bound handlers and listeners
+    // wired against a plugin that's been removed from the loaded map,
+    // and any subsequent dispatch would invoke a closure whose api is
+    // already disposed.
     this.cleanupPluginResources(pluginName, plugin.disposeApi);
-
-    // Remove from loaded map
     this.loaded.delete(pluginName);
 
     this.eventBus.emit('plugin:unloaded', pluginName);
     this.logger?.info(`Unloaded: ${pluginName}`);
+
+    if (teardownError !== undefined) {
+      throw teardownError;
+    }
   }
 
   /**
    * Unload every loaded plugin in reverse load order. Called from
    * `Bot.shutdown()` so plugins get a clean teardown chance on process
    * exit (see audit W-PS finding 2026-04-25). Errors from individual
-   * teardowns are logged but never abort the loop — every remaining
-   * plugin still gets its teardown call.
+   * teardowns are swallowed (already logged loudly by `unload()`); every
+   * remaining plugin still gets its teardown call. `unload()` itself
+   * runs dispatcher/event-bus cleanup even on teardown failure, so no
+   * force-delete fallback is needed here (W2.2).
    */
   async unloadAll(): Promise<void> {
     const names = Array.from(this.loaded.keys()).reverse();
@@ -607,10 +617,6 @@ export class PluginLoader {
         await this.unload(name);
       } catch (err) {
         this.logger?.error(`unloadAll: unload(${name}) threw — continuing:`, err);
-        // Force-remove from the loaded map so a subsequent unloadAll
-        // doesn't keep trying. The teardown failure itself is already
-        // logged loudly via unload()'s own catch.
-        this.loaded.delete(name);
       }
     }
   }

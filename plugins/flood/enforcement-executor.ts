@@ -124,6 +124,13 @@ export class EnforcementExecutor {
    * pending ban/kick can't touch the torn-down api.
    */
   private readonly inFlight = new Set<Promise<void>>();
+  /**
+   * Set in `dispose()`. The fire-and-forget enforcement promises check
+   * this flag before performing side effects after their `await` —
+   * without it, a kick/ban initiated just before teardown can run
+   * `api.kick(...)` against a disposed plugin api.
+   */
+  private disposed = false;
 
   constructor(
     private readonly api: PluginAPI,
@@ -134,6 +141,7 @@ export class EnforcementExecutor {
 
   /** Reset offence state (called from plugin teardown). */
   clear(): void {
+    this.disposed = true;
     this.offenceTracker.clear();
     this.channelActionRate.clear();
     this.recentTerminal.clear();
@@ -357,6 +365,12 @@ export class EnforcementExecutor {
     nick: string,
     reason: string,
   ): Promise<void> {
+    // Disposed-during-microtask guard. `apply()` schedules this via
+    // `applyInner(...).catch(...)` and pushes the promise into `inFlight`,
+    // so when the executor is torn down between scheduling and execution
+    // (e.g. plugin reload mid-flood-burst), the side-effect calls would
+    // otherwise hit a disposed plugin api. Bail before any `api.kick`.
+    if (this.disposed) return;
     if (action === 'warn') {
       this.api.notice(nick, `[flood] ${reason}`);
       this.api.log(`Warned ${nick} in ${channel}: ${reason}`);

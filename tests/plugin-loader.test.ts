@@ -1479,12 +1479,12 @@ describe('PluginLoader', () => {
       expect(readFileSync(markerPath, 'utf-8')).toBe('async torn down');
     });
 
-    it('should propagate teardown errors and leave plugin marked loaded (hard-stop)', async () => {
-      // Teardown failure must NOT silently drop the plugin from the
-      // loaded map — that papers over ghost state (listeners, timers, DB
-      // cursors) and the next reload would double-register them. Instead,
-      // throw from `unload()` and keep the plugin in place so operators
-      // must fix the teardown path or restart the bot.
+    it('should propagate teardown errors after running dispatcher cleanup (W2.2)', async () => {
+      // Teardown failure leaves dispatcher binds + event-bus listeners
+      // wired against a torn-down plugin — those become ghost handlers
+      // on subsequent dispatches. unload() must run cleanupPluginResources
+      // even when teardown() throws, then re-throw the error so callers
+      // see the failure. The plugin still drops from the loaded map.
       const pluginPath = writePlugin(
         tempDir,
         'bad-teardown',
@@ -1492,19 +1492,25 @@ describe('PluginLoader', () => {
         export const name = 'bad-teardown';
         export const version = '1.0.0';
         export const description = '';
-        export function init(api) {}
+        export function init(api) {
+          api.bind('pubm', 0, '*', () => {});
+        }
         export function teardown() {
           throw new Error('teardown explosion');
         }
       `,
       );
 
-      const { loader } = createLoaderFull(tempDir);
+      const { loader, dispatcher } = createLoaderFull(tempDir);
       await loader.load(pluginPath);
 
+      // Verify the bind was actually wired up
+      expect(dispatcher.listBinds({ pluginId: 'bad-teardown' }).length).toBe(1);
+
       await expect(loader.unload('bad-teardown')).rejects.toThrow('teardown explosion');
-      // Plugin stays in the loaded map — operator intervention required.
-      expect(loader.isLoaded('bad-teardown')).toBe(true);
+      // Plugin removed from loaded map and dispatcher cleaned up despite throw
+      expect(loader.isLoaded('bad-teardown')).toBe(false);
+      expect(dispatcher.listBinds({ pluginId: 'bad-teardown' }).length).toBe(0);
     });
   });
 

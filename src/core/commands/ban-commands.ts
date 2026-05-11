@@ -162,7 +162,18 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
       // attributed to `system`/`bot`, one written here. Auditing wants
       // exactly one row per action, attributed to the caller.
       banStore.storeBan(channel, mask, ctx.nick, durationMs);
-      ircCommands.ban(channel, mask, auditActor(ctx));
+      try {
+        ircCommands.ban(channel, mask, auditActor(ctx));
+      } catch (err) {
+        // `IRCCommands.ban -> mode()` throws on parse / param-count
+        // mismatches (malformed mask, capabilities mid-renegotiation).
+        // Reply with the message instead of letting the throw escape into
+        // the dispatcher's catch where the operator just sees a generic
+        // "command failed" without context.
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.reply(`Ban send failed: ${msg}`);
+        return;
+      }
 
       // Propagate via botlink if hub is active — leaves apply the ban to
       // their local stores so a rejoin on another bot still bounces.
@@ -205,7 +216,15 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
       // Single audit row from IRCCommands.unban with the caller as `by`
       // — see the matching comment on `.ban` above. Avoids the
       // double-row pattern that prior callers fell into.
-      ircCommands.unban(channel, mask, auditActor(ctx));
+      try {
+        ircCommands.unban(channel, mask, auditActor(ctx));
+      } catch (err) {
+        // mode()-parse errors surface as a friendly reply instead of a
+        // bare dispatcher catch — see the matching .ban comment.
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.reply(`Unban send failed: ${msg}`);
+        return;
+      }
 
       if (hub) {
         hub.broadcast({ type: 'CHAN_BAN_DEL', channel, mask });

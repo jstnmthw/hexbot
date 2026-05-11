@@ -116,36 +116,36 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 
 #### Original WARNINGs
 
-- [ ] **W1.1** — `client.quit('Registration timeout')` race against late `'irc error'` overwrites `lastCloseReason` (`connection-lifecycle.ts:215,328-339`). Late server ERROR re-classifies as `rate-limited` (5min) instead of `transient` (1s). _Fix:_ lock `lastCloseReason` once `'registration timeout'` is set.
-- [ ] **W1.2** — Single SASL-fail event triggers `process.exit(2)` with no retry budget (`close-reason-classifier.ts:33-34`, `reconnect-driver.ts:168-174`). Transient SASL race takes the bot down indefinitely. _Fix:_ fatal-after-3-consecutive-without-registration.
-- [ ] **W1.3** — `identify_before_join` await not cancellable on shutdown (`connection-lifecycle.ts:285-307`). On `removeListeners()` mid-await, inner timer + EventBus once-listeners survive.
-- [ ] **W1.4** — `STSStore.get()` deletes expired rows during a read with no try/catch (`sts.ts:107-141`). Transient `SQLITE_BUSY` at boot blocks `Bot.start()`.
-- [ ] **W1.5** — `connect()` synchronous throw bypasses `'connecting'` event; registration timer leaks across retries (`connection-lifecycle.ts:206-235`).
+- [x] **W1.1** — `client.quit('Registration timeout')` race against late `'irc error'` overwrites `lastCloseReason` (`connection-lifecycle.ts:215,328-339`). Late server ERROR re-classifies as `rate-limited` (5min) instead of `transient` (1s). _Fix:_ lock `lastCloseReason` once `'registration timeout'` is set.
+- [x] **W1.2** — Single SASL-fail event triggers `process.exit(2)` with no retry budget (`close-reason-classifier.ts:33-34`, `reconnect-driver.ts:168-174`). Transient SASL race takes the bot down indefinitely. _Fix:_ fatal-after-3-consecutive-without-registration.
+- [x] **W1.3** — `identify_before_join` await not cancellable on shutdown (`connection-lifecycle.ts:285-307`). On `removeListeners()` mid-await, inner timer + EventBus once-listeners survive.
+- [x] **W1.4** — `STSStore.get()` deletes expired rows during a read with no try/catch (`sts.ts:107-141`). Transient `SQLITE_BUSY` at boot blocks `Bot.start()`.
+- [x] **W1.5** — `connect()` synchronous throw bypasses `'connecting'` event; registration timer leaks across retries (`connection-lifecycle.ts:206-235`).
 - [x] **W1.6** — `messageQueue.clear()` runs before `cancelPendingVerifies`; DB throw inside `onClose` wedges reconnect (`connection-lifecycle.ts:362-369`). _Fix:_ per-step try/catch in `onClose`.
-- [ ] **W1.7** — `cancelReconnect()` does not stop registration timer or presence timer (`connection-lifecycle.ts:404-406`).
-- [ ] **W1.8** — Transient-tier exponential cap math (`2 ** consecutiveFailures`) blows up at `>= 50` (`reconnect-driver.ts:117-126`). Clamped, but fragile.
-- [ ] **W1.9** — `onSocketError` does not schedule fail-safe close-watchdog (`connection-lifecycle.ts:375-381`). TLS handshake-stage RST may strand bot.
+- [x] **W1.7** — `cancelReconnect()` does not stop registration timer or presence timer (`connection-lifecycle.ts:404-406`).
+- [x] **W1.8** — Transient-tier exponential cap math (`2 ** consecutiveFailures`) blows up at `>= 50` (`reconnect-driver.ts:117-126`). Clamped, but fragile. _(Already addressed by `TRANSIENT_DOUBLING_CAP=20` clamp before this audit ran — verified no overflow at `consecutiveFailures > 20`.)_
+- [x] **W1.9** — `onSocketError` does not schedule fail-safe close-watchdog (`connection-lifecycle.ts:375-381`). TLS handshake-stage RST may strand bot.
 - [x] **W1.10** — DNS ENOTFOUND classified as `transient`, retried every 1-30s forever (`close-reason-classifier.ts:82-94`). Operator typo → DNS hammered. _Fix:_ ENOTFOUND on first attempt → fatal.
 
 ### Phase 2 — Dispatcher & plugin loader (6 items)
 
 - [x] **W2.1** — `dispatch()` iterates `this.binds` array without snapshot — handler-side `unbindAll` reentrancy is undefined (`dispatcher.ts:362-398`) [verified]. _Fix:_ `const snapshot = this.binds.slice()` at top of loop.
-- [ ] **W2.2** — `unloadAll()` partial-failure recovery silently force-deletes without dispatcher cleanup (`plugin-loader.ts:588-601`, `unload()` 552-569). Throwing teardown leaves binds/listeners attached, plugin removed from `loaded` map. Ghost handlers fire post-unload.
+- [x] **W2.2** — `unloadAll()` partial-failure recovery silently force-deletes without dispatcher cleanup (`plugin-loader.ts:588-601`, `unload()` 552-569). Throwing teardown leaves binds/listeners attached, plugin removed from `loaded` map. Ghost handlers fire post-unload.
 - [x] **W2.3** — No circuit breaker for non-timer handlers throwing on every event (`dispatcher.ts:389-396`). 100 msgs/min at a broken `pubm` handler = 100 stack traces/min in logs forever. Timer binds get auto-disable; pub/msg/raw don't.
-- [ ] **W2.4** — Disposed-API guard cannot reach the user-supplied handler closure (`plugin-api-factory.ts:282-294`). Plugin's own `setInterval` outliving teardown calls `myHandler` against a torn-down api. The doc/comment overstates the guard's reach.
-- [ ] **W2.5** — `setCommandRelay` re-wire doesn't track per-call eventBus reference (`hub.ts:236-298`) [latent]. Re-wire with a different bus reference leaks listeners on the original.
-- [ ] **W2.6** — Flood `warned` Set FIFO eviction breaks one-time-per-window guarantee under cap (`flood-limiter.ts:147-152`). 8193rd flooder evicts oldest warned nick → duplicate notice on rotation.
+- [x] **W2.4** — Disposed-API guard cannot reach the user-supplied handler closure (`plugin-api-factory.ts:282-294`). Plugin's own `setInterval` outliving teardown calls `myHandler` against a torn-down api. The doc/comment overstates the guard's reach.
+- [x] **W2.5** — `setCommandRelay` re-wire doesn't track per-call eventBus reference (`hub.ts:236-298`) [latent]. Re-wire with a different bus reference leaks listeners on the original.
+- [x] **W2.6** — Flood `warned` Set FIFO eviction breaks one-time-per-window guarantee under cap (`flood-limiter.ts:147-152`). 8193rd flooder evicts oldest warned nick → duplicate notice on rotation.
 
 ### Phase 3 — Database layer (8 items)
 
 - [x] **W3.1** — `getAllBans()` and `liftExpiredBans()` are unbounded scans of monotonically growing namespace (`ban-store.ts:109-110,144`) [at-scale]. _Fix:_ min-heap on `(expires, key)` updated in `storeBan`/`removeBan`. _(scope: scale-deferred — won't-fix until botnet deployment.)_
-- [ ] **W3.2** — `setAuditFallback` sink wired in type signature but never connected (`database.ts:139`, `mod-log.ts:272`). Disk-full writes drop silently with no fallback. Either delete the dead code or wire a default ring-buffer sink in `bot.ts`.
+- [x] **W3.2** — `setAuditFallback` sink wired in type signature but never connected (`database.ts:139`, `mod-log.ts:272`). Disk-full writes drop silently with no fallback. Either delete the dead code or wire a default ring-buffer sink in `bot.ts`.
 - [x] **W3.3** — Schema migration runs unconditionally inside constructor without batching (`mod-log.ts:255,558-581`) [at-scale]. 2M-row mod*log migration holds write lock and blocks bot for tens of seconds. \_Fix:* batched copy via `setImmediate`. _(scope: scale-deferred.)_
 - [x] **W3.4** — `permissions.listUsers()` walks whole namespace; botlink replace path also linear (`permissions.ts:538,572`) [at-scale]. _Fix:_ `db.list(ns, prefix, { limit })` and stream. _(scope: scale-deferred.)_
-- [ ] **W3.5** — `transaction()` does not short-circuit when `writesDisabled` (`database.ts:197`).
+- [x] **W3.5** — `transaction()` does not short-circuit when `writesDisabled` (`database.ts:197`).
 - [x] **W3.6** — `kv` table has no retention or pruning (`database.ts:243-251`). `seen`, `ai-chat`, `social-tracker`, `feed-store`, `ban:`, `tokens:` all grow forever. _Fix:_ per-namespace retention hook + periodic VACUUM.
-- [ ] **W3.7** — `parseMetadataSafe` returns `null` on read but `audit:log` already emitted parsed metadata (`mod-log.ts:58-72,439,470`). Asymmetric state for botlink relay observers.
-- [ ] **W3.8** — `ban-store.ts:202-210` empty-arg catch silently drops parse errors during legacy migration. Silent data loss; no audit row.
+- [x] **W3.7** — `parseMetadataSafe` returns `null` on read but `audit:log` already emitted parsed metadata (`mod-log.ts:58-72,439,470`). Asymmetric state for botlink relay observers.
+- [x] **W3.8** — `ban-store.ts:202-210` empty-arg catch silently drops parse errors during legacy migration. Silent data loss; no audit row.
 
 ### Phase 4 — DCC subsystem (5 items)
 
@@ -162,9 +162,9 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 #### Original WARNINGs
 
 - [x] **W4.1** — `pendingSessions` leak if `DCCSession.start()` throws before `attachLifecycleHandlers` (`dcc/index.ts:1817-1818,435-462`). Pre-start `'error'` handler is removed before lifecycle handlers attach; an `'error'` event in that microtask gap can crash. Even if caught, session sits in `pendingSessions` forever.
-- [ ] **W4.2** — Lockout/no-password `socket.write` not wrapped in try/catch (`dcc/index.ts:1766-1768,1785-1788`). Late RST emits `'error'` after pre-handshake handler is removed → unhandled error.
-- [ ] **W4.3** — `mod_log` writes during DCC auth-failure storm are synchronous (`dcc/index.ts:1198-1209,1248-1278`). Brute-force attacker triggers O(maxFailures) inserts per identity per window. _Fix:_ batch `auth-fail` rows under lockout window.
-- [ ] **W4.4** — DCC sessions survive IRC reconnect; can issue commands while IRC is down (`bot.ts:1283-1287`, `dcc/index.ts:1367-1399`). _Fix:_ surface connection state to DCC prompt.
+- [x] **W4.2** — Lockout/no-password `socket.write` not wrapped in try/catch (`dcc/index.ts:1766-1768,1785-1788`). Late RST emits `'error'` after pre-handshake handler is removed → unhandled error.
+- [x] **W4.3** — `mod_log` writes during DCC auth-failure storm are synchronous (`dcc/index.ts:1198-1209,1248-1278`). Brute-force attacker triggers O(maxFailures) inserts per identity per window. _Fix:_ batch `auth-fail` rows under lockout window.
+- [x] **W4.4** — DCC sessions survive IRC reconnect; can issue commands while IRC is down (`bot.ts:1283-1287`, `dcc/index.ts:1367-1399`). _Fix:_ surface connection state to DCC prompt.
 
 ### Phase 5 — Botlink subsystem (10 items)
 
@@ -190,18 +190,18 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 #### Original WARNINGs
 
 - [x] **W5.1** — `RateCounter.check()` is O(n) per call (`botlink/rate-counter.ts:19-25`). `filter` reallocates on every check; under recovery storms compounds with sync-frame flood. _(scope: scale-deferred — recovery storms only matter past botnet-scale.)_
-- [ ] **W5.2** — `BotLinkLeaf.connect()` race: socket dangles if `disconnect()` arrives mid-DNS (`botlink/leaf.ts:120-145`). _Fix:_ `if (this.disconnecting) { socket.destroy(); return; }`.
-- [ ] **W5.3** — `disconnect()` zeros `linkKey`; subsequent `connect()` (vs `reconnect()`) silently fails (`botlink/leaf.ts:286-288,304`) [latent].
-- [ ] **W5.4** — Pre-handshake socket has no per-frame size cap; attacker can drive `JSON.parse` + `sanitizeFrame` on 64KB junk for 10s (`hub.ts:443-482`, `protocol.ts:213`). _Fix:_ cap pre-handshake frame to 4KB.
+- [x] **W5.2** — `BotLinkLeaf.connect()` race: socket dangles if `disconnect()` arrives mid-DNS (`botlink/leaf.ts:120-145`). _Fix:_ `if (this.disconnecting) { socket.destroy(); return; }`.
+- [x] **W5.3** — `disconnect()` zeros `linkKey`; subsequent `connect()` (vs `reconnect()`) silently fails (`botlink/leaf.ts:286-288,304`) [latent].
+- [x] **W5.4** — Pre-handshake socket has no per-frame size cap; attacker can drive `JSON.parse` + `sanitizeFrame` on 64KB junk for 10s (`hub.ts:443-482`, `protocol.ts:213`). _Fix:_ cap pre-handshake frame to 4KB.
 - [x] **W5.5** — `frameDispatchContext()` rebuilt per frame (`hub.ts:715-739,750`). 300 frames/s = 300 closures/s; major-GC pressure. _Fix:_ build once at `setCommandRelay`/`acceptHandshake`. _(scope: scale-deferred — only matters at sustained ≥100 frames/s.)_
-- [ ] **W5.6** — `BotLinkProtocol`'s `'line'` listener has no max-queue check (`protocol.ts:216-252`).
+- [x] **W5.6** — `BotLinkProtocol`'s `'line'` listener has no max-queue check (`protocol.ts:216-252`).
 - [x] **W5.7** — Sync replay relies on idempotent upsert but does not detect frame loss (`hub.ts:680-691`). Pair with W-BOTLINK-BP fix. _(scope: scale-deferred.)_
 - [x] **W5.8** — Reconnect storm against per-IP `max_pending_handshakes=3` self-DoSes NAT'd fleets (`auth.ts:326`, `leaf.ts:519-542`). _(scope: scale-deferred — single-bot deploy doesn't have a fleet.)_
 
 ### Phase 6 — Services & identity (2 items)
 
 - [x] **W6.1** — `verifyUser` ACC→STATUS retry doesn't reset 5s timeout (`services.ts:610-632`). Misconfigured `services.type` causes false-positive `nickserv-verify-timeout` rows.
-- [ ] **W6.2** — `pendingGhostResolver` not cleared if GHOST notice arrives after 1.5s timer (`services.ts:579-584,773-790`). Generation race on rapid second reclaim.
+- [x] **W6.2** — `pendingGhostResolver` not cleared if GHOST notice arrives after 1.5s timer (`services.ts:579-584,773-790`). Generation race on rapid second reclaim.
 
 ### Phase 7 — Orchestrator & process (10 items)
 
@@ -242,25 +242,25 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 
 #### Original WARNINGs
 
-- [ ] **W7.1** — `process.on` handlers attached after `main()` is invoked — order-fragile (`index.ts:160-225,235`) [latent].
-- [ ] **W7.2** — Bootstrap throw exits via `process.exit(1)` before logger exists; stderr line lacks systemd priority (`bot.ts:222-227,1607-1664`).
+- [x] **W7.1** — `process.on` handlers attached after `main()` is invoked — order-fragile (`index.ts:160-225,235`) [latent].
+- [x] **W7.2** — Bootstrap throw exits via `process.exit(1)` before logger exists; stderr line lacks systemd priority (`bot.ts:222-227,1607-1664`).
 - [ ] **W7.3** — No supervisor ready-signal (no `sd_notify`) (`index.ts:106-122`). systemd `Type=notify` cannot be used.
-- [ ] **W7.4** — `.restart` command `process.exit(0)` after `bot.shutdown()` — no `stopHeartbeat()` (`bot.ts:1082-1085`). Healthcheck file may not be removed on restart.
-- [ ] **W7.5** — No `process.on('warning')` or `'beforeExit'` handlers (`index.ts`).
-- [ ] **W7.6** — Plugin-load failure logged loud but does not change exit posture (`bot.ts:971-976`). No way to opt into "fail-fast" for CI/staging.
+- [x] **W7.4** — `.restart` command `process.exit(0)` after `bot.shutdown()` — no `stopHeartbeat()` (`bot.ts:1082-1085`). Healthcheck file may not be removed on restart.
+- [x] **W7.5** — No `process.on('warning')` or `'beforeExit'` handlers (`index.ts`).
+- [x] **W7.6** — Plugin-load failure logged loud but does not change exit posture (`bot.ts:971-976`). No way to opt into "fail-fast" for CI/staging.
 
 ### Phase 8 — IRC commands & queue (10 items)
 
-- [ ] **W8.1** — `messageQueue.flush()` on shutdown drains synchronously without deadline (`message-queue.ts:168-173`, `bot.ts:1322`). 200 queued lines → server K-lines on burst right before QUIT → restart connects into K-line.
-- [ ] **W8.2** — `client.quit()` after `flush()` may not sequence QUIT after the burst (`bot.ts:1322-1334`).
+- [x] **W8.1** — `messageQueue.flush()` on shutdown drains synchronously without deadline (`message-queue.ts:168-173`, `bot.ts:1322`). 200 queued lines → server K-lines on burst right before QUIT → restart connects into K-line.
+- [x] **W8.2** — `client.quit()` after `flush()` may not sequence QUIT after the burst (`bot.ts:1322-1334`).
 - [x] **W8.3** — REPL `process.exit(0)` from `rl.on('close')` skips Promise.catch (`repl.ts:115-119`). `bot.shutdown()` rejection → unhandled; bot zombies.
 - [x] **W8.4** — REPL has no `process.stdin.on('error')` handler (`repl.ts:51-122`). EPIPE on stdout crashes the bot.
 - [x] **W8.5** — `.modlog`, `.bans`, `.users`, `.binds` reply with unbounded `lines.join('\n')` (`ban-commands.ts:84-101`, `modlog-commands.ts:730-734`, `permission-commands.ts:228-241`, `dispatcher-commands.ts:60-77`). Botlink-relayed dot-commands silent-truncate at per-target queue cap.
 - [x] **W8.6** — `runEnd` (`.modlog end`) walks full result set with O(N/PAGE*SIZE) synchronous queries (`modlog-commands.ts:663-684`) [at-scale]. 1M-row mod_log → 100k SQLite queries blocks event loop. *(scope: scale-deferred.)\_
-- [ ] **W8.7** — `messageQueue.setRate(0, ...)` silently coerces 0 to default 2 (`message-queue.ts:229-239`, `bot.ts:570-572`).
-- [ ] **W8.8** — `IRCCommands.mode()` parse-failure throws to caller; ban-commands runs synchronously without try/catch (`irc-commands.ts:98-108,301-306,358-364`, `ban-commands.ts:154`).
+- [x] **W8.7** — `messageQueue.setRate(0, ...)` silently coerces 0 to default 2 (`message-queue.ts:229-239`, `bot.ts:570-572`).
+- [x] **W8.8** — `IRCCommands.mode()` parse-failure throws to caller; ban-commands runs synchronously without try/catch (`irc-commands.ts:98-108,301-306,358-364`, `ban-commands.ts:154`).
 - [x] **W8.9** — `.bot <self> .<cmd>` recursion is not limited (`botlink-commands.ts:581-583`). _Fix:_ add `bot` to `BOT_RELAY_FORBIDDEN_COMMANDS`.
-- [ ] **W8.10** — `.audit-tail` listener leaks closure over stale REPL ctx if shutdown order goes wrong (`modlog-commands.ts:548-557`, `repl.ts:147`) [latent].
+- [x] **W8.10** — `.audit-tail` listener leaks closure over stale REPL ctx if shutdown order goes wrong (`modlog-commands.ts:548-557`, `repl.ts:147`) [latent].
 
 ### Phase 9 — Channel state & ISUPPORT (7 items)
 
@@ -290,7 +290,7 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 - [x] **W10.2** — RSS `!rss check` (manual all-feeds) bypasses circuit breaker (`plugins/rss/commands.ts:382-395`). DNS outage → 10 sequential failures → 50s blocking + 10 channel notices.
 - [x] **W10.3** — ai-chat `inflightControllers.clear()` after abort doesn't await fetch unwind; stale completion can release semaphore on new instance (`providers/ollama.ts:266-271`, `providers/gemini.ts:144-149`).
 - [x] **W10.4** — spotify-radio `!radio on` does not verify token via `getCurrentlyPlaying()` before announcing (`plugins/spotify-radio/index.ts:269-325`). Asymmetric "Radio is on" / 50s later "Too many errors. Radio off." channel announce.
-- [ ] **W10.5** — RSS per-feed staggering: feeds tick on same 60s boundary; concurrent feeds chunk-flood at minute boundary (`plugins/rss/feed-formatter.ts:109`). _Fix:_ jitter first poll within interval.
+- [x] **W10.5** — RSS per-feed staggering: feeds tick on same 60s boundary; concurrent feeds chunk-flood at minute boundary (`plugins/rss/feed-formatter.ts:109`). _Fix:_ jitter first poll within interval. _(Deterministic per-feed `feedOffsetMs(id, interval)` in `plugins/rss/index.ts`: first announce poll fires after `offset` ms instead of full interval; subsequent ticks revert to `lastPoll + interval`. Sibling feeds with the same interval but different ids drift apart on first fire.)_
 
 ### Phase 11 — IRC-behavior plugins (9 items)
 

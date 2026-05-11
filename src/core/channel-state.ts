@@ -64,6 +64,14 @@ export class ChannelState {
   private botNick = '';
   private casemapping: Casemapping = 'rfc1459';
   private capabilities: ServerCapabilities = defaultServerCapabilities();
+  /**
+   * Set true in `clearAllChannels` (reconnect path); reset on the first
+   * `onJoin`/`onUserlist` of the new session. Late 353/JOIN lines for the
+   * pre-reconnect session would otherwise re-create empty channel records
+   * that the new session never repopulates. Closes the race window between
+   * `clearAllChannels` and the network-side disconnect actually flushing.
+   */
+  private disconnecting = false;
 
   /**
    * @param initialState Optional seed for the internal channel and
@@ -244,6 +252,11 @@ export class ChannelState {
    * repopulate fresh state on the new session.
    */
   clearAllChannels(): void {
+    // Lock new allocations until the next session actually starts joining
+    // channels. Late lines from the pre-reconnect session (353/JOIN from
+    // the old socket draining) would otherwise re-create empty records
+    // the new session never repopulates.
+    this.disconnecting = true;
     if (this.channels.size === 0) return;
     this.logger?.debug(`clearing ${this.channels.size} tracked channels on reconnect`);
     this.channels.clear();
@@ -282,6 +295,17 @@ export class ChannelState {
     const ident = String(event.ident ?? '');
     const hostname = String(event.hostname ?? '');
     const channel = String(event.channel);
+
+    // Reconnect race guard: a JOIN for a channel we no longer track during
+    // the disconnect window must not allocate a new record. The bot will
+    // re-issue JOIN on the new session if it actually wants this channel.
+    if (this.disconnecting && !this.channels.has(this.lowerChannel(channel))) {
+      this.logger?.debug(`dropping late JOIN for ${channel} during disconnecting window`);
+      return;
+    }
+    // First JOIN of the new session — we're past the reconnect drop and
+    // the new session is allocating fresh channel state.
+    this.disconnecting = false;
 
     // IRCv3 extended-join (cap `extended-join`, IRCv3.2): when negotiated, the
     // server appends an account name and realname to JOIN. irc-framework sets
@@ -402,6 +426,19 @@ export class ChannelState {
     for (const ch of this.channels.values()) {
       const user = ch.users.get(oldLower);
       if (user) {
+        // Surface NICK collisions during a netsplit re-merge. Two distinct
+        // identities ending up under the same key would silently merge —
+        // the surviving record is whichever NICK fired second, with the
+        // earlier user's away/account state lost. We don't change the
+        // behavior (overwrite is the only option once the server has
+        // decided on a winner), but the warn lets the operator see it.
+        const existing = ch.users.get(newLower);
+        if (existing && existing !== user) {
+          this.logger?.warn(
+            `NICK collision in ${ch.name}: ${oldNick} (${user.hostmask}) → ${newNick} ` +
+              `overwrites existing record (${existing.hostmask})`,
+          );
+        }
         ch.users.delete(oldLower);
         user.nick = newNick;
         user.hostmask = `${newNick}!${user.ident}@${user.hostname}`;
@@ -421,6 +458,16 @@ export class ChannelState {
     for (const m of modes) {
       const mode = m.mode ?? '';
       const param = m.param ? String(m.param) : '';
+
+      // Reject malformed entries with no direction char. A buggy or hostile
+      // server emitting `o foo` (missing `+`/`-`) would otherwise be treated
+      // as a remove by `processChannelMode`, since `mode.charAt(0) === '+'`
+      // is false. Skipping is safer than guessing.
+      const direction = mode.charAt(0);
+      if (direction !== '+' && direction !== '-') {
+        this.logger?.debug(`malformed mode entry, skipping: ${mode}`);
+        continue;
+      }
 
       // User prefix modes carry a nick param. Which chars count as prefix modes
       // is ISUPPORT-driven — we consult the current capabilities snapshot so
@@ -504,6 +551,16 @@ export class ChannelState {
     const channel = String(event.channel ?? '');
     if (!isObjectArray(event.users)) return;
     const users = event.users;
+
+    // Reconnect race guard: a 353 NAMES line for a channel we dropped at
+    // disconnect must not re-create the record. The new session's JOIN
+    // path is the only legitimate allocation site once `clearAllChannels`
+    // has fired.
+    if (this.disconnecting && !this.channels.has(this.lowerChannel(channel))) {
+      this.logger?.debug(`dropping late NAMES for ${channel} during disconnecting window`);
+      return;
+    }
+    this.disconnecting = false;
 
     const ch = this.ensureChannel(channel);
 
@@ -596,19 +653,41 @@ export class ChannelState {
     if (!ch) return;
     let modeChars = '';
     let key = '';
-    let limit = 0;
+    let limit = ch.limit;
+    let limitWasParsed = false;
 
     for (const m of event.modes) {
       const mode = String(m.mode);
       const modeChar = mode.charAt(1);
       modeChars += modeChar;
       if (modeChar === 'k') key = String(m.param);
-      if (modeChar === 'l') limit = parseInt(String(m.param), 10);
+      if (modeChar === 'l') {
+        // Match the guard in `processChannelMode`: a non-numeric or
+        // non-positive `+l` param would otherwise pin `ch.limit = NaN`,
+        // poisoning every downstream `< limit` comparison. Keep the
+        // previous value if the server hands us a malformed param.
+        const parsed = parseInt(String(m.param), 10);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          limit = parsed;
+          limitWasParsed = true;
+        } else {
+          this.logger?.debug(
+            `RPL_CHANNELMODEIS: ignoring non-positive +l param "${String(m.param)}" for ${channel}`,
+          );
+        }
+      }
     }
 
     ch.modes = modeChars;
     ch.key = key;
-    ch.limit = limit;
+    // Only overwrite the limit when `+l` was both present and parsed
+    // successfully. If `+l` is absent from the modes list at all, the
+    // server is telling us there is no limit — clear it.
+    if (!modeChars.includes('l')) {
+      ch.limit = 0;
+    } else if (limitWasParsed) {
+      ch.limit = limit;
+    }
 
     this.eventBus.emit('channel:modesReady', channel);
     this.logger?.debug(

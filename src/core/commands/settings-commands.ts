@@ -52,9 +52,11 @@ export interface SettingsCommandsDeps {
   /**
    * Optional supervisor-restart hook. When provided, registers `.restart`
    * — operators run it to apply restart-class config changes and to pick
-   * up plugin code edits. Bot wires this to `bot.shutdown()` followed by
-   * `process.exit(0)`; the surrounding supervisor (Docker, systemd, pm2)
-   * is responsible for re-launching the process. Tests omit it.
+   * up plugin code edits. Bot wires this to `process.kill(pid, 'SIGTERM')`
+   * so the same graceful-shutdown path the signal handler runs is reused
+   * (heartbeat cleanup, then shutdown steps, then exit); the surrounding
+   * supervisor (Docker, systemd, pm2) is responsible for re-launching the
+   * process. Tests omit it.
    */
   restartProcess?: () => void | Promise<void>;
 }

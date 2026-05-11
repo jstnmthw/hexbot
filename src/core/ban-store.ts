@@ -1,6 +1,7 @@
 // Core ban store — first-class channel ban persistence in the _bans namespace.
 // Wraps AdminListStore<BanRecord> with IRC-aware key formatting and expiry logic.
 import type { BotDatabase } from '../database';
+import type { LoggerLike } from '../logger';
 import type { BanRecord, PluginDB } from '../types';
 import { sanitize } from '../utils/sanitize';
 import { stripFormatting } from '../utils/strip-formatting';
@@ -46,9 +47,11 @@ const ORPHAN_BAN_GRACE_MS = 24 * 60 * 60_000;
 export class BanStore {
   private readonly store: AdminListStore<BanRecord>;
   private readonly ircLower: (s: string) => string;
+  private readonly logger: LoggerLike | null;
 
-  constructor(db: BotDatabase, ircLower: (s: string) => string) {
+  constructor(db: BotDatabase, ircLower: (s: string) => string, logger?: LoggerLike | null) {
     this.ircLower = ircLower;
+    this.logger = logger ?? null;
     this.store = new AdminListStore<BanRecord>(db, {
       namespace: NAMESPACE,
       keyFn: (record) => this.makeKey(record.channel, record.mask),
@@ -204,13 +207,23 @@ export class BanStore {
         let parsed: unknown;
         try {
           parsed = JSON.parse(value);
-        } catch {
+        } catch (err) {
           // Skip unparseable rows — they'll still get deleted below so the
-          // stale namespace is fully cleaned up.
+          // stale namespace is fully cleaned up. Log loudly: a malformed
+          // legacy row is silent data loss and operators should know it
+          // happened so they can decide whether to recover from a backup
+          // before the source key is purged. (W3.8)
+          this.logger?.warn(
+            `[ban-store] migrateFromPluginNamespace: dropping unparseable legacy row "${key}" — ${(err as Error).message}`,
+          );
           pluginDb.del(key);
           continue;
         }
-        if (isBanRecord(parsed)) {
+        if (!isBanRecord(parsed)) {
+          this.logger?.warn(
+            `[ban-store] migrateFromPluginNamespace: legacy row "${key}" parsed but failed BanRecord shape check — dropping`,
+          );
+        } else {
           this.store.set(parsed);
           migrated++;
         }

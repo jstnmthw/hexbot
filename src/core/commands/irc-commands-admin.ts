@@ -50,6 +50,15 @@ export interface StabilityMetrics {
    * before granting auto-op flags that depend on services verification.
    */
   botIdentified?: boolean;
+  /**
+   * Audit rows currently held in the in-memory fallback buffer because
+   * SQLite refused the write (BUSY/FULL/IOERR). Non-zero indicates the
+   * database is degraded — operators should investigate disk and locks.
+   * (W3.2)
+   */
+  auditFallbackHeld?: number;
+  /** Total audit rows dropped due to fallback buffer overflow since startup. */
+  auditFallbackDropped?: number;
 }
 
 /** Minimal bot interface for status reporting. */
@@ -291,6 +300,12 @@ export function registerIRCAdminCommands(deps: IrcAdminCommandsDeps): void {
         }
         if (m.failedPluginCount !== undefined && m.failedPluginCount > 0) {
           parts.push(`failed-plugins=${m.failedPluginCount}`);
+        }
+        if (m.auditFallbackHeld !== undefined && m.auditFallbackHeld > 0) {
+          parts.push(`audit-fallback-held=${m.auditFallbackHeld}`);
+        }
+        if (m.auditFallbackDropped !== undefined && m.auditFallbackDropped > 0) {
+          parts.push(`audit-fallback-dropped=${m.auditFallbackDropped}`);
         }
         if (parts.length > 0) {
           lines.push(`Stability: ${parts.join(' | ')}`);

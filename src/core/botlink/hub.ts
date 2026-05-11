@@ -246,6 +246,13 @@ export class BotLinkHub {
 
   private cmdHandler: CommandRelay | null = null;
   private cmdPermissions: LinkPermissions | null = null;
+  /**
+   * Bus reference that the current `eventBusListeners` are attached to.
+   * Tracked separately from the constructor's `this.eventBus` so a re-wire
+   * with a different bus reference still detaches from the right bus
+   * (W2.5).
+   */
+  private wiredEventBus: BotEventBus | null = null;
 
   /** Wire command relay: hub executes CMD frames and broadcasts permission changes. */
   setCommandRelay(
@@ -254,10 +261,13 @@ export class BotLinkHub {
     eventBus: BotEventBus,
   ): void {
     // Idempotent: drop any listeners registered by a previous call so we
-    // don't stack duplicate broadcasts on re-wire.
-    if (this.eventBusListeners.length > 0 && this.eventBus) {
+    // don't stack duplicate broadcasts on re-wire. Detach from whichever
+    // bus we last attached to — `wiredEventBus` may not equal the new
+    // `eventBus` arg or `this.eventBus` if callers wired against a
+    // different bus instance previously.
+    if (this.eventBusListeners.length > 0 && this.wiredEventBus) {
       for (const { event, fn } of this.eventBusListeners) {
-        offBusListener(this.eventBus, event, fn);
+        offBusListener(this.wiredEventBus, event, fn);
       }
       this.eventBusListeners = [];
     }
@@ -314,6 +324,7 @@ export class BotLinkHub {
       { event: 'user:hostmaskAdded', fn: broadcastUserSync },
       { event: 'user:hostmaskRemoved', fn: broadcastUserSync },
     ];
+    this.wiredEventBus = eventBus;
   }
 
   /** Send a command to a specific leaf and await the result. Used by .bot command. */
@@ -427,12 +438,16 @@ export class BotLinkHub {
     this.pendingCmds.drain(['Hub shutting down.']);
     this.routes.clear();
 
-    // Remove eventBus listeners
-    if (this.eventBus) {
+    // Remove eventBus listeners. Detach from `wiredEventBus` (the bus
+    // they were actually attached to via `setCommandRelay`) rather than
+    // `this.eventBus`, which may differ if a caller re-wired with a new
+    // bus reference (W2.5).
+    if (this.wiredEventBus) {
       for (const { event, fn } of this.eventBusListeners) {
-        offBusListener(this.eventBus, event, fn);
+        offBusListener(this.wiredEventBus, event, fn);
       }
       this.eventBusListeners = [];
+      this.wiredEventBus = null;
     }
 
     if (this.server) {

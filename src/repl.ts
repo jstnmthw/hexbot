@@ -177,9 +177,12 @@ export class BotREPL {
   /** Stop the REPL. Idempotent — safe to call from rl.on('close') and .quit. */
   stop(): void {
     Logger.setOutputHook(null);
-    // Drop any `.audit-tail` subscription this session installed before the
-    // REPL goes away — otherwise the listener holds a closure over
-    // `this.print` and stays live until process exit.
+    // ORDER: clearAuditTailForSession MUST run before the listener-cleanup
+    // loop and rl.close(). The audit-tail listener captures `this.print` in a
+    // closure; if we tear the readline interface down first, a late
+    // `audit:log` event would call `this.print` against a torn-down REPL and
+    // either silently no-op or throw. Drop the subscription up front so no
+    // event can hit a half-stopped REPL. (W8.10 / 2026-05-10 audit)
     clearAuditTailForSession('repl');
     for (const { event, fn } of this.ircListeners) {
       this.bot.client.removeListener(event, fn);

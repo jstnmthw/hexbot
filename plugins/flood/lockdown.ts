@@ -66,6 +66,13 @@ export class LockdownController {
     // crossed by every record() call (since count >= -1 is trivially true).
     if (this.cfg.lockCount <= 0) return; // lockdown disabled
 
+    // Without ops we can't lock the channel, so the counters are pointless
+    // memory bloat. `trigger()` already gates on this — but the
+    // distinct-flooder Set / timestamp array kept growing regardless,
+    // which on a sustained join flood inside a long ops-loss window
+    // would consume tens of MB before the bot recovers ops.
+    if (!this.botHasOps(channel)) return;
+
     const lowerChannel = this.api.ircLower(channel);
     const lowerMask = this.api.ircLower(hostmask);
 

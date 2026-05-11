@@ -128,10 +128,28 @@ const PERMISSIONS_CHANGE_EVENTS = [
 /**
  * Handle returned by {@link createPluginApi}. Callers get the usual frozen
  * `api` to hand to the plugin's `init()`, plus a `dispose()` hook that
- * post-teardown converts every method on the api into a no-op. This is the
- * architectural defense against closures that outlive plugin unload: even
- * if a stale `setInterval` or retained ESM module still holds `api`, once
- * disposed it cannot fan out to the dispatcher, database, or IRC client.
+ * post-teardown converts every method on the api into a no-op.
+ *
+ * Scope of the disposed-api guard (W2.4): the guard intercepts calls made
+ * **through** the wrapped api object — `api.db.set(...)`, `api.bind(...)`,
+ * `api.say(...)`, etc. Once disposed, those become no-ops, so a closure
+ * that retained `api` cannot fan out to the dispatcher, database, or IRC
+ * client.
+ *
+ * The guard does **not** intercept:
+ * - Bare-global timers the plugin scheduled itself (`setInterval(myHandler,
+ *   1000)` without going through `api.setInterval`). The timer fires
+ *   `myHandler` directly; whatever non-api state that closure captured is
+ *   still live. Plugins must clear their own bare-global timers in
+ *   `teardown()`. The plugin-loader hardens this further by tracking
+ *   timers scheduled via `api.setInterval`/`api.setTimeout` and clearing
+ *   them on unload.
+ * - Direct EventEmitter listeners attached without `api.eventBus.on(...)`.
+ *   The plugin owns those and must remove them in `teardown()`.
+ * - Module-level state captured before `init()` returned (top-level
+ *   `let`s, imported singletons). Hot-reload re-imports the module so
+ *   this state resets, but the running closure of a stale interval is
+ *   not affected.
  */
 export interface PluginApiHandle {
   readonly api: PluginAPI;
@@ -269,7 +287,10 @@ export function createPluginApi(
   // Mutable cell shared by every guarded method returned from the factory.
   // `dispose()` flips this; every wrapped method early-returns `undefined`
   // once set, so a closure still holding a reference to this api can no
-  // longer fan out to the bot's core graph. See W-PS1.
+  // longer fan out to the bot's core graph via api.* calls. The guard
+  // does NOT intercept bare-global timers/listeners the plugin scheduled
+  // outside of `api.*` — see PluginApiHandle JSDoc for the full scope.
+  // See W-PS1, W2.4.
   const disposedCell = { disposed: false };
 
   const rawApi: PluginAPI = {

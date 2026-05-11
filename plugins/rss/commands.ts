@@ -10,7 +10,13 @@ import type { ChannelHandlerContext, PluginAPI } from '../../src/types';
 import type { CircuitBreaker } from './circuit-breaker';
 import { type FetchFeedOpts, pollFeed } from './feed-fetcher';
 import { announceItems } from './feed-formatter';
-import { type FeedConfig, deleteRuntimeFeed, isRuntimeFeed, saveRuntimeFeed } from './feed-store';
+import {
+  type FeedConfig,
+  type FeedItem,
+  deleteRuntimeFeed,
+  isRuntimeFeed,
+  saveRuntimeFeed,
+} from './feed-store';
 import { validateFeedUrl } from './url-validator';
 
 /**
@@ -265,7 +271,45 @@ export async function handleAdd(
     return;
   }
 
+  // Seed-fetch the feed BEFORE persisting. A 4xx (404, 410, 451) is a
+  // permanent error: persisting the feed anyway would spend the next 5
+  // poll attempts hammering a doomed URL before the circuit breaker
+  // opens, and burns a feed-id slot on something that will never work.
+  // Transient failures (5xx, network errors) still persist — those
+  // recover and the regular poll loop will catch up.
   const feed: FeedConfig = { id, url, channels: [channel], interval };
+  let preview: FeedItem[];
+  try {
+    preview = await pollFeed(
+      api,
+      parser,
+      feed,
+      'seedPreview',
+      cfg.max_per_poll,
+      fetchOptsFor(cfg, deps.abortSignal()),
+    );
+  } catch (err) {
+    const errMsg = errorMessage(err);
+    if (isPermanentSeedError(errMsg)) {
+      api.notice(ctx.nick, `Feed "${id}" rejected — initial fetch failed permanently: ${errMsg}`);
+      logCmd(api, ctx, 'add', 'rejected', `id=${id} url=${url} permanent: ${errMsg}`);
+      return;
+    }
+    // Transient: persist the feed and let the poll loop retry.
+    saveRuntimeFeed(api, feed);
+    activeFeeds.set(id, feed);
+    api.audit.log('rss-feed-add', {
+      channel,
+      target: id,
+      reason: api.stripFormatting(url),
+      metadata: { interval },
+    });
+    api.notice(ctx.nick, `Feed "${id}" added but initial fetch failed: ${errMsg}`);
+    logCmd(api, ctx, 'add', 'error', `id=${id} url=${url} seed failed: ${errMsg}`);
+    return;
+  }
+
+  // Seed succeeded — persist and announce.
   saveRuntimeFeed(api, feed);
   activeFeeds.set(id, feed);
   // Strip IRC formatting from the URL before it lands in mod_log. The
@@ -279,38 +323,32 @@ export async function handleAdd(
     metadata: { interval },
   });
 
-  // Seed every current item as seen, and return the newest as a one-shot
-  // preview so the admin gets instant confirmation the feed is working.
-  try {
-    const preview = await pollFeed(
-      api,
-      parser,
-      feed,
-      'seedPreview',
-      cfg.max_per_poll,
-      fetchOptsFor(cfg, deps.abortSignal()),
+  if (preview.length > 0) {
+    await announceItems(api, feed, preview, cfg.max_title_length, deps.abortSignal());
+    api.notice(
+      ctx.nick,
+      `Feed "${id}" added. Posted latest article to ${channel} as preview; future items will announce automatically.`,
     );
-    if (preview.length > 0) {
-      await announceItems(api, feed, preview, cfg.max_title_length, deps.abortSignal());
-      api.notice(
-        ctx.nick,
-        `Feed "${id}" added. Posted latest article to ${channel} as preview; future items will announce automatically.`,
-      );
-    } else {
-      api.notice(
-        ctx.nick,
-        `Feed "${id}" added (no items in feed yet). Future items will announce to ${channel}.`,
-      );
-    }
-    logCmd(api, ctx, 'add', 'ok', `id=${id} url=${url} chan=${channel} interval=${interval}s`);
-  } catch (err) {
-    const errMsg = errorMessage(err);
-    // Feed is persisted regardless — the next scheduled poll will retry.
-    // Log at error level so operators notice the failed seed even though
-    // the user-facing notice already explains the situation.
-    api.notice(ctx.nick, `Feed "${id}" added but initial fetch failed: ${errMsg}`);
-    logCmd(api, ctx, 'add', 'error', `id=${id} url=${url} seed failed: ${errMsg}`);
+  } else {
+    api.notice(
+      ctx.nick,
+      `Feed "${id}" added (no items in feed yet). Future items will announce to ${channel}.`,
+    );
   }
+  logCmd(api, ctx, 'add', 'ok', `id=${id} url=${url} chan=${channel} interval=${interval}s`);
+}
+
+/**
+ * Discriminate a permanent (don't-persist) seed error from a transient one.
+ * Looks for an HTTP 4xx status in the message — `feed-fetcher`'s `doRequest`
+ * rejects with `new Error('HTTP ${status}')` so the status sits in the
+ * stringified message. 5xx and network errors are transient and recover.
+ */
+function isPermanentSeedError(errMsg: string): boolean {
+  const m = errMsg.match(/HTTP (\d{3})/);
+  if (!m) return false;
+  const status = parseInt(m[1], 10);
+  return status >= 400 && status < 500;
 }
 
 /**
