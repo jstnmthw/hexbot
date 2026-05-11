@@ -4,26 +4,102 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased] — Live config + audit-CRITICAL kill (2026-04-26)
+## [0.6.0] - 2026-05-11 — Live config, audit closures, and clean-cut plugin API
 
 ### Breaking
 
-- **`.load` / `.unload` / `.reload` removed.** Plugin enable/disable now flows through `.set core plugins.<id>.enabled true/false`; `.restart` is the canonical "pick up code edits" path. The cache-busting import path that powered `.reload` is deleted outright — it was the source of the 2026-04-25 audit's CRITICAL (Node ESM loader has no eviction API; every cache-busted re-import minted a permanent module-graph entry). See `docs/audits/memleak-all-2026-04-25.md`.
+- **`.load` / `.unload` / `.reload` removed.** Plugin enable/disable now flows through `.set core plugins.<id>.enabled true/false`; `.restart` is the canonical "pick up code edits" path. The cache-busting import path that powered `.reload` is deleted outright — it was the source of the 2026-04-25 audit's CRITICAL (Node ESM loader has no eviction API; every cache-busted re-import minted a permanent module-graph entry).
 - **`database`, `pluginDir`, `owner.handle`, `owner.hostmask` removed from `config/bot.json`.** They are now bootstrap env vars: `HEX_DB_PATH`, `HEX_PLUGIN_DIR`, `HEX_OWNER_HANDLE`, `HEX_OWNER_HOSTMASK`. The strict-object schema rejects bot.json files that still carry them with a hint pointing at the env var to set.
 - **`plugin-load` / `plugin-unload` / `plugin-reload` `mod_log` action strings retired.** Historical rows remain queryable; new rows use `coreset-set` / `coreset-unset` / `pluginset-set` / `pluginset-unset` / `chanset-set` / `chanset-unset` / `rehash` / `restart`.
+- **`api.config` removed from PluginAPI.** Every shipped plugin migrated to `api.settings` — typed defs via `api.settings.register([...])` and reads via `getString` / `getInt` / `getFlag`. For deeply-nested config that doesn't flatten to typed settings (ai-chat's `channel_characters`, rss's `feeds`), use `api.settings.bootConfig` — a frozen merged JSON snapshot — as the escape hatch.
+- **`.helpset` command removed.** Folded into `.help set <scope> [<key>]` against the unified `HelpRegistry`. The legacy alias has no remaining purpose now that `.help` and `!help` share one corpus indexed across core commands, plugin commands, and all three settings scopes.
+- **`.help` index permission-filtered for unprivileged DCC/IRC dot-command users.** Operator-only commands no longer appear in the index for non-admin users — matching the existing `!help` behavior. REPL and botlink remain unfiltered (trusted-transport bypass).
 
 ### Added
 
-- **`spotify-radio` plugin (MVP)**: announces the operator's currently-playing Spotify track to a channel and rebroadcasts a Jam share link. Owner-gated `!radio on <jam-url>` / `!radio off`, public `!radio` (notice) and `!listen` (channel) status. Strict URL allowlist (`open.spotify.com/jam/<id>` only by default; `spotify.link` opt-in), refresh-token rotation held in-memory, NickServ ACC verification on mutating commands when services are configured. New `pnpm run spotify:auth` workstation helper for the one-time OAuth flow. See `plugins/spotify-radio/README.md`.
+- **`spotify-radio` plugin**: announces the operator's currently-playing Spotify track to a channel and rebroadcasts a Jam share link. Owner-gated `!radio on <jam-url>` / `!radio off`; public `!radio` (notice) and `!listen` (channel) status with a "Current DJ" line that surfaces the session starter. Strict URL allowlist (`open.spotify.com/socialsession/<id>` canonical; `spotify.link` opt-in vanity domain), refresh-token rotation held in-memory, NickServ ACC verification on mutating commands. `announce_prefix` lives in the settings registry (`.set spotify-radio announce_prefix "[FM]"`). New `pnpm run spotify:auth` workstation helper for the one-time OAuth flow.
 - **Three-scope settings registry** (`src/core/settings-registry.ts`): generalises the per-channel `chanset` pattern to `core` (bot-wide live config), `plugin:<id>` (per-plugin), and the existing `chanset` channel scope. KV-canonical-after-first-boot semantics: `bot.json` / `plugins.json` are first-run seeds, then operator `.set` / `.unset` / `.rehash` writes win.
-- **`.set <scope> <key> <value>` / `.unset <scope> <key>` / `.info <scope>` / `.helpset <scope> <key>` / `.rehash [scope]` / `.restart`** (`src/core/commands/settings-commands.ts`). Audit attribution flows through `auditActor(ctx)` so REPL / IRC / DCC / botlink-relay all converge on the same mod_log shape.
+- **`.set <scope> <key> <value>` / `.unset <scope> <key>` / `.info <scope>` / `.rehash [scope]` / `.restart`** (`src/core/commands/settings-commands.ts`). Audit attribution flows through `auditActor(ctx)` so REPL / IRC / DCC / botlink-relay all converge on the same `mod_log` shape.
 - **Reload-class metadata** on every config schema field via `.describe('@reload:live|reload|restart')`. `.set` echoes the class as a hint: `(applied live)` / `(applied; subsystem reloaded)` / `(stored; takes effect after .restart)`.
-- **`PluginAPI.coreSettings`** (read-only view of bot-wide settings) and **`PluginAPI.settings`** (read/write own plugin scope) surface the registry to plugins. `api.config` remains in place for compatibility — individual plugins migrate at their own pace; `seen` is the worked example.
-- **`pluginLoader.unloadAll()`** runs on `Bot.shutdown()` so every plugin gets a clean teardown chance on process exit (closes the audit's W-PS finding).
+- **`PluginAPI.coreSettings`** (read-only view of bot-wide settings) and **`PluginAPI.settings`** (read/write own plugin scope). `api.settings.bootConfig` exposes a frozen merged JSON snapshot for deeply-nested config that doesn't flatten cleanly.
+- **Unified `HelpRegistry` corpus** keyed by a strict (prefix-preserving, case-folded) identifier. Cross-prefix collisions only fire when the same trigger including prefix is registered twice; a fuzzy fallback keeps bare `!help ban` lookups working. `lookup()` takes the active prefix and biases bare queries toward it, rejects cross-prefix queries (`.help !ban` → none), and prefix-filters category / scope listings. SettingsRegistry mirrors synthetic `.set <scope> <key>` entries into the corpus so sub-help dispatch resolves through the same path.
+- **Bounded retry for channel-join failures** (`src/core/channel-presence-checker.ts`, `src/core/connection-lifecycle.ts`): channels that fail JOIN with a permanent-error numeric (+b/+i/+k/+r) now walk a configurable backoff schedule — default `[5min, 15min, 45min]` — instead of being stuck until reconnect. Recovers automatically from time-limited flood bans. Configurable via `channel_retry_schedule_ms`; set to `[]` to restore previous behavior.
+- **Per-plugin bind cap (`warn 500 / hard 1000`)** with `bindsByPlugin` tally in the dispatcher; closes a memleak audit finding around plugins that bind without ever unbinding.
+- **Healthcheck split**: separate liveness (`/tmp/.hexbot-alive`) and readiness (`/tmp/.hexbot-connected`) sentinels distinguish "process wedged" from "IRC unreachable".
+- **`pluginLoader.unloadAll()`** runs on `Bot.shutdown()` so every plugin gets a clean teardown chance.
+
+### Changed
+
+- **`src/bot.ts` split into focused modules** (-26% LOC, no behavior change). Core settings defs co-locate their `onChange` handlers; kv-maintenance and audit-fallback become small classes; config-file I/O and POSIX permission checks move to `src/config/`; `STSRefusalError` relocates next to the rest of STS. `connect()` / `start()` / `shutdown()` reshaped into named phases. New unit tests cover the extracted modules.
+- **Public `types/` `.d.ts` synced with `src/types/` runtime API.** Plugin authors relying on the public declarations for IDE autocomplete were missing several sub-APIs (`audit`, `util`, `settings`, `coreSettings`, `banStore`) and half the recent additions to `PluginAPI` / `HandlerContext` / `ChannelState`.
+- **Plugin tests grouped into `tests/plugins/<plugin>/` subdirs.** 30 ai-chat and 19 chanmod test files no longer sit flat next to one-off tests.
+- **Plugin example configs minimised.** Every key whose value the plugin's own `config.json` (or schema default) already supplies is removed; only operator-required and security-relevant keys remain (chanmod `services_host_pattern`, rss `feeds`, ai-chat `enabled`/`channels`/`api_key_env`/`provider`/`model`). ai-chat and rss flip to `enabled: false` so the example doesn't auto-post on first boot. `docker-compose.yml` drops the unused `env_file` directive.
+- **Dependencies bumped to latest patch/minor versions** (including dependabot bumps for `postcss` 8.5.9 → 8.5.14 and `ip-address` 10.1.0 → 10.2.0).
 
 ### Fixed
 
-- **Audit-CRITICAL (`importWithCacheBust` ESM-cache leak) resolved by deletion**, not mitigation. `load()` now uses a plain `await import(pathToFileURL(absPath).href)`; `importedOnce`, `reload(name)`, `plugin:reloaded` / `plugin:reload_failed` events all removed.
+- **Audit-CRITICAL (`importWithCacheBust` ESM-cache leak) resolved by deletion**, not mitigation. `load()` now uses a plain `await import(pathToFileURL(absPath).href)`; `importedOnce`, `reload(name)`, and `plugin:reloaded` / `plugin:reload_failed` events removed.
+- **`kv` VACUUM spam from 32-bit `setInterval` overflow.** The 30-day delay (2,592,000,000 ms) exceeded Node's `TIMEOUT_MAX` (~24.8 days), which clamps to 1 ms and fires the callback continuously on startup. VACUUM folds into the daily maintenance handler with an elapsed-time check.
+- **First-boot plugin double-load race in `loadAll`.** Seeding `core.plugins.<id>.enabled` into KV pre-load fired the bot's `onChange` listener, which fire-and-forgets `applyPluginEnabled()` and raced the awaited main load loop. Seed moves to after the main loop where `applyPluginEnabled` is idempotent.
+- **`chanmod` handlers crashing on null channel in pub events** (DM-context tests). Mode-command factory, `!kick`, `!ban`, `!unban`, `!kickban`, and `!bans` get the early-return guard.
+- **Spotify-radio**: pre-flight `verifyToken()` before announcing "Radio is on" so a dead refresh-token surfaces privately instead of as a 50s-late "Too many errors" channel announce; bridge Services to channel-state so listeners re-entering `verifyUser` via `chanUser.accountName` short-circuit.
+
+#### Stability audit 2026-05-10 — 3 CRITICAL + 89 WARNING + 55 INFO closed
+
+- **CRITICALs**: every mutating IRC verb now flows through the message queue (chanmod recovery storms can't trip Excess Flood); fatal SQLite errors hand control to `bot.shutdown()` instead of bypassing teardown via `process.exit(2)`; `ensureChannel` stops growing unboundedly under stray TOPIC / RPL_CHANNELMODEIS from misbehaving servers.
+- **STS upgrade leak**: `messageQueue.clear()` now fires BEFORE `client.quit()` on STS upgrade so `onClose` `flushWithDeadline(100)` cannot drain queued PRIVMSGs over plaintext between upgrade decision and TLS reconnect. Closes a narrow secret-leak window for `.adduser` password material or plugin replies containing tokens.
+- **W-STS-EXIT**: STS refusal no longer calls `process.exit(2)` from inside `Bot.connect()` (which leaked DB WAL files and skipped plugin teardown). `index.ts main().catch` now detects `STSRefusalError` and routes through `runBotShutdown()` before exiting.
+- **W-FATALEXIT**: `shutdownWithTimeout` no longer re-rejects when `shutdown()` throws; preserves the original stack trace during incident response.
+- **`Bot.start`** resolves immediately after `client.connect()` is invoked (not after first `registered`), so a rate-limited tier doesn't park `main()` / REPL for 5–30 minutes.
+- **DCC**: idempotent `cleanupPending(port)` keyed on entry identity closes the listener-success-vs-error double-release race.
+- **flood lockdown**: active locks persist to `api.db`; `restoreLocks()` at init replays past-expiry rows and reschedules live ones, so a reconnect mid-lockdown no longer strands `+R` / `+i` on the server.
+- **kv retention**: `BotDatabase.pruneOlderThan(namespace, days)` + `vacuum()` plus a `KV_RETENTION_DAYS` table driving a daily prune timer + monthly VACUUM (both timers `unref`'d).
+- **REPL hardening**: stdout EPIPE + stdin error handlers; `.catch().finally(exit)` on `bot.shutdown()` so a rejection no longer leaves a zombie process. `audit-tail` clears on stop with a `process.exit` hook as belt-and-braces.
+- **Pagination**: `.bans` / `.users` / `.binds` accept `--page N` with a 20-line cap via `src/utils/paginate.ts`.
+- **Connection lifecycle (W1.1–W1.10)**: registration-timeout lock, SASL fatal budget (3 consecutive), cancellable `identify_before_join` await, STSStore lazy expired-row delete try/catch, `client.connect()` synchronous-throw try/catch, per-step try/catch in `onClose`, `cancelReconnect` clears registration + presence timers, fail-safe `socket.destroy` watchdog on socket error, DNS errors classified fatal in close-reason-classifier.
+- **Dispatcher / plugin loader (W2.2–W2.6)**: `unloadAll` partial-failure runs dispatcher cleanup; `setCommandRelay` tracks per-call `eventBus` reference; flood warned-set cap-skip preserves one-time-per-window; non-timer handlers that throw 25× in a row trip off and surface as `[tripped]` in `.binds`.
+- **Database (W3.2 / W3.5 / W3.7 / W3.8)**: `auditFallback` ring buffer wired in `bot.ts`; `transaction()` short-circuits when `writesDisabled`; `parseMetadataSafe` symmetric drop-on-parse-fail; ban-store empty-arg path logs audit row instead of silent drop.
+- **Channel state / ISUPPORT (W9.1–W9.7)**: `RPL_CHANNELMODEIS` +l param guarded with `Number.isFinite` + positive; mode-array direction guard; reconnect mid-353 disconnecting flag drops late JOIN/NAMES; NICK collision warn surfaces netsplit-merge identity clobbers; channel-presence drift detection includes ad-hoc joined channels; TARGMAX parser rejects malformed pairs.
+- **chanmod (W11/W12)**: `isPermanentSeedError` discriminates 4xx HTTP from transient; bot-join bind deletes `rejoin_attempts:` KV row; TTL check in `handleBotOpped` skips stale `-im`; `pruneExpiredState` clears `splitActive` past `splitExpiry`; `LockdownController.record` bails before counter growth; disposed flag short-circuits enforcement post-teardown; `getCooldownMs` reads settings on every check; `armSocksConnectTimeout(30s)` on raw socket connected.
+- **ai-chat / RSS / Spotify / chanmod / dispatcher** medium-effort items: distinct `circuit_open` provider error kind silences channel-visible spam during sustained Gemini outages; manual `!rss check` honors per-feed circuit breaker; cycle-on-deop schedules a 5s+10s verification ladder; `performMassReop` capped at 5 actions per direction-batch with deferred spill; greeter `joinRates` prunes on bot PART/KICK; rate-limited operator notice when verify denies a privileged command because the bot itself is unidentified to NickServ.
+
+#### Security audit 2026-05-10 — 1 CRITICAL + 28 WARNING + INFO sweep closed
+
+- **CRITICAL**: deep-freeze `identity.require_acc_for` and `bootConfig` so a plugin can't disable NickServ verification bot-wide.
+- **Plugin API**: `api.say` / `notice` / `action` route through `splitMessage` + target sanitize; rate-limit `api.audit.log` per plugin and cap action length; `api.changeNick` routes through the message queue; `api.botConfig.version` lets ctcp drop its `node:fs` import.
+- **STS**: rejects duration-only directives over plaintext (lockout guard) + caps duration at one year; exports `normalizeHost` helper.
+- **services**: `services_host_pattern` matches the full `nick!ident@host` hostmask; defensive `sanitize()` on IDENTIFY/GHOST + CRLF reject at config load; SASL EXTERNAL preconditions validated at startup.
+- **POSIX**: `chmod 600` enforcement covers `config/bot.env*`.
+- **mod_log**: mutators propagate runtime toggles; `parseMetadataSafe` rejects non-objects; `validateAction` regex.
+- **BanStore**: sanitizes `mask` / `by`, regex-validates shape, clamps `durationMs`.
+- **permissions**: `setGlobalFlags` / `setChannelFlags` re-warn on weak hostmasks; `syncUser` validates and lowercases channel keys; `setPasswordHash` calls `isValidPasswordFormat`; `getPasswordHash` `@internal`; `findByHostmask` empty-account normalization.
+- **password**: `verifyPassword` rejects sub-minimum plaintext as mismatch.
+- **topic** reason capped at 4 KB; **reconnect-driver** transient backoff doubling cap; **close-reason-classifier** extends `FATAL_PATTERNS` with `CERT_REVOKED` / `ALTNAME` / `DEPTH_ZERO`.
+- **owner-bootstrap** validates hostmask shape; **verify-flags** strips flag-syntax punctuation.
+- **DCC**: live-hash refetch in `handlePasswordLine` + `pendingSessions` set so password rotation evicts in-flight prompts; `preHandshakeErrorHandler` via `.once()` self-cleans; banner `stripFormatting` on nick/ident/host/handle + login-summary peer.
+- **Bot link**: `validateAuthIpWhitelist` warns on IPv6 / non-IP entries and expands bare IPv4 to `/32`; `isPrivateOrLoopback` recognises IPv6 ULA (`fc00::/7`) + link-local (`fe80::/10`); leaf nonce shape pinned to `^[0-9a-fA-F]{64}$`; `.botlink ban` hints when target is loopback / RFC1918; `.modlog` over botlink resolves caller by handle.
+- **Admin commands**: `.ban` / `.unban` thread `auditActor` through `IRCCommands` so exactly one `mod_log` row attributes to the caller; `.flags` reply `stripFormatting` + reword.
+- **Help / settings registry**: `stripFormatting` + 256-char cap on plugin-supplied display strings; fuzzy fallback prefers core bucket.
+- **Plugin loader**: `mod.name` must match the on-disk directory; `inferPluginName` handles `index.ts` paths; disk-discovery names validated against `SAFE_NAME_RE`.
+- **Message queue**: `costMs >= 1`; `flush()` / `drain()` try/catch; `setRate()` restarts the timer; `QueueConfigSchema` bounds rate <= 1000 / burst <= 100.
+- **Plugins**: rss adds `max_feeds` (default 100) + drops 8080/8443 from `DEFAULT_ALLOWED_PORTS`; ai-chat validates Ollama base URL (scheme/host) + warns on non-loopback `http://`; ai-chat lowercases `channel_profiles` / `channel_characters` keys at load; chanmod wires `chanserv_recover_cooldown_ms`.
+
+#### Memleak audit closure
+
+- **Caps**: `pendingHandshakes` capped at 4096 IPs in `BotLinkAuthManager` (manual permanent bans rehydrate from `linkBanStore` on LRU miss); `SharedBanList` caps distinct channels at 1024; `RelayOrchestrator` caps virtual sessions at 64 per `fromBot`; flood `EnforcementExecutor.channelActionRate` capped at 1024 keys with oldest-by-insertion eviction + `dropChannel()` on bot PART/KICK; chanmod prunes idle `threatScores` (4× `takeover_window_ms`) and `lastKnownModes` (24h); ai-chat `RateLimiter.forgetChannel` wired into bot PART/KICK; topic plugin sweeps `previewCooldown` on every invocation.
+- **Timers** stored in fields and cleared on teardown across Services (SASL identify-check, GHOST/reclaim, `pendingGhostResolver`), leaf `reconnectTimer.unref()`, `Bot._isStarted` flag, `recoverableTimestamps` hard cap, `ResilientProvider` retry sleeps tracked and resolved on abort.
+- **Listeners** stored as named fields and explicitly removed: DCC `close` / `error` / `line` handlers in `clearAllTimers`; DCC pre-handshake socket-error closure captures only `nick`; `IRCBridge.attach()` is now idempotent; DCC stale-session eviction unifies pager / audit-tail cleanup; `Logger.addSinkByOwner` / `removeByOwner` mirror `BotEventBus.trackListener`.
+- **Structural**: `BotLinkProtocol` construction wrapped in try/catch that releases the pending-handshake slot on throw; `setupStopnethack` returns a teardown function threaded into chanmod teardown; flood's two part-binds combined into one; Spotify client accepts an external `AbortSignal` so plugin teardown cancels in-flight fetches; ai-chat coalescer callback bails early when state is torn down.
+
+#### Test suite
+
+- **Wall clock**: hoisted `vi.mock` caches `scryptSync` by input (botlink test files dropped from ~5s to <200ms each); top-level static plugin imports in `chanmod-join-recovery` and `ai-chat-admin` shift TS-transform cost out of `beforeEach`.
+
+### Removed
+
+- **`api.config`** field from `PluginAPI` (migrate to `api.settings`).
+- **`.helpset`** command (folded into `.help set <scope>`).
+- **Closed audit documents** (`docs/audits/stability-all-2026-05-10.md` and friends) deleted from the tree after every finding is resolved; commit history retains the reasoning.
 
 ## [0.5.0] - 2026-04-25
 
