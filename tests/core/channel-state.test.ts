@@ -1488,14 +1488,14 @@ describe('ChannelState', () => {
   });
 
   // -------------------------------------------------------------------------
-  // NAMES multi-prefix parsing (§A.3) — the audit's P0 finding
+  // NAMES multi-prefix parsing
   // -------------------------------------------------------------------------
 
   describe('NAMES prefix-mode tracking', () => {
     it('tracks every prefix from a multi-prefix NAMES array', () => {
       // irc-framework parses `~&@%+nick` into modes = ['q','a','o','h','v'].
-      // The audit found that the old code silently ignored this array and
-      // stored [] for every user, breaking every op-check in every plugin.
+      // The old code silently ignored this array and stored [] for every
+      // user, breaking every op-check in every plugin.
       client.simulateEvent('userlist', {
         channel: '#test',
         users: [
@@ -1715,7 +1715,7 @@ describe('ChannelState', () => {
   });
 
   // -------------------------------------------------------------------------
-  // clearNetworkAccounts — reconnect hygiene (§7 Phase 4)
+  // clearNetworkAccounts — reconnect hygiene
   // -------------------------------------------------------------------------
 
   describe('clearNetworkAccounts', () => {

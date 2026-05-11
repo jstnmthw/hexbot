@@ -9,8 +9,7 @@
 // doesn't reach into `src/utils/*` at runtime — that boundary is type-only
 // per CLAUDE.md / DESIGN.md. The factory returns the canonical
 // SlidingWindowCounter (hard key cap + emergency sweep) so a nick-rotation
-// attacker can't balloon the map between 60s plugin sweeps. See memleak
-// audit C1 (2026-04-14).
+// attacker can't balloon the map between 60s plugin sweeps.
 import type { PluginSlidingWindowCounter } from '../../src/types';
 
 export type RateLimitKind = 'msg' | 'join' | 'part' | 'nick';

@@ -381,7 +381,7 @@ describe('CommandHandler', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Configurable command prefix (§8 Phase 7)
+  // Configurable command prefix
   // -------------------------------------------------------------------------
 
   describe('configurable command prefix', () => {
@@ -514,7 +514,7 @@ describe('CommandHandler', () => {
   });
 
   // -------------------------------------------------------------------------
-  // .help via shared renderer (Phase 3)
+  // .help via shared renderer
   // -------------------------------------------------------------------------
 
   describe('.help via shared renderer', () => {

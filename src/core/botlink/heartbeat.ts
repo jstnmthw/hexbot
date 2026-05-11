@@ -6,7 +6,7 @@
 // connection; otherwise increment a sequence number and send a PING. The
 // hub also sweeps stale relay routes on each tick (via `onTick`). Lifting
 // this into a shared driver removes the ~20-line duplicate loop that
-// drifted twice before the 2026-04-19 quality audit flagged it.
+// drifted twice before being unified here.
 //
 // The last-message timestamp stays with the caller — both hub
 // (`LeafConnection.lastMessageAt`) and leaf (`this.lastHeartbeatAt`) have

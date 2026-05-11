@@ -167,13 +167,13 @@ const DISCONNECT_FLUSH_DEADLINE_MS = 100;
 /**
  * Register all IRC connection lifecycle event listeners on the client.
  *
- * After R18 / W-BOTSTART, `Bot.start()` resolves as soon as `client.connect()`
- * is invoked rather than gating on the first successful registration —
- * otherwise a rate-limited (5min initial → 30min cap) first attempt would
- * block `main()` and the REPL until the K-line lifted. The `_resolve` /
- * `_reject` parameters are retained for signature stability but unused;
- * downstream consumers observe the connection state via `getReconnectState()`
- * and the `bot:connected` / `bot:disconnected` events.
+ * `Bot.start()` resolves as soon as `client.connect()` is invoked rather than
+ * gating on the first successful registration — otherwise a rate-limited
+ * (5min initial → 30min cap) first attempt would block `main()` and the REPL
+ * until the K-line lifted. The `_resolve` / `_reject` parameters are retained
+ * for signature stability but unused; downstream consumers observe the
+ * connection state via `getReconnectState()` and the `bot:connected` /
+ * `bot:disconnected` events.
  */
 export function registerConnectionEvents(
   deps: ConnectionLifecycleDeps,
@@ -188,12 +188,12 @@ export function registerConnectionEvents(
   // guard a late `'irc error'` event firing between `client.quit()` and
   // `'close'` would overwrite the reason and re-classify the disconnect
   // as `rate-limited` (5 min initial backoff) when the actual cause was
-  // `transient` (1s). (W1.1)
+  // `transient` (1s).
   let lastCloseReasonLocked = false;
   // Cancellation hook for the `identify_before_join` await. Set when the
   // await is in flight; cleared when it resolves. `removeListeners()`
   // calls this on shutdown so a torn-down lifecycle doesn't leave the
-  // promise pending for up to 60s while the bus is being drained. (W1.3)
+  // promise pending for up to 60s while the bus is being drained.
   let cancelIdentifyAwait: (() => void) | null = null;
   // Captures the last IRC ERROR reason or socket error so we can classify
   // it when 'close' fires — irc-framework's 'close' event only passes a boolean.
@@ -210,7 +210,7 @@ export function registerConnectionEvents(
   // (+i/+b/+k/+r). The presence-check timer consults this map so it
   // applies the bounded retry schedule (default 5/15/45 min) instead of
   // retrying every tick. Cleared implicitly on the next reconnect because
-  // this whole closure is re-created. See bounded-retry design 2026-04-19.
+  // this whole closure is re-created. See bounded-retry design.
   const permanentFailureChannels = new Map<string, PermanentFailureEntry>();
 
   // One-time listeners — registered before any connection events fire so they
@@ -267,7 +267,7 @@ export function registerConnectionEvents(
     }
     reconnectDriver.onConnected();
 
-    // C-4: detect nick collision — the server may have assigned a different
+    // Detect nick collision — the server may have assigned a different
     // nick (e.g. HEX_) when the configured nick (HEX) was taken.
     const actualNick = String(deps.client.user?.nick ?? cfg.nick);
     const nickCollision = actualNick.toLowerCase() !== cfg.nick.toLowerCase();
@@ -299,7 +299,7 @@ export function registerConnectionEvents(
     // lands first.
     deps.identifyWithServices?.();
 
-    // W-1: gate JOINs on identity when configured. Waits for bot:identified,
+    // Gate JOINs on identity when configured. Waits for bot:identified,
     // `bot:disconnected`, or the timeout — whichever fires first. Without
     // the disconnect arm, a session that dropped mid-wait would keep the
     // promise hanging until the timeout elapsed, delaying the next
@@ -359,7 +359,7 @@ export function registerConnectionEvents(
     if (String(e.error ?? '') === 'irc') {
       const reason = String(e.reason ?? '');
       logger.warn(`Server ERROR: ${reason}`);
-      // W1.1: a late `'irc error'` arriving after we've committed to a
+      // A late `'irc error'` arriving after we've committed to a
       // registration-timeout disconnect must not re-classify the close.
       // The driver picks the backoff curve from `lastCloseReason` —
       // overwriting "registration timeout" (transient, 1s retry) with
@@ -375,8 +375,9 @@ export function registerConnectionEvents(
     const reason = lastCloseReason ?? 'connection closed';
     const policy = classifyCloseReason(lastCloseReason);
     lastCloseReason = null;
-    // Release the W1.1 lock now that this disconnect cycle is finishing.
-    // The next attempt's registration-timeout path will set it fresh.
+    // Release the close-reason lock now that this disconnect cycle is
+    // finishing. The next attempt's registration-timeout path will set
+    // it fresh.
     lastCloseReasonLocked = false;
 
     // Run each step under its own try/catch. A throw from any one of them —
@@ -446,12 +447,12 @@ export function registerConnectionEvents(
     }
     logger.error('Socket error:', error.message);
     deps.eventBus.emit('bot:error', error);
-    // W1.9: schedule a fail-safe watchdog. A TLS handshake-stage RST
-    // can produce 'socket error' without a follow-up 'close' (TLS
-    // wraps the socket and may swallow the close on early errors),
-    // stranding the bot with no reconnect. After SOCKET_DESTROY_GRACE_MS
-    // we forcibly destroy the underlying socket so 'close' fires and
-    // the driver picks up.
+    // Schedule a fail-safe watchdog. A TLS handshake-stage RST can
+    // produce 'socket error' without a follow-up 'close' (TLS wraps
+    // the socket and may swallow the close on early errors), stranding
+    // the bot with no reconnect. After SOCKET_DESTROY_GRACE_MS we
+    // forcibly destroy the underlying socket so 'close' fires and the
+    // driver picks up.
     setTimeout(() => {
       if (lastCloseReason !== error.message) return; // a clean close already advanced state
       const socket = getInternalTlsSocket(client);
@@ -520,8 +521,8 @@ export function registerConnectionEvents(
         clearTimeout(registrationTimer);
         registrationTimer = null;
       }
-      // W1.3: cancel the identify_before_join await so a torn-down
-      // lifecycle doesn't leave that promise hanging for up to 60s.
+      // Cancel the identify_before_join await so a torn-down lifecycle
+      // doesn't leave that promise hanging for up to 60s.
       if (cancelIdentifyAwait !== null) {
         cancelIdentifyAwait();
         cancelIdentifyAwait = null;
@@ -536,14 +537,13 @@ export function registerConnectionEvents(
     },
     cancelReconnect(): void {
       reconnectDriver.cancel();
-      // W1.7: also clear the registration-timeout and presence-check
-      // timers. `cancelReconnect` is called from the bot's shutdown
-      // path; without these clears, a pending registration-timer
-      // fires `client.quit()` mid-shutdown and the presence-check
-      // intervals tick during teardown, both producing spurious
-      // log lines and (for the registration-timer) a redundant
-      // close attempt against a socket the shutdown is already
-      // tearing down.
+      // Also clear the registration-timeout and presence-check timers.
+      // `cancelReconnect` is called from the bot's shutdown path;
+      // without these clears, a pending registration-timer fires
+      // `client.quit()` mid-shutdown and the presence-check intervals
+      // tick during teardown, both producing spurious log lines and
+      // (for the registration-timer) a redundant close attempt
+      // against a socket the shutdown is already tearing down.
       if (registrationTimer !== null) {
         clearTimeout(registrationTimer);
         registrationTimer = null;
@@ -620,7 +620,7 @@ function ingestSTSDirective(deps: ConnectionLifecycleDeps): void {
   // first-contact gate already prevents on its own. Operators rely on
   // network-issued revocations to drop stored policies after a server
   // configuration change; without this exemption their only recovery is
-  // a manual DB edit. See R2 / I1.5 in the 2026-05-10 stability audit.
+  // a manual DB edit.
   const isRevocation = directive.duration === 0;
   if (!isRevocation) {
     // Defence in depth on top of `enforceSTS`: if we're on plaintext and a

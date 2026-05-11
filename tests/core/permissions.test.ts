@@ -283,7 +283,7 @@ describe('Permissions', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Account-pattern matching (§7 Phase 4) — `$a:accountname` in hostmasks
+  // Account-pattern matching — `$a:accountname` in hostmasks
   // -------------------------------------------------------------------------
 
   describe('findByHostmask with account patterns', () => {
@@ -333,15 +333,15 @@ describe('Permissions', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Spoofing regression (§7 Phase 4) — hostmask lookups cannot be faked
+  // Spoofing regression — hostmask lookups cannot be faked
   // -------------------------------------------------------------------------
 
   describe('checkFlags spoofing regression', () => {
     it('denies a user whose nick matches a stored record but whose host does not', () => {
-      // Original audit scenario: `alice` has `alice!real@host.com` +o. An
-      // attacker adopts the nick `alice` from `pwned!fake@evil.host`. With
-      // the old findByNick code that matched on nick alone, the attacker
-      // would have been granted +o. findByHostmask must reject them.
+      // Scenario: `alice` has `alice!real@host.com` +o. An attacker adopts
+      // the nick `alice` from `pwned!fake@evil.host`. With the old
+      // findByNick code that matched on nick alone, the attacker would
+      // have been granted +o. findByHostmask must reject them.
       perms.addUser('alice', 'alice!real@host.com', 'o', 'REPL');
       const denied = perms.checkFlags('+o', {
         nick: 'alice',
@@ -744,10 +744,10 @@ describe('Permissions', () => {
 
   describe('password hash persistence', () => {
     let db: BotDatabase;
-    // setPasswordHash defensively calls isValidPasswordFormat (audit
-    // 2026-05-10), so test fixtures must look like real scrypt output:
-    // 32 hex chars salt + 128 hex chars hash. The contents don't have
-    // to verify — these tests only cover storage round-trips, not auth.
+    // setPasswordHash defensively calls isValidPasswordFormat, so test
+    // fixtures must look like real scrypt output: 32 hex chars salt +
+    // 128 hex chars hash. The contents don't have to verify — these
+    // tests only cover storage round-trips, not auth.
     const STUB_HASH = `scrypt$${'a'.repeat(32)}$${'b'.repeat(128)}`;
 
     beforeEach(() => {

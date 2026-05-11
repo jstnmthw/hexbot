@@ -160,9 +160,9 @@ describe('validateFeedUrl', () => {
     await expect(validateFeedUrl('https://[::1]/feed')).rejects.toThrow(/blocked/);
   });
 
-  // Regression for the audit: the old validator missed `::ffff:<hex>:<hex>`
-  // because its v4-mapped regex only matched the dotted form. An attacker
-  // could aim the bot at localhost via `https://[::ffff:7f00:1]/`.
+  // Regression: the old validator missed `::ffff:<hex>:<hex>` because its
+  // v4-mapped regex only matched the dotted form. An attacker could aim
+  // the bot at localhost via `https://[::ffff:7f00:1]/`.
   it('rejects IPv4-mapped IPv6 literal in hex form (audit regression)', async () => {
     await expect(validateFeedUrl('https://[::ffff:7f00:1]/feed')).rejects.toThrow(/blocked/);
     await expect(validateFeedUrl('https://[::ffff:a9fe:a9fe]/feed')).rejects.toThrow(/blocked/);

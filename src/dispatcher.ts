@@ -28,7 +28,7 @@ export interface BindEntry {
   hits: number;
   /**
    * Consecutive handler errors. Used by both the timer auto-disable
-   * (interval-driven) and the dispatch circuit breaker (event-driven, R40)
+   * (interval-driven) and the dispatch circuit breaker (event-driven)
    * to trip a broken plugin off without unbounded log spam.
    */
   consecutiveFailures?: number;

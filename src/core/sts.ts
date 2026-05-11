@@ -134,7 +134,7 @@ export class STSStore {
       // SQLITE_BUSY at boot (concurrent reader / WAL checkpoint) would
       // otherwise propagate out of `get()` and through `Bot.start()`,
       // wedging start on a recoverable contention. The lazy prune is
-      // cosmetic; the next call retries. (W1.4)
+      // cosmetic; the next call retries.
       try {
         this.db.del(STS_DB_NAMESPACE, key);
       } catch {

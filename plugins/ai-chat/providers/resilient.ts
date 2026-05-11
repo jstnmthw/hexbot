@@ -166,7 +166,7 @@ export class ResilientProvider implements AIProvider {
       // Distinct kind so `pipeline.ts` can route this through the silent
       // "tell ops privately" path instead of emitting per-message
       // "AI is temporarily unavailable" notices to every triggered channel
-      // for the full openDurationMs (W-AICHAT-SPAM).
+      // for the full openDurationMs.
       throw new AIProviderError('Circuit breaker open', 'circuit_open');
     }
   }

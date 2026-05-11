@@ -407,8 +407,8 @@ export function init(pluginApi: PluginAPI): void {
     },
   ]);
 
-  // Window must be > 0 — a zero-window sweep is a silent no-op (see audit
-  // W-FL1). Warn and clamp to the documented default instead of crashing
+  // Window must be > 0 — a zero-window sweep is a silent no-op.
+  // Warn and clamp to the documented default instead of crashing
   // the plugin load.
   const windowSecs = (key: string, fallback: number): number => {
     const v = cfgNum(key, fallback);
@@ -462,7 +462,7 @@ export function init(pluginApi: PluginAPI): void {
   // Replay any locks that were active at the previous shutdown — without
   // this, a reconnect mid-lockdown strands `+R`/`+i` on the server until
   // a human op lifts it manually. Past-expiry rows trigger an immediate
-  // lift; live rows reschedule the auto-unlock for the remainder. (W11.6)
+  // lift; live rows reschedule the auto-unlock for the remainder.
   lockdown.restoreLocks();
 
   // Register per-channel lockdown settings

@@ -331,8 +331,8 @@ export async function runPipeline(
         // on every triggered message during an outage is noisy and reveals
         // upstream state to the channel. Tell ops privately instead. Both
         // 429s and an open breaker are sustained-outage signals; treating
-        // them the same closes W-AICHAT-SPAM (channel-visible spam during
-        // a 5+ minute Gemini outage).
+        // them the same prevents channel-visible spam during a sustained
+        // upstream outage.
         noticeOpsRateLimited(ctx.channel, result.message);
       } else {
         ctx.reply('AI is temporarily unavailable.');
@@ -360,8 +360,9 @@ export async function runPipeline(
       // formatResponse has normalized and fantasy-prefix-stripped the
       // lines. Order matters for security: running style (e.g. a casing
       // transform) before the fantasy-prefix filter could re-introduce
-      // prefix characters that the filter just removed. See ai-chat
-      // injection-defense scope note in the 2026-04-17 memory.
+      // prefix characters that the filter just removed. Injection-defense
+      // scope is limited to the SAFETY_CLAUSE + fantasy-drop layers; no
+      // detector/strike system above that.
       const styled = applyCharacterStyle(result.lines, {
         casing: character.style.casing,
         verbosity: character.style.verbosity,

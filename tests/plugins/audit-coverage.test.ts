@@ -1,4 +1,4 @@
-// Phase 3 regression guard: every plugin that drives a privileged action
+// Regression guard: every plugin that drives a privileged action
 // (mode mutations, kicks, bans, structured config events) must produce a
 // `mod_log` row tagged with `source='plugin'` and the plugin name in the
 // `plugin` column. The test exercises the plugin-api factory directly with

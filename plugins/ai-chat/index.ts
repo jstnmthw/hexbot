@@ -1181,5 +1181,5 @@ export function teardown(): void {
   lastRateLimitOpNoticeAt.clear();
 }
 
-// Re-export so Phase 6 tests can still access the formatter.
+// Re-export so tests can still access the formatter.
 export { formatResponse };

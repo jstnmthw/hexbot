@@ -5,7 +5,7 @@
 // `.set core plugins.<id>.enabled true/false` is the canonical path, and
 // `.restart` covers picking up code edits. The pre-refactor `.load` /
 // `.unload` / `.reload` commands were deleted in lockstep with the
-// removal of the cache-busting import path (audit CRITICAL 2026-04-25).
+// removal of the cache-busting import path.
 import type { CommandHandler } from '../../command-handler';
 import type { BotDatabase } from '../../database';
 import type { PluginLoader } from '../../plugin-loader';

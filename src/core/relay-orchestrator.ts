@@ -5,17 +5,16 @@
 // PARTY_CHAT / RELAY / PROTECT / ban-share frames out to DCC, permissions,
 // and ban storage.
 //
-// Extracted from src/bot.ts per the 2026-04-19 quality audit. The orchestrator
-// is constructed once at bot startup and survives across IRC reconnects —
-// `connect()` in bot.ts never nulls these subsystems out, only `stop()` does.
-// That invariant matters because `attachRelayServiceMirror()` installs
-// IRC-client listeners once and `startBotLink()` installs a
-// `botlink:disconnected` handler once; re-running either would leak
-// duplicates.
+// Extracted from src/bot.ts. The orchestrator is constructed once at bot
+// startup and survives across IRC reconnects — `connect()` in bot.ts never
+// nulls these subsystems out, only `stop()` does. That invariant matters
+// because `attachRelayServiceMirror()` installs IRC-client listeners once
+// and `startBotLink()` installs a `botlink:disconnected` handler once;
+// re-running either would leak duplicates.
 //
-// NOTE: a future SubsystemRegistry (see the same audit) could collapse
-// orchestrator + DCC + memo wiring behind a single start/stop protocol.
-// This module intentionally stops short of that second step.
+// NOTE: a future SubsystemRegistry could collapse orchestrator + DCC + memo
+// wiring behind a single start/stop protocol. This module intentionally
+// stops short of that second step.
 import type { Client as IrcClient } from 'irc-framework';
 
 import type { CommandHandler } from '../command-handler';

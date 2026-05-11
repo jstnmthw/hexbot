@@ -248,9 +248,9 @@ describe('seen plugin', () => {
     const msgCtx = makePubCtx('charlie', 'some message');
     await dispatcher.dispatch('pubm', msgCtx);
 
-    // Unload + load (the post-2026-04-25 equivalent of `.reload`).
-    // KV survives the cycle; an operator hitting
-    // `.set core plugins.seen.enabled false` then `true` does the same.
+    // Unload + load is the equivalent of `.reload`. KV survives the cycle;
+    // an operator hitting `.set core plugins.seen.enabled false` then
+    // `true` does the same.
     const filePath = loader.list().find((p) => p.name === 'seen')!.filePath;
     await loader.unload('seen');
     await loader.load(filePath);

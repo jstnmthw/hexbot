@@ -795,9 +795,8 @@ export class ChannelState {
    * by `lowerNick`, invoke `update(user, channel)`. Returns true if at least
    * one channel was touched. Collapses the four "for (ch of channels) { get
    * user; if (!user) continue; mutate }" loops that were duplicated across
-   * account/away/chghost/account-tag handlers — the 2026-04-19 quality
-   * audit flagged them as a dual-source-of-truth hazard because missing
-   * any copy silently drops data.
+   * account/away/chghost/account-tag handlers — a dual-source-of-truth
+   * hazard because missing any copy silently drops data.
    */
   private updateUserAcrossChannels(
     lowerNick: string,

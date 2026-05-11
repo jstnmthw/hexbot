@@ -47,9 +47,9 @@ export type { ChannelSettingChangeCallback };
  *                 surface a "stored; takes effect after .restart" hint
  *                 to the operator.
  *
- * Plugins / core subsystems pick the class when they `register()`.
- * Phase 3 introspects this from Zod `.describe('@reload:*')` annotations
- * on `BotConfigOnDiskSchema`.
+ * Plugins / core subsystems pick the class when they `register()`. Also
+ * introspected from Zod `.describe('@reload:*')` annotations on
+ * `BotConfigOnDiskSchema`.
  */
 export type ReloadClass = 'live' | 'reload' | 'restart';
 

@@ -1,9 +1,8 @@
 // HexBot — Bot Link BSAY routing
 //
-// Extracted from `hub.ts` per the 2026-04-19 quality audit. BSAY carries an
-// IRC message that should be delivered by one or more bots; this handler
-// decides whether to broadcast, dispatch locally, forward to a single leaf,
-// or drop.
+// Extracted from `hub.ts`. BSAY carries an IRC message that should be
+// delivered by one or more bots; this handler decides whether to broadcast,
+// dispatch locally, forward to a single leaf, or drop.
 import type { LoggerLike } from '../../logger';
 import type { LinkFrame } from './types.js';
 
@@ -37,7 +36,7 @@ export interface HubBsayContext {
  * Route a BSAY frame: broadcast, deliver locally, forward to a single
  * leaf, or drop. Re-verifies `+m` on the claimed sender handle before any
  * fanout — a compromised leaf can assemble a raw BSAY frame and bypass
- * the originating-leaf flag check otherwise (CRITICAL-BSAY, 2026-04-24).
+ * the originating-leaf flag check otherwise.
  */
 export function handleBsay(ctx: HubBsayContext, fromBot: string, frame: LinkFrame): void {
   const target = String(frame.target ?? '');

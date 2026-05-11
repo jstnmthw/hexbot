@@ -249,8 +249,7 @@ export class BotLinkHub {
   /**
    * Bus reference that the current `eventBusListeners` are attached to.
    * Tracked separately from the constructor's `this.eventBus` so a re-wire
-   * with a different bus reference still detaches from the right bus
-   * (W2.5).
+   * with a different bus reference still detaches from the right bus.
    */
   private wiredEventBus: BotEventBus | null = null;
 
@@ -441,7 +440,7 @@ export class BotLinkHub {
     // Remove eventBus listeners. Detach from `wiredEventBus` (the bus
     // they were actually attached to via `setCommandRelay`) rather than
     // `this.eventBus`, which may differ if a caller re-wired with a new
-    // bus reference (W2.5).
+    // bus reference.
     if (this.wiredEventBus) {
       for (const { event, fn } of this.eventBusListeners) {
         offBusListener(this.wiredEventBus, event, fn);

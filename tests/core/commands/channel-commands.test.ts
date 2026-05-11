@@ -168,7 +168,7 @@ describe('channel-commands', () => {
     });
 
     // -----------------------------------------------------------------------
-    // Phase 4 — audit coverage
+    // Audit coverage
     // -----------------------------------------------------------------------
 
     it('writes a chanset-set mod_log row when a flag is set', async () => {

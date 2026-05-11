@@ -178,7 +178,7 @@ describe('validateResolvedSecrets', () => {
     cfg.services.sasl = true;
     cfg.services.sasl_mechanism = 'EXTERNAL';
     cfg.services.password = '';
-    // EXTERNAL requires TLS + cert/key per audit 2026-05-10 hardening.
+    // EXTERNAL requires TLS + cert/key.
     cfg.irc.tls = true;
     cfg.irc.tls_cert = '/etc/hexbot/cert.pem';
     cfg.irc.tls_key = '/etc/hexbot/key.pem';

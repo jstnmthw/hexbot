@@ -1813,7 +1813,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     // between `'connection'` and a late `'error'` (Linux socket-accept
     // races, EADDRINUSE on a closing listener) double-released the port,
     // potentially freeing a slot owned by a parallel offer to a different
-    // nick. (W-DCC-PORT / R20)
+    // nick.
     const cleanupPending = (label: string): void => {
       const entry = this.pending.get(port);
       if (entry !== pending) return; // already cleaned up by a peer path
@@ -1833,7 +1833,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     // any subsequent `'error'` we'd see is moot — but if we *don't* detach
     // and the kernel emits a stray late `'error'` (closing-listener
     // edge case), that handler would re-run `cleanupPending` against a
-    // port slot the openSession has now repurposed. R20 / W-DCC-PORT.
+    // port slot the openSession has now repurposed.
     const onError = (err: Error): void => {
       this.logger?.error(`DCC server error on port ${port}:`, err);
       cleanupPending(`error: ${err.message}`);
@@ -1957,7 +1957,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     // attached the lifecycle handlers) leaves the set entry to be reaped
     // via the close-path. If `start()` itself throws, the catch below
     // re-attaches the pre-handshake handler and removes the pending
-    // session entry to avoid a leak. (W4.1 / R19)
+    // session entry to avoid a leak.
     this.pendingSessions.add(session);
     try {
       session.start(this.version, this.botNick, preHandshakeErrorHandler);

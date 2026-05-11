@@ -54,7 +54,6 @@ export interface StabilityMetrics {
    * Audit rows currently held in the in-memory fallback buffer because
    * SQLite refused the write (BUSY/FULL/IOERR). Non-zero indicates the
    * database is degraded — operators should investigate disk and locks.
-   * (W3.2)
    */
   auditFallbackHeld?: number;
   /** Total audit rows dropped due to fallback buffer overflow since startup. */

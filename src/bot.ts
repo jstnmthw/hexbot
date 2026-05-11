@@ -211,7 +211,7 @@ export class Bot {
   /**
    * Snapshot of audit rows that could not be persisted to SQLite. Returns
    * a defensive copy so callers can iterate without seeing concurrent
-   * mutations. Used by `.status` and ops triage. See W3.2.
+   * mutations. Used by `.status` and ops triage.
    */
   getAuditFallbackBuffer(): LogModActionOptions[] {
     return this.auditFallbackBuffer.slice();
@@ -278,7 +278,7 @@ export class Bot {
    * silently lose audit rows. The buffer is bounded — old entries are
    * dropped FIFO when the cap is reached so a long degraded period
    * doesn't bloat memory. Operators see the count via `.status`; the
-   * raw entries can be retrieved by core commands for triage. (W3.2)
+   * raw entries can be retrieved by core commands for triage.
    */
   private static readonly AUDIT_FALLBACK_CAPACITY = 256;
   private auditFallbackBuffer: LogModActionOptions[] = [];
@@ -1021,7 +1021,7 @@ export class Bot {
     // Wire audit fallback: when an audit row cannot be persisted to
     // SQLite (busy/full/fatal), spill it into a bounded in-memory ring
     // buffer instead of dropping it silently. Surfaced via `.status`
-    // so operators see the count during a degraded period (W3.2).
+    // so operators see the count during a degraded period.
     this.db.setAuditFallback((options) => this.pushAuditFallback(options));
     this.permissions.loadFromDb();
 
@@ -1055,7 +1055,7 @@ export class Bot {
     // IDENTIFY and GHOST password paths are not — operators flipping
     // `sasl: false` to support a legacy network (or enabling
     // ghost_on_recover on a plaintext link) silently lose TLS protection of
-    // the password. Warn loudly. See SECURITY.md §3.2 / audit 2026-05-10.
+    // the password. Warn loudly. See SECURITY.md §3.2.
     this.warnServicesPlaintextRisks();
 
     this.registerCoreCommands();
@@ -1100,9 +1100,9 @@ export class Bot {
     }
 
     // Re-anchor uptime to the first `bot:connected` event so `.status`
-    // reports the connected-window. With the R18 fix `connect()` resolves
-    // before registration succeeds; we defer the anchor to the actual
-    // event so a long initial backoff doesn't make uptime show "negative"
+    // reports the connected-window. `connect()` resolves before
+    // registration succeeds; we defer the anchor to the actual event
+    // so a long initial backoff doesn't make uptime show "negative"
     // values. The listener is one-shot — every subsequent reconnect leaves
     // `startTime` anchored to the original first-connect moment, which
     // matches operator expectations for "uptime since the bot started
@@ -1132,7 +1132,7 @@ export class Bot {
    *     rows older than the per-namespace TTL. Plugins with their own
    *     sweeps (seen, ai-chat) keep theirs; this is the safety net for
    *     long-running deployments where ad-hoc plugin state otherwise
-   *     accumulates forever (R21 / W3.6).
+   *     accumulates forever.
    *   - monthly VACUUM: reclaims pages freed by the prune. Holds an
    *     exclusive lock for the duration, so we run it 03:00-aligned to
    *     coincide with the typical low-traffic window.
@@ -1332,7 +1332,7 @@ export class Bot {
     this.channelState.setBotNick(this.config.irc.nick);
     this.services.attach();
 
-    // C-4: on nick collision, update channelState and bridge so channel-join
+    // On nick collision, update channelState and bridge so channel-join
     // tracking uses the real nick, then attempt GHOST if configured.
     // The listener fires synchronously before joinConfiguredChannels runs.
     // Tracked under the 'bot' owner so shutdown's removeByOwner sweeps it
@@ -1521,9 +1521,7 @@ export class Bot {
     // Tear down every loaded plugin so each plugin's `teardown()` runs
     // on process exit. Without this, plugin-owned timers / DB cursors /
     // listeners would only get the dispatcher's auto-unbind step at
-    // shutdown — never the plugin's own cleanup hook. Doubles as the
-    // fix for audit W-PS finding 2026-04-25 ("plugins miss their
-    // teardown chance on process exit").
+    // shutdown — never the plugin's own cleanup hook.
     try {
       await this.pluginLoader.unloadAll();
     } catch (err) {
@@ -1671,7 +1669,7 @@ export class Bot {
       exit: (code) => process.exit(code),
     });
     this._reconnectDriver = reconnectDriver;
-    // R18 / W-BOTSTART: resolve as soon as `client.connect()` is invoked.
+    // Resolve as soon as `client.connect()` is invoked.
     // Previously we awaited the first `registered` event, which on a
     // K-line / DNSBL / Throttled rate-limited tier would park `Bot.start()`
     // for 5–30 minutes — main() blocks, the REPL never starts, and the
@@ -1745,7 +1743,7 @@ export class Bot {
               );
               this.config.irc.tls = true;
               this.config.irc.port = directive.port;
-              // W-STS-LEAK: drop the outbound queue BEFORE quit so the
+              // Drop the outbound queue BEFORE quit so the
               // onClose `flushWithDeadline(100)` doesn't drain queued
               // PRIVMSGs out over the cleartext socket between the
               // upgrade decision and the TLS reconnect. A queued
@@ -1767,7 +1765,7 @@ export class Bot {
         resolve,
         reject,
       );
-      // W1.5: catch a synchronous throw from `client.connect()` (TLS
+      // Catch a synchronous throw from `client.connect()` (TLS
       // factory rejecting a malformed cert path, irc-framework option
       // validation throwing on a bogus port). Without this guard, the
       // 'connecting' event never fires, the registration timer is
@@ -1854,7 +1852,7 @@ export class Bot {
       enable_chghost: true,
     };
 
-    // C-4: let irc-framework use the configured alt_nick on collision, rather
+    // Let irc-framework use the configured alt_nick on collision, rather
     // than appending `_` blindly. The bot still attempts GHOST on bot:nick-collision.
     if (cfg.alt_nick) {
       options.alt_nick = cfg.alt_nick;

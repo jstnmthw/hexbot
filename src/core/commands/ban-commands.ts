@@ -140,9 +140,7 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
 
       // 0 is the BanStore sentinel for "permanent" — no expiry sweep.
       // Optional duration token only — trailing words after the
-      // duration are dropped. The .ban handler used to thread them as
-      // `reason` into a duplicate tryAudit row (audit 2026-05-10
-      // closed that); today the single mod_log row is written by
+      // duration are dropped. The single mod_log row is written by
       // IRCCommands.ban and inherits the actor only.
       let durationMs = 0;
       const rest = parsed.rest;

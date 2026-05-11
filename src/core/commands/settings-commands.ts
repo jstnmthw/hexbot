@@ -461,8 +461,8 @@ export function registerSettingsCommands(deps: SettingsCommandsDeps): void {
   // pm2) restarts the container. No state is lost — KV is durable; SASL,
   // channel joins, and DCC sessions are re-established by the new
   // process. We deleted `.reload` alongside the cache-busting import
-  // path (audit CRITICAL 2026-04-25), and `.restart` is the canonical
-  // path for "pick up code edits without leaking module-graph residue".
+  // path, and `.restart` is the canonical path for "pick up code edits
+  // without leaking module-graph residue".
   if (deps.restartProcess) {
     handler.registerCommand(
       'restart',

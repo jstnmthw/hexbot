@@ -313,7 +313,7 @@ describe('permission-commands (IRC source)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// .flags — owner flag escalation guard (W-1)
+// .flags — owner flag escalation guard
 // ---------------------------------------------------------------------------
 
 describe('.flags owner escalation guard', () => {

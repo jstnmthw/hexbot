@@ -242,7 +242,7 @@ export async function respond(
  * 3 & 4 are cosmetic / format. NEVER reorder rules 1–2 below cosmetic rules.
  * Small local models (llama3.2:3b) honor numbered Rules lists more reliably
  * than prose, and weight the END of the system prompt more heavily, so this
- * section stays last (per memory: project_local_model_research).
+ * section stays last.
  *
  * The opening sentence is prose — not a `## Rules` markdown header. Small
  * models treat `## ...` as a document outline to extend and reproduce the

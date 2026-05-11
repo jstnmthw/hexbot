@@ -714,7 +714,7 @@ describe('help plugin', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Settings-scope index folding (Phase 2)
+  // Settings-scope index folding
   // ---------------------------------------------------------------------------
 
   describe('settings-scope index', () => {

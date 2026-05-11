@@ -212,7 +212,7 @@ export class BanStore {
           // stale namespace is fully cleaned up. Log loudly: a malformed
           // legacy row is silent data loss and operators should know it
           // happened so they can decide whether to recover from a backup
-          // before the source key is purged. (W3.8)
+          // before the source key is purged.
           this.logger?.warn(
             `[ban-store] migrateFromPluginNamespace: dropping unparseable legacy row "${key}" — ${(err as Error).message}`,
           );

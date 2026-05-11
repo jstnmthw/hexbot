@@ -60,7 +60,7 @@ function makeLogger(): RecordingLogger {
 /**
  * Create a raw better-sqlite3 handle holding the pre-Phase-1 mod_log shape.
  * No `source`/`plugin`/`outcome`/`metadata` columns — the schema BotDatabase
- * shipped with before the audit Phase 1 rewrite. The table is intentionally
+ * shipped with before the Phase 1 rewrite. The table is intentionally
  * empty so individual tests can seed exactly the rows they need.
  */
 function makeLegacyDb(): DatabaseType {

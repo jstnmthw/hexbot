@@ -4,8 +4,7 @@
 // auth manager: the per-IP LRU tracker, the manual CIDR ban map, and
 // the DB-backed `AdminListStore` for persisted link bans. Extracted from
 // `auth.ts` so the admission gate (auth.ts) doesn't also have to know
-// about storage layout, cap enforcement, and startup load. See 2026-04-19
-// quality audit.
+// about storage layout, cap enforcement, and startup load.
 import type { BotDatabase } from '../../database';
 import type { LoggerLike } from '../../logger';
 import { AdminListStore } from '../admin-list-store';

@@ -244,7 +244,7 @@ export class BotDatabase {
    * acquire the write lock and immediately fail anyway, but the lock
    * acquisition still costs round-trips and produces a misleading
    * SQLITE_FULL stack from inside `BEGIN`. Mirrors the guard in
-   * `set()` and `del()` (W3.5).
+   * `set()` and `del()`.
    */
   transaction<T>(fn: () => T): T {
     const db = this.ensureOpen();
@@ -294,7 +294,7 @@ export class BotDatabase {
     // happened to touch the DB.
     db.pragma('busy_timeout = 5000');
 
-    // KV store — unchanged by the Phase 1 rewrite
+    // KV store
     db.exec(`
       CREATE TABLE IF NOT EXISTS kv (
         namespace TEXT NOT NULL,

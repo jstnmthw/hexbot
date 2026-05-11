@@ -479,7 +479,7 @@ export class PluginLoader {
     // can hand both a read/write view to the plugin and the underlying
     // registry to operator commands. Recreated on each `load()` (a stale
     // reload should never inherit listener stacks from the previous
-    // instance — see audit W-PS2 cross-cutting verification).
+    // instance).
     if (this.pluginSettings && this.db) {
       const moduleDescription = typeof mod.description === 'string' ? mod.description : undefined;
       this.pluginSettings.set(
@@ -554,7 +554,7 @@ export class PluginLoader {
    * If `teardown()` throws, dispatcher binds, event-bus listeners, help
    * entries, channel-settings entries, and the scoped api are still
    * cleaned up so no ghost handlers remain wired against a torn-down
-   * plugin (W2.2). The teardown error is logged loudly and re-thrown so
+   * plugin. The teardown error is logged loudly and re-thrown so
    * callers see the failure, but the plugin is removed from the loaded
    * map regardless — leaving binds attached to a half-torn-down plugin
    * is worse than incomplete teardown of plugin-internal state (timers,
@@ -604,11 +604,10 @@ export class PluginLoader {
   /**
    * Unload every loaded plugin in reverse load order. Called from
    * `Bot.shutdown()` so plugins get a clean teardown chance on process
-   * exit (see audit W-PS finding 2026-04-25). Errors from individual
-   * teardowns are swallowed (already logged loudly by `unload()`); every
-   * remaining plugin still gets its teardown call. `unload()` itself
-   * runs dispatcher/event-bus cleanup even on teardown failure, so no
-   * force-delete fallback is needed here (W2.2).
+   * exit. Errors from individual teardowns are swallowed (already logged
+   * loudly by `unload()`); every remaining plugin still gets its teardown
+   * call. `unload()` itself runs dispatcher/event-bus cleanup even on
+   * teardown failure, so no force-delete fallback is needed here.
    */
   async unloadAll(): Promise<void> {
     const names = Array.from(this.loaded.keys()).reverse();
@@ -648,7 +647,7 @@ export class PluginLoader {
    */
   private cleanupPluginResources(pluginName: string, disposeApi: () => void): void {
     // Neutralise the plugin's api handle first so no downstream cleanup
-    // step can reach back into a plugin method. See W-PS1.
+    // step can reach back into a plugin method.
     try {
       disposeApi();
     } catch (err) {
@@ -656,7 +655,7 @@ export class PluginLoader {
     }
 
     // Drain any event-bus listeners the plugin registered via
-    // `trackListener(pluginName, ...)`. See W-BO1.
+    // `trackListener(pluginName, ...)`.
     this.eventBus.removeByOwner(pluginName);
 
     // Clean up binds, help entries, and channel settings.
@@ -679,7 +678,7 @@ export class PluginLoader {
 
     // Drain the per-plugin `onModesReady` listeners registered via the
     // plugin API. These live in a parallel map (not trackListener) so the
-    // off* methods can look them up by callback identity. See W-PS2.
+    // off* methods can look them up by callback identity.
     //
     // Per-entry try/catch: a single throw from `off()` must not leave the
     // remaining listeners attached.

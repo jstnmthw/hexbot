@@ -2214,8 +2214,8 @@ describe('IRCBridge', () => {
 
   describe('CHANTYPES / isValidChannel', () => {
     it('dispatches join on `!` channels when CHANTYPES advertises them (IRCnet)', async () => {
-      // Before Phase 2 the bridge hardcoded `[#&]`, silently dropping every
-      // join/part/privmsg event on IRCnet-style `!CHANNELS`.
+      // Before this change the bridge hardcoded `[#&]`, silently dropping
+      // every join/part/privmsg event on IRCnet-style `!CHANNELS`.
       const { parseISupport } = await import('../src/core/isupport');
       bridge.setCapabilities(
         parseISupport({

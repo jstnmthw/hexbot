@@ -1,10 +1,9 @@
-// Regression tests for `docs/audits/security-all-2026-05-10.md`.
-//
-// One test per audit "Test suggestions" bullet. Keep these unit-level —
-// the deeper behavioral assertions live in the per-module suites
-// (`permissions.test.ts`, `sts.test.ts`, `password.test.ts`, etc.). This
-// file's job is to ensure no future refactor silently undoes any of the
-// findings closed in this audit.
+// Regression tests for the security audit. One test per audit "Test
+// suggestions" bullet. Keep these unit-level — the deeper behavioral
+// assertions live in the per-module suites (`permissions.test.ts`,
+// `sts.test.ts`, `password.test.ts`, etc.). This file's job is to ensure
+// no future refactor silently undoes any of the findings closed in this
+// audit.
 import { describe, expect, it } from 'vitest';
 
 import { isPrivateOrLoopback, validateAuthIpWhitelist } from '../../src/core/botlink/auth';

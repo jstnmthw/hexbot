@@ -130,7 +130,7 @@ const PERMISSIONS_CHANGE_EVENTS = [
  * `api` to hand to the plugin's `init()`, plus a `dispose()` hook that
  * post-teardown converts every method on the api into a no-op.
  *
- * Scope of the disposed-api guard (W2.4): the guard intercepts calls made
+ * Scope of the disposed-api guard: the guard intercepts calls made
  * **through** the wrapped api object — `api.db.set(...)`, `api.bind(...)`,
  * `api.say(...)`, etc. Once disposed, those become no-ops, so a closure
  * that retained `api` cannot fan out to the dispatcher, database, or IRC
@@ -290,7 +290,6 @@ export function createPluginApi(
   // longer fan out to the bot's core graph via api.* calls. The guard
   // does NOT intercept bare-global timers/listeners the plugin scheduled
   // outside of `api.*` — see PluginApiHandle JSDoc for the full scope.
-  // See W-PS1, W2.4.
   const disposedCell = { disposed: false };
 
   const rawApi: PluginAPI = {

@@ -236,7 +236,7 @@ describe('ChannelSettings', () => {
   });
 
   // -------------------------------------------------------------------------
-  // CASEMAPPING normalisation (§12 Phase 7)
+  // CASEMAPPING normalisation
   // -------------------------------------------------------------------------
 
   describe('channel case normalisation', () => {
@@ -255,8 +255,8 @@ describe('ChannelSettings', () => {
       // BotDatabase under the raw channel name, then read back through
       // the normalised ChannelSettings instance using the SAME casing.
       // Callers that later query with a different casing (e.g. all-lower)
-      // will see the def default — the audit calls out a one-time
-      // operator-facing re-set as the accepted cost of the cutover.
+      // will see the def default — a one-time operator-facing re-set is
+      // the accepted cost of the cutover.
       const normalized = new ChannelSettings(db, undefined, (s) => s.toLowerCase());
       normalized.register('myplugin', [stringDef]);
       db.set('chanset', '#Legacy:greet_msg', 'hi legacy');

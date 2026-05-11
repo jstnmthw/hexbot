@@ -403,7 +403,7 @@ describe('irc-commands-admin', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Phase 4 — audit coverage for every privileged admin command
+  // Audit coverage for every privileged admin command
   // ---------------------------------------------------------------------------
 
   describe('audit coverage', () => {

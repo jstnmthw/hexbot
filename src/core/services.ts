@@ -186,7 +186,7 @@ export class Services {
    * Last-emitted-at for the "bot is unidentified — verify denied" notice.
    * Rate-limits a sustained NickServ outage to one operator log per
    * cooldown window so we don't spam the channel with the same warning
-   * on every privileged dispatch. (R42 / I6.3)
+   * on every privileged dispatch.
    */
   private lastUnidentifiedDenialNoticeAt = 0;
   private static readonly UNIDENTIFIED_NOTICE_COOLDOWN_MS = 5 * 60_000;
@@ -207,7 +207,7 @@ export class Services {
     this._onConnected = () => {
       this.reconnectedAt = Date.now();
       this._identifyFallbackSent = false;
-      // I-1: warn if SASL is configured but the bot is still not identified
+      // Warn if SASL is configured but the bot is still not identified
       // a few seconds after registration. This fires seconds after reconnect
       // rather than waiting for chanmod probe timeouts to surface the miss.
       if (this.servicesConfig.sasl) {
@@ -405,11 +405,11 @@ export class Services {
       return { verified: true, account: nick };
     }
 
-    // C-3 (services audit, 2026-04): if the bot is known-unidentified,
-    // NickServ will ignore STATUS/ACC queries from us (Rizon/Anope silently
-    // drops them — Atheme returns nothing rather than an error). Fail fast
-    // with a structured reason so the caller sees a clean verified:false
-    // rather than a 5-second timeout.
+    // If the bot is known-unidentified, NickServ will ignore STATUS/ACC
+    // queries from us (Rizon/Anope silently drops them — Atheme returns
+    // nothing rather than an error). Fail fast with a structured reason
+    // so the caller sees a clean verified:false rather than a 5-second
+    // timeout.
     if (this._botIdentifyState === 'unidentified') {
       this.logger?.warn(
         `Skipping NickServ verify for ${nick} — bot is not identified (will retry once bot identifies)`,
@@ -419,12 +419,12 @@ export class Services {
       // verify them) sees *something*. Without this, the only signal is a
       // log line nobody is watching at 3am. The cooldown prevents an
       // outage from spamming the audit channel — once per 5 minutes is
-      // enough to surface "bot can't verify, fix me." (I6.3 / R42)
+      // enough to surface "bot can't verify, fix me."
       this.maybeEmitUnidentifiedDenialNotice(nick);
       return { verified: false, account: null };
     }
 
-    // W-3: use a longer timeout in the post-reconnect window. NickServ is
+    // Use a longer timeout in the post-reconnect window. NickServ is
     // under heavy load when all reconnecting clients flood in simultaneously.
     // Apply within 30s of bot:connected; once outside the window, the normal
     // 5s default is appropriate.
@@ -458,8 +458,7 @@ export class Services {
         `Pending verify cap reached (${MAX_PENDING_VERIFIES}) — failing closed for ${nick}. ` +
           `Services provider is likely overloaded or unreachable.`,
       );
-      // Audit the cap rejection — the stability-audit baseline for the
-      // pending-verify cap requires a `mod_log` trail so review can tell a
+      // Audit the cap rejection — a `mod_log` trail lets review tell a
       // real services outage (many `nickserv-verify-cap` rows in a short
       // window) apart from a single user-triggered anomaly.
       tryLogModAction(
@@ -710,7 +709,7 @@ export class Services {
       }
     }
 
-    // C-1: detect NickServ telling the bot to identify (SASL missed).
+    // Detect NickServ telling the bot to identify (SASL missed).
     // Covers Anope ("This nickname is registered and protected") and
     // Atheme ("This nickname is registered"). On match, record the
     // unidentified state and, if SASL+password is configured, send a
@@ -738,9 +737,9 @@ export class Services {
       return;
     }
 
-    // C-1 / W-2: detect NickServ confirming identity (after IDENTIFY fallback
-    // or slow SASL confirm). Covers Anope ("Password accepted"),
-    // Atheme ("You are now identified for"), and generic patterns.
+    // Detect NickServ confirming identity (after IDENTIFY fallback or
+    // slow SASL confirm). Covers Anope ("Password accepted"), Atheme
+    // ("You are now identified for"), and generic patterns.
     const nowIdentified =
       /(?:you are now identified|password accepted|you are now recognized|you have been logged in)/i.test(
         message,
@@ -868,7 +867,7 @@ export class Services {
         // the new race's resolver). If we're still the active race,
         // null so a late NickServ notice that races past the timer
         // sees `pendingGhostResolver === null` and skips its
-        // invocation. (W6.2)
+        // invocation.
         if (this.pendingGhostResolver === finish) {
           this.pendingGhostResolver = null;
         }
@@ -891,9 +890,9 @@ export class Services {
    * The reclaim's `finish()` closure nulls this on both fast-path (ack)
    * and slow-path (timer) so a NickServ notice that arrives after the
    * race has resolved sees `pendingGhostResolver === null` and short-
-   * circuits at the handler-side null check (W6.2). The equality guard
-   * on finish protects against the rare case where a second reclaim
-   * has already replaced the resolver between ack-arrival and finish.
+   * circuits at the handler-side null check. The equality guard on
+   * finish protects against the rare case where a second reclaim has
+   * already replaced the resolver between ack-arrival and finish.
    */
   private pendingGhostResolver: (() => void) | null = null;
 

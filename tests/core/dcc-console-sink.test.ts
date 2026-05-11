@@ -461,7 +461,7 @@ describe('.console command', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Phase 4 — audit coverage for .console flag mutations
+  // Audit coverage for .console flag mutations
   // -------------------------------------------------------------------------
 
   it('writes a console-set audit row for own-flag mutation', async () => {

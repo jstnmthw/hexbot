@@ -99,7 +99,7 @@ export function handleBotSelfDeop(
               // bot AWOL — we wouldn't notice until the next presence-check
               // sweep. Two retry windows give services a chance to grant
               // INVITE; after that we log loudly and let the connection-level
-              // presence check pick it up. (W11.2)
+              // presence check pick it up.
               const verify = (attempt: number, delayMs: number): void => {
                 state.cycles.schedule(delayMs, () => {
                   const ch = api.getChannel(channel);

@@ -1,9 +1,9 @@
 // HexBot — Bot Link CMD relay handler
 //
-// Extracted from `hub.ts` per the 2026-04-19 quality audit. A single pure
-// function that validates an incoming CMD frame against hub state (target
-// bot connected? handle has an active remote session?) and either forwards,
-// rejects, or executes it locally.
+// Extracted from `hub.ts`. A single pure function that validates an
+// incoming CMD frame against hub state (target bot connected? handle has
+// an active remote session?) and either forwards, rejects, or executes
+// it locally.
 //
 // The handler receives a small {@link HubCmdRelayContext} facade rather
 // than the whole `BotLinkHub` — this keeps the hub's private fields

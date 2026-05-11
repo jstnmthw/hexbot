@@ -32,8 +32,8 @@
 //   inbound events on `!` channels.
 //
 // - **TARGMAX** — per-command target caps, e.g. `PRIVMSG:4,NOTICE:4,JOIN:`.
-//   Consumed by MessageQueue in Phase 6 to avoid server-side target-change
-//   limits (Libera's notorious "target change" throttle).
+//   Consumed by MessageQueue to avoid server-side target-change limits
+//   (Libera's notorious "target change" throttle).
 //
 // - **CASEMAPPING** — the canonical case-folding rule. Already applied via
 //   the `setCasemapping` pipeline; we surface it here so consumers can log

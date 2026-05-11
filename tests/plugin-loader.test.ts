@@ -502,13 +502,13 @@ describe('PluginLoader', () => {
 
   // The pre-refactor `reload()` method, the cache-busting import path,
   // and the `plugin:reloaded` / `plugin:reload_failed` events were
-  // deleted in the 2026-04-25 live-config refactor. Plugin enable /
-  // disable flows through `core.plugins.<id>.enabled` (the registry's
-  // onChange triggers load/unload via the api factory's wiring); plugin
-  // authors picking up code edits use `.restart` for a clean process
-  // restart with no module-graph residue. The deleted tests for those
-  // code paths are intentionally not replaced — the contract is now
-  // "no in-process re-import", which `unloadAll` covers.
+  // deleted. Plugin enable / disable flows through
+  // `core.plugins.<id>.enabled` (the registry's onChange triggers
+  // load/unload via the api factory's wiring); plugin authors picking
+  // up code edits use `.restart` for a clean process restart with no
+  // module-graph residue. The deleted tests for those code paths are
+  // intentionally not replaced — the contract is now "no in-process
+  // re-import", which `unloadAll` covers.
 
   describe('unloadAll', () => {
     it('runs teardown for every loaded plugin', async () => {

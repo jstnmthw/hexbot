@@ -4,10 +4,10 @@
 // promotes the existing key to the end of the iteration order, or — when
 // the key is new and the map has reached `cap` — evicts the oldest entry
 // before inserting. Exists to make the "implicit LRU via Map insertion
-// order" contract explicit; the 2026-04-19 quality audit flagged the
-// invariant in auth.ts as fragile. Callers whose inserts must never
-// displace existing entries (e.g. a grow-then-prune workflow) should use
-// a plain Map and enforce the cap themselves.
+// order" contract explicit, since the invariant in auth.ts was fragile.
+// Callers whose inserts must never displace existing entries (e.g. a
+// grow-then-prune workflow) should use a plain Map and enforce the cap
+// themselves.
 
 /**
  * Map with a hard capacity and LRU eviction semantics on every `set`.

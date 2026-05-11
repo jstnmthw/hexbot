@@ -1,4 +1,4 @@
-// Cross-dialect ISUPPORT matrix — Phase 8.
+// Cross-dialect ISUPPORT matrix.
 //
 // The earlier isupport.test.ts exercises the parser with synthetic values
 // chosen to poke at edge cases. This file is the other half: it feeds the
@@ -9,7 +9,7 @@
 // (missing ngIRCd `+` halfop, dropping InspIRCd's type-C `f`) should
 // fail loudly here.
 //
-// Also covers two regressions the audit called out specifically:
+// Also covers two specific regressions:
 //   - NAMES parsing when `multi-prefix` is NOT negotiated: the server
 //     sends only the user's highest-rank prefix (e.g. `@alice` for an
 //     op+voice). Channel state must still track `o`.

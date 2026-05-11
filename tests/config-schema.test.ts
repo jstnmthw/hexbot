@@ -299,9 +299,9 @@ describe('parseReloadClassFromDescription / parseReloadClassFromZod', () => {
 
   it('every annotated leaf in BotConfigOnDiskSchema carries a parseable token', () => {
     // Walk every required leaf in BotConfigOnDiskSchema and assert that
-    // the @reload:* token resolves cleanly. This is the contract Phase 4
-    // depends on: an unannotated key would silently default to `live`,
-    // which is wrong for restart-class fields like `irc.host`.
+    // the @reload:* token resolves cleanly. An unannotated key would
+    // silently default to `live`, which is wrong for restart-class
+    // fields like `irc.host`.
     const schema = BotConfigOnDiskSchema as unknown as { shape: Record<string, unknown> };
     const expectAnnotated = (s: unknown, label: string): void => {
       const desc = (s as { description?: string }).description;

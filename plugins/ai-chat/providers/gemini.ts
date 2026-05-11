@@ -44,7 +44,7 @@ export class GeminiProvider implements AIProvider {
   /**
    * Bumped on every {@link abort}; fetches tag themselves with the epoch at
    * start and skip the cleanup-on-finish if it advanced. See ollama.ts for
-   * the full rationale (W10.3).
+   * the full rationale.
    */
   private epoch = 0;
 
@@ -140,7 +140,7 @@ export class GeminiProvider implements AIProvider {
     } catch (err) {
       throw mapGeminiError(err);
     } finally {
-      // See ollama.ts for the epoch-mismatch skip rationale (W10.3).
+      // See ollama.ts for the epoch-mismatch skip rationale.
       if (startEpoch === this.epoch) {
         this.inflightControllers.delete(controller);
       }

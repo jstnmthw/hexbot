@@ -208,7 +208,7 @@ export class MessageQueue {
         // Per-message isolation — one bad send must not abort the flush
         // loop. Log at debug so the disconnect-path drain doesn't spam
         // warnings when irc-framework's socket is already half-closed,
-        // but still leaves a trail when forensics need it (I8.4).
+        // but still leaves a trail when forensics need it.
         this.logger?.debug('flushWithDeadline() send failed:', err);
       }
       drained++;

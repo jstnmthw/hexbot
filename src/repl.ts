@@ -119,7 +119,7 @@ export class BotREPL {
       // promise becomes an unhandled-rejection that doesn't run the
       // `.then(() => process.exit(0))` continuation, leaving the bot as
       // a zombie process. .finally is the canonical "exit no matter
-      // what" path. (W8.3 / R26)
+      // what" path.
       this.bot
         .shutdown()
         .catch((err) => {
@@ -131,7 +131,7 @@ export class BotREPL {
     // Don't let an EPIPE on stdout (parent process closed the pipe — common
     // with `node ... | head -n 1`) crash the bot. Without this handler
     // Node's default behavior is to surface stdout EPIPE as an
-    // `'uncaughtException'` and tear the process down. (W8.4 / R26)
+    // `'uncaughtException'` and tear the process down.
     process.stdout.on('error', (err) => {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'EPIPE' || code === 'ERR_STREAM_DESTROYED') {
@@ -182,7 +182,7 @@ export class BotREPL {
     // closure; if we tear the readline interface down first, a late
     // `audit:log` event would call `this.print` against a torn-down REPL and
     // either silently no-op or throw. Drop the subscription up front so no
-    // event can hit a half-stopped REPL. (W8.10 / 2026-05-10 audit)
+    // event can hit a half-stopped REPL.
     clearAuditTailForSession('repl');
     for (const { event, fn } of this.ircListeners) {
       this.bot.client.removeListener(event, fn);

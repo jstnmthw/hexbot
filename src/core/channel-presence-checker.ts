@@ -4,8 +4,7 @@
 // silently fallen out of. Lives in its own file (rather than inline in
 // connection-lifecycle.ts) so the presence-check policy — warn once per
 // outage, bounded backoff on permanent-failure channels, don't hammer the
-// server — is reviewable independently of the connection FSM. See the
-// 2026-04-19 quality audit.
+// server — is reviewable independently of the connection FSM.
 import type { LoggerLike } from '../logger';
 import type { ChannelEntry } from '../types';
 import { ircLower } from '../utils/wildcard';

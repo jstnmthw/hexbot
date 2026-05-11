@@ -33,8 +33,8 @@ export function isRecoverableSocketError(value: unknown): boolean {
  * if `shutdown()` threw. Prevents a stuck shutdown from leaving the
  * process in limbo, and prevents a thrown shutdown from re-rejecting up
  * through `process.on('unhandledRejection')` and re-entering the very
- * fatalExit chain that called us (W-FATALEXIT: at 3am during an
- * incident, the second stack trace buries the original error).
+ * fatalExit chain that called us — at 3am during an incident, the second
+ * stack trace buries the original error.
  */
 export async function shutdownWithTimeout(
   shutdown: () => Promise<void>,

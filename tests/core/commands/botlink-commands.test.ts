@@ -1425,7 +1425,7 @@ describe('.botlink ban subcommands', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase 4 — audit coverage for botlink commands
+// Audit coverage for botlink commands
 // ---------------------------------------------------------------------------
 
 describe('botlink commands — audit coverage', () => {

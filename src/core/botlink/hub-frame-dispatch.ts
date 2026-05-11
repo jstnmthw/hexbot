@@ -2,9 +2,8 @@
 //
 // Registry mapping each steady-state `FrameType` to a handler function.
 // Extracted from the 98-line switch that lived inside
-// `BotLinkHub.onSteadyState` per the 2026-04-19 quality audit so adding a
-// new frame type is a one-line registry edit rather than a hunt into the
-// hub's internals.
+// `BotLinkHub.onSteadyState` so adding a new frame type is a one-line
+// registry edit rather than a hunt into the hub's internals.
 //
 // Rules of this file:
 //  - Handlers return `true` if they fully handled the frame and no further

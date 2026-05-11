@@ -438,8 +438,8 @@ function readNamedField(
 /**
  * Spotify's `Retry-After` is documented as seconds. Be defensive: any
  * non-numeric or absurd value clamps into a sane range. The poll-loop
- * also clamps — see Phase 6 — but defending here means the rest of
- * the code can trust the value without re-validation.
+ * also clamps, but defending here means the rest of the code can
+ * trust the value without re-validation.
  */
 function parseRetryAfter(header: string | null): number {
   if (header === null) return 5;

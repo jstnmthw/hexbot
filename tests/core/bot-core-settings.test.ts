@@ -1,8 +1,7 @@
-// Phase 7 verification — `.set core <key> <value>` reaches the live
-// subsystem (logger, message queue, flood limiter, mod_log toggle,
-// memo manager) without a process restart, and restart-class keys
-// surface the operator-facing "stored; takes effect after .restart"
-// hint without applying.
+// Verifies `.set core <key> <value>` reaches the live subsystem (logger,
+// message queue, flood limiter, mod_log toggle, memo manager) without a
+// process restart, and restart-class keys surface the operator-facing
+// "stored; takes effect after .restart" hint without applying.
 import { describe, expect, it, vi } from 'vitest';
 
 import { CommandHandler } from '../../src/command-handler';
@@ -45,7 +44,7 @@ function setup(): {
     changeNick: vi.fn(),
   };
 
-  // Mirror the subset of registrations + dispatcher Bot wires; if Phase 7
+  // Mirror the subset of registrations + dispatcher Bot wires; if this
   // diverges from Bot.registerCoreSettings the test catches it.
   coreSettings.register('bot', [
     {

@@ -5,7 +5,7 @@
 // ban/unban interface. Escalation math lives in `./auth-escalation`;
 // LRU / CIDR / DB storage lives in `./auth-store`. This file stays
 // focused on "should this IP be allowed through, and what do we do
-// after the handshake result is known?". See 2026-04-19 quality audit.
+// after the handshake result is known?".
 import type { BotDatabase } from '../../database';
 import type { BotEventBus } from '../../event-bus';
 import type { LoggerLike } from '../../logger';

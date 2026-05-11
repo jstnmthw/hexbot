@@ -186,13 +186,13 @@ describe('IRCCommands', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Mode batcher — CHANMODES-aware param allocation (§2 Phase 2)
+  // Mode batcher — CHANMODES-aware param allocation
   // -------------------------------------------------------------------------
 
   it('should mix flag and param modes in one call using expectsParam', () => {
-    // `+mo alice` — 'm' is Type D (flag), 'o' is a prefix mode.
-    // Total 1 param needed; caller passes 1. Phase 1's 1:1 rule would have
-    // rejected this because it treated every mode char as param-taking.
+    // `+mo alice` — 'm' is Type D (flag), 'o' is a prefix mode. Total 1
+    // param needed; caller passes 1. The old 1:1 rule would have rejected
+    // this because it treated every mode char as param-taking.
     irc.mode('#test', '+mo', 'Alice');
     const rawMsgs = client.sent.filter((m) => m.type === 'raw');
     expect(rawMsgs).toHaveLength(1);
@@ -282,7 +282,7 @@ describe('IRCCommands', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Phase 2 — every mutating method logs + actor threading
+  // Every mutating method logs + actor threading
   // -------------------------------------------------------------------------
 
   describe('actor threading and full mutating coverage', () => {
@@ -506,8 +506,9 @@ describe('IRCCommands', () => {
   });
 
   it('should log a warning via logger when db.logModAction throws', () => {
-    // The audit helper centralizes the resilience pattern at warn level —
-    // tests assert the standardized message rather than the per-class one.
+    // The audit helper centralizes the resilience pattern at warn level
+    // — tests assert the standardized message rather than the per-class
+    // one.
     const logger = new Logger(null, { value: 'debug' });
     const childLogger = logger.child('irc-commands');
     const warnSpy = vi.spyOn(childLogger, 'warn').mockImplementation(() => {});

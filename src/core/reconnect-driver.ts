@@ -115,7 +115,7 @@ export function createReconnectDriver(deps: ReconnectDriverDeps): ReconnectDrive
   let attemptCount = 0;
   let nextAttemptAt: number | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
-  // W1.2: a single SASL/auth-fatal close used to take the bot down with no
+  // A single SASL/auth-fatal close used to take the bot down with no
   // retry budget. SASL races on services restart / lag are real but
   // transient — give the policy 3 consecutive fatals (without an
   // intervening successful registration) before honoring the exit. The
@@ -190,10 +190,10 @@ export function createReconnectDriver(deps: ReconnectDriverDeps): ReconnectDrive
       if (policy.tier === 'fatal') {
         consecutiveFatals++;
         if (consecutiveFatals < FATAL_BUDGET) {
-          // W1.2: under the budget — treat as rate-limited so the next
-          // attempt waits the long backoff while services / cert / DNS
-          // either heal or surface a definitive cause. The driver still
-          // exits if the same fatal class persists across the budget.
+          // Under the budget — treat as rate-limited so the next attempt
+          // waits the long backoff while services / cert / DNS either
+          // heal or surface a definitive cause. The driver still exits
+          // if the same fatal class persists across the budget.
           logger.warn(
             `Fatal-class disconnect (${policy.label}) — attempt ${consecutiveFatals}/${FATAL_BUDGET} ` +
               `under retry budget; treating as rate-limited.`,

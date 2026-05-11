@@ -3,8 +3,7 @@
 // Pure, side-effect-free helpers for the per-IP ban escalation policy.
 // Owns the `AuthTracker` shape and the constants that define how bans
 // grow and decay. Extracted from `auth.ts` so the escalation math can be
-// unit-tested without standing up an auth manager, a DB, or a hub. See
-// 2026-04-19 quality audit.
+// unit-tested without standing up an auth manager, a DB, or a hub.
 
 /**
  * Per-IP auth-failure state. The same shape is used by both the LRU

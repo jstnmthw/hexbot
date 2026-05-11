@@ -427,9 +427,9 @@ export class ModLog {
     // or other non-serializable value can't kill the audit row entirely
     // — we coerce to a marker shape that's still valid JSON instead. This
     // also keeps the audit:log event payload in lockstep with what
-    // `parseMetadataSafe` would yield on read (W3.7): both produce a
-    // plain object (or null) so botlink relay observers see exactly
-    // what a follow-up `getModLogById` would return.
+    // `parseMetadataSafe` would yield on read: both produce a plain
+    // object (or null) so botlink relay observers see exactly what a
+    // follow-up `getModLogById` would return.
     let metadataJson: string | null = null;
     let emittedMetadata: Record<string, unknown> | null = null;
     if (metadata != null) {

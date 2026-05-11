@@ -149,7 +149,7 @@ export class FloodLimiter {
       // is temporary, and a missed warning is far less harmful than the
       // duplicate-notice loop FIFO eviction creates: evicting an
       // already-warned flooder lets them trip the warning notice again
-      // on rotation, breaking the once-per-window contract (W2.6).
+      // on rotation, breaking the once-per-window contract.
       if (this.warned.size >= MAX_WARNED_KEYS) {
         this.logger?.debug(
           `[dispatcher] flood: warned-set at cap (${MAX_WARNED_KEYS}); skipping notice for ${key} (${kind})`,

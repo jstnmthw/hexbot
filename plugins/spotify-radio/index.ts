@@ -3,8 +3,7 @@
 // The operator starts a Jam in their own Spotify client, runs
 // `!radio on <jam-url>` in a channel, and the bot polls
 // `/v1/me/player/currently-playing` against the operator's account and
-// announces each track transition. See README.md and the plan in
-// docs/plans/spotify-radio.md for the full design.
+// announces each track transition. See README.md for the full design.
 //
 // Architecture note: state (`cfg`, `spotify`, `session`) lives in a
 // closure created by `createSpotifyRadio()`. The plugin loader sees a
