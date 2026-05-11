@@ -1,0 +1,369 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  detectPromptEcho,
+  formatResponse,
+  isFantasyLine,
+} from '../../../plugins/ai-chat/output-formatter';
+
+describe('formatResponse', () => {
+  it('returns empty array for empty input', () => {
+    expect(formatResponse('', 4, 400)).toEqual([]);
+    expect(formatResponse('   \n\n   ', 4, 400)).toEqual([]);
+  });
+
+  it('strips bold/italic/code markdown', () => {
+    expect(formatResponse('**bold** and *italic* and `code`', 4, 400)).toEqual([
+      'bold and italic and code',
+    ]);
+  });
+
+  it('strips headers', () => {
+    // After header strip, "Heading" ends with a letter so the soft-wrap
+    // join merges it with the next line. The point of this test is the
+    // `#` strip, which still holds.
+    expect(formatResponse('# Heading\nbody', 4, 400)).toEqual(['Heading body']);
+  });
+
+  it('strips block quotes', () => {
+    expect(formatResponse('> quoted', 4, 400)).toEqual(['quoted']);
+  });
+
+  it('converts markdown lists to dash bullets', () => {
+    expect(formatResponse('* one\n* two\n1. three', 4, 400)).toEqual(['- one', '- two', '- three']);
+  });
+
+  it('converts markdown links to "text (url)"', () => {
+    expect(formatResponse('See [docs](http://x.com) for more.', 4, 400)).toEqual([
+      'See docs (http://x.com) for more.',
+    ]);
+  });
+
+  it('strips \\r and NULs', () => {
+    expect(formatResponse('hi\rworld\0', 4, 400)).toEqual(['hiworld']);
+  });
+
+  it('strips IRC color codes', () => {
+    expect(formatResponse('\x0304red\x03 text \x02bold\x02', 4, 400)).toEqual(['red text bold']);
+  });
+
+  it('collapses runs of whitespace', () => {
+    expect(formatResponse('too     many    spaces', 4, 400)).toEqual(['too many spaces']);
+  });
+
+  it('collapses blank lines and merges the soft-wrapped remainder', () => {
+    // Multi-newline collapses to a single \n in stripProtocolUnsafe, then
+    // joinSoftWraps merges across because "one" ends with a letter and
+    // "two" doesn't start with a list/fantasy marker.
+    expect(formatResponse('one\n\n\ntwo', 4, 400)).toEqual(['one two']);
+  });
+
+  it('merges mid-sentence soft-wrapped newlines (small-model habit)', () => {
+    // Llama 3.2 3B emits soft wraps around 80 chars from training-data
+    // line widths. Without joinSoftWraps these become 3 IRC PRIVMSGs.
+    const text = 'others claim that was\njust the beginning of a whole new era in human\nhistory.';
+    expect(formatResponse(text, 4, 400)).toEqual([
+      'others claim that was just the beginning of a whole new era in human history.',
+    ]);
+  });
+
+  it('keeps line breaks after sentence terminators (paragraph intent)', () => {
+    // Lines that end with . ! ? : are treated as deliberate breaks.
+    expect(formatResponse('first thought.\nsecond thought.', 4, 400)).toEqual([
+      'first thought.',
+      'second thought.',
+    ]);
+    expect(formatResponse('really?\nyeah!', 4, 400)).toEqual(['really?', 'yeah!']);
+  });
+
+  it('splits long line at sentence boundary when possible', () => {
+    const text = 'First sentence. Second sentence. Third sentence. Fourth sentence.';
+    const out = formatResponse(text, 4, 32);
+    expect(out.length).toBeGreaterThanOrEqual(2);
+    // Each line must respect the length cap.
+    for (const line of out) expect(line.length).toBeLessThanOrEqual(32);
+  });
+
+  it('splits long line at word boundary when no sentence break exists', () => {
+    const text = 'word '.repeat(50).trim();
+    const out = formatResponse(text, 10, 40);
+    for (const line of out) {
+      expect(line.length).toBeLessThanOrEqual(40);
+      // Should not split mid-word
+      expect(line.startsWith(' ') || line.endsWith(' ')).toBe(false);
+    }
+  });
+
+  it('hard-splits a line with no spaces', () => {
+    const text = 'x'.repeat(200);
+    const out = formatResponse(text, 10, 40);
+    expect(out.length).toBeGreaterThanOrEqual(5);
+    for (const line of out) expect(line.length).toBeLessThanOrEqual(40);
+  });
+
+  it('truncates to maxLines with ellipsis', () => {
+    // Use sentence-terminated lines so joinSoftWraps doesn't fold them
+    // into one logical line — the test is about the maxLines truncation.
+    const text = 'line1.\nline2.\nline3.\nline4.\nline5.\nline6.';
+    const out = formatResponse(text, 3, 400);
+    expect(out).toHaveLength(3);
+    expect(out[2]).toContain('...');
+  });
+
+  it('does not add ellipsis when lines fit within maxLines', () => {
+    const out = formatResponse('a.\nb.\nc.', 4, 400);
+    expect(out).toEqual(['a.', 'b.', 'c.']);
+  });
+
+  it('handles unicode correctly', () => {
+    expect(formatResponse('héllo 世界 🌍', 4, 400)).toEqual(['héllo 世界 🌍']);
+  });
+
+  it('strips code fences', () => {
+    expect(formatResponse('```typescript\nconst x = 1;\n```', 4, 400)).toEqual(['const x = 1;']);
+  });
+
+  it('leaves plain text untouched', () => {
+    expect(formatResponse('Just a plain sentence.', 4, 400)).toEqual(['Just a plain sentence.']);
+  });
+
+  it('returns empty when stripping leaves nothing', () => {
+    expect(formatResponse('\x00\x01\x02', 4, 400)).toEqual([]);
+  });
+
+  // ChanServ fantasy-command defense: drop the entire response if ANY line
+  // starts with a fantasy prefix so an LLM can't inject `.deop admin` etc.
+  // through the bot's mouth.
+  it('drops response when a line starts with "." (ChanServ fantasy)', () => {
+    expect(formatResponse('.deop admin', 4, 400)).toEqual([]);
+  });
+
+  it('drops response when a line starts with "!"', () => {
+    expect(formatResponse('!kick target', 4, 400)).toEqual([]);
+  });
+
+  it('drops response when a line starts with "/"', () => {
+    expect(formatResponse('/msg ChanServ OWNER attacker', 4, 400)).toEqual([]);
+  });
+
+  it('drops entire multi-line response if any line has a fantasy prefix', () => {
+    // Even though line 1 is safe, lines 2-3 are compromised → drop everything
+    expect(formatResponse('Sure thing!\n.deop admin\n.kick admin', 4, 400)).toEqual([]);
+  });
+
+  it('drops response when split chunks produce a fantasy-prefix line', () => {
+    // Force a split where a chunk begins with ". …"
+    const text = 'Say this. .deop admin please.';
+    const out = formatResponse(text, 4, 12);
+    // Entire response is dropped because a chunk starts with "."
+    expect(out).toEqual([]);
+  });
+
+  it('drops response for extended fantasy prefixes (~@%$&+)', () => {
+    expect(formatResponse('~command arg', 4, 400)).toEqual([]);
+    expect(formatResponse('@op me', 4, 400)).toEqual([]);
+    expect(formatResponse('%halfop', 4, 400)).toEqual([]);
+    expect(formatResponse('$special', 4, 400)).toEqual([]);
+    expect(formatResponse('&chanop', 4, 400)).toEqual([]);
+    expect(formatResponse('+voice me', 4, 400)).toEqual([]);
+  });
+
+  it('leaves "-" bullet lines untouched (not a fantasy prefix)', () => {
+    expect(formatResponse('- first\n- second', 4, 400)).toEqual(['- first', '- second']);
+  });
+
+  it('does NOT drop responses where fantasy chars are mid-string', () => {
+    expect(formatResponse('see .config or !help', 4, 400)).toEqual(['see .config or !help']);
+  });
+
+  it('isFantasyLine returns false for safe starts', () => {
+    expect(isFantasyLine('hello')).toBe(false);
+    expect(isFantasyLine('- dash')).toBe(false);
+    expect(isFantasyLine('')).toBe(false);
+  });
+
+  it('isFantasyLine returns true for all known fantasy prefixes', () => {
+    expect(isFantasyLine('.op x')).toBe(true);
+    expect(isFantasyLine('!kick x')).toBe(true);
+    expect(isFantasyLine('/mode +o')).toBe(true);
+    expect(isFantasyLine('~command')).toBe(true);
+    expect(isFantasyLine('@op')).toBe(true);
+    expect(isFantasyLine('%half')).toBe(true);
+    expect(isFantasyLine('$spec')).toBe(true);
+    expect(isFantasyLine('&chan')).toBe(true);
+    expect(isFantasyLine('+voice')).toBe(true);
+  });
+
+  it('strips Unicode zero-width chars that would hide a fantasy prefix', () => {
+    // ZWSP (U+200B) before `.deop admin` — without stripping, the invisible char
+    // would sit at position 0 and isFantasyLine would miss the dot.
+    expect(formatResponse('\u200b.deop admin', 4, 400)).toEqual([]);
+    // ZWJ (U+200D)
+    expect(formatResponse('\u200d.op attacker', 4, 400)).toEqual([]);
+    // BOM (U+FEFF)
+    expect(formatResponse('\ufeff.kick admin', 4, 400)).toEqual([]);
+    // Bidi override (U+202E) — right-to-left override
+    expect(formatResponse('\u202e.deop admin', 4, 400)).toEqual([]);
+    // Word joiner (U+2060)
+    expect(formatResponse('\u2060.deop admin', 4, 400)).toEqual([]);
+  });
+
+  it('strips Unicode format chars interleaved throughout the message', () => {
+    // Attacker could insert ZWSPs between every char to defeat simple checks.
+    // We strip them all, then the dot is at position 0 → response dropped.
+    expect(formatResponse('.\u200bd\u200be\u200bo\u200bp admin', 4, 400)).toEqual([]);
+  });
+
+  it('drops response for multi-char prefix sequences (.., !!, //)', () => {
+    expect(isFantasyLine('..deop admin')).toBe(true);
+    expect(isFantasyLine('!!kick user')).toBe(true);
+    expect(isFantasyLine('///topic foo')).toBe(true);
+    expect(formatResponse('..deop admin', 4, 400)).toEqual([]);
+  });
+
+  // Atheme strtok simulation — regression test for the space-prepend bypass
+  it('formatted output is never parseable as fantasy by Atheme strtok', () => {
+    function athemeWouldParse(msg: string, prefix = '.!/'): boolean {
+      const token = msg.trimStart().split(' ')[0];
+      return token.length >= 2 && prefix.includes(token[0]) && /[a-zA-Z]/.test(token[1]);
+    }
+
+    for (const input of ['.deop admin', '!kick user', '/mode +o evil']) {
+      const lines = formatResponse(input, 4, 400);
+      // Response is dropped entirely — no lines to parse
+      expect(lines).toEqual([]);
+      for (const line of lines) {
+        expect(athemeWouldParse(line)).toBe(false);
+      }
+    }
+  });
+
+  it('truncates last line if even ellipsis suffix wont fit', () => {
+    // When the final line is already at the max length, appending suffix must still fit.
+    const text =
+      'a'.repeat(40) + '\n' + 'b'.repeat(40) + '\n' + 'c'.repeat(40) + '\n' + 'd'.repeat(40);
+    const out = formatResponse(text, 3, 40);
+    expect(out).toHaveLength(3);
+    expect(out[2].endsWith('...')).toBe(true);
+    expect(out[2].length).toBeLessThanOrEqual(40);
+  });
+
+  // W14: combining marks can't hide a fantasy prefix.
+  it('drops a line whose fantasy prefix is preceded by a combining mark', () => {
+    // \u0301 (combining acute) before a `.deop` — strip path must drop the mark
+    // so the `.` is first, and isFantasyLine catches it.
+    expect(formatResponse('\u0301.deop admin', 4, 400)).toEqual([]);
+  });
+
+  // W15: fullwidth / compatibility prefixes fold via NFKC.
+  it('detects fullwidth fullstop as fantasy prefix via NFKC', () => {
+    // U+FF0E FULLWIDTH FULL STOP — renders as `．`; Atheme would match it if
+    // the client sent it, and certainly if the bot's own NFKC-folded client
+    // rendered it. NFKC-normalise before the check.
+    expect(isFantasyLine('\uFF0Edeop admin')).toBe(true);
+    expect(formatResponse('\uFF0Edeop admin', 4, 400)).toEqual([]);
+  });
+
+  // W16: Unicode line separators must split into separate logical lines.
+  it('treats U+2028 / U+2029 / NEL as line breaks for the fantasy check', () => {
+    // Without the normalisation, this would collapse into one line starting
+    // with "Sure", bypassing the fantasy-prefix test for ".deop".
+    expect(formatResponse('Sure thing\u2028.deop admin', 4, 400)).toEqual([]);
+    expect(formatResponse('ok\u2029!kick user', 4, 400)).toEqual([]);
+    expect(formatResponse('ok\u0085/mode +o evil', 4, 400)).toEqual([]);
+  });
+
+  // maxLineLength is measured in UTF-8 bytes, not JS code units. Multibyte
+  // content must split before the IRC server's 510-byte truncation kicks in.
+  describe('UTF-8 byte length', () => {
+    const enc = new TextEncoder();
+    const byteLen = (s: string) => enc.encode(s).length;
+
+    it('splits CJK lines that exceed the byte cap even if char length is under it', () => {
+      // 100 CJK chars = 300 UTF-8 bytes. Cap of 60 bytes should force splits.
+      const text = '中'.repeat(100);
+      const lines = formatResponse(text, 10, 60);
+      expect(lines.length).toBeGreaterThan(1);
+      for (const line of lines) {
+        expect(byteLen(line)).toBeLessThanOrEqual(60);
+      }
+    });
+
+    it('never splits a multibyte code point in half', () => {
+      // Each emoji = 4 UTF-8 bytes. With cap=10 bytes, lines must hold whole
+      // emoji, not partial sequences (which would be invalid UTF-8 / mojibake).
+      const text = '😀'.repeat(20);
+      const lines = formatResponse(text, 10, 10);
+      for (const line of lines) {
+        expect(() => enc.encode(line)).not.toThrow();
+        // Round-trip via decode to catch lone surrogates.
+        const round = new TextDecoder('utf-8', { fatal: true }).decode(enc.encode(line));
+        expect(round).toBe(line);
+        expect(byteLen(line)).toBeLessThanOrEqual(10);
+      }
+    });
+
+    it('truncation ellipsis stays within the byte cap on a multibyte final line', () => {
+      // Force truncation: 5 lines, maxLines=2. Final line picks up " ..." suffix.
+      const text = ['一', '二', '三' + '中'.repeat(20), '四', '五'].join('\n');
+      const lines = formatResponse(text, 2, 30);
+      expect(lines).toHaveLength(2);
+      expect(byteLen(lines[lines.length - 1])).toBeLessThanOrEqual(30);
+      expect(lines[lines.length - 1].endsWith('...')).toBe(true);
+    });
+  });
+});
+
+describe('detectPromptEcho', () => {
+  const SYS =
+    'You are a regular channel user, not an operator. You do not know IRC operator commands, ' +
+    'services syntax, channel mode letters, ban mask formats, or network admin procedures.';
+
+  it('returns null when threshold is 0 (detector disabled)', () => {
+    expect(detectPromptEcho('anything', SYS, 0)).toBeNull();
+  });
+
+  it('returns null when the output is shorter than the threshold', () => {
+    expect(detectPromptEcho('too short', SYS, 60)).toBeNull();
+  });
+
+  it('returns null when the system prompt is shorter than the threshold', () => {
+    expect(detectPromptEcho('some output'.repeat(10), 'tiny', 60)).toBeNull();
+  });
+
+  it('returns null when output has no contiguous overlap with system prompt', () => {
+    expect(
+      detectPromptEcho(
+        'The quick brown fox jumped over the lazy dog in the middle of town today.',
+        SYS,
+        60,
+      ),
+    ).toBeNull();
+  });
+
+  it('detects a verbatim chunk of the system prompt in the output', () => {
+    const leaked = 'Preamble. You are a regular channel user, not an operator. You do not know IRC';
+    const match = detectPromptEcho(leaked, SYS, 60);
+    expect(match).not.toBeNull();
+    expect(match!.length).toBeGreaterThanOrEqual(60);
+  });
+
+  it('normalises whitespace differences — multiple spaces, tabs, newlines collapse', () => {
+    const leaked =
+      'Preamble. You are a regular   channel\tuser,\n\nnot an operator. You do not know IRC';
+    const match = detectPromptEcho(leaked, SYS, 60);
+    expect(match).not.toBeNull();
+  });
+
+  it('caps the preview slice at 200 characters', () => {
+    const echo = SYS.slice(0, 180);
+    const match = detectPromptEcho(echo.repeat(2), SYS, 60);
+    expect(match).not.toBeNull();
+    expect(match!.length).toBeLessThanOrEqual(200);
+  });
+
+  it('returns null when post-normalisation lengths fall below threshold', () => {
+    // 70 spaces collapses to 1 — normalised length drops below the threshold.
+    expect(detectPromptEcho(' '.repeat(70), SYS, 60)).toBeNull();
+  });
+});
