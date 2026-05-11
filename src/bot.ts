@@ -1745,6 +1745,14 @@ export class Bot {
               );
               this.config.irc.tls = true;
               this.config.irc.port = directive.port;
+              // W-STS-LEAK: drop the outbound queue BEFORE quit so the
+              // onClose `flushWithDeadline(100)` doesn't drain queued
+              // PRIVMSGs out over the cleartext socket between the
+              // upgrade decision and the TLS reconnect. A queued
+              // `.adduser nick *!*@host` (password material) or a
+              // plugin reply containing token material could otherwise
+              // hit a passive observer during the 100ms window.
+              this.messageQueue.clear();
               // Drop the current session; the reconnect lifecycle will kick
               // back in and the next connect picks up the mutated config.
               this.client.quit('STS upgrade to TLS');

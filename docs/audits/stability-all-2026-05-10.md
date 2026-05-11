@@ -30,19 +30,19 @@ A further 11 items previously labelled CRITICAL by parallel subagents have been 
 
 Each section below is a discrete review phase. `/build` and refactoring skills can tick these off as they fix items.
 
-- [ ] **Phase 1 — Connection lifecycle & reconnect** (`connection-lifecycle.ts`, `reconnect-driver.ts`, `close-reason-classifier.ts`, `sts.ts`, `irc-bridge.ts`)
-- [ ] **Phase 2 — Dispatcher & plugin loader** (`dispatcher.ts`, `plugin-loader.ts`, `plugin-api-factory.ts`, `flood-limiter.ts`)
-- [ ] **Phase 3 — Database layer** (`database.ts`, `database-errors.ts`, `mod-log.ts`, `ban-store.ts`, `admin-list-store.ts`, `settings-registry.ts`, `channel-settings.ts`)
-- [ ] **Phase 4 — DCC subsystem** (`src/core/dcc/*`)
-- [ ] **Phase 5 — Botlink subsystem** (`src/core/botlink/*`)
-- [ ] **Phase 6 — Services & identity** (`services.ts`, `services-parser.ts`, `password.ts`, `permissions.ts`, `owner-bootstrap.ts`, `hostmask-matcher.ts`)
-- [ ] **Phase 7 — Orchestrator & process handlers** (`bot.ts`, `index.ts`, `bootstrap.ts`, `process-handlers.ts`)
-- [ ] **Phase 8 — IRC commands & message queue** (`irc-commands.ts`, `message-queue.ts`, `command-handler.ts`, `repl.ts`, `audit.ts`, `commands/*`)
-- [ ] **Phase 9 — Channel state & ISUPPORT** (`channel-state.ts`, `isupport.ts`, `channel-presence-checker.ts`, `hostmask-matcher.ts`, `irc-event-helpers.ts`)
-- [ ] **Phase 10 — External-call plugins** (`plugins/rss`, `plugins/ai-chat`, `plugins/spotify-radio`)
-- [ ] **Phase 11 — IRC-behavior plugins** (`plugins/chanmod`, `plugins/flood`, `plugins/topic`, `plugins/greeter`)
-- [ ] **Phase 12 — Utilities & small plugins** (`src/utils/*`, `event-bus.ts`, `logger.ts`, `plugins/{8ball,ctcp,help,seen}`)
-- [ ] **Phase 13 (follow-up) — Cover the 5 files missed by the original sweep** (`src/core/audit.ts`, `src/core/memo.ts`, `src/core/relay-orchestrator.ts`, `src/core/seed-from-json.ts`, `src/utils/deep-freeze.ts`, `src/database-errors.ts`)
+- [x] **Phase 1 — Connection lifecycle & reconnect** (`connection-lifecycle.ts`, `reconnect-driver.ts`, `close-reason-classifier.ts`, `sts.ts`, `irc-bridge.ts`)
+- [x] **Phase 2 — Dispatcher & plugin loader** (`dispatcher.ts`, `plugin-loader.ts`, `plugin-api-factory.ts`, `flood-limiter.ts`)
+- [x] **Phase 3 — Database layer** (`database.ts`, `database-errors.ts`, `mod-log.ts`, `ban-store.ts`, `admin-list-store.ts`, `settings-registry.ts`, `channel-settings.ts`)
+- [x] **Phase 4 — DCC subsystem** (`src/core/dcc/*`)
+- [x] **Phase 5 — Botlink subsystem** (`src/core/botlink/*`)
+- [x] **Phase 6 — Services & identity** (`services.ts`, `services-parser.ts`, `password.ts`, `permissions.ts`, `owner-bootstrap.ts`, `hostmask-matcher.ts`)
+- [x] **Phase 7 — Orchestrator & process handlers** (`bot.ts`, `index.ts`, `bootstrap.ts`, `process-handlers.ts`)
+- [x] **Phase 8 — IRC commands & message queue** (`irc-commands.ts`, `message-queue.ts`, `command-handler.ts`, `repl.ts`, `audit.ts`, `commands/*`)
+- [x] **Phase 9 — Channel state & ISUPPORT** (`channel-state.ts`, `isupport.ts`, `channel-presence-checker.ts`, `hostmask-matcher.ts`, `irc-event-helpers.ts`)
+- [x] **Phase 10 — External-call plugins** (`plugins/rss`, `plugins/ai-chat`, `plugins/spotify-radio`)
+- [x] **Phase 11 — IRC-behavior plugins** (`plugins/chanmod`, `plugins/flood`, `plugins/topic`, `plugins/greeter`)
+- [x] **Phase 12 — Utilities & small plugins** (`src/utils/*`, `event-bus.ts`, `logger.ts`, `plugins/{8ball,ctcp,help,seen}`)
+- [x] **Phase 13 (follow-up) — Cover the 5 files missed by the original sweep** (`src/core/audit.ts`, `src/core/memo.ts`, `src/core/relay-orchestrator.ts`, `src/core/seed-from-json.ts`, `src/utils/deep-freeze.ts`, `src/database-errors.ts`) _(scope: skipped — operator chose to close existing findings first; revisit if specific incident data points there. R33 reflects this same decision.)_
 
 ---
 
@@ -106,13 +106,13 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
   - **Demotion reason:** The bot is _correctly recovering_, not wedged. The downstream supervisor failure (W-HEALTHCHECK below) is the actual offender. The fix is healthcheck redesign, not in-process retry behaviour.
   - **Remediation:** Resolve `Bot.start()` after the first attempt is scheduled (success or retry). Surface live state via `getReconnectState()` so the healthcheck can report "alive but reconnecting" instead of "alive but disconnected".
 
-- [ ] **[W-STS-LEAK] Connection lifecycle `onClose` runs `messageQueue.flushWithDeadline` after STS upgrade decision** [security-xref]
+- [x] **[W-STS-LEAK] Connection lifecycle `onClose` runs `messageQueue.flushWithDeadline` after STS upgrade decision** [security-xref]
   - **File:** `src/bot.ts:1463-1485` (`onSTSDirective`), `src/core/connection-lifecycle.ts:362-369` (onClose)
   - **Pattern:** Cascading failure / cleartext leak
   - **Scenario:** Plaintext first contact to a server with `sts=port=6697,duration=2592000`. Bot decides to upgrade, calls `client.quit('STS upgrade')`, queued PRIVMSGs from `messageQueue` are still in `flushWithDeadline(100)` from `onClose`. The 100ms drain can flush a queued op or an in-flight reply _over plaintext_ between the upgrade decision and the new TLS connect.
   - **Impact:** A queued `.adduser nick *!*@host` setting a password, or a plugin reply containing token material, can leak to a passive observer during the upgrade transition.
   - **Demotion reason:** Security concern more than stability concern. 100ms drain window plus requirement that queue contains secret-bearing content makes this narrow.
-  - **Remediation:** When `onSTSDirective` mutates config to upgrade, call `messageQueue.clear()` _before_ `client.quit()`. Skip the `flushWithDeadline` on this specific disconnect path.
+  - **Remediation:** When `onSTSDirective` mutates config to upgrade, call `messageQueue.clear()` _before_ `client.quit()`. Skip the `flushWithDeadline` on this specific disconnect path. _(Closed: `this.messageQueue.clear()` added immediately before `this.client.quit('STS upgrade to TLS')` in `bot.ts` `onSTSDirective` so queued PRIVMSGs are dropped before the onClose `flushWithDeadline(100)` would have drained them over plaintext.)_
 
 #### Original WARNINGs
 
@@ -244,7 +244,7 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 
 - [x] **W7.1** — `process.on` handlers attached after `main()` is invoked — order-fragile (`index.ts:160-225,235`) [latent].
 - [x] **W7.2** — Bootstrap throw exits via `process.exit(1)` before logger exists; stderr line lacks systemd priority (`bot.ts:222-227,1607-1664`).
-- [ ] **W7.3** — No supervisor ready-signal (no `sd_notify`) (`index.ts:106-122`). systemd `Type=notify` cannot be used.
+- [x] **W7.3** — No supervisor ready-signal (no `sd_notify`) (`index.ts:106-122`). systemd `Type=notify` cannot be used. _(scope: deferred — paired with R38; operator deploys via Docker so the two-file healthcheck (R12) covers the same need. Revisit if a systemd `Type=notify` unit becomes the target deployment.)_
 - [x] **W7.4** — `.restart` command `process.exit(0)` after `bot.shutdown()` — no `stopHeartbeat()` (`bot.ts:1082-1085`). Healthcheck file may not be removed on restart.
 - [x] **W7.5** — No `process.on('warning')` or `'beforeExit'` handlers (`index.ts`).
 - [x] **W7.6** — Plugin-load failure logged loud but does not change exit posture (`bot.ts:971-976`). No way to opt into "fail-fast" for CI/staging.
@@ -286,7 +286,7 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 
 #### Original WARNINGs
 
-- [ ] **W10.1** — RSS permanent error treated as transient on add path (`plugins/rss/commands.ts:284-313`). Persists feeds even on 404 seed; 5 doomed polls before circuit opens.
+- [x] **W10.1** — RSS permanent error treated as transient on add path (`plugins/rss/commands.ts:284-313`). Persists feeds even on 404 seed; 5 doomed polls before circuit opens. _(Closed: `isPermanentSeedError(errMsg)` discriminates 4xx HTTP from transient errors in `handleAdd` — 4xx rejects without persisting, 5xx/network still persists for the regular poll loop.)_
 - [x] **W10.2** — RSS `!rss check` (manual all-feeds) bypasses circuit breaker (`plugins/rss/commands.ts:382-395`). DNS outage → 10 sequential failures → 50s blocking + 10 channel notices.
 - [x] **W10.3** — ai-chat `inflightControllers.clear()` after abort doesn't await fetch unwind; stale completion can release semaphore on new instance (`providers/ollama.ts:266-271`, `providers/gemini.ts:144-149`).
 - [x] **W10.4** — spotify-radio `!radio on` does not verify token via `getCurrentlyPlaying()` before announcing (`plugins/spotify-radio/index.ts:269-325`). Asymmetric "Radio is on" / 50s later "Too many errors. Radio off." channel announce.
@@ -294,22 +294,22 @@ The 11 items at the top of phases 1, 4, 5, 7, 10 were originally labelled CRITIC
 
 ### Phase 11 — IRC-behavior plugins (9 items)
 
-- [ ] **W11.1** — `rejoin_attempts:<chan>` KV records never deleted (`plugins/chanmod/protection.ts:128,154`). KV bloat across reboots.
+- [x] **W11.1** — `rejoin_attempts:<chan>` KV records never deleted (`plugins/chanmod/protection.ts:128,154`). KV bloat across reboots. _(Closed: `api.bind('join', ...)` in `protection.ts:270` deletes the `rejoin_attempts:` KV row on successful bot rejoin.)_
 - [x] **W11.2** — Cycle-on-deop wedge on services-free networks (`plugins/chanmod/mode-enforce-recovery.ts:87-98`). PART succeeds, JOIN blocked by mode set during 2s window → bot AWOL until reload.
-- [ ] **W11.3** — Stale `pendingRecoverCleanup` / `unbanRequested` fires `-im` on rejoin (`mode-enforce-recovery.ts:131-134`, `protection.ts:111-113`).
-- [ ] **W11.4** — `splitActive` / `splitExpiry` not pruned by 60s time bind (`plugins/chanmod/stopnethack.ts:99-106`).
+- [x] **W11.3** — Stale `pendingRecoverCleanup` / `unbanRequested` fires `-im` on rejoin (`mode-enforce-recovery.ts:131-134`, `protection.ts:111-113`). _(Closed: TTL check in `handleBotOpped` at `mode-enforce-recovery.ts:160-172` skips stale entries; `pruneExpiredState` at `state.ts:265-270` reaps both maps every 60s.)_
+- [x] **W11.4** — `splitActive` / `splitExpiry` not pruned by 60s time bind (`plugins/chanmod/stopnethack.ts:99-106`). _(Closed: `pruneExpiredState` at `state.ts:290-299` clears `splitActive` + `splitOpsSnapshot` once `splitExpiry` is past; the inline mode-event check is no longer the only reset path.)_
 - [x] **W11.5** — Mass re-op `+oooooooo...` not capped per recovery cycle (`mode-enforce-recovery.ts:225-241`). 30-flagged-user channel: 6-7 MODE lines + deop/halfop/voice + hostile response in one tick → flood K-line during recovery.
 - [x] **W11.6** — Lockdown timer fires `-${mode}` after bot disconnect; if reconnect not complete, mode stranded on server forever (`plugins/flood/lockdown.ts:154-156,168-183`). _Fix:_ persist active locks in `api.db`; re-attempt on rejoin.
-- [ ] **W11.7** — `joinRates` / lockdown counters survive bot ops loss mid-window (`plugins/flood/lockdown.ts:48-58`).
-- [ ] **W11.8** — `enforcement-executor inFlight` Set has detached promise race against teardown (`plugins/flood/enforcement-executor.ts:276-281`). _Fix:_ `disposed` flag at top of teardown.
+- [x] **W11.7** — `joinRates` / lockdown counters survive bot ops loss mid-window (`plugins/flood/lockdown.ts:48-58`). _(Closed: `LockdownController.record()` at `lockdown.ts:74` early-returns when bot has no ops, so the flooder Set + timestamp array cannot grow during ops-loss windows.)_
+- [x] **W11.8** — `enforcement-executor inFlight` Set has detached promise race against teardown (`plugins/flood/enforcement-executor.ts:276-281`). _Fix:_ `disposed` flag at top of teardown. _(Closed: `disposed` flag at `enforcement-executor.ts:133`, set in `dispose()`/`teardown()`, checked at every entry into action paths at `enforcement-executor.ts:372-373` so post-teardown promises bail before touching the api.)_
 - [x] **W11.9** — Greeter `joinRates` per-channel map never pruned for departed channels (`plugins/greeter/index.ts:145,184`). _Fix:_ mirror chanmod's bot-PART/KICK pattern.
 
 ### Phase 12 — Utilities & small plugins (4 items)
 
 - [x] **W12.1** — `eventBus.on(...)` direct (vs `trackListener`) bypasses ownership tracking (`event-bus.ts:201-208`). _(@deprecated JSDoc; full migration deferred.)_
-- [ ] **W12.2** — `help.cooldown_ms` snapshot at init time; live-config inconsistent with header/footer (`plugins/help/index.ts:82-87`).
+- [x] **W12.2** — `help.cooldown_ms` snapshot at init time; live-config inconsistent with header/footer (`plugins/help/index.ts:82-87`). _(Closed: `getCooldownMs()` at `plugins/help/index.ts:84-88` reads `api.settings.getInt('cooldown_ms')` on every check rather than snapshotting at init, so `.set help cooldown_ms <new>` takes effect immediately.)_
 - [x] **W12.3** — `plugins/ctcp/index.ts` `CTCP PING` echoes `ctx.text` verbatim with no length cap (`plugins/ctcp/index.ts:35-37`).
-- [ ] **W12.4** — SOCKS5 connect timeout not configured end-to-end (`src/utils/socks.ts`). Black-holed proxy → half-open connect.
+- [x] **W12.4** — SOCKS5 connect timeout not configured end-to-end (`src/utils/socks.ts`). Black-holed proxy → half-open connect. _(Closed: `armSocksConnectTimeout(socket, SOCKS5_CONNECT_TIMEOUT_MS = 30_000)` in `src/utils/socks.ts` wires `socket.setTimeout` + a `'timeout'` handler that calls `socket.destroy(new Error('SOCKS5 connect timeout'))`. Armed in `connection-lifecycle.ts:501` on the `raw socket connected` event, disarmed on `registered`.)_
 
 ---
 
@@ -525,7 +525,7 @@ These were open during meta-review and have been answered. Captured here so futu
 - [x] **Healthcheck design intent:** The single-file signal conflated _liveness_ ("restart me if I'm wedged") with _readiness_ ("am I doing my job"). Resolution: two-file k8s-style model — `/tmp/.hexbot-alive` (always touched) + `/tmp/.hexbot-connected` (touched on connect, removed on disconnect). Default `docker-compose.yml` uses `-connected` for operator visibility; autoheal/k8s liveness adopters point at `-alive` to preserve the in-process backoff. R12 implements this; the supposed "incompatibility with autoheal" is dissolved. R18 (Bot.start await blocking) is independent.
 - [x] **DB `process.exit(2)` intent:** Unclear — but R14 preserves loud-fail semantics either way. Captured inline on [C-DBEXIT].
 - [x] **STS revocation:** Rare use case. [W-STS-REVOKE] demoted to INFO (now I1.5). R2 stays in quick-wins at low priority.
-- [ ] **Future audit process (R43):** Both stricter CRITICAL bar in the skill AND parent verification of CRITICAL claims before accepting from subagents.
+- [x] **Future audit process (R43):** Both stricter CRITICAL bar in the skill AND parent verification of CRITICAL claims before accepting from subagents. _(Implemented in `.claude/skills/stability/SKILL.md`: 3-clause CRITICAL bar + mandatory severity-recalibration step. Local-only change since `.claude/` is gitignored.)_
 
 ---
 
