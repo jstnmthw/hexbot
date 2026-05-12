@@ -38,7 +38,7 @@
   "license": "GPL-2.0",
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
-    "better-sqlite3": "^12.9.0",
+    "better-sqlite3": "^12.10.0",
     "chalk": "^5.6.2",
     "irc-framework": "^4.14.0",
     "tsx": "^4.21.0",
@@ -48,8 +48,8 @@
     "@eslint/js": "^10.0.1",
     "@trivago/prettier-plugin-sort-imports": "^6.0.2",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^25.6.2",
-    "@vitest/coverage-v8": "^4.1.5",
+    "@types/node": "^25.7.0",
+    "@vitest/coverage-v8": "^4.1.6",
     "eslint": "^10.3.0",
     "husky": "^9.1.7",
     "ipaddr.js": "^2.4.0",
@@ -58,8 +58,8 @@
     "rss-parser": "^3.13.0",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.59.2",
-    "vite": "^8.0.11",
-    "vitest": "^4.1.5"
+    "typescript-eslint": "^8.59.3",
+    "vite": "^8.0.12",
+    "vitest": "^4.1.6"
   }
 }
