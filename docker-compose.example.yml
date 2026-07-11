@@ -9,13 +9,11 @@ services:
       - ./plugins:/app/plugins:ro
       - ./data:/app/data
     healthcheck:
-      test:
-        [
-          'CMD',
-          'sh',
-          '-c',
-          '[ -f /tmp/.hexbot-connected ] && [ $$(( $$(date +%s) - $$(stat -c %Y /tmp/.hexbot-connected) )) -lt 120 ]',
-        ]
+      # `-connected` is a presence signal, not a heartbeat: touched once on
+      # bot:connected, removed on bot:disconnected. Check existence only — a
+      # freshness window would go stale ~120s after connect on a stable link
+      # (the file's mtime never advances) and falsely report unhealthy.
+      test: ['CMD', 'sh', '-c', '[ -f /tmp/.hexbot-connected ]']
       interval: 30s
       timeout: 5s
       retries: 3
