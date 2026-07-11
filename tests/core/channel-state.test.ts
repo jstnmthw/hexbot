@@ -1786,6 +1786,67 @@ describe('ChannelState', () => {
       expect(() => state.clearAllChannels()).not.toThrow();
       expect(state.getAllChannels().length).toBe(0);
     });
+
+    it('drops late JOINs during the disconnecting window, then accepts the new session after registered', () => {
+      // Regression: the disconnecting window used to deadlock. After
+      // clearAllChannels() no channel is tracked, so the drop guard in
+      // onJoin/onUserlist rejected EVERY event of the new session —
+      // including its own self-JOINs — and the in-band reset behind the
+      // guard was unreachable. Channel tracking stayed dead until restart
+      // while the presence checker retried joins forever. The `registered`
+      // event (001 of the new session) now closes the window.
+      client.simulateEvent('join', {
+        nick: 'HexBot',
+        ident: 'h',
+        hostname: 'h.local',
+        channel: '#a',
+      });
+      state.clearAllChannels();
+
+      // Late line draining from the old socket — must still be dropped.
+      client.simulateEvent('join', {
+        nick: 'Straggler',
+        ident: 's',
+        hostname: 's.local',
+        channel: '#a',
+      });
+      expect(state.getChannel('#a')).toBeUndefined();
+
+      // New session registers; its self-JOIN must be tracked again.
+      client.simulateEvent('registered', { nick: 'HexBot' });
+      client.simulateEvent('join', {
+        nick: 'HexBot',
+        ident: 'h',
+        hostname: 'h.local',
+        channel: '#a',
+      });
+      expect(state.getChannel('#a')).toBeDefined();
+      expect(state.getUser('#a', 'HexBot')).toBeDefined();
+    });
+
+    it('accepts a NAMES reply after registered ends the disconnecting window', () => {
+      client.simulateEvent('join', {
+        nick: 'HexBot',
+        ident: 'h',
+        hostname: 'h.local',
+        channel: '#a',
+      });
+      state.clearAllChannels();
+
+      // Old-session NAMES during the window — dropped.
+      client.simulateEvent('userlist', {
+        channel: '#a',
+        users: [{ nick: 'Alice', ident: 'a', hostname: 'a.local', modes: [] }],
+      });
+      expect(state.getChannel('#a')).toBeUndefined();
+
+      client.simulateEvent('registered', { nick: 'HexBot' });
+      client.simulateEvent('userlist', {
+        channel: '#a',
+        users: [{ nick: 'Alice', ident: 'a', hostname: 'a.local', modes: [] }],
+      });
+      expect(state.getUser('#a', 'Alice')).toBeDefined();
+    });
   });
 
   // -------------------------------------------------------------------------

@@ -244,11 +244,18 @@ export class Permissions {
     for (const [chan, chanFlags] of Object.entries(channelFlags)) {
       normalizedChannels[this.lowerChannel(chan)] = chanFlags;
     }
+    // Preserve the local password hash across the replacement. Sync frames
+    // never carry hashes over botlink (by design — see SECURITY.md §3.4),
+    // so without the carry-over every hub sync silently wiped the leaf's
+    // seeded/.chpass credentials and DCC login stopped working until the
+    // next boot re-seeded from owner.password_env.
+    const existing = this.users.get(lower);
     this.users.set(lower, {
       handle,
       hostmasks,
       global: flags,
       channels: normalizedChannels,
+      ...(existing?.password_hash !== undefined ? { password_hash: existing.password_hash } : {}),
     });
     this.persist();
 

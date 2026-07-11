@@ -951,6 +951,28 @@ describe('Permissions', () => {
 
       expect(infoMsgs.some((m) => m.includes('from manual'))).toBe(true);
     });
+
+    it('preserves the local password hash when a sync replaces the record', () => {
+      // Regression: sync frames never carry password hashes over botlink,
+      // and syncUser replaced the record wholesale — every hub sync wiped
+      // the leaf's seeded/.chpass hash, so owner-bootstrap re-seeded on
+      // every boot and DCC login was rejected between syncs.
+      const STUB_HASH = `scrypt$${'a'.repeat(32)}$${'b'.repeat(128)}`;
+      const p = new Permissions(undefined, null);
+      p.addUser('dark', '*!dark@host.example', 'n', 'test');
+      p.setPasswordHash('dark', STUB_HASH, 'test');
+
+      p.syncUser('dark', ['*!dark@host.example'], 'n', {});
+
+      expect(p.getPasswordHash('dark')).toBe(STUB_HASH);
+    });
+
+    it('does not invent a password hash for a freshly synced user', () => {
+      const p = new Permissions(undefined, null);
+      p.syncUser('newcomer', ['*!new@host.example'], 'o', {});
+
+      expect(p.getPasswordHash('newcomer')).toBeNull();
+    });
   });
 
   // -------------------------------------------------------------------------

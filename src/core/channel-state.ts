@@ -65,11 +65,14 @@ export class ChannelState {
   private casemapping: Casemapping = 'rfc1459';
   private capabilities: ServerCapabilities = defaultServerCapabilities();
   /**
-   * Set true in `clearAllChannels` (reconnect path); reset on the first
-   * `onJoin`/`onUserlist` of the new session. Late 353/JOIN lines for the
-   * pre-reconnect session would otherwise re-create empty channel records
-   * that the new session never repopulates. Closes the race window between
+   * Set true in `clearAllChannels` (reconnect path); reset when the new
+   * session registers (001). Late 353/JOIN lines for the pre-reconnect
+   * session would otherwise re-create empty channel records that the new
+   * session never repopulates. Closes the race window between
    * `clearAllChannels` and the network-side disconnect actually flushing.
+   * The in-band resets in `onJoin`/`onUserlist` are a backstop for clients
+   * that never surface `registered` — they only fire for channels still
+   * tracked, so the registered-event reset is the load-bearing one.
    */
   private disconnecting = false;
 
@@ -122,6 +125,15 @@ export class ChannelState {
 
   /** Start listening to IRC events. */
   attach(): void {
+    // New session registered (001) — the disconnecting window opened by
+    // `clearAllChannels` on the reconnect path is over. This reset must be
+    // event-driven: the lazy resets in onJoin/onUserlist sit BEHIND the
+    // drop guard, and after the clear no channel is tracked, so every
+    // new-session JOIN/NAMES would be dropped and the lazy reset never
+    // reached — permanently dead channel tracking until restart.
+    this.listen('registered', () => {
+      this.disconnecting = false;
+    });
     this.listen('join', this.onJoin.bind(this));
     this.listen('part', this.onPart.bind(this));
     this.listen('quit', this.onQuit.bind(this));
