@@ -165,9 +165,9 @@ describe('help plugin', () => {
     // First line is the bold intro
     expect(messages[0].startsWith('\x02')).toBe(true);
     expect(messages[0]).toContain('— !help <category> or !help <command>');
-    // One line per category, no footer
-    expect(messages.some((m) => m.includes('\x02fun\x02'))).toBe(true);
-    expect(messages.some((m) => m.includes('\x02info\x02'))).toBe(true);
+    // One line per uppercased section, no footer
+    expect(messages.some((m) => m.includes('\x02FUN\x02'))).toBe(true);
+    expect(messages.some((m) => m.includes('\x02INFO\x02'))).toBe(true);
     // No classic header/footer lines
     expect(messages).not.toContain('*** Help ***');
     expect(messages).not.toContain('*** End of Help ***');
@@ -181,7 +181,7 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    const funLine = messages.find((m) => m.includes('\x02fun\x02'));
+    const funLine = messages.find((m) => m.includes('\x02FUN\x02'));
     expect(funLine).toBeDefined();
     expect(funLine).toContain('8ball');
     // Command names are stripped of ! in compact index
@@ -225,10 +225,11 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    expect(messages).toContain('\x02[fun]\x02');
-    expect(messages).toContain('\x02[info]\x02');
-    expect(messages.some((m) => m.includes('\x02!8ball\x02'))).toBe(true);
-    expect(messages.some((m) => m.includes('\x02!seen\x02'))).toBe(true);
+    expect(messages).toContain(' \x02FUN\x02');
+    expect(messages).toContain(' \x02INFO\x02');
+    // Index rows list bare names (prefix stripped).
+    expect(messages.some((m) => m.includes('\x028ball\x02'))).toBe(true);
+    expect(messages.some((m) => m.includes('\x02seen\x02'))).toBe(true);
   });
 
   // ---------------------------------------------------------------------------
@@ -298,8 +299,8 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    const hasOp = messages.some((m) => m.includes('!op'));
-    const hasBall = messages.some((m) => m.includes('!8ball'));
+    const hasOp = messages.some((m) => m.includes('\x02op\x02'));
+    const hasBall = messages.some((m) => m.includes('\x028ball\x02'));
 
     expect(hasOp).toBe(false);
     expect(hasBall).toBe(true);
@@ -320,8 +321,8 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    expect(messages.some((m) => m.includes('!op'))).toBe(true);
-    expect(messages.some((m) => m.includes('!8ball'))).toBe(true);
+    expect(messages.some((m) => m.includes('\x02op\x02'))).toBe(true);
+    expect(messages.some((m) => m.includes('\x028ball\x02'))).toBe(true);
   });
 
   // ---------------------------------------------------------------------------
@@ -342,11 +343,11 @@ describe('help plugin', () => {
       expect(call[0]).toBe('user1');
     }
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    // Single line: bold usage — description | Requires: <flags>
-    expect(messages).toEqual(['\x02!op\x02 [nick] — Op a nick | Requires: o']);
+    // Syntax line, blank, description, then a Requires line.
+    expect(messages).toEqual(['Syntax: \x02!op\x02 [nick]', ' ', 'Op a nick', 'Requires: o']);
   });
 
-  it('!help <command> with flags:- omits the Requires suffix entirely', async () => {
+  it('!help <command> with flags:- omits the Requires line entirely', async () => {
     await loadHelp();
     helpRegistry.register('8ball', [BALL_ENTRY]);
 
@@ -354,7 +355,7 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    expect(messages).toEqual(['\x02!8ball\x02 <question> — Ask the magic 8-ball']);
+    expect(messages).toEqual(['Syntax: \x02!8ball\x02 <question>', ' ', 'Ask the magic 8-ball']);
   });
 
   it('!help !op (with leading !) also works', async () => {
@@ -367,7 +368,7 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    expect(messages[0]).toBe('\x02!op\x02 [nick] — Op a nick | Requires: o');
+    expect(messages[0]).toBe('Syntax: \x02!op\x02 [nick]');
   });
 
   it('!help <command> shows detail lines when present', async () => {
@@ -425,8 +426,8 @@ describe('help plugin', () => {
       expect(call[0]).toBe('user1');
     }
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    expect(messages[0]).toBe('\x02[fun]\x02');
-    expect(messages.some((m) => m.includes('\x02!8ball\x02'))).toBe(true);
+    expect(messages[0]).toBe(' \x02FUN\x02');
+    expect(messages.some((m) => m.includes('\x028ball\x02'))).toBe(true);
   });
 
   it('!help <category> filters by permission', async () => {
@@ -454,8 +455,8 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    expect(messages[0]).toBe('\x02[moderation]\x02');
-    expect(messages.some((m) => m.includes('\x02!op\x02'))).toBe(true);
+    expect(messages[0]).toBe(' \x02MODERATION\x02');
+    expect(messages.some((m) => m.includes('\x02op\x02'))).toBe(true);
   });
 
   it('!help <category> case-insensitive match', async () => {
@@ -466,8 +467,8 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    expect(messages[0]).toBe('\x02[fun]\x02');
-    expect(messages.some((m) => m.includes('\x02!8ball\x02'))).toBe(true);
+    expect(messages[0]).toBe(' \x02FUN\x02');
+    expect(messages.some((m) => m.includes('\x028ball\x02'))).toBe(true);
   });
 
   it('command name takes priority over category name in arg dispatch', async () => {
@@ -487,7 +488,7 @@ describe('help plugin', () => {
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
     // Should show detail for !fun command, not the category view
-    expect(messages).toEqual(['\x02!fun\x02 — A command called fun']);
+    expect(messages).toEqual(['Syntax: \x02!fun\x02', ' ', 'A command called fun']);
   });
 
   it('!help <unknowncategory> returns not-found reply', async () => {
@@ -557,8 +558,8 @@ describe('help plugin', () => {
       // Compact index: first line is bold intro with usage hint
       expect(messages[0].startsWith('\x02')).toBe(true);
       expect(messages[0]).toContain('— !help <category> or !help <command>');
-      // One line per category, no verbose footer
-      expect(messages.some((m: string) => m.includes('\x02fun\x02'))).toBe(true);
+      // One line per uppercased section, no verbose footer
+      expect(messages.some((m: string) => m.includes('\x02FUN\x02'))).toBe(true);
       expect(messages).not.toContain('*** End of Help ***');
     });
 
@@ -646,8 +647,8 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    // The pluginId 'myplugin' should be used as the category label
-    expect(messages.some((m) => m.includes('myplugin'))).toBe(true);
+    // The pluginId 'myplugin' should be used as the (uppercased) section label
+    expect(messages.some((m) => m.includes('\x02MYPLUGIN\x02'))).toBe(true);
   });
 
   it('!help <category> works for entry without explicit category (pluginId as fallback)', async () => {
@@ -664,8 +665,8 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    expect(messages[0]).toBe('\x02[myplugin]\x02');
-    expect(messages.some((m) => m.includes('\x02!foo\x02'))).toBe(true);
+    expect(messages[0]).toBe(' \x02MYPLUGIN\x02');
+    expect(messages.some((m) => m.includes('\x02foo\x02'))).toBe(true);
   });
 
   // ---------------------------------------------------------------------------

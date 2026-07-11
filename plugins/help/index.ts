@@ -123,10 +123,13 @@ export function init(api: PluginAPI): void {
           privateReply(ctx, renderCommand(result.entry));
           return;
         case 'category':
-          privateReply(ctx, renderCategory(result.category, result.entries));
+          privateReply(ctx, renderCategory(result.category, result.entries, '!'));
           return;
         case 'scope':
-          privateReply(ctx, renderScope(result.scope, result.header, result.entries, '!'));
+          privateReply(
+            ctx,
+            renderScope(result.scope, result.header, result.entries, '!', result.group),
+          );
           return;
         case 'denied':
         case 'none':

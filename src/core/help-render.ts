@@ -1,4 +1,4 @@
-// HexBot — Shared help renderer
+// HexBot — Shared help renderer (Services / ChanServ-style)
 //
 // One renderer module for both transports — the IRC `!help` plugin and
 // the core `.help` built-in (REPL / DCC / IRC dot-commands). Inputs are
@@ -6,16 +6,25 @@
 // already-formatted lines that each transport sends through its own
 // channel (NOTICE / PRIVMSG / ctx.reply).
 //
+// Display model (mirrors network services like ChanServ/NickServ):
+//   - The bare index lists command *names* only, aligned in monospace
+//     columns under uppercased section headers. Params never appear here.
+//   - Per-command detail opens with a `Syntax:` line, then the description,
+//     any `detail[]` lines, then a `Requires:` line.
+//   - Settings scopes are a sub-tree: the index points at `.help set`; a
+//     scope view folds keys by dotted prefix; a group view expands one
+//     prefix; a leaf key resolves to the normal command-detail path.
+//
 // Layered responsibilities:
 //   - {@link filterByPermission}     — strip entries the caller may not see
-//   - {@link lookup}                 — dispatch a query to one of the four
-//                                     result kinds (command / category /
-//                                     scope / none)
-//   - {@link renderIndex}            — bare-index render with set:* scope
-//                                     folding
-//   - {@link renderCommand}          — single-entry detail
+//   - {@link lookup}                 — dispatch a query to one of the result
+//                                     kinds (command / category / scope /
+//                                     denied / none)
+//   - {@link renderIndex}            — bare-index render, scopes folded to a
+//                                     single pointer line
+//   - {@link renderCommand}          — single-entry `Syntax:` detail
 //   - {@link renderCategory}         — non-scope category view
-//   - {@link renderScope}            — settings-scope verbose listing
+//   - {@link renderScope}            — settings-scope view (folded or expanded)
 import type { HandlerContext, HelpEntry, HelpRegistryView } from '../types';
 
 /**
@@ -26,6 +35,12 @@ import type { HandlerContext, HelpEntry, HelpRegistryView } from '../types';
 export interface RenderPermissions {
   checkFlags(requiredFlags: string, ctx: HandlerContext): boolean;
 }
+
+/** Column gap (spaces) between the name column and the description column. */
+const COLUMN_GAP = 2;
+
+/** Soft wrap width used when packing the folded settings-group grid. */
+const GRID_WIDTH = 72;
 
 /** Bold the trigger (first word) of a usage string, leaving args unbolded. */
 export function boldTrigger(usage: string): string {
@@ -75,6 +90,8 @@ export type LookupResult =
       scope: string;
       header: HelpEntry | null;
       entries: HelpEntry[];
+      /** Dotted-prefix group to expand (`.help set core logging`); folded view when absent. */
+      group?: string;
     }
   | { kind: 'denied'; query: string }
   | { kind: 'none'; query: string };
@@ -89,14 +106,17 @@ export type LookupResult =
  *      `.ban`. Cross-prefix queries (`.help !ban`) reject — only the
  *      active prefix's surface is visible.
  *   2. Scope header detection — when the matched entry is a synthetic
- *      `.set <scope>` header, the lookup pivots to a scope view so
- *      `.help set chanmod` lists the scope's keys instead of dumping
- *      the bare command line.
- *   3. Category match — falls through when no command matched and the
+ *      `.set <scope>` header, the lookup pivots to a folded scope view so
+ *      `.help set chanmod` lists the scope's keys instead of dumping the
+ *      bare command line.
+ *   3. Settings group expansion — `.help set core logging` pivots to a
+ *      scope view filtered to the `logging.*` keys when no exact command
+ *      matched but the third token names a dotted-prefix group.
+ *   4. Category match — falls through when no command matched and the
  *      query case-folds to a category label. Filtered by prefix so
  *      `.help moderation` shows `.ban`/`.unban`/`.bans` and
  *      `!help moderation` shows `!ban`/`!op`/`!kick`/etc.
- *   4. None.
+ *   5. None.
  *
  * Permission gating: matched commands the caller cannot see resolve to
  * `denied` (renderer turns this into the same `No help for "<query>"`
@@ -131,21 +151,12 @@ export function lookup(
   }
   if (entry) {
     const cat = entry.category ?? entry.pluginId ?? '';
-    // Scope header → pivot to scope view so the listing of keys lands
-    // instead of a one-line command-detail render.
+    // Scope header → pivot to the folded scope view so the listing of
+    // keys lands instead of a one-line command-detail render.
     if (cat.startsWith('set:')) {
       const scope = cat.slice(4);
       if (isScopeHeaderEntry(entry, scope)) {
-        const scopeEntries = filterByPermission(
-          registry
-            .getAll()
-            .filter(
-              (e) =>
-                (e.category ?? e.pluginId ?? '') === cat && commandMatchesPrefix(e.command, prefix),
-            ),
-          ctx,
-          perms,
-        );
+        const scopeEntries = collectScopeEntries(registry, scope, prefix, ctx, perms);
         if (scopeEntries.length > 0) {
           return { kind: 'scope', scope, header: entry, entries: scopeEntries };
         }
@@ -158,7 +169,12 @@ export function lookup(
     return { kind: 'denied', query };
   }
 
-  // Priority 2: category match (prefix-filtered, then permission-filtered).
+  // Priority 3: settings group expansion — `set <scope> <group>` where
+  // `<group>.*` names live keys but `<scope> <group>` is not itself a key.
+  const groupResult = resolveSettingsGroup(registry, trimmed, prefix, ctx, perms);
+  if (groupResult) return groupResult;
+
+  // Priority 4: category match (prefix-filtered, then permission-filtered).
   const visible = filterByPermission(
     registry.getAll().filter((e) => commandMatchesPrefix(e.command, prefix)),
     ctx,
@@ -181,6 +197,60 @@ export function lookup(
 }
 
 /**
+ * Gather the permission-filtered entries belonging to `set:<scope>` under
+ * the active prefix. Shared by the scope-header pivot and group expansion.
+ */
+function collectScopeEntries(
+  registry: HelpRegistryView,
+  scope: string,
+  prefix: string,
+  ctx: HandlerContext,
+  perms: RenderPermissions | null,
+): HelpEntry[] {
+  return filterByPermission(
+    registry
+      .getAll()
+      .filter(
+        (e) =>
+          (e.category ?? e.pluginId ?? '') === `set:${scope}` &&
+          commandMatchesPrefix(e.command, prefix),
+      ),
+    ctx,
+    perms,
+  );
+}
+
+/**
+ * Resolve `set <scope> <group>` to a scope view expanded to the group's
+ * keys. Returns null when the query isn't a settings-group shape, the
+ * scope is unknown/empty under this prefix, or `<group>` matches no
+ * dotted-prefix keys. `<scope> <group>` that is itself a full key never
+ * reaches here — Priority 1 resolves it as a leaf command first.
+ */
+function resolveSettingsGroup(
+  registry: HelpRegistryView,
+  trimmed: string,
+  prefix: string,
+  ctx: HandlerContext,
+  perms: RenderPermissions | null,
+): LookupResult | null {
+  const tokens = trimmed.replace(/^[!.]/, '').split(/\s+/);
+  if (tokens.length < 3 || tokens[0].toLowerCase() !== 'set') return null;
+  const scope = tokens[1];
+  const group = tokens.slice(2).join(' ');
+  const scopeEntries = collectScopeEntries(registry, scope, prefix, ctx, perms);
+  if (scopeEntries.length === 0) return null;
+  const hasGroupKeys = scopeEntries.some((e) => {
+    if (isScopeHeaderEntry(e, scope)) return false;
+    const keyName = extractKeyName(e.command, scope);
+    return keyName === group || keyName.startsWith(`${group}.`);
+  });
+  if (!hasGroupKeys) return null;
+  const header = scopeEntries.find((e) => isScopeHeaderEntry(e, scope)) ?? null;
+  return { kind: 'scope', scope, header, entries: scopeEntries, group };
+}
+
+/**
  * True when the entry's command trigger uses the active prefix. Isolates
  * `.help` (REPL/admin dot-command) and `!help` (channel bang-command)
  * corpora — each transport surfaces only its own commands. Multi-word
@@ -197,22 +267,23 @@ function commandMatchesPrefix(command: string, prefix: string): boolean {
 
 /** Options driving the bare-index render. */
 export interface RenderIndexOptions {
-  /** True for the compact one-line-per-category view; false for verbose. */
+  /** True for the terse packed-names view; false for the full aligned view. */
   compact: boolean;
   /** Header line shown above the index. */
   header: string;
-  /** Footer line shown after the verbose listing. Ignored in compact mode. */
+  /** Footer line shown after the full listing. Ignored in compact mode. */
   footer: string;
-  /** Command prefix used in the intro hint and key-stripping (`!` / `.`). */
+  /** Command prefix used in the intro hint and name-stripping (`!` / `.`). */
   prefix: string;
 }
 
 /**
  * Render the bare `!help` / `.help` index — a permission-filtered overview
- * of every available command. `set:*` categories collapse onto a single
- * scope-summary line each so the index doesn't get swamped by 200 setting
- * keys. Returns the empty `["No commands available."]` line when nothing
- * is visible to the caller.
+ * of every available command, grouped into uppercased sections. Command
+ * *names* only; params live in the per-command detail. `set:*` categories
+ * collapse to a single `Configuration:` pointer line so the index isn't
+ * swamped by hundreds of setting keys. Returns the empty
+ * `["No commands available."]` line when nothing is visible to the caller.
  */
 export function renderIndex(entries: HelpEntry[], opts: RenderIndexOptions): string[] {
   if (entries.length === 0) {
@@ -220,19 +291,17 @@ export function renderIndex(entries: HelpEntry[], opts: RenderIndexOptions): str
   }
 
   const groups = new Map<string, HelpEntry[]>();
-  const settingsScopes = new Map<string, { header: HelpEntry | null; keyCount: number }>();
+  const scopeNames: string[] = [];
+  const seenScopes = new Set<string>();
 
   for (const entry of entries) {
     const cat = entry.category ?? entry.pluginId ?? '';
     if (cat.startsWith('set:')) {
       const scope = cat.slice(4);
-      const slot = settingsScopes.get(scope) ?? { header: null, keyCount: 0 };
-      if (isScopeHeaderEntry(entry, scope)) {
-        slot.header = entry;
-      } else {
-        slot.keyCount += 1;
+      if (!seenScopes.has(scope)) {
+        seenScopes.add(scope);
+        scopeNames.push(scope);
       }
-      settingsScopes.set(scope, slot);
       continue;
     }
     const list = groups.get(cat) ?? [];
@@ -246,76 +315,126 @@ export function renderIndex(entries: HelpEntry[], opts: RenderIndexOptions): str
       `\x02${opts.header}\x02 — ${opts.prefix}help <category> or ${opts.prefix}help <command>`,
     );
     for (const [category, group] of groups) {
-      const commands = group.map((e) => stripCommandPrefix(e.command, opts.prefix)).join('  ');
-      lines.push(`  \x02${category}\x02: ${commands}`);
+      const names = group.map((e) => stripCommandPrefix(e.command, opts.prefix)).join(' ');
+      lines.push(` \x02${sectionLabel(category)}\x02  ${names}`);
     }
-    lines.push(...renderSettingsScopeIndex(settingsScopes));
-  } else {
-    lines.push(`\x02${opts.header}\x02`);
-    for (const [category, group] of groups) {
-      lines.push(`\x02[${category}]\x02`);
-      for (const entry of group) {
-        lines.push(`  ${boldTrigger(entry.usage)} — ${entry.description}`);
-      }
+    if (scopeNames.length > 0) {
+      // `CONFIG`, not `SETTINGS` — the `settings` command category already
+      // owns a `SETTINGS` section; this line points at the `set:*` scope tree.
+      lines.push(` \x02CONFIG\x02  ${scopeNames.join(' ')} — ${opts.prefix}help set <scope>`);
     }
-    lines.push(...renderSettingsScopeIndex(settingsScopes));
-    if (opts.footer) lines.push(opts.footer);
+    return lines;
   }
+
+  // Full view: shared name column across every section so commands line up.
+  const nameWidth = maxNameWidth([...groups.values()].flat(), opts.prefix);
+  lines.push(`\x02${opts.header}\x02`);
+  for (const [category, group] of groups) {
+    lines.push(` \x02${sectionLabel(category)}\x02`);
+    for (const entry of group) {
+      lines.push(
+        alignedRow(stripCommandPrefix(entry.command, opts.prefix), entry.description, nameWidth),
+      );
+    }
+  }
+  if (scopeNames.length > 0) {
+    lines.push(`Configuration: ${scopeNames.join(' ')} — ${opts.prefix}help set <scope>`);
+  }
+  if (opts.footer) lines.push(opts.footer);
   return lines;
 }
 
 /**
- * Render the per-command detail view. Mirrors `!help <command>` and
- * `.help <command>` — bold trigger, em-dash, description, optional
- * `| Requires: <flags>` suffix, plus any per-line `detail[]`.
+ * Render the per-command detail view — the ChanServ `Syntax:` shape.
+ * `Syntax:` line (bold trigger), the description, any per-line `detail[]`,
+ * then a `Requires:` line for flagged commands.
  */
 export function renderCommand(entry: HelpEntry): string[] {
-  const lines: string[] = [];
-  const flagsSuffix = entry.flags === '-' ? '' : ` | Requires: ${entry.flags}`;
-  lines.push(`${boldTrigger(entry.usage)} — ${entry.description}${flagsSuffix}`);
+  const lines: string[] = [`Syntax: ${boldTrigger(entry.usage)}`, ' ', entry.description];
   if (entry.detail) {
     for (const line of entry.detail) {
       lines.push(`  ${line}`);
     }
   }
-  return lines;
-}
-
-/**
- * Render a non-scope category view — the `[category]` header followed by
- * one bold-trigger line per command. Used for plugin-defined categories
- * like `[moderation]`, `[fun]`, `[info]`.
- */
-export function renderCategory(category: string, entries: HelpEntry[]): string[] {
-  const lines: string[] = [`\x02[${category}]\x02`];
-  for (const entry of entries) {
-    lines.push(`  ${boldTrigger(entry.usage)} — ${entry.description}`);
+  if (entry.flags !== '-') {
+    lines.push(`Requires: ${entry.flags}`);
   }
   return lines;
 }
 
 /**
- * Render the verbose settings-scope view — `!help set chanmod` style.
- * Lists every key under the scope with its description, prefixed by the
- * scope name and key count, with a tail hint pointing at the per-key
- * detail path.
+ * Render a non-scope category view — an uppercased section header followed
+ * by one aligned `name  description` row per command, then a detail hint.
+ * Used for plugin-defined categories like `moderation`, `fun`, `info`.
+ */
+export function renderCategory(category: string, entries: HelpEntry[], prefix: string): string[] {
+  const nameWidth = maxNameWidth(entries, prefix);
+  const lines: string[] = [` \x02${sectionLabel(category)}\x02`];
+  for (const entry of entries) {
+    lines.push(alignedRow(stripCommandPrefix(entry.command, prefix), entry.description, nameWidth));
+  }
+  lines.push(`Type ${prefix}help <command> for details.`);
+  return lines;
+}
+
+/**
+ * Render the settings-scope view — `!help set chanmod` style. Two shapes:
+ *
+ *   - Folded (no `group`): keys grouped by dotted prefix (`logging.*`,
+ *     `queue.*`) shown as a packed count grid, with any non-dotted keys
+ *     listed directly. Tail points at expanding a group.
+ *   - Expanded (`group` set): the keys under `<group>.*` listed in full,
+ *     aligned name + description. Tail points at per-key detail.
  */
 export function renderScope(
   scope: string,
   header: HelpEntry | null,
   entries: HelpEntry[],
   prefix: string,
+  group?: string,
 ): string[] {
   const keys = entries.filter((e) => !isScopeHeaderEntry(e, scope));
-  const lines: string[] = [];
+
+  if (group !== undefined) {
+    const groupKeys = keys.filter((e) => {
+      const name = extractKeyName(e.command, scope);
+      return name === group || name.startsWith(`${group}.`);
+    });
+    const width = maxKeyWidth(groupKeys, scope);
+    const lines: string[] = [
+      `\x02${scope}\x02 / \x02${group}\x02 — ${countLabel(groupKeys.length)}`,
+      ' ',
+    ];
+    for (const e of groupKeys) {
+      lines.push(alignedRow(extractKeyName(e.command, scope), e.description, width));
+    }
+    if (groupKeys.length > 0) {
+      lines.push(`Type ${prefix}help set ${scope} <key> for one key's detail.`);
+    }
+    return lines;
+  }
+
   const titleSuffix = header?.description ? ` — ${header.description}` : '';
-  lines.push(`\x02${scope}\x02 settings (${keys.length})${titleSuffix}`);
-  for (const e of keys) {
-    const keyName = extractKeyName(e.command, scope);
-    lines.push(`  \x02${keyName}\x02 — ${e.description}`);
+  const lines: string[] = [`\x02${scope}\x02 settings — ${countLabel(keys.length)}${titleSuffix}`];
+
+  const { grouped, flat } = foldKeysByPrefix(keys, scope);
+  if (grouped.size > 0) {
+    lines.push(' ');
+    lines.push(...renderGroupGrid(grouped));
+  }
+  if (flat.length > 0) {
+    lines.push(' ');
+    const width = maxKeyWidth(flat, scope);
+    for (const e of flat) {
+      lines.push(alignedRow(extractKeyName(e.command, scope), e.description, width));
+    }
   }
   if (keys.length > 0) {
-    lines.push(`Type ${prefix}help set ${scope} <key> for detail.`);
+    lines.push(
+      grouped.size > 0
+        ? `Type ${prefix}help set ${scope} <group> to expand, or <key> for detail.`
+        : `Type ${prefix}help set ${scope} <key> for detail.`,
+    );
   }
   return lines;
 }
@@ -324,10 +443,101 @@ export function renderScope(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/** Uppercase a category label for the ChanServ-style section header. */
+function sectionLabel(category: string): string {
+  return category.toUpperCase();
+}
+
+/** `1 key` / `N keys` — singular-aware count label for scope titles. */
+function countLabel(count: number): string {
+  return count === 1 ? '1 key' : `${count} keys`;
+}
+
 /**
- * Drop a single leading `prefix` character from `command` so the compact
- * index renders bare command names (`8ball  seen` rather than
- * `!8ball  !seen`). Multi-word commands keep the rest intact.
+ * One aligned table row: bold `name`, padded to `width`, a `COLUMN_GAP`
+ * gutter, then `description`. Padding is applied to the plain name so the
+ * `\x02` bold bytes don't skew column alignment.
+ */
+function alignedRow(name: string, description: string, width: number, indent = '   '): string {
+  const pad = ' '.repeat(Math.max(1, width - name.length + COLUMN_GAP));
+  return `${indent}\x02${name}\x02${pad}${description}`;
+}
+
+/** Widest prefix-stripped command name across `entries` (0 when empty). */
+function maxNameWidth(entries: HelpEntry[], prefix: string): number {
+  let max = 0;
+  for (const e of entries) {
+    const len = stripCommandPrefix(e.command, prefix).length;
+    if (len > max) max = len;
+  }
+  return max;
+}
+
+/** Widest extracted key name across scope `entries` (0 when empty). */
+function maxKeyWidth(entries: HelpEntry[], scope: string): number {
+  let max = 0;
+  for (const e of entries) {
+    const len = extractKeyName(e.command, scope).length;
+    if (len > max) max = len;
+  }
+  return max;
+}
+
+/**
+ * Partition scope key entries into dotted-prefix groups and non-dotted
+ * "flat" keys. `logging.level` / `logging.file` fold under `logging`;
+ * `enabled` stays flat and is listed directly. Insertion order is
+ * preserved so the grid and flat list follow registration order.
+ */
+function foldKeysByPrefix(
+  keys: HelpEntry[],
+  scope: string,
+): { grouped: Map<string, HelpEntry[]>; flat: HelpEntry[] } {
+  const grouped = new Map<string, HelpEntry[]>();
+  const flat: HelpEntry[] = [];
+  for (const e of keys) {
+    const name = extractKeyName(e.command, scope);
+    const dot = name.indexOf('.');
+    // dot === 0 is a leading-dot / misfiled entry with no real prefix —
+    // keep it flat so its full name survives rather than folding under "".
+    if (dot <= 0) {
+      flat.push(e);
+      continue;
+    }
+    const p = name.slice(0, dot);
+    const list = grouped.get(p) ?? [];
+    list.push(e);
+    grouped.set(p, list);
+  }
+  return { grouped, flat };
+}
+
+/**
+ * Render the folded group grid — `<prefix>.* <count>` cells packed several
+ * per line within {@link GRID_WIDTH}. Cells share a fixed width so counts
+ * line up across rows.
+ */
+function renderGroupGrid(grouped: Map<string, HelpEntry[]>): string[] {
+  const entries = [...grouped.entries()];
+  const labelWidth = Math.max(...entries.map(([g]) => `${g}.*`.length));
+  const countWidth = Math.max(...entries.map(([, ks]) => String(ks.length).length));
+  const cells = entries.map(
+    ([g, ks]) => `${`${g}.*`.padEnd(labelWidth)} ${String(ks.length).padStart(countWidth)}`,
+  );
+  const cellWidth = labelWidth + 1 + countWidth;
+  const gap = 4;
+  const cols = Math.max(1, Math.floor((GRID_WIDTH + gap) / (cellWidth + gap)));
+  const rows: string[] = [];
+  for (let i = 0; i < cells.length; i += cols) {
+    rows.push(`   ${cells.slice(i, i + cols).join(' '.repeat(gap))}`);
+  }
+  return rows;
+}
+
+/**
+ * Drop a single leading `prefix` character (or the whole multi-char
+ * prefix) from `command` so index rows render bare command names
+ * (`8ball` rather than `!8ball`). Multi-word commands keep the rest intact.
  */
 function stripCommandPrefix(command: string, prefix: string): string {
   if (prefix.length === 1 && command.startsWith(prefix)) {
@@ -352,25 +562,4 @@ function extractKeyName(command: string, scope: string): string {
   if (segments.length < 3) return command;
   if (segments[1] !== scope) return command;
   return segments.slice(2).join(' ');
-}
-
-/**
- * Render the folded `[settings]` pseudo-category — one line per scope
- * with summary and key count. Empty array when no scopes are present so
- * the caller can `lines.push(...renderSettingsScopeIndex(scopes))`
- * unconditionally.
- */
-function renderSettingsScopeIndex(
-  scopes: Map<string, { header: HelpEntry | null; keyCount: number }>,
-): string[] {
-  if (scopes.size === 0) return [];
-  const lines: string[] = ['\x02[settings]\x02'];
-  for (const [scope, info] of scopes) {
-    const summary = info.header?.description ?? '';
-    const count = info.keyCount;
-    const countLabel = count === 1 ? '1 key' : `${count} keys`;
-    const tail = summary ? ` — ${summary}` : '';
-    lines.push(`  \x02${scope}\x02 (${countLabel})${tail}`);
-  }
-  return lines;
 }

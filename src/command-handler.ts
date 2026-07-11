@@ -346,11 +346,17 @@ export class CommandHandler {
           ctx.reply(renderCommand(result.entry).join('\n'));
           return;
         case 'category':
-          ctx.reply(renderCategory(result.category, result.entries).join('\n'));
+          ctx.reply(renderCategory(result.category, result.entries, this.prefix).join('\n'));
           return;
         case 'scope':
           ctx.reply(
-            renderScope(result.scope, result.header, result.entries, this.prefix).join('\n'),
+            renderScope(
+              result.scope,
+              result.header,
+              result.entries,
+              this.prefix,
+              result.group,
+            ).join('\n'),
           );
           return;
         case 'denied':

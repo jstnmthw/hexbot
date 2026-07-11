@@ -49,8 +49,9 @@ describe('CommandHandler', () => {
       await handler.execute('.help', ctx);
 
       const output = ctx.reply.mock.calls[0][0];
-      expect(output).toContain('.foo');
-      expect(output).toContain('.bar');
+      // Index rows list bare names (prefix stripped), bolded.
+      expect(output).toContain('\x02foo\x02');
+      expect(output).toContain('\x02bar\x02');
     });
 
     it('should show help for a specific command', async () => {
@@ -560,7 +561,7 @@ describe('CommandHandler', () => {
       expect(out).toContain('No help for "ban"');
     });
 
-    it('routes .help set <scope> through the scope renderer (lists keys)', async () => {
+    it('routes .help set <scope> through the scope renderer (folds keys by prefix)', async () => {
       const registry = new HelpRegistry();
       const handler = new CommandHandler(null, '.', registry);
       registry.register('bot', [
@@ -585,8 +586,10 @@ describe('CommandHandler', () => {
 
       const out = ctx.reply.mock.calls[0][0];
       expect(out).toContain('core');
-      expect(out).toContain('logging.level');
-      expect(out).toContain('Type .help set core <key> for detail.');
+      // Dotted keys fold into a `<prefix>.* <count>` grid, not a flat list.
+      expect(out).toContain('logging.* 1');
+      expect(out).not.toContain('logging.level');
+      expect(out).toContain('Type .help set core <group> to expand, or <key> for detail.');
     });
 
     it('routes .help set <scope> <key> through the per-entry detail render', async () => {

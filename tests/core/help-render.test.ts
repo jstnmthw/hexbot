@@ -175,6 +175,21 @@ describe('lookup', () => {
     }
   });
 
+  it('expands a dotted-prefix group (.set core logging) into a scope view', () => {
+    const reg = setup();
+    const result = lookup(reg, '.set core logging', makeCtx(), null, '.');
+    expect(result.kind).toBe('scope');
+    if (result.kind === 'scope') {
+      expect(result.scope).toBe('core');
+      expect(result.group).toBe('logging');
+    }
+  });
+
+  it('returns none for a settings group with no matching keys', () => {
+    const reg = setup();
+    expect(lookup(reg, '.set core nonesuch', makeCtx(), null, '.').kind).toBe('none');
+  });
+
   it('returns none for an empty / whitespace-only query', () => {
     const reg = setup();
     expect(lookup(reg, '   ', makeCtx(), null, '!').kind).toBe('none');
@@ -267,47 +282,106 @@ describe('lookup', () => {
 });
 
 describe('renderCommand', () => {
-  it('omits the Requires suffix for `-` flag entries', () => {
+  it('omits the Requires line for `-` flag entries', () => {
     expect(renderCommand(PUBLIC_ENTRY)).toEqual([
-      '\x02!8ball\x02 <question> — Ask the magic 8-ball',
+      'Syntax: \x02!8ball\x02 <question>',
+      ' ',
+      'Ask the magic 8-ball',
     ]);
   });
 
-  it('appends `| Requires: <flags>` for flagged entries', () => {
-    expect(renderCommand(OP_ENTRY)).toEqual(['\x02!op\x02 [nick] — Op a nick | Requires: o']);
+  it('appends a `Requires: <flags>` line for flagged entries', () => {
+    expect(renderCommand(OP_ENTRY)).toEqual([
+      'Syntax: \x02!op\x02 [nick]',
+      ' ',
+      'Op a nick',
+      'Requires: o',
+    ]);
   });
 
-  it('renders detail lines indented under the header', () => {
+  it('renders detail lines indented between the description and Requires', () => {
     expect(renderCommand(SCOPE_KEY_ENTRY)).toEqual([
-      '\x02.set\x02 core logging.level <string> — Minimum log level | Requires: n',
+      'Syntax: \x02.set\x02 core logging.level <string>',
+      ' ',
+      'Minimum log level',
       '  Type: string  Default: info  Reload: live',
+      'Requires: n',
     ]);
   });
 });
 
 describe('renderCategory', () => {
-  it('renders the bracketed category header followed by one entry per line', () => {
-    const lines = renderCategory('fun', [PUBLIC_ENTRY]);
-    expect(lines).toEqual(['\x02[fun]\x02', '  \x02!8ball\x02 <question> — Ask the magic 8-ball']);
+  it('renders an uppercased section header, aligned rows, and a detail hint', () => {
+    const lines = renderCategory('fun', [PUBLIC_ENTRY], '!');
+    expect(lines).toEqual([
+      ' \x02FUN\x02',
+      '   \x028ball\x02  Ask the magic 8-ball',
+      'Type !help <command> for details.',
+    ]);
+  });
+
+  it('aligns command names into a shared column', () => {
+    const lines = renderCategory('moderation', [OP_ENTRY, PUBLIC_ENTRY], '!');
+    // Widest name is `8ball` (5) → `op` (2) padded to align descriptions.
+    expect(lines).toContain('   \x02op\x02     Op a nick');
+    expect(lines).toContain('   \x028ball\x02  Ask the magic 8-ball');
   });
 });
 
 describe('renderScope', () => {
-  it('renders title with summary and key count, plus one line per key', () => {
+  it('folds keys by dotted prefix with a count grid and an expand hint', () => {
     const lines = renderScope('core', SCOPE_HEADER, [SCOPE_HEADER, SCOPE_KEY_ENTRY], '.');
-    expect(lines[0]).toBe('\x02core\x02 settings (1) — Bot-wide singletons');
-    expect(lines).toContain('  \x02logging.level\x02 — Minimum log level');
+    expect(lines[0]).toBe('\x02core\x02 settings — 1 key — Bot-wide singletons');
+    expect(lines).toContain('   logging.* 1');
+    // Per-key names do NOT appear in the folded view.
+    expect(lines.some((l) => l.includes('logging.level'))).toBe(false);
+    expect(lines[lines.length - 1]).toBe(
+      'Type .help set core <group> to expand, or <key> for detail.',
+    );
+  });
+
+  it('lists non-dotted keys directly rather than folding them', () => {
+    const flatKey: HelpEntry = {
+      command: '.set core motd',
+      flags: 'n',
+      usage: '.set core motd <string>',
+      description: 'Message of the day',
+      category: 'set:core',
+    };
+    const lines = renderScope('core', SCOPE_HEADER, [SCOPE_HEADER, flatKey], '.');
+    expect(lines).toContain('   \x02motd\x02  Message of the day');
     expect(lines[lines.length - 1]).toBe('Type .help set core <key> for detail.');
   });
 
-  it('omits the trailing detail hint when no keys are present', () => {
+  it('expands a single dotted-prefix group when `group` is given', () => {
+    const second: HelpEntry = {
+      command: '.set core logging.file',
+      flags: 'n',
+      usage: '.set core logging.file <string>',
+      description: 'Log file path',
+      category: 'set:core',
+    };
+    const lines = renderScope(
+      'core',
+      SCOPE_HEADER,
+      [SCOPE_HEADER, SCOPE_KEY_ENTRY, second],
+      '.',
+      'logging',
+    );
+    expect(lines[0]).toBe('\x02core\x02 / \x02logging\x02 — 2 keys');
+    expect(lines).toContain('   \x02logging.level\x02  Minimum log level');
+    expect(lines).toContain('   \x02logging.file\x02   Log file path');
+    expect(lines[lines.length - 1]).toBe("Type .help set core <key> for one key's detail.");
+  });
+
+  it('omits the trailing hint when no keys are present', () => {
     const lines = renderScope('core', SCOPE_HEADER, [SCOPE_HEADER], '.');
-    expect(lines).toEqual(['\x02core\x02 settings (0) — Bot-wide singletons']);
+    expect(lines).toEqual(['\x02core\x02 settings — 0 keys — Bot-wide singletons']);
   });
 
   it('handles a missing header gracefully', () => {
     const lines = renderScope('core', null, [SCOPE_KEY_ENTRY], '.');
-    expect(lines[0]).toBe('\x02core\x02 settings (1)');
+    expect(lines[0]).toBe('\x02core\x02 settings — 1 key');
   });
 });
 
@@ -322,7 +396,7 @@ describe('renderIndex', () => {
     expect(lines).toEqual(['No commands available.']);
   });
 
-  it('compact: bolds the header and lists one line per category', () => {
+  it('compact: bolds the header and packs names under uppercased sections', () => {
     const lines = renderIndex([PUBLIC_ENTRY, OP_ENTRY], {
       compact: true,
       header: 'HexBot',
@@ -330,11 +404,13 @@ describe('renderIndex', () => {
       prefix: '!',
     });
     expect(lines[0]).toBe('\x02HexBot\x02 — !help <category> or !help <command>');
-    expect(lines.some((l) => l.includes('\x02fun\x02') && l.includes('8ball'))).toBe(true);
-    expect(lines.some((l) => l.includes('\x02moderation\x02') && l.includes('op'))).toBe(true);
+    expect(lines.some((l) => l.includes('\x02FUN\x02') && l.includes('8ball'))).toBe(true);
+    expect(lines.some((l) => l.includes('\x02MODERATION\x02') && l.includes('op'))).toBe(true);
+    // Compact view lists names only — no descriptions.
+    expect(lines.some((l) => l.includes('Op a nick'))).toBe(false);
   });
 
-  it('verbose: emits header, [category] sections, and footer', () => {
+  it('verbose: emits header, uppercased sections, aligned rows, and footer', () => {
     const lines = renderIndex([PUBLIC_ENTRY, OP_ENTRY], {
       compact: false,
       header: 'Available',
@@ -342,22 +418,34 @@ describe('renderIndex', () => {
       prefix: '.',
     });
     expect(lines[0]).toBe('\x02Available\x02');
-    expect(lines).toContain('\x02[fun]\x02');
-    expect(lines).toContain('\x02[moderation]\x02');
+    expect(lines).toContain(' \x02FUN\x02');
+    expect(lines).toContain(' \x02MODERATION\x02');
+    expect(lines.some((l) => l.includes('Ask the magic 8-ball'))).toBe(true);
     expect(lines[lines.length - 1]).toBe('*** end ***');
   });
 
-  it('folds set:* categories into one line per scope with summary + key count', () => {
+  it('folds set:* categories into a single Configuration pointer line (verbose)', () => {
+    const lines = renderIndex([SCOPE_HEADER, SCOPE_KEY_ENTRY, PUBLIC_ENTRY], {
+      compact: false,
+      header: 'HexBot',
+      footer: '',
+      prefix: '.',
+    });
+    expect(lines.some((l) => l === 'Configuration: core — .help set <scope>')).toBe(true);
+    // Neither scope key counts, summaries, nor per-key names appear in the index.
+    expect(lines.some((l) => l.includes('Bot-wide singletons'))).toBe(false);
+    expect(lines.some((l) => l.includes('logging.level'))).toBe(false);
+    expect(lines.some((l) => l.includes('key'))).toBe(false);
+  });
+
+  it('folds set:* scopes into a single SETTINGS pointer line (compact)', () => {
     const lines = renderIndex([SCOPE_HEADER, SCOPE_KEY_ENTRY, PUBLIC_ENTRY], {
       compact: true,
       header: 'HexBot',
       footer: 'end',
       prefix: '!',
     });
-    expect(lines.some((l) => l === '\x02[settings]\x02')).toBe(true);
-    expect(lines.some((l) => l.includes('\x02core\x02') && l.includes('(1 key)'))).toBe(true);
-    expect(lines.some((l) => l.includes('Bot-wide singletons'))).toBe(true);
-    // Per-key entries do NOT appear as their own lines in the compact view.
+    expect(lines.some((l) => l === ' \x02CONFIG\x02  core — !help set <scope>')).toBe(true);
     expect(lines.some((l) => l.includes('logging.level'))).toBe(false);
   });
 
@@ -386,7 +474,7 @@ describe('renderIndex', () => {
       prefix: '::',
     });
     // Compact line lists `ping` (no prefix), not `::ping`.
-    expect(lines.some((l) => l.includes('\x02fun\x02:') && l.includes('ping'))).toBe(true);
+    expect(lines.some((l) => l.includes('\x02FUN\x02') && l.includes('ping'))).toBe(true);
     expect(lines.some((l) => l.includes('::ping'))).toBe(false);
   });
 
@@ -443,10 +531,10 @@ describe('renderScope', () => {
 });
 
 describe('renderIndex — settings scope edge cases', () => {
-  it('renders a settings scope with no header (description column blank)', () => {
+  it('lists a scope name in the pointer line even with no registered header', () => {
     // A `set:*` category entry whose header was never registered (or
-    // was unregistered). Folded line should still appear with the key
-    // count, just without the trailing summary.
+    // was unregistered). The scope name still folds into the pointer line
+    // — the index no longer surfaces per-scope key counts or summaries.
     const orphanKey: HelpEntry = {
       command: '.set orphan foo',
       flags: 'n',
@@ -460,14 +548,11 @@ describe('renderIndex — settings scope edge cases', () => {
       footer: '',
       prefix: '.',
     });
-    const orphanLine = lines.find((l) => l.includes('\x02orphan\x02'));
-    expect(orphanLine).toBeDefined();
-    expect(orphanLine).toContain('(1 key)');
-    // No header → no `— summary` tail.
-    expect(orphanLine).not.toContain('—');
+    expect(lines).toContain(' \x02CONFIG\x02  orphan — .help set <scope>');
+    expect(lines.some((l) => l.includes('key'))).toBe(false);
   });
 
-  it('renders a settings scope when the header description is empty (still no tail)', () => {
+  it('dedupes a scope with both header and keys into a single pointer entry', () => {
     const emptyHeader: HelpEntry = {
       command: '.set quiet',
       flags: 'n',
@@ -488,8 +573,7 @@ describe('renderIndex — settings scope edge cases', () => {
       footer: '',
       prefix: '.',
     });
-    const quietLine = lines.find((l) => l.includes('\x02quiet\x02'));
-    expect(quietLine).toBeDefined();
-    expect(quietLine).not.toContain('—');
+    // Scope appears once, not once per entry.
+    expect(lines).toContain(' \x02CONFIG\x02  quiet — .help set <scope>');
   });
 });
