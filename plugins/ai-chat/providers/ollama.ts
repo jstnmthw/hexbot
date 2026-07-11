@@ -300,7 +300,18 @@ export class OllamaProvider implements AIProvider {
         init.headers = { 'content-type': 'application/json' };
         init.body = JSON.stringify(body);
       }
-      const response = await fetch(`${this.baseUrl}${path}`, init);
+      const url = `${this.baseUrl}${path}`;
+      let response: Response;
+      try {
+        response = await fetch(url, init);
+      } catch (err) {
+        // Node's fetch rejects with a bare "fetch failed" TypeError on
+        // connection-level failures (daemon down, DNS miss, timeout) that
+        // names neither host nor port. Re-tag it with the target URL so the
+        // operator sees *what* was unreachable, preserving name/cause so
+        // mapOllamaError still triages it as a retryable network error.
+        throw tagFetchUrl(err, url);
+      }
       if (!response.ok) {
         const text = await safeReadText(response);
         throw new OllamaHttpError(response.status, text || response.statusText);
@@ -316,6 +327,20 @@ export class OllamaProvider implements AIProvider {
       }
     }
   }
+}
+
+/**
+ * Append the request URL to a connection-level fetch rejection's message,
+ * in place so `err.name` (AbortError) and `err.cause.code` (ECONNREFUSED,
+ * ENOTFOUND, …) survive for {@link mapOllamaError}'s triage. Node's native
+ * fetch omits the target from "fetch failed", leaving operators to guess
+ * which host/port was down.
+ */
+function tagFetchUrl(err: unknown, url: string): unknown {
+  if (err instanceof Error && !err.message.includes(url)) {
+    err.message = err.message ? `${err.message} (${url})` : url;
+  }
+  return err;
 }
 
 /** Read a response body to string without throwing if it's already consumed or malformed. */
