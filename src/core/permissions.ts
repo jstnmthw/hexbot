@@ -68,6 +68,40 @@ export function hasOwnerOrMaster(record: { global: string }): boolean {
   return record.global.includes(OWNER_FLAG) || record.global.includes(MASTER_FLAG);
 }
 
+/**
+ * Apply an eggdrop-style flag-change spec to an existing flag string and
+ * return the resulting flag set in canonical `nmovd` order.
+ *
+ * The spec is a sequence of `+`/`-` sections: `+od` adds, `-v` removes,
+ * `+o-v` does both, and bare leading letters count as adds. Sections apply
+ * left to right, so the last mention of a letter wins. Flags not named in
+ * the spec are preserved — this is what makes `.flags <handle> +d` a safe
+ * "blend in" toggle instead of a full replacement that wipes `+n`.
+ *
+ * Throws on letters outside {@link VALID_FLAGS} so a typo like `+q` is
+ * surfaced to the operator instead of silently doing nothing.
+ */
+export function applyFlagSpec(current: string, spec: string): string {
+  const flags = new Set(current);
+  let adding = true;
+  for (const ch of spec) {
+    if (ch === '+') {
+      adding = true;
+    } else if (ch === '-') {
+      adding = false;
+    } else if (!VALID_FLAGS.includes(ch)) {
+      throw new Error(`Invalid flag "${ch}" — valid flags are: ${VALID_FLAGS.split('').join(' ')}`);
+    } else if (adding) {
+      flags.add(ch);
+    } else {
+      flags.delete(ch);
+    }
+  }
+  return VALID_FLAGS.split('')
+    .filter((f) => flags.has(f))
+    .join('');
+}
+
 // Account-pattern matching (`$a:<account>`) and the wildcard+specificity
 // scoring it shares with hostmask patterns live in `./hostmask-matcher` so
 // the contract (account matches outrank hostmask matches, literal chars
@@ -442,6 +476,17 @@ export class Permissions {
   /** Get a user record by handle (case-insensitive). */
   getUser(handle: string): UserRecord | null {
     return this.users.get(handle.toLowerCase()) ?? null;
+  }
+
+  /**
+   * Current per-channel flag string for a user, `''` when none set or the
+   * user is unknown. Case-folds the channel name via the connected network's
+   * CASEMAPPING — callers must not index `record.channels` directly with a
+   * raw channel name, since the stored keys are already folded.
+   */
+  getChannelFlags(handle: string, channel: string): string {
+    const record = this.getUser(handle);
+    return record?.channels[this.lowerChannel(channel)] ?? '';
   }
 
   /** Return all user records. */

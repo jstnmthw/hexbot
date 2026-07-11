@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { Permissions } from '../../src/core/permissions';
+import { Permissions, applyFlagSpec } from '../../src/core/permissions';
 import { BotDatabase } from '../../src/database';
 import { createLogger } from '../../src/logger';
 
@@ -1036,5 +1036,44 @@ describe('Permissions', () => {
       expect(user!.global).toBe('nm');
       expect(user!.channels['#chan']).toBe('o');
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// applyFlagSpec — pure flag-delta parser
+// ---------------------------------------------------------------------------
+
+describe('applyFlagSpec', () => {
+  it('adds flags to the existing set', () => {
+    expect(applyFlagSpec('n', '+d')).toBe('nd');
+  });
+
+  it('removes flags from the existing set', () => {
+    expect(applyFlagSpec('nov', '-v')).toBe('no');
+  });
+
+  it('treats bare leading letters as adds', () => {
+    expect(applyFlagSpec('v', 'o')).toBe('ov');
+  });
+
+  it('applies mixed +/- sections in order', () => {
+    expect(applyFlagSpec('ov', '+d-v')).toBe('od');
+  });
+
+  it('is last-wins when a letter appears in both sections', () => {
+    expect(applyFlagSpec('', '+o-o')).toBe('');
+    expect(applyFlagSpec('', '-o+o')).toBe('o');
+  });
+
+  it('returns flags in canonical nmovd order', () => {
+    expect(applyFlagSpec('', '+dvomn')).toBe('nmovd');
+  });
+
+  it('removing an absent flag is a no-op', () => {
+    expect(applyFlagSpec('o', '-v')).toBe('o');
+  });
+
+  it('throws on unknown flag letters', () => {
+    expect(() => applyFlagSpec('o', '+x')).toThrow('Invalid flag "x"');
   });
 });

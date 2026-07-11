@@ -147,6 +147,98 @@ describe('permission-commands', () => {
   });
 
   // -------------------------------------------------------------------------
+  // .flags — delta semantics
+  //
+  // Regression: `.flags <handle> <spec>` used to REPLACE the whole flag
+  // string, so an owner running `.flags self +d` (to suppress auto-op and
+  // blend in) silently wiped their own +n and locked themselves out of
+  // every privileged command. The spec is a delta: `+` adds, `-` removes,
+  // everything else is preserved.
+  // -------------------------------------------------------------------------
+
+  describe('.flags delta semantics', () => {
+    beforeEach(async () => {
+      await handler.execute('.adduser testuser *!test@host ov', makeCtx());
+    });
+
+    it('adding +d preserves existing flags (regression: +d demoted the owner)', async () => {
+      await handler.execute('.adduser boss *!boss@host n', makeCtx());
+
+      const ctx = makeCtx();
+      await handler.execute('.flags boss +d', ctx);
+
+      expect(perms.getUser('boss')!.global).toBe('nd');
+      expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('"nd"'));
+    });
+
+    it('-v removes only v and keeps the rest', async () => {
+      const ctx = makeCtx();
+      await handler.execute('.flags testuser -v', ctx);
+
+      expect(perms.getUser('testuser')!.global).toBe('o');
+    });
+
+    it('-d does not grant d (regression: the - was stripped and the letter added)', async () => {
+      const ctx = makeCtx();
+      await handler.execute('.flags testuser -d', ctx);
+
+      expect(perms.getUser('testuser')!.global).toBe('ov');
+    });
+
+    it('applies mixed specs like +d-v in one pass', async () => {
+      const ctx = makeCtx();
+      await handler.execute('.flags testuser +d-v', ctx);
+
+      expect(perms.getUser('testuser')!.global).toBe('od');
+    });
+
+    it('rejects unknown flag letters instead of silently dropping them', async () => {
+      const ctx = makeCtx();
+      await handler.execute('.flags testuser +x', ctx);
+
+      expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('Invalid flag'));
+      expect(perms.getUser('testuser')!.global).toBe('ov');
+    });
+
+    it('merges channel flag deltas with existing channel flags', async () => {
+      await handler.execute('.flags testuser +o #main', makeCtx());
+      await handler.execute('.flags testuser +v #main', makeCtx());
+
+      expect(perms.getUser('testuser')!.channels['#main']).toBe('ov');
+    });
+
+    it('removing the last channel flag clears the channel entry', async () => {
+      await handler.execute('.flags testuser +o #main', makeCtx());
+
+      const ctx = makeCtx();
+      await handler.execute('.flags testuser -o #main', ctx);
+
+      expect(perms.getUser('testuser')!.channels['#main']).toBeUndefined();
+      expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('(none)'));
+    });
+
+    it('refuses to remove +n from the last owner', async () => {
+      await handler.execute('.adduser solo *!solo@host n', makeCtx());
+
+      const ctx = makeCtx();
+      await handler.execute('.flags solo -n', ctx);
+
+      expect(perms.getUser('solo')!.global).toBe('n');
+      expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('only +n owner'));
+    });
+
+    it('allows removing +n when another owner exists', async () => {
+      await handler.execute('.adduser first *!f@host n', makeCtx());
+      await handler.execute('.adduser second *!s@host n', makeCtx());
+
+      const ctx = makeCtx();
+      await handler.execute('.flags first -n', ctx);
+
+      expect(perms.getUser('first')!.global).toBe('');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // .users
   // -------------------------------------------------------------------------
 
@@ -340,10 +432,33 @@ describe('.flags owner escalation guard', () => {
     await handler.execute('.flags target +n', ctx);
 
     expect(ctx.reply).toHaveBeenCalledWith(
-      'Only owners (+n) can grant master (+m) or owner (+n) flags.',
+      'Only owners (+n) can change master (+m) or owner (+n) flags.',
     );
     // Flags should remain unchanged
     expect(perms.getUser('target')!.global).toBe('o');
+  });
+
+  it('a +m user cannot smuggle a +m grant behind a leading revoke (-v+m)', async () => {
+    // Regression: the guard used to key off flagsArg.startsWith('-'), so a
+    // spec that opened with a revoke bypassed the owner gate entirely.
+    const ctx = makeCtx({ source: 'irc', nick: 'master', ident: 'master', hostname: 'host' });
+    await handler.execute('.flags target -v+m', ctx);
+
+    expect(ctx.reply).toHaveBeenCalledWith(
+      'Only owners (+n) can change master (+m) or owner (+n) flags.',
+    );
+    expect(perms.getUser('target')!.global).toBe('o');
+  });
+
+  it('a +m user cannot demote an owner with -n', async () => {
+    perms.addUser('boss2', '*!b2@h', 'n', 'setup');
+    const ctx = makeCtx({ source: 'irc', nick: 'master', ident: 'master', hostname: 'host' });
+    await handler.execute('.flags boss2 -n', ctx);
+
+    expect(ctx.reply).toHaveBeenCalledWith(
+      'Only owners (+n) can change master (+m) or owner (+n) flags.',
+    );
+    expect(perms.getUser('boss2')!.global).toBe('n');
   });
 
   it('a +n user can still set +n flags', async () => {
@@ -351,7 +466,7 @@ describe('.flags owner escalation guard', () => {
     await handler.execute('.flags target +n', ctx);
 
     expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('Global flags'));
-    expect(perms.getUser('target')!.global).toBe('n');
+    expect(perms.getUser('target')!.global).toBe('no');
   });
 
   it('REPL source bypasses the owner guard', async () => {
@@ -359,7 +474,7 @@ describe('.flags owner escalation guard', () => {
     await handler.execute('.flags target +n', ctx);
 
     expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('Global flags'));
-    expect(perms.getUser('target')!.global).toBe('n');
+    expect(perms.getUser('target')!.global).toBe('no');
   });
 
   it('rejects +n escalation even when ident/hostname are missing', async () => {
@@ -369,7 +484,7 @@ describe('.flags owner escalation guard', () => {
     await handler.execute('.flags target +n', ctx);
 
     expect(ctx.reply).toHaveBeenCalledWith(
-      'Only owners (+n) can grant master (+m) or owner (+n) flags.',
+      'Only owners (+n) can change master (+m) or owner (+n) flags.',
     );
     expect(perms.getUser('target')!.global).toBe('o');
   });
@@ -403,7 +518,7 @@ describe('.flags owner escalation guard', () => {
     await handler.execute('.flags master +n', ctx);
 
     expect(ctx.reply).toHaveBeenCalledWith(
-      'Only owners (+n) can grant master (+m) or owner (+n) flags.',
+      'Only owners (+n) can change master (+m) or owner (+n) flags.',
     );
     expect(perms.getUser('master')!.global).toBe('m');
   });
@@ -418,7 +533,7 @@ describe('.flags owner escalation guard', () => {
     await handler.execute('.flags target +m', ctx);
 
     expect(ctx.reply).toHaveBeenCalledWith(
-      'Only owners (+n) can grant master (+m) or owner (+n) flags.',
+      'Only owners (+n) can change master (+m) or owner (+n) flags.',
     );
     expect(perms.getUser('target')!.global).toBe('o');
   });
@@ -433,6 +548,6 @@ describe('.flags owner escalation guard', () => {
     await handler.execute('.flags target +n', ctx);
 
     expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('Global flags'));
-    expect(perms.getUser('target')!.global).toBe('n');
+    expect(perms.getUser('target')!.global).toBe('no');
   });
 });

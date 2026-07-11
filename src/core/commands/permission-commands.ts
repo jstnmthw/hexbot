@@ -5,7 +5,7 @@ import { paginate, parsePageFlag } from '../../utils/paginate';
 import { stripFormatting } from '../../utils/strip-formatting';
 import { formatTable } from '../../utils/table';
 import { getAuditSource, parseCommandArgs } from '../command-helpers';
-import { OWNER_FLAG, type Permissions } from '../permissions';
+import { OWNER_FLAG, type Permissions, applyFlagSpec } from '../permissions';
 
 export interface PermissionCommandsDeps {
   handler: CommandHandler;
@@ -118,8 +118,8 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
     'flags',
     {
       flags: '+n|+m',
-      description: 'View or set user flags',
-      usage: '.flags [handle] [+flags [#channel]]',
+      description: 'View or change user flags',
+      usage: '.flags [handle] [+flags|-flags [#channel]]',
       category: 'permissions',
       relayToHub: true,
     },
@@ -133,7 +133,7 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
         ctx.reply(
           'Flag legend: n=owner (all access), m=master (user mgmt), o=op (channel cmds), v=voice, d=deop (no auto-op, +v if flagged)',
         );
-        ctx.reply('Usage: .flags <handle> [+flags [#channel]]');
+        ctx.reply('Usage: .flags <handle> [+flags|-flags [#channel]]');
         return;
       }
 
@@ -156,18 +156,39 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
         return;
       }
 
-      // Set mode — parts[1] is the +/- flag string (e.g. `+o`, `-mn`).
+      // Set mode — parts[1] is a flag-change spec (`+o`, `-v`, `+o-v`).
       const flagsArg = parts[1];
       // Audit source resolves the caller's transport to the canonical
       // mod_log `by` value. See CLAUDE.md "Audit logging convention" — never
       // hand-roll `{ by: ctx.nick, source: ctx.source }` here.
       const source = getAuditSource(ctx);
 
-      // Guard: only owners can grant flags at master level (`m`) or higher.
+      // Channel-specific path: `.flags <handle> <flags> #channel`. Channel
+      // names start with `#` or `&` per RFC 2812, but the legacy `.flags`
+      // grammar only documents `#`, so keep the narrow check here.
+      const channel = parts.length >= 3 && parts[2].startsWith('#') ? parts[2] : null;
+
+      // The spec is a delta against the current flags, never a replacement.
+      // Replacement semantics let `.flags self +d` (an owner toggling
+      // auto-op suppression to blend in) silently wipe their own +n and
+      // lock them out of every privileged command until a REPL rescue.
+      const current = channel ? permissions.getChannelFlags(handle, channel) : user.global;
+      let next: string;
+      try {
+        next = applyFlagSpec(current, flagsArg);
+      } catch (err) {
+        ctx.reply(err instanceof Error ? err.message : String(err));
+        return;
+      }
+
+      // Guard: only owners can change flags at master level (`m`) or higher.
       // A `+m` master was previously allowed to promote arbitrary users to
       // `+m`, which is an escalation path — any master could seed a parallel
-      // line of masters without owner involvement. Tighten the gate so
-      // granting `m` or `n` requires `+n`.
+      // line of masters without owner involvement. Revocations are gated
+      // too: a master stripping an owner's `n` is a demotion attack, and
+      // keying the check off the spec's leading sign let `-v+m` smuggle a
+      // grant past the gate. Comparing current vs. resulting membership
+      // covers every spelling.
       //
       // Botlink source is NOT exempt: a compromised `+m` on any leaf could
       // otherwise run `.flags self +n` and have the hub silently promote
@@ -181,45 +202,37 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
             ? permissions.getUser(ctx.nick)
             : permissions.findByHostmask(`${ctx.nick}!${ctx.ident ?? ''}@${ctx.hostname ?? ''}`);
         const callerIsOwner = caller?.global.includes(OWNER_FLAG) ?? false;
-        // Strip leading `+`/`-` so a `-m` revoke isn't treated as a grant.
-        // The grammar accepts both `+m` (add) and `-m` (revoke); only
-        // additions need the owner gate. `flagsArg` arrives with at most
-        // one leading sign per parseCommandArgs.
-        const isRevoke = flagsArg.startsWith('-');
-        const grantsMasterOrHigher =
-          !isRevoke && (flagsArg.includes(OWNER_FLAG) || flagsArg.includes('m'));
-        if (grantsMasterOrHigher && !callerIsOwner) {
-          ctx.reply('Only owners (+n) can grant master (+m) or owner (+n) flags.');
+        const touchesMasterOrHigher = [OWNER_FLAG, 'm'].some(
+          (f) => next.includes(f) !== current.includes(f),
+        );
+        if (touchesMasterOrHigher && !callerIsOwner) {
+          ctx.reply('Only owners (+n) can change master (+m) or owner (+n) flags.');
           return;
         }
       }
 
-      // Channel-specific path: `.flags <handle> <flags> #channel`. Channel
-      // names start with `#` or `&` per RFC 2812, but the legacy `.flags`
-      // grammar only documents `#`, so keep the narrow check here.
-      // `flagsArg.replace(/^\+/, '')` strips one leading `+` — the
-      // setGlobalFlags / setChannelFlags APIs interpret a bare `-x`
-      // as revoke and unprefixed letters as add. Stripping a single
-      // `+` lets the operator type either `+o` or `o` and get the
-      // same add semantics, while `-o` still revokes.
-      if (parts.length >= 3 && parts[2].startsWith('#')) {
-        const channel = parts[2];
-        permissions.setChannelFlags(
-          handle,
-          channel,
-          flagsArg.replace(/^\+/, ''),
-          source,
-          ctx.source,
-        );
+      if (channel) {
+        permissions.setChannelFlags(handle, channel, next, source, ctx.source);
         ctx.reply(
-          `Channel flags for "${stripFormatting(handle)}" in ${stripFormatting(channel)} set to "${stripFormatting(flagsArg)}"`,
+          `Channel flags for "${stripFormatting(handle)}" in ${stripFormatting(channel)} set to "${next || '(none)'}"`,
         );
       } else {
-        // Global flags
-        permissions.setGlobalFlags(handle, flagsArg.replace(/^\+/, ''), source, ctx.source);
-        ctx.reply(
-          `Global flags for "${stripFormatting(handle)}" set to "${stripFormatting(flagsArg)}"`,
-        );
+        // Last-owner guard, mirroring `.deluser`: removing `n` from the only
+        // +n user leaves the bot with no owner and requires manual DB
+        // surgery (or a REPL session) to recover.
+        if (user.global.includes(OWNER_FLAG) && !next.includes(OWNER_FLAG)) {
+          const ownerCount = permissions
+            .listUsers()
+            .filter((u) => u.global.includes(OWNER_FLAG)).length;
+          if (ownerCount <= 1) {
+            ctx.reply(
+              `Refusing to remove +n from "${stripFormatting(handle)}" — they are the only +n owner. Add another owner first.`,
+            );
+            return;
+          }
+        }
+        permissions.setGlobalFlags(handle, next, source, ctx.source);
+        ctx.reply(`Global flags for "${stripFormatting(handle)}" set to "${next || '(none)'}"`);
       }
     },
   );
