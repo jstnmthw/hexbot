@@ -347,7 +347,7 @@ The NOTICE text will tell you why. Most pre-connection rejections return a gener
 
 ### Connection times out after the offer
 
-The bot opens a TCP port and waits 30 seconds for your client to connect. If your client cannot reach the port:
+The bot opens a TCP port and waits 30 seconds for your client to connect. Retrying `/dcc chat` while a previous offer is still pending is safe: the stale offer is canceled and replaced with a fresh one (logged as `replacing pending offer`). If your client cannot reach the port:
 
 1. Confirm the bot's `ip` is the correct **public** IP (not a private/internal address).
 2. Confirm the firewall allows inbound TCP on the configured port range.

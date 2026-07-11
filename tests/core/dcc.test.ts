@@ -573,7 +573,7 @@ describe('DCCManager', () => {
     expect(client.notices.some((n) => n.message.includes('request denied'))).toBe(false);
   });
 
-  it('rejects nick with a pending connection', async () => {
+  it('cancels a stale pending offer when the same nick retries', async () => {
     const dispatcher = makeDispatcher();
     let handler!: (ctx: HandlerContext) => Promise<void>;
     (dispatcher.bind as ReturnType<typeof vi.fn>).mockImplementation(
@@ -582,6 +582,11 @@ describe('DCCManager', () => {
       },
     );
     const pendingMap = new Map<number, PendingDCC>();
+    // Exhaust the allocator so the retry stops at port allocation instead
+    // of opening a real TCP listener — the assertion targets the
+    // replacement step, which runs before allocation.
+    const portAllocator = new RangePortAllocator([50000, 50000]);
+    portAllocator.markUsed(50000);
     const m = new DCCManager({
       client,
       dispatcher,
@@ -592,14 +597,76 @@ describe('DCCManager', () => {
       version: '1.0.0',
       botNick: 'hexbot',
       pending: pendingMap,
+      portAllocator,
     });
     m.attach();
 
-    // Inject a fake pending entry for this nick
-    pendingMap.set(50001, { nick: 'testnick' } as PendingDCC);
+    const cancel = vi.fn();
+    pendingMap.set(50001, { nick: 'testnick', port: 50001, cancel } as unknown as PendingDCC);
 
     await handler(makeCtx('testnick'));
-    expect(client.notices.some((n) => n.message.includes('request denied'))).toBe(true);
+    // The stale offer is canceled and the request proceeds past the
+    // duplicate check (it then fails on the exhausted port pool).
+    expect(cancel).toHaveBeenCalledWith('replaced (testnick)');
+  });
+
+  it('leaves pending offers from other nicks untouched on a new request', async () => {
+    const dispatcher = makeDispatcher();
+    let handler!: (ctx: HandlerContext) => Promise<void>;
+    (dispatcher.bind as ReturnType<typeof vi.fn>).mockImplementation(
+      (_t: string, _f: string, _m: string, fn: (ctx: HandlerContext) => Promise<void>) => {
+        handler = fn;
+      },
+    );
+    const pendingMap = new Map<number, PendingDCC>();
+    const portAllocator = new RangePortAllocator([50000, 50000]);
+    portAllocator.markUsed(50000);
+    const m = new DCCManager({
+      client,
+      dispatcher,
+      permissions: makePermissions(makeUser()),
+      services: makeServices(),
+      commandHandler: makeCommandHandler(),
+      config: makeConfig(),
+      version: '1.0.0',
+      botNick: 'hexbot',
+      pending: pendingMap,
+      portAllocator,
+    });
+    m.attach();
+
+    const cancel = vi.fn();
+    pendingMap.set(50001, { nick: 'othernick', port: 50001, cancel } as unknown as PendingDCC);
+
+    await handler(makeCtx('testnick'));
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
+  it('warns at attach when dcc.ip is not a valid IPv4 address', () => {
+    const warn = vi.fn();
+    const logger: import('../../src/logger').LoggerLike = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn,
+      error: vi.fn(),
+      child: () => logger,
+      setLevel: vi.fn(),
+      getLevel: () => 'debug',
+    };
+    const m = new DCCManager({
+      client,
+      dispatcher: makeDispatcher(),
+      permissions: makePermissions(makeUser()),
+      services: makeServices(),
+      commandHandler: makeCommandHandler(),
+      config: makeConfig({ ip: 'irc.example.com' }),
+      version: '1.0.0',
+      botNick: 'hexbot',
+      logger,
+    });
+    m.attach();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('not a valid IPv4 address'));
+    m.detach('test');
   });
 
   it('rejects when port range is exhausted (in handler)', async () => {
@@ -1745,6 +1812,7 @@ describe('DCCManager.openSession prompt integration', () => {
       server: undefined as unknown as import('node:net').Server,
       port: 0,
       timer: setTimeout(() => {}, 0),
+      cancel: () => {},
     };
   }
 

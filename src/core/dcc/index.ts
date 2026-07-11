@@ -339,6 +339,12 @@ export interface PendingDCC {
   server: NetServer;
   port: number;
   timer: ReturnType<typeof setTimeout>;
+  /**
+   * Tear down this offer before a client ever connected: close the
+   * listener, release the port, and drop the pending entry. Idempotent —
+   * safe to race against the timeout and accept paths.
+   */
+  cancel: (label: string) => void;
 }
 
 /**
@@ -1386,6 +1392,17 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
       return;
     }
     this.attached = true;
+
+    // Surface a bad `dcc.ip` at startup instead of at offer time: an
+    // unparseable address serializes to decimal 0, so every CTCP reply
+    // would tell clients to connect to 0.0.0.0 and passive DCC would
+    // fail with no hint in the logs.
+    if (ipToDecimal(this.config.ip) === 0) {
+      this.logger?.warn(
+        `dcc.ip "${this.config.ip}" is not a valid IPv4 address — passive DCC replies will advertise 0.0.0.0 and clients will not be able to connect`,
+      );
+    }
+
     this.dispatcher.bind('ctcp', '-', 'DCC', this.onDccCtcp.bind(this), PLUGIN_ID);
 
     // Mirror incoming private messages and notices to all DCC sessions so
@@ -1732,10 +1749,20 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
         return false;
       }
     }
+    // A retry while a previous offer is still pending means the client
+    // abandoned that window (never got our reply, or its connect failed) —
+    // it can no longer complete the old handshake, because it only accepts
+    // a reply carrying its latest token. Denying here (the old behavior)
+    // locked the user out for the rest of the 30s window, so only retries
+    // that happened to land in the gap after a timeout got a live offer.
+    // Cancel the stale offer and let the new request proceed instead.
+    // Map deletion during values() iteration is spec-safe.
     for (const p of this.pending.values()) {
       if (this.sessionStore.sessionKey(p.nick) === lowerNick) {
-        this.client.notice(nick, 'DCC CHAT: request denied.');
-        return false;
+        this.logger?.info(
+          `DCC: replacing pending offer for ${nick} on port ${p.port} with new request`,
+        );
+        p.cancel(`replaced (${nick})`);
       }
     }
     return true;
@@ -1788,7 +1815,9 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
       // token reads as "no token" to some clients and breaks correlation).
       const token = parsed.token !== 0 ? parsed.token : Math.floor(Math.random() * 0xffff) + 1;
       this.client.ctcpRequest(nick, 'DCC', `CHAT chat ${ipDecimal} ${port} ${token}`);
-      this.logger?.info(`Passive DCC offered to ${nick} on port ${port}`);
+      this.logger?.info(
+        `Passive DCC offered to ${nick} on port ${port} (advertising ${this.config.ip})`,
+      );
     });
 
     const pending: PendingDCC = {
@@ -1802,6 +1831,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
         cleanupPending(`timeout (${nick})`);
         this.logger?.info(`DCC offer to ${nick} timed out`);
       }, PENDING_TIMEOUT_MS),
+      cancel: (label) => cleanupPending(label),
     };
     pending.timer.unref?.();
     this.pending.set(port, pending);
