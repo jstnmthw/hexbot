@@ -49,9 +49,10 @@ describe('CommandHandler', () => {
       await handler.execute('.help', ctx);
 
       const output = ctx.reply.mock.calls[0][0];
-      // Index rows list bare names (prefix stripped), bolded.
-      expect(output).toContain('\x02foo\x02');
-      expect(output).toContain('\x02bar\x02');
+      // Index rows list bare names (prefix stripped) with no IRC formatting.
+      expect(output).toContain('foo');
+      expect(output).toContain('bar');
+      expect(output).not.toContain('\x02');
     });
 
     it('should show help for a specific command', async () => {

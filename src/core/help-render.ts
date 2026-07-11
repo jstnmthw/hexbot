@@ -42,13 +42,6 @@ const COLUMN_GAP = 2;
 /** Soft wrap width used when packing the folded settings-group grid. */
 const GRID_WIDTH = 72;
 
-/** Bold the trigger (first word) of a usage string, leaving args unbolded. */
-export function boldTrigger(usage: string): string {
-  const spaceIdx = usage.indexOf(' ');
-  if (spaceIdx === -1) return `\x02${usage}\x02`;
-  return `\x02${usage.slice(0, spaceIdx)}\x02${usage.slice(spaceIdx)}`;
-}
-
 /**
  * Filter `entries` down to those the caller may see. Unflagged entries
  * (`'-'`) pass through unconditionally; flagged entries hit `perms`.
@@ -311,34 +304,37 @@ export function renderIndex(entries: HelpEntry[], opts: RenderIndexOptions): str
 
   const lines: string[] = [];
   if (opts.compact) {
-    lines.push(
-      `\x02${opts.header}\x02 — ${opts.prefix}help <category> or ${opts.prefix}help <command>`,
-    );
+    lines.push(`${opts.header} — ${opts.prefix}help <category> or ${opts.prefix}help <command>`);
     for (const [category, group] of groups) {
       const names = group.map((e) => stripCommandPrefix(e.command, opts.prefix)).join(' ');
-      lines.push(` \x02${sectionLabel(category)}\x02  ${names}`);
+      lines.push(` ${sectionLabel(category)}  ${names}`);
     }
     if (scopeNames.length > 0) {
       // `CONFIG`, not `SETTINGS` — the `settings` command category already
       // owns a `SETTINGS` section; this line points at the `set:*` scope tree.
-      lines.push(` \x02CONFIG\x02  ${scopeNames.join(' ')} — ${opts.prefix}help set <scope>`);
+      lines.push(` CONFIG  ${scopeNames.join(' ')} — ${opts.prefix}help set <scope>`);
     }
     return lines;
   }
 
   // Full view: shared name column across every section so commands line up.
+  // A blank line separates the header, each section, and the trailing
+  // pointer/footer so the listing reads as spaced groups rather than a wall.
   const nameWidth = maxNameWidth([...groups.values()].flat(), opts.prefix);
-  lines.push(`\x02${opts.header}\x02`);
+  lines.push(opts.header);
+  lines.push(' ');
   for (const [category, group] of groups) {
-    lines.push(` \x02${sectionLabel(category)}\x02`);
+    lines.push(` ${sectionLabel(category)}`);
     for (const entry of group) {
       lines.push(
         alignedRow(stripCommandPrefix(entry.command, opts.prefix), entry.description, nameWidth),
       );
     }
+    lines.push(' ');
   }
   if (scopeNames.length > 0) {
     lines.push(`Configuration: ${scopeNames.join(' ')} — ${opts.prefix}help set <scope>`);
+    lines.push(' ');
   }
   if (opts.footer) lines.push(opts.footer);
   return lines;
@@ -346,11 +342,11 @@ export function renderIndex(entries: HelpEntry[], opts: RenderIndexOptions): str
 
 /**
  * Render the per-command detail view — the ChanServ `Syntax:` shape.
- * `Syntax:` line (bold trigger), the description, any per-line `detail[]`,
- * then a `Requires:` line for flagged commands.
+ * `Syntax:` line, the description, any per-line `detail[]`, then a
+ * `Requires:` line for flagged commands.
  */
 export function renderCommand(entry: HelpEntry): string[] {
-  const lines: string[] = [`Syntax: ${boldTrigger(entry.usage)}`, ' ', entry.description];
+  const lines: string[] = [`Syntax: ${entry.usage}`, ' ', entry.description];
   if (entry.detail) {
     for (const line of entry.detail) {
       lines.push(`  ${line}`);
@@ -369,7 +365,7 @@ export function renderCommand(entry: HelpEntry): string[] {
  */
 export function renderCategory(category: string, entries: HelpEntry[], prefix: string): string[] {
   const nameWidth = maxNameWidth(entries, prefix);
-  const lines: string[] = [` \x02${sectionLabel(category)}\x02`];
+  const lines: string[] = [` ${sectionLabel(category)}`];
   for (const entry of entries) {
     lines.push(alignedRow(stripCommandPrefix(entry.command, prefix), entry.description, nameWidth));
   }
@@ -401,10 +397,7 @@ export function renderScope(
       return name === group || name.startsWith(`${group}.`);
     });
     const width = maxKeyWidth(groupKeys, scope);
-    const lines: string[] = [
-      `\x02${scope}\x02 / \x02${group}\x02 — ${countLabel(groupKeys.length)}`,
-      ' ',
-    ];
+    const lines: string[] = [`${scope} / ${group} — ${countLabel(groupKeys.length)}`, ' '];
     for (const e of groupKeys) {
       lines.push(alignedRow(extractKeyName(e.command, scope), e.description, width));
     }
@@ -415,7 +408,7 @@ export function renderScope(
   }
 
   const titleSuffix = header?.description ? ` — ${header.description}` : '';
-  const lines: string[] = [`\x02${scope}\x02 settings — ${countLabel(keys.length)}${titleSuffix}`];
+  const lines: string[] = [`${scope} settings — ${countLabel(keys.length)}${titleSuffix}`];
 
   const { grouped, flat } = foldKeysByPrefix(keys, scope);
   if (grouped.size > 0) {
@@ -454,13 +447,14 @@ function countLabel(count: number): string {
 }
 
 /**
- * One aligned table row: bold `name`, padded to `width`, a `COLUMN_GAP`
- * gutter, then `description`. Padding is applied to the plain name so the
- * `\x02` bold bytes don't skew column alignment.
+ * One aligned table row: `name`, padded to `width`, a `COLUMN_GAP` gutter,
+ * then `description`. The help output carries no IRC formatting — rows read
+ * as a plain scan list, with uppercased section headers providing the only
+ * visual grouping.
  */
 function alignedRow(name: string, description: string, width: number, indent = '   '): string {
   const pad = ' '.repeat(Math.max(1, width - name.length + COLUMN_GAP));
-  return `${indent}\x02${name}\x02${pad}${description}`;
+  return `${indent}${name}${pad}${description}`;
 }
 
 /** Widest prefix-stripped command name across `entries` (0 when empty). */
