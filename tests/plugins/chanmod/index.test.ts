@@ -477,6 +477,46 @@ describe('chanmod plugin — auto-op', () => {
     }
   });
 
+  it('grants exactly one +o when user:identified fires mid-verification (double-grant race)', async () => {
+    // Regression: Services.resolveVerification() emits `user:identified`
+    // BEFORE the promise returned by verifyUser() resolves. Chanmod's
+    // identify reconciler used to start a second grant for the same user
+    // while the original grantMode was still suspended on that promise —
+    // every NickServ-verified auto-op landed twice (double MODE, double
+    // mod_log row). The grantsInFlight guard makes the reconciler skip
+    // users with a grant decision already in progress.
+    const liveBot = createMockBot({ botNick: 'hexbot' });
+    giveBotOps(liveBot, '#test');
+    try {
+      vi.spyOn(liveBot.services, 'isAvailable').mockReturnValue(true);
+      const verifySpy = vi
+        .spyOn(liveBot.services, 'verifyUser')
+        .mockImplementation(async (nick: string) => {
+          // Mirror resolveVerification's ordering: bridge the account into
+          // channel-state, emit user:identified synchronously, THEN resolve.
+          liveBot.channelState.setAccountForNick(nick, 'darkacct');
+          liveBot.eventBus.emit('user:identified', nick, 'darkacct');
+          return { verified: true, account: 'darkacct' };
+        });
+      await liveBot.pluginLoader.load(PLUGIN_PATH, makeChanmodPluginOverrides());
+      liveBot.permissions.addUser('dark', 'dark!dark@stable.cloak.example', 'o', 'test');
+      liveBot.client.clearMessages();
+
+      simulateJoin(liveBot, 'dark', 'dark', 'stable.cloak.example', '#test');
+      await tick();
+      await tick();
+
+      const opGrants = liveBot.client.messages.filter(
+        (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('dark'),
+      );
+      expect(opGrants).toHaveLength(1);
+      // The reconciler must not have issued a second NickServ round-trip either.
+      expect(verifySpy).toHaveBeenCalledTimes(1);
+    } finally {
+      liveBot.cleanup();
+    }
+  });
+
   it('refuses to auto-op via weak hostmask when services are unavailable', async () => {
     // Services-free network fallback: hostmask-only auto-op requires the
     // stored pattern to clear the specificity threshold. `weakOp!*@*` is

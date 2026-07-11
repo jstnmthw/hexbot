@@ -614,9 +614,23 @@ export class Services {
     const fromNick = nickServTarget.includes('@') ? nickServTarget.split('@')[0] : nickServTarget;
 
     if (nick.toLowerCase() !== fromNick.toLowerCase()) {
-      // Debug: log notices from other sources only when we have pending verifications
+      // The sender check above IS the spoof guard — a wrong-sender notice
+      // never reaches the ACC/STATUS parser. Logging here is observability
+      // only, gated on pending verifications so quiet-time notices stay
+      // silent (and so a notice flood can't spam the log).
       if (this.pending.size > 0) {
-        this.logger?.debug(`Ignoring notice from ${nick} (expected ${fromNick}): ${message}`);
+        if (Services.matchesVerificationShape(message)) {
+          // A notice that PARSES like a verification reply but comes from
+          // the wrong sender is either a spoof attempt or a misconfigured
+          // `services.nickserv` target — both deserve to be loud.
+          this.logger?.warn(
+            `[security] Notice from ${nick} matches the ACC/STATUS reply shape but the expected NickServ sender is ${fromNick} — not parsing it (spoof attempt or misconfigured services.nickserv): ${message}`,
+          );
+        } else {
+          this.logger?.debug(
+            `Notice from ${nick} while awaiting a ${fromNick} reply — not a verification reply, other subsystems handle their own notices: ${message}`,
+          );
+        }
       }
       return;
     }

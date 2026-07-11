@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Services } from '../../src/core/services';
 import { BotEventBus } from '../../src/event-bus';
+import type { LoggerLike } from '../../src/logger';
 import type { ServicesConfig } from '../../src/types';
 
 // ---------------------------------------------------------------------------
@@ -40,6 +41,7 @@ function createServices(opts?: {
   password?: string;
   sasl?: boolean;
   botNick?: string;
+  logger?: LoggerLike;
 }): { services: Services; client: MockClient; eventBus: BotEventBus } {
   const client = new MockClient();
   const eventBus = new BotEventBus();
@@ -56,10 +58,31 @@ function createServices(opts?: {
     servicesConfig,
     eventBus,
     botNick: opts?.botNick,
+    logger: opts?.logger ?? null,
   });
 
   services.attach();
   return { services, client, eventBus };
+}
+
+/** Minimal LoggerLike whose sink methods are vi.fn() spies. */
+function createSpyLogger(): LoggerLike & {
+  debug: ReturnType<typeof vi.fn>;
+  warn: ReturnType<typeof vi.fn>;
+} {
+  const logger = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: (): LoggerLike => logger,
+    setLevel: (): void => {},
+    getLevel: () => 'debug' as const,
+  };
+  return logger as LoggerLike & {
+    debug: ReturnType<typeof vi.fn>;
+    warn: ReturnType<typeof vi.fn>;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -550,6 +573,51 @@ describe('Services', () => {
       // Clean up by resolving the pending verification
       client.simulateNotice('NickServ', 'Alice ACC 3');
       await promise;
+    });
+
+    it('warns [security] on a verification-shaped notice from the wrong sender', async () => {
+      // The sender check is the spoof guard — this test pins the
+      // observability side: a wrong-sender notice that PARSES like an
+      // ACC/STATUS reply must be loud, not buried at debug level.
+      const logger = createSpyLogger();
+      const { services, client } = createServices({ type: 'atheme', logger });
+
+      const promise = services.verifyUser('Alice', 5000);
+      client.simulateNotice('FakeServ', 'Alice ACC 3');
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('[security] Notice from FakeServ'),
+      );
+      // The spoof never reaches the parser — the real reply still resolves.
+      client.simulateNotice('NickServ', 'Alice ACC 3');
+      const result = await promise;
+      expect(result.verified).toBe(true);
+    });
+
+    it('logs wrong-sender non-verification notices at debug, without warning', async () => {
+      const logger = createSpyLogger();
+      const { services, client } = createServices({ type: 'atheme', logger });
+
+      const promise = services.verifyUser('Alice', 5000);
+      client.simulateNotice('ChanServ', 'Founder: HEX');
+
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.stringContaining('other subsystems handle their own notices'),
+      );
+      client.simulateNotice('NickServ', 'Alice ACC 3');
+      await promise;
+    });
+
+    it('stays silent on wrong-sender notices when no verification is pending', () => {
+      const logger = createSpyLogger();
+      const { client } = createServices({ type: 'atheme', logger });
+
+      client.simulateNotice('FakeServ', 'Alice ACC 3');
+      client.simulateNotice('ChanServ', 'Founder: HEX');
+
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.debug).not.toHaveBeenCalled();
     });
 
     it('handles NickServ notice that does not match any pattern when verifications are pending', async () => {

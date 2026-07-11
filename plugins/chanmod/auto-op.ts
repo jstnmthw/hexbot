@@ -82,6 +82,39 @@ function computeDesiredMode(allFlags: string, config: ChanmodConfig): DesiredMod
 async function grantMode(
   api: PluginAPI,
   config: ChanmodConfig,
+  state: SharedState,
+  channel: string,
+  nick: string,
+  desired: 'o' | 'h' | 'v',
+  knownAccount: string | null | undefined = undefined,
+  user: PublicUserRecord | null = null,
+  fullHostmask: string | null = null,
+): Promise<void> {
+  // In-flight guard — see `SharedState.grantsInFlight`. The critical race:
+  // this function awaits `verifyUser()`, whose resolve path emits
+  // `user:identified` *before* the awaiting caller resumes; that event
+  // triggers the reconciler, which would start a second grant for the same
+  // user while this one is still suspended. Keyed by channel|nick (not
+  // mode) so competing o/h/v decisions for one user can't interleave either.
+  const grantKey = `${api.ircLower(channel)}|${api.ircLower(nick)}`;
+  if (state.grantsInFlight.has(grantKey)) {
+    api.debug(
+      `Skipping ${desired === 'o' ? '+o' : desired === 'h' ? '+h' : '+v'} for ${api.stripFormatting(nick)} in ${channel} — a grant is already in flight`,
+    );
+    return;
+  }
+  state.grantsInFlight.add(grantKey);
+  try {
+    await applyGrant(api, config, channel, nick, desired, knownAccount, user, fullHostmask);
+  } finally {
+    state.grantsInFlight.delete(grantKey);
+  }
+}
+
+/** Verification gate + mode application for {@link grantMode}. Never call directly. */
+async function applyGrant(
+  api: PluginAPI,
+  config: ChanmodConfig,
   channel: string,
   nick: string,
   desired: 'o' | 'h' | 'v',
@@ -226,6 +259,7 @@ async function grantMode(
 async function reconcileUserInChannel(
   api: PluginAPI,
   config: ChanmodConfig,
+  state: SharedState,
   user: PublicUserRecord,
   channel: string,
   nick: string,
@@ -263,7 +297,7 @@ async function reconcileUserInChannel(
 
   // Upgrade: grant desired mode if the user doesn't already carry it.
   if (desired && !currentModes.includes(desired)) {
-    await grantMode(api, config, channel, nick, desired, knownAccount, user, fullHostmask);
+    await grantMode(api, config, state, channel, nick, desired, knownAccount, user, fullHostmask);
   }
 }
 
@@ -316,7 +350,7 @@ function warnAutoOpMisconfig(api: PluginAPI, config: ChanmodConfig): void {
 export function setupAutoOp(
   api: PluginAPI,
   config: ChanmodConfig,
-  _state: SharedState,
+  state: SharedState,
   chain?: ProtectionChain,
   probeState?: ProbeState,
 ): () => void {
@@ -361,10 +395,10 @@ export function setupAutoOp(
         // plus a buffer. Long enough that a fast services response has been
         // applied; short enough that the warning is visible while the operator
         // is still looking at the join.
-        _state.cycles.schedule(5000, () => {
+        state.cycles.schedule(5000, () => {
           const access = chain?.getAccess(channel) ?? 'none';
-          if (access === 'none' && !_state.takeoverWarnedChannels.has(channelKey)) {
-            _state.takeoverWarnedChannels.add(channelKey);
+          if (access === 'none' && !state.takeoverWarnedChannels.has(channelKey)) {
+            state.takeoverWarnedChannels.add(channelKey);
             api.warn(
               `Takeover detection enabled for ${channel} but chanserv_access is 'none' — bot cannot self-recover. Set via: .chanset ${channel} chanserv_access op`,
             );
@@ -392,7 +426,7 @@ export function setupAutoOp(
     // the dispatcher catches it, but then every other join on the same
     // tick loses its auto-op. Fail quietly per-user instead.
     try {
-      await grantMode(api, config, channel, nick, desired, ctx.account, user, fullHostmask);
+      await grantMode(api, config, state, channel, nick, desired, ctx.account, user, fullHostmask);
     } catch (err) {
       api.error(`auto-op grantMode threw for ${nick} in ${channel}:`, err);
     }
@@ -401,7 +435,7 @@ export function setupAutoOp(
   // React to .adduser / .flags / .addhostmask so mode changes take effect
   // immediately for already-joined users instead of waiting for a rejoin.
   api.onPermissionsChanged((handle) => {
-    reconcileHandleAcrossChannels(api, config, handle).catch((err) => {
+    reconcileHandleAcrossChannels(api, config, state, handle).catch((err) => {
       api.error(`onPermissionsChanged reconciler failed for ${handle}:`, err);
     });
   });
@@ -417,12 +451,12 @@ export function setupAutoOp(
   // hostmask alone is unverified and Stage B's specificity floor is the
   // only gate.
   api.onUserIdentified((nick) => {
-    reconcileNickInAllChannels(api, config, nick).catch((err) => {
+    reconcileNickInAllChannels(api, config, state, nick).catch((err) => {
       api.error(`onUserIdentified reconciler failed for ${nick}:`, err);
     });
   });
   api.onUserDeidentified((nick) => {
-    reconcileNickInAllChannels(api, config, nick).catch((err) => {
+    reconcileNickInAllChannels(api, config, state, nick).catch((err) => {
       api.error(`onUserDeidentified reconciler failed for ${nick}:`, err);
     });
   });
@@ -432,7 +466,7 @@ export function setupAutoOp(
   // above never sees them. Hook onModesReady (fires after self-join +
   // requestChannelModes round-trips) to reconcile everyone already present.
   api.onModesReady((channel) => {
-    reconcileAllUsersInChannel(api, config, channel).catch((err) => {
+    reconcileAllUsersInChannel(api, config, state, channel).catch((err) => {
       api.error(`onModesReady reconciler failed for ${channel}:`, err);
     });
   });
@@ -457,6 +491,7 @@ export function setupAutoOp(
 async function reconcileNickInAllChannels(
   api: PluginAPI,
   config: ChanmodConfig,
+  state: SharedState,
   nick: string,
 ): Promise<void> {
   for (const channel of api.botConfig.irc.channels) {
@@ -476,6 +511,7 @@ async function reconcileNickInAllChannels(
       await reconcileUserInChannel(
         api,
         config,
+        state,
         record,
         channel,
         chanUser.nick,
@@ -525,6 +561,7 @@ function revokeAutoGrants(
 async function reconcileHandleAcrossChannels(
   api: PluginAPI,
   config: ChanmodConfig,
+  state: SharedState,
   handle: string,
 ): Promise<void> {
   const lowerHandle = handle.toLowerCase();
@@ -544,6 +581,7 @@ async function reconcileHandleAcrossChannels(
       await reconcileUserInChannel(
         api,
         config,
+        state,
         record,
         channel,
         chanUser.nick,
@@ -565,6 +603,7 @@ async function reconcileHandleAcrossChannels(
 async function reconcileAllUsersInChannel(
   api: PluginAPI,
   config: ChanmodConfig,
+  state: SharedState,
   channel: string,
 ): Promise<void> {
   if (!api.channelSettings.getFlag(channel, 'auto_op')) return;
@@ -581,6 +620,7 @@ async function reconcileAllUsersInChannel(
     await reconcileUserInChannel(
       api,
       config,
+      state,
       record,
       channel,
       chanUser.nick,

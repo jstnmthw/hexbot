@@ -102,6 +102,17 @@ export interface SharedState {
   knownGoodTopics: Map<string, { topic: string; setAt: number }>;
   /** Channels already warned about takeover_detection w/o chanserv_access (dedupe per session). */
   takeoverWarnedChannels: Set<string>;
+  // Auto-op
+  /**
+   * Prefix-mode grants currently being decided, keyed `ircLower(channel)|ircLower(nick)`.
+   * Multiple triggers can race a grant for the same user — the join bind, the
+   * modesReady reconciler, and the `user:identified` event that services emits
+   * *mid-verification* (before the awaiting grantMode resumes). The first
+   * caller takes the key; concurrent callers skip. Without this, every
+   * verified auto-op lands twice: once from the identify reconciler, once
+   * from the original grant resuming after `verifyUser()`.
+   */
+  grantsInFlight: Set<string>;
 
   /** Schedule a callback on `enforcementTimers` — wraps setTimeout + add, auto-removes on fire. */
   scheduleEnforcement(delayMs: number, fn: () => void): void;
@@ -195,6 +206,7 @@ export function createState(): SharedState {
     unbanRequested: new Map(),
     knownGoodTopics: new Map(),
     takeoverWarnedChannels: new Set(),
+    grantsInFlight: new Set(),
     scheduleEnforcement(delayMs: number, fn: () => void): void {
       const timer = setTimeout(() => {
         state.enforcementTimers.delete(timer);
@@ -229,6 +241,7 @@ export function clearSharedState(state: SharedState): void {
   state.unbanRequested.clear();
   state.knownGoodTopics.clear();
   state.takeoverWarnedChannels.clear();
+  state.grantsInFlight.clear();
 }
 
 /**
