@@ -1,0 +1,22 @@
+services:
+  hexbot:
+    build: .
+    restart: unless-stopped
+    ports:
+      - '49152-49171:49152-49171'
+    volumes:
+      - ./config:/app/config:ro
+      - ./plugins:/app/plugins:ro
+      - ./data:/app/data
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'sh',
+          '-c',
+          '[ -f /tmp/.hexbot-connected ] && [ $$(( $$(date +%s) - $$(stat -c %Y /tmp/.hexbot-connected) )) -lt 120 ]',
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
