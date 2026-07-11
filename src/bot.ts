@@ -387,8 +387,10 @@ export class Bot {
   private async applyPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
     const isLoaded = this.pluginLoader.isLoaded(pluginId);
     if (enabled && !isLoaded) {
-      const pluginPath = `${resolve(this.config.pluginDir)}/${pluginId}/dist/index.js`;
-      const result = await this.pluginLoader.load(pluginPath);
+      // loadById re-reads plugins.json so the re-enabled plugin keeps its
+      // operator config (provider, model, channels, ...). A bare load()
+      // here would drop those overrides and fall back to config.json.
+      const result = await this.pluginLoader.loadById(pluginId);
       if (result.status !== 'ok') {
         this.botLogger.error(
           `Plugin "${pluginId}" enable via .set failed: ${result.error ?? 'unknown error'}`,

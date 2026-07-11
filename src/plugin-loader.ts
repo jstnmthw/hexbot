@@ -549,6 +549,28 @@ export class PluginLoader {
   }
 
   /**
+   * Load a single plugin by id, re-reading `plugins.json` so the plugin
+   * receives the same merged config the boot path (`loadAll`) applied.
+   *
+   * This is the runtime-enable entry point: an operator flipping a plugin
+   * back on with `.set core plugins.<id>.enabled true` routes here (via
+   * `Bot.applyPluginEnabled`). Re-reading is load-bearing — calling bare
+   * `load(pluginPath)` with no `pluginsConfig` makes `mergeConfig` drop
+   * every `plugins.json` override, so the plugin silently falls back to
+   * its on-disk `config.json` defaults (wrong provider/model/channels).
+   * The config path was captured by the most recent `loadAll()`; if none
+   * ran (or the file has since gone missing) the plugin loads with
+   * defaults, matching first-boot behavior.
+   */
+  async loadById(pluginId: string): Promise<LoadResult> {
+    const pluginPath = join(this.pluginDir, pluginId, 'dist', 'index.js');
+    const pluginsConfig = this.pluginsConfigPath
+      ? (this.readPluginsConfig(this.pluginsConfigPath) ?? undefined)
+      : undefined;
+    return this.load(pluginPath, pluginsConfig);
+  }
+
+  /**
    * Unload a plugin by name.
    *
    * If `teardown()` throws, dispatcher binds, event-bus listeners, help

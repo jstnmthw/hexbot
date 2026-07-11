@@ -835,6 +835,65 @@ describe('PluginLoader', () => {
     });
   });
 
+  describe('loadById (runtime enable)', () => {
+    it('re-reads plugins.json so a re-enabled plugin keeps its overrides', async () => {
+      // config.json defaults mimic ai-chat's on-disk gemini defaults.
+      writePluginConfig(tempDir, 'toggle-plugin', {
+        provider: 'gemini',
+        model: 'gemini-2.5-flash-lite',
+      });
+      // Plugin records the effective provider/model it booted with.
+      writePlugin(
+        tempDir,
+        'toggle-plugin',
+        `
+        export const name = 'toggle-plugin';
+        export const version = '1.0.0';
+        export const description = '';
+        export function init(api) {
+          api.db.set('booted-provider', String(api.settings.bootConfig.provider ?? ''));
+          api.db.set('booted-model', String(api.settings.bootConfig.model ?? ''));
+        }
+      `,
+      );
+
+      // plugins.json overrides gemini -> ollama, matching the operator's config.
+      const configDir = makeTempDir();
+      const cfgPath = writePluginsJson(configDir, {
+        'toggle-plugin': {
+          enabled: true,
+          config: { provider: 'ollama', model: 'gemma3:270m' },
+        },
+      });
+
+      const db = new BotDatabase(':memory:');
+      db.open();
+      const { loader } = createLoader(tempDir, db);
+
+      // Boot path applies the override.
+      await loader.loadAll(cfgPath);
+      expect(db.get('toggle-plugin', 'booted-provider')).toBe('ollama');
+      expect(db.get('toggle-plugin', 'booted-model')).toBe('gemma3:270m');
+
+      // Simulate `.set core plugins.<id>.enabled false` then `true`.
+      await loader.unload('toggle-plugin');
+      // Sentinels prove the re-enable re-runs init and rewrites the values.
+      db.set('toggle-plugin', 'booted-provider', 'STALE');
+      db.set('toggle-plugin', 'booted-model', 'STALE');
+
+      const result = await loader.loadById('toggle-plugin');
+      expect(result.status).toBe('ok');
+
+      // The re-enabled plugin must still see the operator's overrides, not
+      // the config.json gemini defaults.
+      expect(db.get('toggle-plugin', 'booted-provider')).toBe('ollama');
+      expect(db.get('toggle-plugin', 'booted-model')).toBe('gemma3:270m');
+
+      db.close();
+      rmSync(configDir, { recursive: true, force: true });
+    });
+  });
+
   describe('list', () => {
     it('should list loaded plugins', async () => {
       const pluginPath = writePlugin(
@@ -1673,8 +1732,7 @@ describe('PluginLoader', () => {
         irc: {
           ...MINIMAL_BOT_CONFIG.irc,
           channels: ['#plain', { name: '#keyed', key: 'secret' }] as (
-            | string
-            | { name: string; key: string }
+            string | { name: string; key: string }
           )[],
         },
       };
