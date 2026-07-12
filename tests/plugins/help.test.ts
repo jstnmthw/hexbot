@@ -214,7 +214,7 @@ describe('help plugin', () => {
     expect(messages[messages.length - 1]).toBe('--- End ---');
   });
 
-  it('verbose mode: lists commands grouped into uppercased sections', async () => {
+  it('verbose mode: lists uppercased topic rows with command names as fallback blurbs', async () => {
     await loadHelp({
       help: { enabled: true, config: { compact_index: false, cooldown_ms: 0 } },
     });
@@ -225,10 +225,16 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    expect(messages).toContain(' FUN');
-    expect(messages).toContain(' INFO');
-    expect(messages.some((m) => m.includes('8ball'))).toBe(true);
-    // No IRC bold anywhere; blank lines separate the sections.
+    // Topics only — plugin topics carry their command names as the blurb;
+    // per-command descriptions live one level down in `!help <topic>`.
+    const funRow = messages.find((m) => m.includes('FUN'));
+    expect(funRow).toBeDefined();
+    expect(funRow).toContain('8ball');
+    const infoRow = messages.find((m) => m.includes('INFO'));
+    expect(infoRow).toBeDefined();
+    expect(infoRow).toContain('seen');
+    expect(messages.some((m) => m.includes('Ask the magic 8-ball'))).toBe(false);
+    // No IRC bold anywhere; a blank line separates intro from topics.
     expect(messages.some((m) => m.includes('\x02'))).toBe(false);
     expect(messages).toContain(' ');
   });
@@ -300,12 +306,13 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    // Match on the (unique) descriptions so the check is bold-agnostic.
-    const hasOp = messages.some((m) => m.includes('Op a nick'));
-    const hasBall = messages.some((m) => m.includes('Ask the magic 8-ball'));
+    // A topic whose every command is flagged out disappears from the
+    // index entirely; visible topics keep their rows.
+    const hasModeration = messages.some((m) => m.includes('MODERATION'));
+    const hasFun = messages.some((m) => m.includes('FUN'));
 
-    expect(hasOp).toBe(false);
-    expect(hasBall).toBe(true);
+    expect(hasModeration).toBe(false);
+    expect(hasFun).toBe(true);
   });
 
   it('shows flags:o entries to a user with +o permission', async () => {
@@ -323,8 +330,8 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    expect(messages.some((m) => m.includes('Op a nick'))).toBe(true);
-    expect(messages.some((m) => m.includes('Ask the magic 8-ball'))).toBe(true);
+    expect(messages.some((m) => m.includes('MODERATION'))).toBe(true);
+    expect(messages.some((m) => m.includes('FUN'))).toBe(true);
   });
 
   // ---------------------------------------------------------------------------
@@ -428,8 +435,21 @@ describe('help plugin', () => {
       expect(call[0]).toBe('user1');
     }
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    expect(messages[0]).toBe(' FUN');
+    expect(messages[0]).toBe('FUN');
     expect(messages.some((m) => m.includes('8ball'))).toBe(true);
+    // Footer teaches the drill-down shape.
+    expect(messages.some((m) => m.includes('Type !help fun <command>'))).toBe(true);
+  });
+
+  it('!help <category> <command> drills down to the command detail', async () => {
+    await loadHelp();
+    helpRegistry.register('8ball', [BALL_ENTRY]);
+
+    const ctx = makeCtx({ args: 'fun 8ball', text: '!help fun 8ball' });
+    await dispatcher.dispatch('pub', ctx);
+
+    const messages = mockNotice.mock.calls.map((c) => c[1]);
+    expect(messages).toEqual(['Syntax: !8ball <question>', ' ', 'Ask the magic 8-ball']);
   });
 
   it('!help <category> filters by permission', async () => {
@@ -457,7 +477,7 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    expect(messages[0]).toBe(' MODERATION');
+    expect(messages[0]).toBe('MODERATION — Channel bans and enforcement');
     expect(messages.some((m) => m.includes('op'))).toBe(true);
   });
 
@@ -469,7 +489,7 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    expect(messages[0]).toBe(' FUN');
+    expect(messages[0]).toBe('FUN');
     expect(messages.some((m) => m.includes('8ball'))).toBe(true);
   });
 
@@ -666,7 +686,7 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    expect(messages[0]).toBe(' MYPLUGIN');
+    expect(messages[0]).toBe('MYPLUGIN');
     expect(messages.some((m) => m.includes('foo'))).toBe(true);
   });
 

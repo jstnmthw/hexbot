@@ -7,8 +7,11 @@
 // channel (NOTICE / PRIVMSG / ctx.reply).
 //
 // Display model (mirrors network services like ChanServ/NickServ):
-//   - The bare index lists command *names* only, aligned in monospace
-//     columns under uppercased section headers. Params never appear here.
+//   - The bare index opens with a wrapped intro paragraph, then lists the
+//     available *topics* only — uppercased, with a short description
+//     aligned beside each. Individual commands never appear here.
+//   - A topic view (`help irc`) lists that topic's commands with aligned
+//     descriptions and points at `help <topic> <command>` for detail.
 //   - Per-command detail opens with a `Syntax:` line, then the description,
 //     any `detail[]` lines, then a `Requires:` line.
 //   - Settings scopes are a sub-tree: the index points at `.help set`; a
@@ -39,8 +42,61 @@ export interface RenderPermissions {
 /** Column gap (spaces) between the name column and the description column. */
 const COLUMN_GAP = 2;
 
+/** Left indent for aligned list rows — four spaces, per services convention. */
+const ROW_INDENT = '    ';
+
+/** Wrap width for prose lines (intro paragraph, descriptions, footers). */
+const WRAP_WIDTH = 60;
+
+/** Total line budget for an aligned row before its description wraps. */
+const ROW_WIDTH = 72;
+
 /** Soft wrap width used when packing the folded settings-group grid. */
 const GRID_WIDTH = 72;
+
+/**
+ * Short blurbs for the core command topics shown beside each uppercased
+ * label in the bare index. Topics with no entry here (plugin-defined
+ * categories like `fun`) fall back to a comma-joined list of their
+ * command names — still tells the reader what lives inside without core
+ * having to know plugin vocabulary.
+ */
+const TOPIC_DESCRIPTIONS: Record<string, string> = {
+  general: 'Basic bot commands',
+  permissions: 'Bot user accounts and access flags',
+  dispatcher: 'Inspect the event dispatcher binds',
+  irc: 'Channel presence and messaging',
+  plugins: 'Load, unload, and reload plugins',
+  settings: 'Live configuration and channel settings',
+  audit: 'Moderation audit log',
+  dcc: 'DCC console sessions',
+  memo: 'MemoServ proxy',
+  botlink: 'Botnet links and remote bots',
+  moderation: 'Channel bans and enforcement',
+};
+
+/**
+ * Greedy word-wrap `text` to `width` columns. Words longer than `width`
+ * land on their own line unbroken — hostmasks and setting keys are more
+ * useful intact than split mid-token. Returns `[]` for empty/blank input.
+ */
+export function wrapText(text: string, width: number): string[] {
+  const words = text.split(/\s+/).filter((w) => w.length > 0);
+  const lines: string[] = [];
+  let current = '';
+  for (const word of words) {
+    if (current.length === 0) {
+      current = word;
+    } else if (current.length + 1 + word.length <= width) {
+      current += ` ${word}`;
+    } else {
+      lines.push(current);
+      current = word;
+    }
+  }
+  if (current.length > 0) lines.push(current);
+  return lines;
+}
 
 /**
  * Filter `entries` down to those the caller may see. Unflagged entries
@@ -105,11 +161,14 @@ export type LookupResult =
  *   3. Settings group expansion — `.help set core logging` pivots to a
  *      scope view filtered to the `logging.*` keys when no exact command
  *      matched but the third token names a dotted-prefix group.
- *   4. Category match — falls through when no command matched and the
+ *   4. Topic drill-down — `.help irc say` resolves the trailing tokens as
+ *      a command and matches when that command lives under the leading
+ *      topic. The ChanServ `HELP SET EMAIL` shape.
+ *   5. Category match — falls through when no command matched and the
  *      query case-folds to a category label. Filtered by prefix so
  *      `.help moderation` shows `.ban`/`.unban`/`.bans` and
  *      `!help moderation` shows `!ban`/`!op`/`!kick`/etc.
- *   5. None.
+ *   6. None.
  *
  * Permission gating: matched commands the caller cannot see resolve to
  * `denied` (renderer turns this into the same `No help for "<query>"`
@@ -167,7 +226,11 @@ export function lookup(
   const groupResult = resolveSettingsGroup(registry, trimmed, prefix, ctx, perms);
   if (groupResult) return groupResult;
 
-  // Priority 4: category match (prefix-filtered, then permission-filtered).
+  // Priority 4: `<topic> <command>` drill-down.
+  const drillResult = resolveTopicCommand(registry, trimmed, prefix, ctx, perms);
+  if (drillResult) return drillResult;
+
+  // Priority 5: category match (prefix-filtered, then permission-filtered).
   const visible = filterByPermission(
     registry.getAll().filter((e) => commandMatchesPrefix(e.command, prefix)),
     ctx,
@@ -244,6 +307,39 @@ function resolveSettingsGroup(
 }
 
 /**
+ * Resolve `<topic> <command>` to that command's detail — the ChanServ
+ * `HELP SET EMAIL` drill-down shape (`.help irc say`, `!help fun 8ball`).
+ * The trailing tokens resolve through the same prefix-biased command
+ * lookup as a bare query, but the match only counts when the entry
+ * actually lives under the named topic — `.help irc flags` must not
+ * silently alias into PERMISSIONS. Flagged-out matches resolve to
+ * `denied` so privileged commands don't leak by shape difference.
+ * Returns null (fall through) when the query isn't this shape.
+ */
+function resolveTopicCommand(
+  registry: HelpRegistryView,
+  trimmed: string,
+  prefix: string,
+  ctx: HandlerContext,
+  perms: RenderPermissions | null,
+): LookupResult | null {
+  const tokens = trimmed.split(/\s+/);
+  if (tokens.length < 2) return null;
+  const topic = tokens[0].toLowerCase();
+  const rest = tokens.slice(1).join(' ');
+  const restHasPrefix = rest.startsWith('!') || rest.startsWith('.');
+  const entry = restHasPrefix
+    ? registry.get(rest)
+    : (registry.get(`${prefix}${rest}`) ?? registry.get(rest));
+  if (!entry || !commandMatchesPrefix(entry.command, prefix)) return null;
+  if ((entry.category ?? entry.pluginId ?? '').toLowerCase() !== topic) return null;
+  if (entry.flags === '-' || !perms || perms.checkFlags(entry.flags, ctx)) {
+    return { kind: 'command', entry };
+  }
+  return { kind: 'denied', query: trimmed };
+}
+
+/**
  * True when the entry's command trigger uses the active prefix. Isolates
  * `.help` (REPL/admin dot-command) and `!help` (channel bang-command)
  * corpora — each transport surfaces only its own commands. Multi-word
@@ -271,11 +367,13 @@ export interface RenderIndexOptions {
 }
 
 /**
- * Render the bare `!help` / `.help` index — a permission-filtered overview
- * of every available command, grouped into uppercased sections. Command
- * *names* only; params live in the per-command detail. `set:*` categories
- * collapse to a single `Configuration:` pointer line so the index isn't
- * swamped by hundreds of setting keys. Returns the empty
+ * Render the bare `!help` / `.help` index. The full (verbose) view is the
+ * ChanServ base-help shape: the `header` paragraph wrapped to prose width,
+ * then one aligned row per *topic* — uppercased label plus a short
+ * description. Individual commands live one level down in the topic view.
+ * The compact view keeps the terse one-line-per-category packing. `set:*`
+ * categories collapse to a single `Configuration:` pointer line so the
+ * index isn't swamped by hundreds of setting keys. Returns the empty
  * `["No commands available."]` line when nothing is visible to the caller.
  */
 export function renderIndex(entries: HelpEntry[], opts: RenderIndexOptions): string[] {
@@ -317,36 +415,51 @@ export function renderIndex(entries: HelpEntry[], opts: RenderIndexOptions): str
     return lines;
   }
 
-  // Full view: shared name column across every section so commands line up.
-  // A blank line separates the header, each section, and the trailing
-  // pointer/footer so the listing reads as spaced groups rather than a wall.
-  const nameWidth = maxNameWidth([...groups.values()].flat(), opts.prefix);
-  lines.push(opts.header);
-  lines.push(' ');
-  for (const [category, group] of groups) {
-    lines.push(` ${sectionLabel(category)}`);
-    for (const entry of group) {
+  // Full view: wrapped intro paragraph, then the topics as one contiguous
+  // aligned block — no per-command rows at this level.
+  if (opts.header) {
+    lines.push(...wrapText(opts.header, WRAP_WIDTH));
+    lines.push(' ');
+  }
+  if (groups.size > 0) {
+    const labelWidth = Math.max(...[...groups.keys()].map((c) => sectionLabel(c).length));
+    for (const [category, group] of groups) {
       lines.push(
-        alignedRow(stripCommandPrefix(entry.command, opts.prefix), entry.description, nameWidth),
+        ...alignedRow(
+          sectionLabel(category),
+          topicDescription(category, group, opts.prefix),
+          labelWidth,
+        ),
       );
     }
-    lines.push(' ');
   }
   if (scopeNames.length > 0) {
-    lines.push(`Configuration: ${scopeNames.join(' ')} — ${opts.prefix}help set <scope>`);
     lines.push(' ');
+    lines.push(
+      ...wrapText(
+        `Configuration: ${scopeNames.join(' ')} — ${opts.prefix}help set <scope>`,
+        WRAP_WIDTH,
+      ),
+    );
   }
-  if (opts.footer) lines.push(opts.footer);
+  if (opts.footer) {
+    lines.push(' ');
+    lines.push(opts.footer);
+  }
   return lines;
 }
 
 /**
  * Render the per-command detail view — the ChanServ `Syntax:` shape.
- * `Syntax:` line, the description, any per-line `detail[]`, then a
- * `Requires:` line for flagged commands.
+ * `Syntax:` line, the wrapped description, any per-line `detail[]`, then
+ * a `Requires:` line for flagged commands.
  */
 export function renderCommand(entry: HelpEntry): string[] {
-  const lines: string[] = [`Syntax: ${entry.usage}`, ' ', entry.description];
+  const lines: string[] = [
+    `Syntax: ${entry.usage}`,
+    ' ',
+    ...wrapText(entry.description, WRAP_WIDTH),
+  ];
   if (entry.detail) {
     for (const line of entry.detail) {
       lines.push(`  ${line}`);
@@ -359,17 +472,28 @@ export function renderCommand(entry: HelpEntry): string[] {
 }
 
 /**
- * Render a non-scope category view — an uppercased section header followed
- * by one aligned `name  description` row per command, then a detail hint.
- * Used for plugin-defined categories like `moderation`, `fun`, `info`.
+ * Render a non-scope topic view — the ChanServ `HELP SET` shape. An
+ * uppercased label (with the topic blurb when one exists), a blank line,
+ * one aligned `name  description` row per command, then a wrapped hint
+ * pointing at the `help <topic> <command>` drill-down.
  */
 export function renderCategory(category: string, entries: HelpEntry[], prefix: string): string[] {
   const nameWidth = maxNameWidth(entries, prefix);
-  const lines: string[] = [` ${sectionLabel(category)}`];
+  const label = sectionLabel(category);
+  const blurb = TOPIC_DESCRIPTIONS[category.toLowerCase()];
+  const lines: string[] = [blurb ? `${label} — ${blurb}` : label, ' '];
   for (const entry of entries) {
-    lines.push(alignedRow(stripCommandPrefix(entry.command, prefix), entry.description, nameWidth));
+    lines.push(
+      ...alignedRow(stripCommandPrefix(entry.command, prefix), entry.description, nameWidth),
+    );
   }
-  lines.push(`Type ${prefix}help <command> for details.`);
+  lines.push(' ');
+  lines.push(
+    ...wrapText(
+      `Type ${prefix}help ${category.toLowerCase()} <command> for more information on a particular command.`,
+      WRAP_WIDTH,
+    ),
+  );
   return lines;
 }
 
@@ -399,7 +523,7 @@ export function renderScope(
     const width = maxKeyWidth(groupKeys, scope);
     const lines: string[] = [`${scope} / ${group} — ${countLabel(groupKeys.length)}`, ' '];
     for (const e of groupKeys) {
-      lines.push(alignedRow(extractKeyName(e.command, scope), e.description, width));
+      lines.push(...alignedRow(extractKeyName(e.command, scope), e.description, width));
     }
     if (groupKeys.length > 0) {
       lines.push(`Type ${prefix}help set ${scope} <key> for one key's detail.`);
@@ -419,7 +543,7 @@ export function renderScope(
     lines.push(' ');
     const width = maxKeyWidth(flat, scope);
     for (const e of flat) {
-      lines.push(alignedRow(extractKeyName(e.command, scope), e.description, width));
+      lines.push(...alignedRow(extractKeyName(e.command, scope), e.description, width));
     }
   }
   if (keys.length > 0) {
@@ -447,14 +571,32 @@ function countLabel(count: number): string {
 }
 
 /**
- * One aligned table row: `name`, padded to `width`, a `COLUMN_GAP` gutter,
- * then `description`. The help output carries no IRC formatting — rows read
- * as a plain scan list, with uppercased section headers providing the only
- * visual grouping.
+ * One aligned table row: four-space indent, `name` padded to `width`, a
+ * `COLUMN_GAP` gutter, then `description`. Descriptions that would push
+ * the line past {@link ROW_WIDTH} wrap onto continuation lines indented
+ * to the description column — the ChanServ ENTRYMSG shape. The help
+ * output carries no IRC formatting; rows read as a plain scan list.
  */
-function alignedRow(name: string, description: string, width: number, indent = '   '): string {
+function alignedRow(name: string, description: string, width: number): string[] {
   const pad = ' '.repeat(Math.max(1, width - name.length + COLUMN_GAP));
-  return `${indent}${name}${pad}${description}`;
+  const descColumn = ROW_INDENT.length + width + COLUMN_GAP;
+  const wrapped = wrapText(description, Math.max(24, ROW_WIDTH - descColumn));
+  if (wrapped.length === 0) return [`${ROW_INDENT}${name}`];
+  const [first, ...rest] = wrapped;
+  const contIndent = ' '.repeat(descColumn);
+  return [`${ROW_INDENT}${name}${pad}${first}`, ...rest.map((line) => `${contIndent}${line}`)];
+}
+
+/**
+ * Description shown beside a topic label in the bare index — the curated
+ * core blurb when one exists, else the topic's command names joined into
+ * a scan list (plugin-defined topics document themselves this way).
+ */
+function topicDescription(category: string, group: HelpEntry[], prefix: string): string {
+  return (
+    TOPIC_DESCRIPTIONS[category.toLowerCase()] ??
+    group.map((e) => stripCommandPrefix(e.command, prefix)).join(', ')
+  );
 }
 
 /** Widest prefix-stripped command name across `entries` (0 when empty). */
@@ -523,7 +665,7 @@ function renderGroupGrid(grouped: Map<string, HelpEntry[]>): string[] {
   const cols = Math.max(1, Math.floor((GRID_WIDTH + gap) / (cellWidth + gap)));
   const rows: string[] = [];
   for (let i = 0; i < cells.length; i += cols) {
-    rows.push(`   ${cells.slice(i, i + cols).join(' '.repeat(gap))}`);
+    rows.push(`${ROW_INDENT}${cells.slice(i, i + cols).join(' '.repeat(gap))}`);
   }
   return rows;
 }

@@ -133,8 +133,8 @@ export class CommandHandler {
       'help',
       {
         flags: '-',
-        description: 'List commands or show help for a specific command',
-        usage: `${this.prefix}help [command]`,
+        description: 'List help topics or show help for a specific command',
+        usage: `${this.prefix}help [topic] [command]`,
         category: 'general',
       },
       (args, ctx) => {
@@ -367,8 +367,10 @@ export class CommandHandler {
       return;
     }
 
-    // Bare-index render. Verbose mode (compact: false) so the trusted
-    // operator console gets the categorised listing operators expect.
+    // Bare-index render. Verbose mode (compact: false) gives the ChanServ
+    // base-help shape: wrapped intro paragraph, then the topics with short
+    // descriptions — navigation happens via `.help <topic>` and
+    // `.help <topic> <command>`, so no footer line is needed here.
     // Prefix filter: this transport only surfaces its own trigger
     // (`.foo` for the dot-command path). The bang-prefix corpus is
     // shown by the channel-side `!help` plugin.
@@ -377,11 +379,17 @@ export class CommandHandler {
       renderPerms === null
         ? prefixed
         : prefixed.filter((e) => e.flags === '-' || renderPerms.checkFlags(e.flags, handlerCtx));
+    const p = this.prefix;
     const lines = renderIndex(visibleEntries, {
       compact: false,
-      header: 'Available commands',
-      footer: `Type ${this.prefix}help <command> for details on a specific command.`,
-      prefix: this.prefix,
+      header:
+        'HexBot allows you to manage and control various aspects of ' +
+        'the bot and its channels. Available command topics are ' +
+        `listed below; to use a command, type ${p}command. For more ` +
+        `information on a specific topic, type ${p}help topic; for a ` +
+        `specific command, type ${p}help topic command.`,
+      footer: '',
+      prefix: p,
     });
     ctx.reply(lines.join('\n'));
   }

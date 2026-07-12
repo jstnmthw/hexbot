@@ -22,18 +22,23 @@ describe('CommandHandler', () => {
   // -------------------------------------------------------------------------
 
   describe('.help', () => {
-    it('should list available commands', async () => {
+    it('should list available topics under a wrapped intro paragraph', async () => {
       const handler = new CommandHandler();
       const ctx = makeCtx();
       await handler.execute('.help', ctx);
 
       expect(ctx.reply).toHaveBeenCalledOnce();
       const output = ctx.reply.mock.calls[0][0];
-      expect(output).toContain('Available commands');
-      expect(output).toContain('.help');
+      expect(output).toContain('HexBot allows you to manage and control');
+      expect(output).toContain('.help topic');
+      expect(output).toContain('GENERAL');
+      // Intro paragraph is wrapped to prose width for IRC transports.
+      for (const line of output.split('\n')) {
+        expect(line.length).toBeLessThanOrEqual(72);
+      }
     });
 
-    it('should group multiple commands in the same category', async () => {
+    it('lists topics in the index and commands under .help <topic>', async () => {
       const handler = new CommandHandler();
       handler.registerCommand(
         'foo',
@@ -48,11 +53,18 @@ describe('CommandHandler', () => {
       const ctx = makeCtx();
       await handler.execute('.help', ctx);
 
+      // Index lists the uppercased topic only — commands live one level
+      // down in the topic view. No IRC formatting anywhere.
       const output = ctx.reply.mock.calls[0][0];
-      // Index rows list bare names (prefix stripped) with no IRC formatting.
-      expect(output).toContain('foo');
-      expect(output).toContain('bar');
+      expect(output).toContain('GENERAL');
+      expect(output).not.toContain('foo');
       expect(output).not.toContain('\x02');
+
+      await handler.execute('.help general', ctx);
+      const topicOut = ctx.reply.mock.calls[1][0];
+      expect(topicOut).toContain('foo');
+      expect(topicOut).toContain('bar');
+      expect(topicOut).toContain('Type .help general <command>');
     });
 
     it('should show help for a specific command', async () => {
@@ -62,7 +74,16 @@ describe('CommandHandler', () => {
 
       const output = ctx.reply.mock.calls[0][0];
       expect(output).toContain('.help');
-      expect(output).toContain('List commands');
+      expect(output).toContain('List help topics');
+    });
+
+    it('resolves .help <topic> <command> to the command detail', async () => {
+      const handler = new CommandHandler();
+      const ctx = makeCtx();
+      await handler.execute('.help general help', ctx);
+
+      const output = ctx.reply.mock.calls[0][0];
+      expect(output).toContain('Syntax: .help [topic] [command]');
     });
 
     it('should report unknown command in help', async () => {
@@ -464,7 +485,7 @@ describe('CommandHandler', () => {
       expect(entry).toBeDefined();
       expect(entry?.pluginId).toBe('core');
       expect(entry?.command).toBe('.help');
-      expect(entry?.usage).toBe('.help [command]');
+      expect(entry?.usage).toBe('.help [topic] [command]');
       expect(entry?.category).toBe('general');
     });
 
@@ -540,6 +561,26 @@ describe('CommandHandler', () => {
 
       const out = ctx.reply.mock.calls[0][0];
       expect(out).toContain('.rss');
+      expect(out).toContain('Subscribe to an RSS feed');
+    });
+
+    it('routes .help <topic> <command> through the drill-down to the detail view', async () => {
+      const registry = new HelpRegistry();
+      const handler = new CommandHandler(null, '.', registry);
+      registry.register('rss', [
+        {
+          command: '.rss',
+          flags: '-',
+          usage: '.rss <feed>',
+          description: 'Subscribe to an RSS feed',
+          category: 'feeds',
+        },
+      ]);
+      const ctx = makeCtx();
+      await handler.execute('.help feeds rss', ctx);
+
+      const out = ctx.reply.mock.calls[0][0];
+      expect(out).toContain('Syntax: .rss <feed>');
       expect(out).toContain('Subscribe to an RSS feed');
     });
 

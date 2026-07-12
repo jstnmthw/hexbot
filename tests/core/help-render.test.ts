@@ -179,6 +179,34 @@ describe('lookup', () => {
     expect(lookup(reg, '.set core nonesuch', makeCtx(), null, '.').kind).toBe('none');
   });
 
+  // `<topic> <command>` drill-down — the ChanServ `HELP SET EMAIL` shape.
+  describe('topic drill-down', () => {
+    it('resolves `<topic> <command>` to the command detail', () => {
+      const reg = setup();
+      const result = lookup(reg, 'fun 8ball', makeCtx(), null, '!');
+      expect(result.kind).toBe('command');
+      if (result.kind === 'command') expect(result.entry.command).toBe('!8ball');
+    });
+
+    it('rejects a command drilled through the wrong topic', () => {
+      const reg = setup();
+      expect(lookup(reg, 'moderation 8ball', makeCtx(), null, '!').kind).toBe('none');
+    });
+
+    it('returns denied when the drilled command flags out the caller', () => {
+      const reg = setup();
+      const perms: RenderPermissions = { checkFlags: vi.fn().mockReturnValue(false) };
+      expect(lookup(reg, 'moderation op', makeCtx(), perms, '!').kind).toBe('denied');
+    });
+
+    it('keeps prefix isolation for the drilled command', () => {
+      // `.help moderation op` with only `!op` registered — the bang-side
+      // command must not surface on the dot-command surface.
+      const reg = setup();
+      expect(lookup(reg, 'moderation op', makeCtx(), null, '.').kind).toBe('none');
+    });
+  });
+
   it('returns none for an empty / whitespace-only query', () => {
     const reg = setup();
     expect(lookup(reg, '   ', makeCtx(), null, '!').kind).toBe('none');
@@ -297,23 +325,47 @@ describe('renderCommand', () => {
       'Requires: n',
     ]);
   });
+
+  it('wraps a long description at the prose width', () => {
+    const entry: HelpEntry = {
+      ...PUBLIC_ENTRY,
+      description:
+        'Ask the magic 8-ball a question and receive a mystical answer drawn from the classic set of twenty responses',
+    };
+    const lines = renderCommand(entry);
+    expect(lines[0]).toBe('Syntax: !8ball <question>');
+    expect(lines[1]).toBe(' ');
+    const descLines = lines.slice(2);
+    expect(descLines.length).toBeGreaterThan(1);
+    for (const line of descLines) {
+      expect(line.length).toBeLessThanOrEqual(60);
+    }
+  });
 });
 
 describe('renderCategory', () => {
-  it('renders an uppercased section header, aligned rows, and a detail hint', () => {
+  it('renders the uppercased label, aligned rows, and a wrapped drill-down hint', () => {
     const lines = renderCategory('fun', [PUBLIC_ENTRY], '!');
     expect(lines).toEqual([
-      ' FUN',
-      '   8ball  Ask the magic 8-ball',
-      'Type !help <command> for details.',
+      'FUN',
+      ' ',
+      '    8ball  Ask the magic 8-ball',
+      ' ',
+      'Type !help fun <command> for more information on a',
+      'particular command.',
     ]);
+  });
+
+  it('appends the curated topic blurb to the label when one exists', () => {
+    const lines = renderCategory('moderation', [OP_ENTRY], '!');
+    expect(lines[0]).toBe('MODERATION — Channel bans and enforcement');
   });
 
   it('aligns command names into a shared column', () => {
     const lines = renderCategory('moderation', [OP_ENTRY, PUBLIC_ENTRY], '!');
     // Widest name is `8ball` (5) → `op` (2) padded to align descriptions.
-    expect(lines).toContain('   op     Op a nick');
-    expect(lines).toContain('   8ball  Ask the magic 8-ball');
+    expect(lines).toContain('    op     Op a nick');
+    expect(lines).toContain('    8ball  Ask the magic 8-ball');
   });
 });
 
@@ -321,7 +373,7 @@ describe('renderScope', () => {
   it('folds keys by dotted prefix with a count grid and an expand hint', () => {
     const lines = renderScope('core', SCOPE_HEADER, [SCOPE_HEADER, SCOPE_KEY_ENTRY], '.');
     expect(lines[0]).toBe('core settings — 1 key — Bot-wide singletons');
-    expect(lines).toContain('   logging.* 1');
+    expect(lines).toContain('    logging.* 1');
     // Per-key names do NOT appear in the folded view.
     expect(lines.some((l) => l.includes('logging.level'))).toBe(false);
     expect(lines[lines.length - 1]).toBe(
@@ -338,7 +390,7 @@ describe('renderScope', () => {
       category: 'set:core',
     };
     const lines = renderScope('core', SCOPE_HEADER, [SCOPE_HEADER, flatKey], '.');
-    expect(lines).toContain('   motd  Message of the day');
+    expect(lines).toContain('    motd  Message of the day');
     expect(lines[lines.length - 1]).toBe('Type .help set core <key> for detail.');
   });
 
@@ -358,8 +410,8 @@ describe('renderScope', () => {
       'logging',
     );
     expect(lines[0]).toBe('core / logging — 2 keys');
-    expect(lines).toContain('   logging.level  Minimum log level');
-    expect(lines).toContain('   logging.file   Log file path');
+    expect(lines).toContain('    logging.level  Minimum log level');
+    expect(lines).toContain('    logging.file   Log file path');
     expect(lines[lines.length - 1]).toBe("Type .help set core <key> for one key's detail.");
   });
 
@@ -399,18 +451,41 @@ describe('renderIndex', () => {
     expect(lines.some((l) => l.includes('Op a nick'))).toBe(false);
   });
 
-  it('verbose: emits header, uppercased sections, aligned rows, and footer', () => {
+  it('verbose: emits wrapped header, aligned topic rows, and footer', () => {
     const lines = renderIndex([PUBLIC_ENTRY, OP_ENTRY], {
       compact: false,
       header: 'Available',
       footer: '*** end ***',
-      prefix: '.',
+      prefix: '!',
     });
     expect(lines[0]).toBe('Available');
-    expect(lines).toContain(' FUN');
-    expect(lines).toContain(' MODERATION');
-    expect(lines.some((l) => l.includes('Ask the magic 8-ball'))).toBe(true);
+    expect(lines[1]).toBe(' ');
+    // Topics only — plugin topics fall back to their command names as the
+    // blurb; per-command descriptions never appear at index level.
+    expect(lines).toContain('    FUN         8ball');
+    expect(lines).toContain('    MODERATION  Channel bans and enforcement');
+    expect(lines.some((l) => l.includes('Ask the magic 8-ball'))).toBe(false);
+    expect(lines[lines.length - 2]).toBe(' ');
     expect(lines[lines.length - 1]).toBe('*** end ***');
+  });
+
+  it('verbose: wraps a long header paragraph to 60 columns', () => {
+    const intro =
+      'HexBot allows you to manage and control various aspects of the bot ' +
+      'and its channels. Available command topics are listed below.';
+    const lines = renderIndex([PUBLIC_ENTRY], {
+      compact: false,
+      header: intro,
+      footer: '',
+      prefix: '!',
+    });
+    const blank = lines.indexOf(' ');
+    const introLines = lines.slice(0, blank);
+    expect(introLines.length).toBeGreaterThan(1);
+    for (const line of introLines) {
+      expect(line.length).toBeLessThanOrEqual(60);
+    }
+    expect(introLines.join(' ')).toBe(intro);
   });
 
   it('folds set:* categories into a single Configuration pointer line (verbose)', () => {
@@ -438,7 +513,7 @@ describe('renderIndex', () => {
     expect(lines.some((l) => l.includes('logging.level'))).toBe(false);
   });
 
-  it('verbose: omits a footer line when footer is empty', () => {
+  it('verbose: omits the footer and its separator when footer is empty', () => {
     const lines = renderIndex([PUBLIC_ENTRY], {
       compact: false,
       header: 'h',
@@ -446,6 +521,7 @@ describe('renderIndex', () => {
       prefix: '.',
     });
     expect(lines[lines.length - 1]).not.toBe('');
+    expect(lines[lines.length - 1]).not.toBe(' ');
   });
 
   it('compact: strips a multi-character prefix from command names', () => {
