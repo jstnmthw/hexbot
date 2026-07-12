@@ -179,6 +179,18 @@ describe('lookup', () => {
     expect(lookup(reg, '.set core nonesuch', makeCtx(), null, '.').kind).toBe('none');
   });
 
+  it('expands the OTHER pseudo-group (.set core other) into a scope view', () => {
+    // `logging.level` is the scope's only key, so it lands in the OTHER
+    // bucket (single-member prefix) — the pseudo-group must resolve.
+    const reg = setup();
+    const result = lookup(reg, '.set core other', makeCtx(), null, '.');
+    expect(result.kind).toBe('scope');
+    if (result.kind === 'scope') {
+      expect(result.scope).toBe('core');
+      expect(result.group).toBe('other');
+    }
+  });
+
   // `<topic> <command>` drill-down — the ChanServ `HELP SET EMAIL` shape.
   describe('topic drill-down', () => {
     it('resolves `<topic> <command>` to the command detail', () => {
@@ -307,11 +319,12 @@ describe('renderCommand', () => {
     ]);
   });
 
-  it('appends a `Requires: <flags>` line for flagged entries', () => {
+  it('appends a `Requires: <flags>` block for flagged entries', () => {
     expect(renderCommand(OP_ENTRY)).toEqual([
       'Syntax: !op [nick]',
       ' ',
       'Op a nick',
+      ' ',
       'Requires: o',
     ]);
   });
@@ -321,7 +334,8 @@ describe('renderCommand', () => {
       'Syntax: .set core logging.level <string>',
       ' ',
       'Minimum log level',
-      '  Type: string  Default: info  Reload: live',
+      '    Type: string  Default: info  Reload: live',
+      ' ',
       'Requires: n',
     ]);
   });
@@ -370,28 +384,60 @@ describe('renderCategory', () => {
 });
 
 describe('renderScope', () => {
-  it('folds keys by dotted prefix with a count grid and an expand hint', () => {
-    const lines = renderScope('core', SCOPE_HEADER, [SCOPE_HEADER, SCOPE_KEY_ENTRY], '.');
-    expect(lines[0]).toBe('core settings — 1 key — Bot-wide singletons');
-    expect(lines).toContain('    logging.* 1');
-    // Per-key names do NOT appear in the folded view.
-    expect(lines.some((l) => l.includes('logging.level'))).toBe(false);
-    expect(lines[lines.length - 1]).toBe(
-      'Type .help set core <group> to expand, or <key> for detail.',
+  const LOG_FILE_ENTRY: HelpEntry = {
+    command: '.set core logging.file',
+    flags: 'n',
+    usage: '.set core logging.file <string>',
+    description: 'Log file path',
+    category: 'set:core',
+  };
+  const IDENTITY_ENTRY: HelpEntry = {
+    command: '.set core identity.method',
+    flags: 'n',
+    usage: '.set core identity.method <string>',
+    description: 'How the bot identifies',
+    category: 'set:core',
+  };
+  const FLAT_ENTRY: HelpEntry = {
+    command: '.set core motd',
+    flags: 'n',
+    usage: '.set core motd <string>',
+    description: 'Message of the day',
+    category: 'set:core',
+  };
+
+  it('renders multi-member prefixes as uppercased topic rows (base-index shape)', () => {
+    const lines = renderScope(
+      'core',
+      SCOPE_HEADER,
+      [SCOPE_HEADER, SCOPE_KEY_ENTRY, LOG_FILE_ENTRY],
+      '.',
     );
+    expect(lines[0]).toBe('CORE SETTINGS — Bot-wide singletons (2 keys)');
+    expect(lines).toContain('    LOGGING  level, file');
+    // Per-key descriptions do NOT appear in the folded view.
+    expect(lines.some((l) => l.includes('Minimum log level'))).toBe(false);
+    expect(lines.join(' ')).toContain('Type .help set core <topic>');
   });
 
-  it('lists non-dotted keys directly rather than folding them', () => {
-    const flatKey: HelpEntry = {
-      command: '.set core motd',
-      flags: 'n',
-      usage: '.set core motd <string>',
-      description: 'Message of the day',
-      category: 'set:core',
-    };
-    const lines = renderScope('core', SCOPE_HEADER, [SCOPE_HEADER, flatKey], '.');
+  it('folds flat keys and single-member prefixes under OTHER', () => {
+    const lines = renderScope(
+      'core',
+      SCOPE_HEADER,
+      [SCOPE_HEADER, SCOPE_KEY_ENTRY, LOG_FILE_ENTRY, IDENTITY_ENTRY, FLAT_ENTRY],
+      '.',
+    );
+    expect(lines).toContain('    OTHER    identity.method, motd');
+    // The lone identity.* key must not get its own topic row.
+    expect(lines.some((l) => l.includes('IDENTITY'))).toBe(false);
+  });
+
+  it('lists non-dotted keys directly when no multi-member prefixes exist', () => {
+    const lines = renderScope('core', SCOPE_HEADER, [SCOPE_HEADER, FLAT_ENTRY], '.');
     expect(lines).toContain('    motd  Message of the day');
-    expect(lines[lines.length - 1]).toBe('Type .help set core <key> for detail.');
+    expect(lines.slice(-2).join(' ')).toBe(
+      'Type .help set core <key> for more information on a particular key.',
+    );
   });
 
   it('expands a single dotted-prefix group when `group` is given', () => {
@@ -409,20 +455,37 @@ describe('renderScope', () => {
       '.',
       'logging',
     );
-    expect(lines[0]).toBe('core / logging — 2 keys');
+    expect(lines[0]).toBe('CORE SETTINGS / LOGGING — 2 keys');
     expect(lines).toContain('    logging.level  Minimum log level');
     expect(lines).toContain('    logging.file   Log file path');
-    expect(lines[lines.length - 1]).toBe("Type .help set core <key> for one key's detail.");
+    expect(lines.slice(-2).join(' ')).toBe(
+      'Type .help set core <key> for more information on a particular key.',
+    );
+  });
+
+  it('expands the OTHER pseudo-topic to the bucketed keys', () => {
+    const lines = renderScope(
+      'core',
+      SCOPE_HEADER,
+      [SCOPE_HEADER, SCOPE_KEY_ENTRY, LOG_FILE_ENTRY, IDENTITY_ENTRY, FLAT_ENTRY],
+      '.',
+      'other',
+    );
+    expect(lines[0]).toBe('CORE SETTINGS / OTHER — 2 keys');
+    expect(lines).toContain('    identity.method  How the bot identifies');
+    expect(lines).toContain('    motd             Message of the day');
+    // Multi-member logging.* keys stay out of the bucket.
+    expect(lines.some((l) => l.includes('logging.'))).toBe(false);
   });
 
   it('omits the trailing hint when no keys are present', () => {
     const lines = renderScope('core', SCOPE_HEADER, [SCOPE_HEADER], '.');
-    expect(lines).toEqual(['core settings — 0 keys — Bot-wide singletons']);
+    expect(lines).toEqual(['CORE SETTINGS — Bot-wide singletons (0 keys)']);
   });
 
   it('handles a missing header gracefully', () => {
     const lines = renderScope('core', null, [SCOPE_KEY_ENTRY], '.');
-    expect(lines[0]).toBe('core settings — 1 key');
+    expect(lines[0]).toBe('CORE SETTINGS — 1 key');
   });
 });
 
@@ -511,6 +574,28 @@ describe('renderIndex', () => {
     });
     expect(lines.some((l) => l === ' CONFIG  core — !help set <scope>')).toBe(true);
     expect(lines.some((l) => l.includes('logging.level'))).toBe(false);
+  });
+
+  it('verbose: falls back to the standard intro when the header is empty', () => {
+    const lines = renderIndex([PUBLIC_ENTRY], {
+      compact: false,
+      header: '',
+      footer: '',
+      prefix: '.',
+    });
+    const intro = lines.slice(0, lines.indexOf(' ')).join(' ');
+    expect(intro).toContain('HexBot allows you to manage and control');
+    expect(intro).toContain('type .help topic');
+  });
+
+  it('compact: falls back to the product banner when the header is empty', () => {
+    const lines = renderIndex([PUBLIC_ENTRY], {
+      compact: true,
+      header: '',
+      footer: '',
+      prefix: '!',
+    });
+    expect(lines[0]).toBe('HexBot Commands — !help <category> or !help <command>');
   });
 
   it('verbose: omits the footer and its separator when footer is empty', () => {

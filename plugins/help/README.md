@@ -19,34 +19,41 @@ detail view is shown; otherwise it is tried as a category name.
 
 ```
 -Bot- HexBot Commands — !help <category> or !help <command>
--Bot-   fun: 8ball
--Bot-   info: seen
--Bot-   moderation: op  deop  halfop  dehalfop  voice  devoice  kick  ban  unban  kickban  bans
+-Bot-  FUN  8ball
+-Bot-  INFO  seen
+-Bot-  MODERATION  op deop halfop dehalfop voice devoice kick ban unban kickban bans
 ```
+
+With `compact_index: false` the index opens with a wrapped intro
+paragraph instead, then lists the categories as uppercased topic rows
+with short descriptions — the ChanServ base-help shape shared with the
+core `.help` built-in.
 
 ### Example output (`!help moderation`)
 
 ```
--Bot- [moderation]
--Bot-   !op [nick] — Op a nick (or yourself if omitted)
--Bot-   !deop [nick] — Deop a nick (or yourself if omitted)
--Bot-   ...
+-Bot- MODERATION — Channel bans and enforcement
+-Bot-
+-Bot-     op    Op a nick (or yourself if omitted)
+-Bot-     deop  Deop a nick (or yourself if omitted)
+-Bot-     ...
+-Bot-
+-Bot- Type !help moderation <command> for more information on a
+-Bot- particular command.
 ```
 
 ### Example output (`!help op`)
 
 ```
--Bot- !op [nick] — Op a nick (or yourself if omitted) | Requires: o
+-Bot- Syntax: !op [nick]
+-Bot-
+-Bot- Op a nick (or yourself if omitted)
+-Bot-
+-Bot- Requires: o
 ```
 
-### Example output (`!help 8ball`)
-
-```
--Bot- !8ball <question> — Ask the magic 8-ball a question
-```
-
-Flags collapse onto the header as `| Requires: <flags>`. Unflagged
-commands omit the suffix — the absence is the signal.
+Unflagged commands omit the `Requires:` block — the absence is the
+signal.
 
 ### Permission filtering
 
@@ -76,30 +83,30 @@ In `config/plugins.json`:
       "reply_type": "notice",
       "cooldown_ms": 30000,
       "compact_index": true,
-      "header": "HexBot Commands",
+      "header": "",
       "footer": "*** End of Help ***"
     }
   }
 }
 ```
 
-| Key             | Type    | Default                 | Description                                                          |
-| --------------- | ------- | ----------------------- | -------------------------------------------------------------------- |
-| `reply_type`    | string  | `"notice"`              | How help output is delivered (see below).                            |
-| `cooldown_ms`   | number  | `30000`                 | Per-user cooldown for the list view, in ms.                          |
-| `compact_index` | boolean | `true`                  | Show a one-line-per-category index instead of the full command list. |
-| `header`        | string  | `"HexBot Commands"`     | First line of the list view.                                         |
-| `footer`        | string  | `"*** End of Help ***"` | Last line shown when `compact_index: false`.                         |
+| Key             | Type    | Default                 | Description                                                                                    |
+| --------------- | ------- | ----------------------- | ---------------------------------------------------------------------------------------------- |
+| `reply_type`    | string  | `"notice"`              | How help output is delivered (see below).                                                      |
+| `cooldown_ms`   | number  | `30000`                 | Per-user cooldown for the list view, in ms.                                                    |
+| `compact_index` | boolean | `true`                  | Show a one-line-per-category index instead of the full command list.                           |
+| `header`        | string  | `""`                    | Custom index header. Empty = standard intro (verbose) or a `HexBot Commands` banner (compact). |
+| `footer`        | string  | `"*** End of Help ***"` | Last line shown when `compact_index: false`. Empty = no footer.                                |
 
 ### Reply modes
 
 `reply_type` controls where the list view output is sent:
 
-| Value                | List view target  | Detail view target | Example IRC output           |
-| -------------------- | ----------------- | ------------------ | ---------------------------- |
-| `"notice"` (default) | NOTICE to nick    | NOTICE to nick     | `-Bot- *** Help ***`         |
-| `"privmsg"`          | PRIVMSG to nick   | NOTICE to nick     | `<Bot> *** Help ***`         |
-| `"channel_notice"`   | NOTICE to channel | NOTICE to nick     | `-Bot- [#chan] *** Help ***` |
+| Value                | List view target  | Detail view target | Example IRC output                |
+| -------------------- | ----------------- | ------------------ | --------------------------------- |
+| `"notice"` (default) | NOTICE to nick    | NOTICE to nick     | `-Bot- HexBot Commands …`         |
+| `"privmsg"`          | PRIVMSG to nick   | NOTICE to nick     | `<Bot> HexBot Commands …`         |
+| `"channel_notice"`   | NOTICE to channel | NOTICE to nick     | `-Bot- [#chan] HexBot Commands …` |
 
 When `reply_type` is `"channel_notice"` and `!help` is invoked via PM, it falls back to
 private NOTICE.

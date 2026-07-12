@@ -1,10 +1,13 @@
-// HexBot — Shared help renderer (Services / ChanServ-style)
+// HexBot — Shared help view builders (Services / ChanServ-style)
 //
-// One renderer module for both transports — the IRC `!help` plugin and
+// One view module for both transports — the IRC `!help` plugin and
 // the core `.help` built-in (REPL / DCC / IRC dot-commands). Inputs are
 // the unified {@link HelpRegistry} corpus; outputs are arrays of
 // already-formatted lines that each transport sends through its own
-// channel (NOTICE / PRIVMSG / ctx.reply).
+// channel (NOTICE / PRIVMSG / ctx.reply). All layout conventions (wrap
+// widths, indents, label casing, row alignment, block separation) live
+// in `help-format` — every view here composes those primitives, so the
+// whole help system reads as one page style.
 //
 // Display model (mirrors network services like ChanServ/NickServ):
 //   - The bare index opens with a wrapped intro paragraph, then lists the
@@ -15,8 +18,10 @@
 //   - Per-command detail opens with a `Syntax:` line, then the description,
 //     any `detail[]` lines, then a `Requires:` line.
 //   - Settings scopes are a sub-tree: the index points at `.help set`; a
-//     scope view folds keys by dotted prefix; a group view expands one
-//     prefix; a leaf key resolves to the normal command-detail path.
+//     scope view lists dotted-prefix topics in the base-index shape, with
+//     flat and single-member keys folded under a synthetic OTHER topic; a
+//     topic view expands one prefix (or OTHER); a leaf key resolves to
+//     the normal command-detail path.
 //
 // Layered responsibilities:
 //   - {@link filterByPermission}     — strip entries the caller may not see
@@ -28,7 +33,10 @@
 //   - {@link renderCommand}          — single-entry `Syntax:` detail
 //   - {@link renderCategory}         — non-scope category view
 //   - {@link renderScope}            — settings-scope view (folded or expanded)
+//   - {@link renderNotFound}         — uniform not-found / denied reply
+//   - {@link indexIntro}             — standard bare-index intro paragraph
 import type { HandlerContext, HelpEntry, HelpRegistryView } from '../types';
+import { ROW_INDENT, alignedRows, helpPage, prose, sectionLabel, titleLine } from './help-format';
 
 /**
  * Permissions surface needed by the renderer. Pass `null` to skip flag
@@ -39,20 +47,12 @@ export interface RenderPermissions {
   checkFlags(requiredFlags: string, ctx: HandlerContext): boolean;
 }
 
-/** Column gap (spaces) between the name column and the description column. */
-const COLUMN_GAP = 2;
-
-/** Left indent for aligned list rows — four spaces, per services convention. */
-const ROW_INDENT = '    ';
-
-/** Wrap width for prose lines (intro paragraph, descriptions, footers). */
-const WRAP_WIDTH = 60;
-
-/** Total line budget for an aligned row before its description wraps. */
-const ROW_WIDTH = 72;
-
-/** Soft wrap width used when packing the folded settings-group grid. */
-const GRID_WIDTH = 72;
+/**
+ * Label of the synthetic scope topic collecting flat keys and
+ * single-member dotted prefixes — one row instead of a topic per stray
+ * key. Matched case-insensitively on expansion (`.help set core other`).
+ */
+const OTHER_TOPIC = 'other';
 
 /**
  * Short blurbs for the core command topics shown beside each uppercased
@@ -74,29 +74,6 @@ const TOPIC_DESCRIPTIONS: Record<string, string> = {
   botlink: 'Botnet links and remote bots',
   moderation: 'Channel bans and enforcement',
 };
-
-/**
- * Greedy word-wrap `text` to `width` columns. Words longer than `width`
- * land on their own line unbroken — hostmasks and setting keys are more
- * useful intact than split mid-token. Returns `[]` for empty/blank input.
- */
-export function wrapText(text: string, width: number): string[] {
-  const words = text.split(/\s+/).filter((w) => w.length > 0);
-  const lines: string[] = [];
-  let current = '';
-  for (const word of words) {
-    if (current.length === 0) {
-      current = word;
-    } else if (current.length + 1 + word.length <= width) {
-      current += ` ${word}`;
-    } else {
-      lines.push(current);
-      current = word;
-    }
-  }
-  if (current.length > 0) lines.push(current);
-  return lines;
-}
 
 /**
  * Filter `entries` down to those the caller may see. Unflagged entries
@@ -281,7 +258,9 @@ function collectScopeEntries(
  * keys. Returns null when the query isn't a settings-group shape, the
  * scope is unknown/empty under this prefix, or `<group>` matches no
  * dotted-prefix keys. `<scope> <group>` that is itself a full key never
- * reaches here — Priority 1 resolves it as a leaf command first.
+ * reaches here — Priority 1 resolves it as a leaf command first. The
+ * synthetic OTHER topic resolves when the scope has bucketed keys and no
+ * real `other`-prefixed keys shadow it.
  */
 function resolveSettingsGroup(
   registry: HelpRegistryView,
@@ -296,12 +275,16 @@ function resolveSettingsGroup(
   const group = tokens.slice(2).join(' ');
   const scopeEntries = collectScopeEntries(registry, scope, prefix, ctx, perms);
   if (scopeEntries.length === 0) return null;
-  const hasGroupKeys = scopeEntries.some((e) => {
-    if (isScopeHeaderEntry(e, scope)) return false;
+  const keys = scopeEntries.filter((e) => !isScopeHeaderEntry(e, scope));
+  const hasGroupKeys = keys.some((e) => {
     const keyName = extractKeyName(e.command, scope);
     return keyName === group || keyName.startsWith(`${group}.`);
   });
-  if (!hasGroupKeys) return null;
+  if (!hasGroupKeys) {
+    const isOtherTopic =
+      group.toLowerCase() === OTHER_TOPIC && foldKeysByPrefix(keys, scope).other.length > 0;
+    if (!isOtherTopic) return null;
+  }
   const header = scopeEntries.find((e) => isScopeHeaderEntry(e, scope)) ?? null;
   return { kind: 'scope', scope, header, entries: scopeEntries, group };
 }
@@ -354,11 +337,41 @@ function commandMatchesPrefix(command: string, prefix: string): boolean {
 // Renderers
 // ---------------------------------------------------------------------------
 
+/**
+ * Standard bare-index intro paragraph — the ChanServ-style opener both
+ * transports share. {@link renderIndex} falls back to this when the
+ * caller passes an empty header, so the wording lives here once rather
+ * than drifting between the core `.help` built-in and the `!help`
+ * plugin's operator-configurable header.
+ */
+export function indexIntro(prefix: string): string {
+  return (
+    'HexBot allows you to manage and control various aspects of ' +
+    'the bot and its channels. Available command topics are ' +
+    `listed below; to use a command, type ${prefix}command. For more ` +
+    `information on a specific topic, type ${prefix}help topic; for a ` +
+    `specific command, type ${prefix}help topic command.`
+  );
+}
+
+/**
+ * Uniform not-found reply. Also used for permission-denied lookups so
+ * privileged commands don't leak by shape difference — both transports
+ * must send exactly this line for both cases.
+ */
+export function renderNotFound(query: string, prefix: string): string {
+  return `No help for "${query}" — type ${prefix}help for a list of commands`;
+}
+
 /** Options driving the bare-index render. */
 export interface RenderIndexOptions {
   /** True for the terse packed-names view; false for the full aligned view. */
   compact: boolean;
-  /** Header line shown above the index. */
+  /**
+   * Header shown above the index — the intro paragraph in the full view,
+   * the lead of the one-line banner in compact mode. Empty falls back to
+   * {@link indexIntro} (full) or a short product banner (compact).
+   */
   header: string;
   /** Footer line shown after the full listing. Ignored in compact mode. */
   footer: string;
@@ -400,9 +413,10 @@ export function renderIndex(entries: HelpEntry[], opts: RenderIndexOptions): str
     groups.set(cat, list);
   }
 
-  const lines: string[] = [];
   if (opts.compact) {
-    lines.push(`${opts.header} — ${opts.prefix}help <category> or ${opts.prefix}help <command>`);
+    const lines: string[] = [];
+    const banner = opts.header || 'HexBot Commands';
+    lines.push(`${banner} — ${opts.prefix}help <category> or ${opts.prefix}help <command>`);
     for (const [category, group] of groups) {
       const names = group.map((e) => stripCommandPrefix(e.command, opts.prefix)).join(' ');
       lines.push(` ${sectionLabel(category)}  ${names}`);
@@ -417,58 +431,35 @@ export function renderIndex(entries: HelpEntry[], opts: RenderIndexOptions): str
 
   // Full view: wrapped intro paragraph, then the topics as one contiguous
   // aligned block — no per-command rows at this level.
-  if (opts.header) {
-    lines.push(...wrapText(opts.header, WRAP_WIDTH));
-    lines.push(' ');
-  }
-  if (groups.size > 0) {
-    const labelWidth = Math.max(...[...groups.keys()].map((c) => sectionLabel(c).length));
-    for (const [category, group] of groups) {
-      lines.push(
-        ...alignedRow(
-          sectionLabel(category),
-          topicDescription(category, group, opts.prefix),
-          labelWidth,
-        ),
-      );
-    }
-  }
-  if (scopeNames.length > 0) {
-    lines.push(' ');
-    lines.push(
-      ...wrapText(
-        `Configuration: ${scopeNames.join(' ')} — ${opts.prefix}help set <scope>`,
-        WRAP_WIDTH,
-      ),
-    );
-  }
-  if (opts.footer) {
-    lines.push(' ');
-    lines.push(opts.footer);
-  }
-  return lines;
+  const topics: Array<[string, string]> = [...groups.entries()].map(([category, group]) => [
+    sectionLabel(category),
+    topicDescription(category, group, opts.prefix),
+  ]);
+  return helpPage(
+    prose(opts.header || indexIntro(opts.prefix)),
+    alignedRows(topics),
+    scopeNames.length > 0
+      ? prose(`Configuration: ${scopeNames.join(' ')} — ${opts.prefix}help set <scope>`)
+      : [],
+    opts.footer ? [opts.footer] : [],
+  );
 }
 
 /**
  * Render the per-command detail view — the ChanServ `Syntax:` shape.
- * `Syntax:` line, the wrapped description, any per-line `detail[]`, then
- * a `Requires:` line for flagged commands.
+ * `Syntax:` line, the wrapped description with any `detail[]` lines
+ * indented beneath it, then a `Requires:` block for flagged commands.
  */
 export function renderCommand(entry: HelpEntry): string[] {
-  const lines: string[] = [
-    `Syntax: ${entry.usage}`,
-    ' ',
-    ...wrapText(entry.description, WRAP_WIDTH),
-  ];
-  if (entry.detail) {
-    for (const line of entry.detail) {
-      lines.push(`  ${line}`);
-    }
+  const body = prose(entry.description);
+  for (const line of entry.detail ?? []) {
+    body.push(`${ROW_INDENT}${line}`);
   }
-  if (entry.flags !== '-') {
-    lines.push(`Requires: ${entry.flags}`);
-  }
-  return lines;
+  return helpPage(
+    [`Syntax: ${entry.usage}`],
+    body,
+    entry.flags !== '-' ? [`Requires: ${entry.flags}`] : [],
+  );
 }
 
 /**
@@ -478,33 +469,29 @@ export function renderCommand(entry: HelpEntry): string[] {
  * pointing at the `help <topic> <command>` drill-down.
  */
 export function renderCategory(category: string, entries: HelpEntry[], prefix: string): string[] {
-  const nameWidth = maxNameWidth(entries, prefix);
-  const label = sectionLabel(category);
-  const blurb = TOPIC_DESCRIPTIONS[category.toLowerCase()];
-  const lines: string[] = [blurb ? `${label} — ${blurb}` : label, ' '];
-  for (const entry of entries) {
-    lines.push(
-      ...alignedRow(stripCommandPrefix(entry.command, prefix), entry.description, nameWidth),
-    );
-  }
-  lines.push(' ');
-  lines.push(
-    ...wrapText(
+  return helpPage(
+    titleLine(category, TOPIC_DESCRIPTIONS[category.toLowerCase()]),
+    alignedRows(
+      entries.map((entry) => [stripCommandPrefix(entry.command, prefix), entry.description]),
+    ),
+    prose(
       `Type ${prefix}help ${category.toLowerCase()} <command> for more information on a particular command.`,
-      WRAP_WIDTH,
     ),
   );
-  return lines;
 }
 
 /**
- * Render the settings-scope view — `!help set chanmod` style. Two shapes:
+ * Render the settings-scope view — `!help set core` style. Two shapes:
  *
- *   - Folded (no `group`): keys grouped by dotted prefix (`logging.*`,
- *     `queue.*`) shown as a packed count grid, with any non-dotted keys
- *     listed directly. Tail points at expanding a group.
+ *   - Folded (no `group`): the base-index shape — one aligned row per
+ *     multi-member dotted prefix (uppercased topic label, member key
+ *     names as the description), with flat keys and single-member
+ *     prefixes folded under a synthetic OTHER topic. A scope with no
+ *     multi-member prefixes lists its keys directly instead of showing
+ *     an OTHER-only table.
  *   - Expanded (`group` set): the keys under `<group>.*` listed in full,
- *     aligned name + description. Tail points at per-key detail.
+ *     aligned name + description; `other` expands the OTHER bucket.
+ *     Tail points at per-key detail.
  */
 export function renderScope(
   scope: string,
@@ -514,77 +501,65 @@ export function renderScope(
   group?: string,
 ): string[] {
   const keys = entries.filter((e) => !isScopeHeaderEntry(e, scope));
+  const keyRows = (list: HelpEntry[]): Array<[string, string]> =>
+    list.map((e) => [extractKeyName(e.command, scope), e.description]);
+  const keyHint = `Type ${prefix}help set ${scope} <key> for more information on a particular key.`;
 
   if (group !== undefined) {
-    const groupKeys = keys.filter((e) => {
+    let groupKeys = keys.filter((e) => {
       const name = extractKeyName(e.command, scope);
       return name === group || name.startsWith(`${group}.`);
     });
-    const width = maxKeyWidth(groupKeys, scope);
-    const lines: string[] = [`${scope} / ${group} — ${countLabel(groupKeys.length)}`, ' '];
-    for (const e of groupKeys) {
-      lines.push(...alignedRow(extractKeyName(e.command, scope), e.description, width));
+    // Real `other.*` keys shadow the synthetic topic — the bucket only
+    // answers when the literal match came up empty.
+    if (groupKeys.length === 0 && group.toLowerCase() === OTHER_TOPIC) {
+      groupKeys = foldKeysByPrefix(keys, scope).other;
     }
-    if (groupKeys.length > 0) {
-      lines.push(`Type ${prefix}help set ${scope} <key> for one key's detail.`);
-    }
-    return lines;
-  }
-
-  const titleSuffix = header?.description ? ` — ${header.description}` : '';
-  const lines: string[] = [`${scope} settings — ${countLabel(keys.length)}${titleSuffix}`];
-
-  const { grouped, flat } = foldKeysByPrefix(keys, scope);
-  if (grouped.size > 0) {
-    lines.push(' ');
-    lines.push(...renderGroupGrid(grouped));
-  }
-  if (flat.length > 0) {
-    lines.push(' ');
-    const width = maxKeyWidth(flat, scope);
-    for (const e of flat) {
-      lines.push(...alignedRow(extractKeyName(e.command, scope), e.description, width));
-    }
-  }
-  if (keys.length > 0) {
-    lines.push(
-      grouped.size > 0
-        ? `Type ${prefix}help set ${scope} <group> to expand, or <key> for detail.`
-        : `Type ${prefix}help set ${scope} <key> for detail.`,
+    return helpPage(
+      titleLine(`${scope} settings / ${group}`, countLabel(groupKeys.length)),
+      alignedRows(keyRows(groupKeys)),
+      groupKeys.length > 0 ? prose(keyHint) : [],
     );
   }
-  return lines;
+
+  const blurb = header?.description
+    ? `${header.description} (${countLabel(keys.length)})`
+    : countLabel(keys.length);
+  const title = titleLine(`${scope} settings`, blurb);
+
+  const { grouped, other } = foldKeysByPrefix(keys, scope);
+  if (grouped.size === 0) {
+    // No multi-member prefixes — every key is a "single", so an
+    // OTHER-only table would just add a hop. List them directly.
+    return helpPage(title, alignedRows(keyRows(other)), other.length > 0 ? prose(keyHint) : []);
+  }
+
+  const topics: Array<[string, string]> = [...grouped.entries()].map(([g, ks]) => [
+    sectionLabel(g),
+    ks.map((e) => extractKeyName(e.command, scope).slice(g.length + 1)).join(', '),
+  ]);
+  if (other.length > 0) {
+    topics.push([
+      sectionLabel(OTHER_TOPIC),
+      other.map((e) => extractKeyName(e.command, scope)).join(', '),
+    ]);
+  }
+  return helpPage(
+    title,
+    alignedRows(topics),
+    prose(
+      `Type ${prefix}help set ${scope} <topic> for the keys in a topic, or ${prefix}help set ${scope} <key> for more information on a particular key.`,
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/** Uppercase a category label for the ChanServ-style section header. */
-function sectionLabel(category: string): string {
-  return category.toUpperCase();
-}
-
 /** `1 key` / `N keys` — singular-aware count label for scope titles. */
 function countLabel(count: number): string {
   return count === 1 ? '1 key' : `${count} keys`;
-}
-
-/**
- * One aligned table row: four-space indent, `name` padded to `width`, a
- * `COLUMN_GAP` gutter, then `description`. Descriptions that would push
- * the line past {@link ROW_WIDTH} wrap onto continuation lines indented
- * to the description column — the ChanServ ENTRYMSG shape. The help
- * output carries no IRC formatting; rows read as a plain scan list.
- */
-function alignedRow(name: string, description: string, width: number): string[] {
-  const pad = ' '.repeat(Math.max(1, width - name.length + COLUMN_GAP));
-  const descColumn = ROW_INDENT.length + width + COLUMN_GAP;
-  const wrapped = wrapText(description, Math.max(24, ROW_WIDTH - descColumn));
-  if (wrapped.length === 0) return [`${ROW_INDENT}${name}`];
-  const [first, ...rest] = wrapped;
-  const contIndent = ' '.repeat(descColumn);
-  return [`${ROW_INDENT}${name}${pad}${first}`, ...rest.map((line) => `${contIndent}${line}`)];
 }
 
 /**
@@ -599,75 +574,46 @@ function topicDescription(category: string, group: HelpEntry[], prefix: string):
   );
 }
 
-/** Widest prefix-stripped command name across `entries` (0 when empty). */
-function maxNameWidth(entries: HelpEntry[], prefix: string): number {
-  let max = 0;
-  for (const e of entries) {
-    const len = stripCommandPrefix(e.command, prefix).length;
-    if (len > max) max = len;
-  }
-  return max;
-}
-
-/** Widest extracted key name across scope `entries` (0 when empty). */
-function maxKeyWidth(entries: HelpEntry[], scope: string): number {
-  let max = 0;
-  for (const e of entries) {
-    const len = extractKeyName(e.command, scope).length;
-    if (len > max) max = len;
-  }
-  return max;
-}
-
 /**
- * Partition scope key entries into dotted-prefix groups and non-dotted
- * "flat" keys. `logging.level` / `logging.file` fold under `logging`;
- * `enabled` stays flat and is listed directly. Insertion order is
- * preserved so the grid and flat list follow registration order.
+ * Partition scope key entries into multi-member dotted-prefix topics and
+ * the `other` bucket. `logging.level` / `logging.file` fold under
+ * `logging`; non-dotted keys (`enabled`) and prefixes with a single
+ * member land in `other` — the folded view groups those under one OTHER
+ * row rather than spending a topic on a lone key. Two passes so both
+ * partitions preserve registration order.
  */
 function foldKeysByPrefix(
   keys: HelpEntry[],
   scope: string,
-): { grouped: Map<string, HelpEntry[]>; flat: HelpEntry[] } {
-  const grouped = new Map<string, HelpEntry[]>();
-  const flat: HelpEntry[] = [];
+): { grouped: Map<string, HelpEntry[]>; other: HelpEntry[] } {
+  const memberCounts = new Map<string, number>();
   for (const e of keys) {
-    const name = extractKeyName(e.command, scope);
-    const dot = name.indexOf('.');
-    // dot === 0 is a leading-dot / misfiled entry with no real prefix —
-    // keep it flat so its full name survives rather than folding under "".
-    if (dot <= 0) {
-      flat.push(e);
+    const p = dottedPrefix(extractKeyName(e.command, scope));
+    if (p !== null) memberCounts.set(p, (memberCounts.get(p) ?? 0) + 1);
+  }
+  const grouped = new Map<string, HelpEntry[]>();
+  const other: HelpEntry[] = [];
+  for (const e of keys) {
+    const p = dottedPrefix(extractKeyName(e.command, scope));
+    if (p === null || (memberCounts.get(p) ?? 0) < 2) {
+      other.push(e);
       continue;
     }
-    const p = name.slice(0, dot);
     const list = grouped.get(p) ?? [];
     list.push(e);
     grouped.set(p, list);
   }
-  return { grouped, flat };
+  return { grouped, other };
 }
 
 /**
- * Render the folded group grid — `<prefix>.* <count>` cells packed several
- * per line within {@link GRID_WIDTH}. Cells share a fixed width so counts
- * line up across rows.
+ * First dotted segment of a key name (`logging.level` → `logging`), or
+ * null when there is no real prefix — no dot, or a leading-dot misfiled
+ * entry whose full name should survive rather than folding under "".
  */
-function renderGroupGrid(grouped: Map<string, HelpEntry[]>): string[] {
-  const entries = [...grouped.entries()];
-  const labelWidth = Math.max(...entries.map(([g]) => `${g}.*`.length));
-  const countWidth = Math.max(...entries.map(([, ks]) => String(ks.length).length));
-  const cells = entries.map(
-    ([g, ks]) => `${`${g}.*`.padEnd(labelWidth)} ${String(ks.length).padStart(countWidth)}`,
-  );
-  const cellWidth = labelWidth + 1 + countWidth;
-  const gap = 4;
-  const cols = Math.max(1, Math.floor((GRID_WIDTH + gap) / (cellWidth + gap)));
-  const rows: string[] = [];
-  for (let i = 0; i < cells.length; i += cols) {
-    rows.push(`${ROW_INDENT}${cells.slice(i, i + cols).join(' '.repeat(gap))}`);
-  }
-  return rows;
+function dottedPrefix(name: string): string | null {
+  const dot = name.indexOf('.');
+  return dot <= 0 ? null : name.slice(0, dot);
 }
 
 /**

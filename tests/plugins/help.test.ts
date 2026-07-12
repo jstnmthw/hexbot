@@ -352,8 +352,8 @@ describe('help plugin', () => {
       expect(call[0]).toBe('user1');
     }
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    // Syntax line, blank, description, then a Requires line.
-    expect(messages).toEqual(['Syntax: !op [nick]', ' ', 'Op a nick', 'Requires: o']);
+    // Syntax line, blank, description, then a blank-separated Requires block.
+    expect(messages).toEqual(['Syntax: !op [nick]', ' ', 'Op a nick', ' ', 'Requires: o']);
   });
 
   it('!help <command> with flags:- omits the Requires line entirely', async () => {
@@ -391,9 +391,9 @@ describe('help plugin', () => {
     await dispatcher.dispatch('pub', ctx);
 
     const messages = mockNotice.mock.calls.map((c) => c[1]);
-    // Detail lines are indented to match the list view's two-space prefix.
-    expect(messages).toContain('  Extra info here');
-    expect(messages).toContain('  More info');
+    // Detail lines share the aligned-row indent from help-format.
+    expect(messages).toContain('    Extra info here');
+    expect(messages).toContain('    More info');
   });
 
   it('!help <command> hides privileged commands from unprivileged users', async () => {
@@ -404,7 +404,10 @@ describe('help plugin', () => {
     const ctx = makeCtx({ args: 'op', text: '!help op' });
     await dispatcher.dispatch('pub', ctx);
 
-    expect(mockNotice).toHaveBeenCalledWith('user1', 'No help for "op" — try !help for a list');
+    expect(mockNotice).toHaveBeenCalledWith(
+      'user1',
+      'No help for "op" — type !help for a list of commands',
+    );
   });
 
   it('!help <unknowncmd> returns explicit not-found reply', async () => {
@@ -415,7 +418,7 @@ describe('help plugin', () => {
 
     expect(mockNotice).toHaveBeenCalledWith(
       'user1',
-      'No help for "unknowncmd" — try !help for a list',
+      'No help for "unknowncmd" — type !help for a list of commands',
     );
   });
 
@@ -462,7 +465,7 @@ describe('help plugin', () => {
 
     expect(mockNotice).toHaveBeenCalledWith(
       'user1',
-      'No help for "moderation" — try !help for a list',
+      'No help for "moderation" — type !help for a list of commands',
     );
   });
 
@@ -522,7 +525,7 @@ describe('help plugin', () => {
 
     expect(mockNotice).toHaveBeenCalledWith(
       'user1',
-      'No help for "unknowncat" — try !help for a list',
+      'No help for "unknowncat" — type !help for a list of commands',
     );
   });
 
@@ -584,7 +587,7 @@ describe('help plugin', () => {
       expect(messages).not.toContain('*** End of Help ***');
     });
 
-    it('header defaults to "HexBot Commands" when config value is null', async () => {
+    it('header falls back to the standard intro when config value is null', async () => {
       await loadHelp({
         help: {
           enabled: true,
@@ -597,7 +600,7 @@ describe('help plugin', () => {
       await dispatcher.dispatch('pub', ctx);
 
       const messages = mockNotice.mock.calls.map((c) => c[1]);
-      expect(messages[0]).toBe('HexBot Commands');
+      expect(messages[0]).toContain('HexBot allows you to manage and control');
     });
 
     it('footer defaults to "*** End of Help ***" when config value is null', async () => {

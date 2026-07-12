@@ -7,6 +7,7 @@ import {
   renderCategory,
   renderCommand,
   renderIndex,
+  renderNotFound,
   renderScope,
 } from '../../src/core/help-render';
 import type { HandlerContext, PluginAPI } from '../../src/types';
@@ -62,8 +63,8 @@ export function init(api: PluginAPI): void {
     {
       key: 'header',
       type: 'string',
-      default: 'HexBot Commands',
-      description: 'Header line for the help index',
+      default: '',
+      description: 'Custom header for the help index (empty = standard intro)',
     },
     {
       key: 'footer',
@@ -133,7 +134,7 @@ export function init(api: PluginAPI): void {
           return;
         case 'denied':
         case 'none':
-          api.notice(ctx.nick, `No help for "${arg}" — try !help for a list`);
+          api.notice(ctx.nick, renderNotFound(arg, '!'));
           return;
       }
     }
@@ -170,10 +171,13 @@ export function init(api: PluginAPI): void {
       .getAll()
       .filter((e) => e.command.startsWith('!'))
       .filter((e) => e.flags === '-' || api.permissions.checkFlags(e.flags, ctx));
+    // Empty header/footer values pass through — renderIndex supplies the
+    // standard intro (verbose) or product banner (compact) for an empty
+    // header, and an operator-cleared footer means "no footer".
     const lines = renderIndex(visible, {
       compact: api.settings.getFlag('compact_index'),
-      header: api.settings.getString('header') || 'HexBot Commands',
-      footer: api.settings.getString('footer') || '*** End of Help ***',
+      header: api.settings.getString('header'),
+      footer: api.settings.getString('footer'),
       prefix: '!',
     });
     for (const line of lines) {

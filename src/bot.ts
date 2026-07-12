@@ -304,7 +304,7 @@ export class Bot {
       auditActions: { set: 'coreset-set', unset: 'coreset-unset' },
       helpRegistry: this.helpRegistry,
       scopeLabel: 'core',
-      scopeSummary: 'Bot-wide singletons (logging, queue, flood, services, dcc, ...)',
+      scopeSummary: 'Bot-wide singletons',
       commandPrefix: this.config.command_prefix ?? '.',
     });
 

@@ -9,6 +9,7 @@ import {
   renderCategory,
   renderCommand,
   renderIndex,
+  renderNotFound,
   renderScope,
 } from './core/help-render';
 import type { HandlerContext, HelpEntry } from './types';
@@ -361,7 +362,7 @@ export class CommandHandler {
           return;
         case 'denied':
         case 'none':
-          ctx.reply(`No help for "${arg}" — type ${this.prefix}help for a list of commands`);
+          ctx.reply(renderNotFound(arg, this.prefix));
           return;
       }
       return;
@@ -379,17 +380,12 @@ export class CommandHandler {
       renderPerms === null
         ? prefixed
         : prefixed.filter((e) => e.flags === '-' || renderPerms.checkFlags(e.flags, handlerCtx));
-    const p = this.prefix;
+    // Empty header — renderIndex fills in the shared standard intro.
     const lines = renderIndex(visibleEntries, {
       compact: false,
-      header:
-        'HexBot allows you to manage and control various aspects of ' +
-        'the bot and its channels. Available command topics are ' +
-        `listed below; to use a command, type ${p}command. For more ` +
-        `information on a specific topic, type ${p}help topic; for a ` +
-        `specific command, type ${p}help topic command.`,
+      header: '',
       footer: '',
-      prefix: p,
+      prefix: this.prefix,
     });
     ctx.reply(lines.join('\n'));
   }

@@ -621,6 +621,13 @@ describe('CommandHandler', () => {
           description: 'Minimum log level',
           category: 'set:core',
         },
+        {
+          command: '.set core logging.file',
+          flags: 'n',
+          usage: '.set core logging.file <string>',
+          description: 'Log file path',
+          category: 'set:core',
+        },
       ]);
 
       const ctx = makeCtx();
@@ -628,10 +635,11 @@ describe('CommandHandler', () => {
 
       const out = ctx.reply.mock.calls[0][0];
       expect(out).toContain('core');
-      // Dotted keys fold into a `<prefix>.* <count>` grid, not a flat list.
-      expect(out).toContain('logging.* 1');
-      expect(out).not.toContain('logging.level');
-      expect(out).toContain('Type .help set core <group> to expand, or <key> for detail.');
+      // Dotted keys fold into an uppercased topic row listing member
+      // names — per-key descriptions stay out of the folded view.
+      expect(out).toContain('LOGGING  level, file');
+      expect(out).not.toContain('Minimum log level');
+      expect(out).toContain('Type .help set core <topic>');
     });
 
     it('routes .help set <scope> <key> through the per-entry detail render', async () => {
