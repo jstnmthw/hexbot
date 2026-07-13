@@ -218,12 +218,15 @@ export class BotLinkProtocol {
   private logger: LoggerLike | null;
   private closed = false;
   /**
-   * When true, inbound frames larger than {@link MAX_PRE_HANDSHAKE_FRAME_SIZE}
-   * are dropped without parsing and {@link onPreHandshakeOversize} fires.
-   * Switched off via {@link clearPreHandshake} once the handshake has
-   * accepted, after which the standard 64 KB cap takes over.
+   * True from construction until the handshake accepts. While set, an
+   * inbound line — or a newline-free stream (see {@link attachFrameLengthGuard})
+   * — larger than {@link MAX_PRE_HANDSHAKE_FRAME_SIZE} destroys the socket
+   * and fires {@link onPreHandshakeOversize}, holding an unauthenticated
+   * peer to the tight 4 KB budget a legitimate HELLO never exceeds. Lifted
+   * via {@link clearPreHandshake} once the peer authenticates, after which
+   * the standard 64 KB {@link MAX_FRAME_SIZE} cap takes over.
    */
-  private preHandshake = false;
+  private preHandshake = true;
   /**
    * In-flight inbound frames — incremented on enqueue (before onFrame
    * runs), decremented on dispatch completion. Goes to zero between
@@ -239,6 +242,22 @@ export class BotLinkProtocol {
    * the in-flight count drains back below the cap.
    */
   private overflowLogged = false;
+  /**
+   * Running byte count of the current inbound line — bytes seen on the
+   * socket since the last LF. Tracked by {@link attachFrameLengthGuard} so
+   * the "never send a newline" flood is caught before node:readline buffers
+   * it without bound. Reset to the trailing partial-line length on every
+   * chunk that carries a newline.
+   */
+  private pendingLineBytes = 0;
+  /**
+   * Named reference to the 'data' listener installed by
+   * {@link attachFrameLengthGuard}. Stored so the teardown paths can
+   * `socket.off()` it — without this the closure (which captures `this`)
+   * lives until the socket itself is destroyed and GC'd. Mirrors the DCC
+   * session's line-length guard hygiene.
+   */
+  private dataGuard: ((chunk: Buffer) => void) | null = null;
 
   /** Fired when a valid frame is received. */
   // Return type is `unknown` so synchronous handlers that incidentally
@@ -251,9 +270,13 @@ export class BotLinkProtocol {
   /** Fired on socket error. */
   onError: ((err: Error) => void) | null = null;
   /**
-   * Fired when an inbound frame exceeds the pre-handshake cap. The hub
-   * uses this hook to record an `auth-fail` audit row before the socket
-   * is destroyed, since the connection has not yet identified a botname.
+   * Fired once, just before the socket is destroyed, when an inbound frame
+   * — or a newline-free stream (see {@link attachFrameLengthGuard}) —
+   * exceeds the pre-handshake cap. The hub feeds this into its per-IP
+   * auth-failure tracker so a peer that floods the unauthenticated window
+   * escalates toward an auto-ban like any other brute-force source; the
+   * connection has no botname yet, so escalation keys on the IP. `bytes`
+   * is the offending line/stream length.
    */
   onPreHandshakeOversize: ((bytes: number) => void) | null = null;
 
@@ -360,8 +383,18 @@ export class BotLinkProtocol {
       }
     });
 
+    // Byte-count guard for the newline-withholding OOM: the size caps in
+    // the 'line' handler above only fire once readline sees an LF, so a
+    // peer that streams bytes and never sends one grows readline's internal
+    // buffer without bound. This catches it at the socket level.
+    this.attachFrameLengthGuard();
+
     socket.on('close', () => {
       this.closed = true;
+      if (this.dataGuard !== null) {
+        this.socket.off('data', this.dataGuard);
+        this.dataGuard = null;
+      }
       this.onClose?.();
       // Drop callback refs now that the final close notification has
       // fired — see comment in close(). Nulling here (rather than in
@@ -376,6 +409,62 @@ export class BotLinkProtocol {
     socket.on('error', (err) => {
       this.onError?.(err);
     });
+  }
+
+  /**
+   * Install the inbound byte-count guard. node:readline (created in the
+   * constructor with `crlfDelay: Infinity`) accumulates an incomplete line
+   * in its internal buffer with no limit, so {@link MAX_PRE_HANDSHAKE_FRAME_SIZE}
+   * and {@link MAX_FRAME_SIZE} — both enforced only inside the 'line'
+   * handler, which fires only after a newline — never see a peer that
+   * streams bytes while withholding the LF. This 'data' listener counts
+   * bytes since the last newline and destroys the socket the instant a
+   * single un-terminated line crosses the active cap (the 4 KB
+   * pre-handshake cap while {@link preHandshake}, else the 64 KB steady
+   * cap). Mirrors the DCC session's line-length guard.
+   */
+  private attachFrameLengthGuard(): void {
+    this.dataGuard = (chunk: Buffer) => {
+      /* v8 ignore next -- race guard: buffered chunks can arrive after close */
+      if (this.closed) return;
+
+      // 0x0a = LF. Extend the running count on a newline-free chunk; on a
+      // chunk that contains one, reset to the bytes after the LAST LF —
+      // the partial trailing line readline will keep buffering.
+      const newlineIdx = chunk.lastIndexOf(0x0a);
+      if (newlineIdx === -1) {
+        this.pendingLineBytes += chunk.length;
+      } else {
+        this.pendingLineBytes = chunk.length - newlineIdx - 1;
+      }
+
+      const cap = this.preHandshake ? MAX_PRE_HANDSHAKE_FRAME_SIZE : MAX_FRAME_SIZE;
+      if (this.pendingLineBytes <= cap) return;
+
+      if (this.preHandshake) {
+        this.logger?.warn(
+          `Pre-handshake stream exceeded ${cap}B without a newline — destroying socket`,
+        );
+        this.onPreHandshakeOversize?.(this.pendingLineBytes);
+      } else {
+        this.logger?.error(
+          `Inbound stream exceeded ${cap}B without a newline — dropping connection`,
+        );
+      }
+      this.close();
+    };
+    this.socket.on('data', this.dataGuard);
+  }
+
+  /**
+   * Lift the pre-handshake frame cap once the peer has authenticated, so
+   * steady-state frames (channel-state syncs run up to the full
+   * {@link MAX_FRAME_SIZE}) are no longer held to the tight 4 KB
+   * unauthenticated budget. Idempotent. The hub calls this when it admits a
+   * leaf; the leaf calls it when it receives WELCOME.
+   */
+  clearPreHandshake(): void {
+    this.preHandshake = false;
   }
 
   /** Send a frame. Returns false if the connection is closed or the frame is too large. */
@@ -405,6 +494,12 @@ export class BotLinkProtocol {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    // Release the 'data' guard closure now so it's GC-eligible on close
+    // rather than waiting for socket destruction — mirrors DCC hygiene.
+    if (this.dataGuard !== null) {
+      this.socket.off('data', this.dataGuard);
+      this.dataGuard = null;
+    }
     this.rl?.close();
     this.socket.destroy(); // destroy() is idempotent
     // Callback refs are released by the socket 'close' listener, not

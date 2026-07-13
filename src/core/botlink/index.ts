@@ -13,6 +13,7 @@ export {
   BotLinkProtocol,
   HUB_ONLY_FRAMES,
   MAX_FRAME_SIZE,
+  MAX_PRE_HANDSHAKE_FRAME_SIZE,
   computeHelloHmac,
   deriveLinkKey,
   sanitizeFrame,

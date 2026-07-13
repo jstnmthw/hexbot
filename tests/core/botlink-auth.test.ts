@@ -2,7 +2,7 @@
 // Separate file to avoid test contamination from botlink.test.ts timer interactions.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { BotLinkHub, isWhitelisted } from '../../src/core/botlink';
+import { BotLinkHub, MAX_PRE_HANDSHAKE_FRAME_SIZE, isWhitelisted } from '../../src/core/botlink';
 import { BotEventBus } from '../../src/event-bus';
 import type { BotlinkConfig } from '../../src/types';
 import {
@@ -102,6 +102,16 @@ async function sendGoodAuth(hub: BotLinkHub, ip: string, botname: string, tick =
   const { socket, written, duplex } = createMockSocketWithIP(ip);
   hub.addConnection(socket);
   answerHelloChallenge(written, duplex, TEST_LINK_KEY, botname);
+  await tick();
+  return { socket, written, duplex };
+}
+
+/** Flood a fresh connection past the 4 KB pre-handshake cap before authenticating. */
+async function sendPreHandshakeOversize(hub: BotLinkHub, ip: string, tick = realTick) {
+  const { socket, written, duplex } = createMockSocketWithIP(ip);
+  hub.addConnection(socket);
+  // 8 KB line: over the 4 KB pre-auth cap, under the 64 KB steady cap.
+  duplex.push('x'.repeat(MAX_PRE_HANDSHAKE_FRAME_SIZE * 2) + '\r\n');
   await tick();
   return { socket, written, duplex };
 }
@@ -280,6 +290,35 @@ describe('auth brute-force protection', () => {
 
     expect(events).toHaveLength(1);
     expect(events[0]).toEqual({ ip, failures: 2, duration: 60_000 });
+  });
+
+  it('counts a pre-handshake oversize flood as an auth failure and escalates to a ban', async () => {
+    const eventBus = new BotEventBus();
+    const events: Array<{ ip: string; failures: number; duration: number }> = [];
+    eventBus.on('auth:ban', (ip, failures, duration) => events.push({ ip, failures, duration }));
+
+    const hub = makeHub(
+      hubConfig({ max_auth_failures: 2, auth_ban_duration_ms: 60_000 }),
+      '1.0.0',
+      null,
+      eventBus,
+    );
+    const ip = '10.99.0.99';
+
+    // Two oversize floods from the same IP, each on its own connection —
+    // the pre-handshake guard destroys the socket, freeing the pending
+    // slot, so the second attempt is admitted and tips the IP over.
+    await sendPreHandshakeOversize(hub, ip);
+    await sendPreHandshakeOversize(hub, ip);
+
+    expect(events).toEqual([{ ip, failures: 2, duration: 60_000 }]);
+
+    // Once banned, a subsequent connection is dropped before it can speak.
+    const { socket, written } = createMockSocketWithIP(ip);
+    hub.addConnection(socket);
+    await realTick();
+    expect(written).toHaveLength(0);
+    expect(socket.destroyed).toBe(true);
   });
 
   it('respects custom max_auth_failures config', async () => {

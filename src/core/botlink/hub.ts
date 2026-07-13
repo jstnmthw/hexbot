@@ -559,6 +559,15 @@ export class BotLinkHub {
       finish('timeout');
     }, timeoutMs);
 
+    // A peer that blows past the 4 KB pre-handshake budget before it has
+    // authenticated is treated as an auth failure: it feeds the same per-IP
+    // escalation as a bad HMAC, so a pre-auth flooder climbs to an auto-ban
+    // instead of reopening sockets indefinitely. The connection has no
+    // botname yet, so escalation keys on the IP. noteFailure already writes
+    // the botlink-autoban audit row on escalation, so we deliberately do
+    // not log a per-event row (that would be a DB-write amplifier).
+    protocol.onPreHandshakeOversize = () => this.auth.noteFailure(ip, whitelisted);
+
     // Emit the challenge BEFORE wiring onFrame so a malicious leaf can't
     // ship a pre-emptive HELLO before we've decided on a nonce.
     protocol.send({
@@ -722,6 +731,11 @@ export class BotLinkHub {
       });
     }
     protocol.send({ type: 'SYNC_END' });
+
+    // Handshake accepted — lift the 4 KB pre-handshake cap so this leaf's
+    // steady-state frames (channel-state syncs run up to the full 64 KB)
+    // are no longer bounded by the unauthenticated budget.
+    protocol.clearPreHandshake();
 
     // Switch to steady-state frame handling
     protocol.onFrame = (f) => this.onSteadyState(botname, f);

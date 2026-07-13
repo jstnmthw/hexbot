@@ -8,6 +8,7 @@ import {
   BotLinkProtocol,
   type LinkFrame,
   MAX_FRAME_SIZE,
+  MAX_PRE_HANDSHAKE_FRAME_SIZE,
   RateCounter,
   type SocketFactory,
   computeHelloHmac,
@@ -295,6 +296,7 @@ describe('BotLinkProtocol', () => {
   it('rejects frames exceeding 64KB', async () => {
     const { socket, written, duplex } = createMockSocket();
     const protocol = new BotLinkProtocol(socket, null);
+    protocol.clearPreHandshake(); // exercise the post-handshake 64KB cap
     const received: LinkFrame[] = [];
     protocol.onFrame = (frame) => received.push(frame);
 
@@ -309,6 +311,52 @@ describe('BotLinkProtocol', () => {
     expect(sent.some((f) => f.type === 'ERROR' && f.code === 'FRAME_TOO_LARGE')).toBe(true);
   });
 
+  it('destroys the socket when a peer streams past 64KB without a newline', async () => {
+    // The "line" size caps only fire once readline sees an LF. A peer that
+    // streams bytes and never sends one must be caught by the byte-count
+    // 'data' guard, or readline buffers it unbounded (the M-01 OOM).
+    const { socket, duplex } = createMockSocket();
+    const protocol = new BotLinkProtocol(socket, null);
+    protocol.clearPreHandshake(); // steady-state 64KB cap, not the 4KB pre-auth one
+    const received: LinkFrame[] = [];
+    protocol.onFrame = (frame) => received.push(frame);
+
+    // Two newline-free chunks that individually sit under the cap but
+    // accumulate past it — exercises the cross-chunk running count.
+    duplex.push('x'.repeat(40 * 1024));
+    await tick();
+    expect(protocol.isClosed).toBe(false); // still under 64KB
+
+    duplex.push('x'.repeat(40 * 1024));
+    await tick();
+
+    expect(protocol.isClosed).toBe(true);
+    expect(duplex.destroyed).toBe(true);
+    expect(received).toEqual([]); // no frame ever completed
+  });
+
+  it('resets the running byte count after each newline', async () => {
+    // A long-lived connection that sends many sub-cap frames back to back
+    // (more than 64KB in aggregate, but each terminated) must never trip
+    // the guard — the count resets at every LF.
+    const { socket, duplex } = createMockSocket();
+    const protocol = new BotLinkProtocol(socket, null);
+    protocol.clearPreHandshake(); // steady-state 64KB cap, not the 4KB pre-auth one
+    const received: LinkFrame[] = [];
+    protocol.onFrame = (frame) => received.push(frame);
+
+    for (let i = 0; i < 5; i++) {
+      duplex.push(`{"type":"PING","seq":${i}}\r\n`);
+      // A 40KB newline-free tail after the framed line: resets to this
+      // partial length, well under the cap, so no destroy.
+      duplex.push('x'.repeat(40 * 1024) + '\r\n');
+      await tick();
+    }
+
+    expect(protocol.isClosed).toBe(false);
+    expect(received).toHaveLength(5);
+  });
+
   it('rejects outbound frames exceeding 64KB', () => {
     const { socket } = createMockSocket();
     const protocol = new BotLinkProtocol(socket, null);
@@ -316,6 +364,60 @@ describe('BotLinkProtocol', () => {
     const bigData = 'x'.repeat(MAX_FRAME_SIZE);
     const result = protocol.send({ type: 'TEST', data: bigData });
     expect(result).toBe(false);
+  });
+
+  it('holds an unauthenticated peer to the 4KB pre-handshake cap (completed line)', async () => {
+    // A fresh protocol starts in pre-handshake: a single line between the
+    // 4KB pre-auth cap and the 64KB steady cap must be rejected, and via
+    // the audit hook (not the ERROR frame the steady path sends).
+    const { socket, written, duplex } = createMockSocket();
+    const protocol = new BotLinkProtocol(socket, null);
+    const oversize = vi.fn();
+    protocol.onPreHandshakeOversize = oversize;
+    const received: LinkFrame[] = [];
+    protocol.onFrame = (frame) => received.push(frame);
+
+    // 8KB line: over the 4KB pre-auth cap, under the 64KB steady cap.
+    duplex.push('x'.repeat(MAX_PRE_HANDSHAKE_FRAME_SIZE * 2) + '\r\n');
+    await tick();
+
+    expect(oversize).toHaveBeenCalledTimes(1);
+    expect(protocol.isClosed).toBe(true);
+    expect(received).toEqual([]);
+    // Pre-handshake rejection destroys silently — no ERROR frame is written.
+    expect(parseWritten(written).some((f) => f.type === 'ERROR')).toBe(false);
+  });
+
+  it('holds an unauthenticated peer to the 4KB pre-handshake cap (newline-free stream)', async () => {
+    // Same cap, enforced by the byte-count guard: a peer that streams past
+    // 4KB without a newline is cut off before it can reach the 64KB steady
+    // budget it has not authenticated for.
+    const { socket, duplex } = createMockSocket();
+    const protocol = new BotLinkProtocol(socket, null);
+    const oversize = vi.fn();
+    protocol.onPreHandshakeOversize = oversize;
+
+    duplex.push('x'.repeat(MAX_PRE_HANDSHAKE_FRAME_SIZE + 1)); // no newline
+    await tick();
+
+    expect(oversize).toHaveBeenCalledTimes(1);
+    expect(protocol.isClosed).toBe(true);
+  });
+
+  it('clearPreHandshake lifts the cap from 4KB to 64KB', async () => {
+    // After the handshake accepts, an 8KB newline-free stream that would
+    // have tripped the pre-auth cap is now well within the steady budget.
+    const { socket, duplex } = createMockSocket();
+    const protocol = new BotLinkProtocol(socket, null);
+    const oversize = vi.fn();
+    protocol.onPreHandshakeOversize = oversize;
+
+    protocol.clearPreHandshake();
+    duplex.push('x'.repeat(MAX_PRE_HANDSHAKE_FRAME_SIZE * 2)); // no newline, 8KB
+    await tick();
+
+    expect(oversize).not.toHaveBeenCalled();
+    expect(protocol.isClosed).toBe(false);
   });
 
   it('ignores frames with no type field', async () => {

@@ -438,8 +438,13 @@ export class BotLinkLeaf {
         this.reconnectDelay = this.reconnectDelayMs;
         this.lastHeartbeatAt = Date.now();
 
-        // Switch to steady state
-        if (this.protocol) this.protocol.onFrame = (f) => this.onSteadyState(f);
+        // Switch to steady state — lift the 4 KB pre-handshake cap now that
+        // the hub has authenticated, so inbound sync frames (channel state
+        // runs up to the full 64 KB) are no longer bounded by it.
+        if (this.protocol) {
+          this.protocol.clearPreHandshake();
+          this.protocol.onFrame = (f) => this.onSteadyState(f);
+        }
         this.startHeartbeat();
 
         this.logger?.info(`Connected to hub "${this.hubBotname}"`);
