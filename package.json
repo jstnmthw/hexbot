@@ -41,7 +41,7 @@
     "better-sqlite3": "^12.11.1",
     "chalk": "^5.6.2",
     "irc-framework": "^4.14.0",
-    "tsx": "^4.23.0",
+    "tsx": "^4.23.12",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -49,17 +49,17 @@
     "@trivago/prettier-plugin-sort-imports": "^6.0.2",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.9.5",
-    "@vitest/coverage-v8": "^4.1.10",
-    "eslint": "^10.7.0",
+    "@vitest/coverage-v8": "^4.1.11",
+    "eslint": "^10.9.0",
     "husky": "^9.1.7",
-    "ipaddr.js": "^2.4.0",
+    "ipaddr.js": "^2.5.0",
     "lint-staged": "^16.4.0",
-    "prettier": "^3.9.5",
+    "prettier": "^3.9.6",
     "rss-parser": "^3.13.0",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.63.0",
-    "vite": "^8.1.4",
-    "vitest": "^4.1.10"
+    "typescript-eslint": "^8.67.0",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
   }
 }
