@@ -4,6 +4,39 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.0] - 2026-08-22 — Services-style help, delta flags, and the July leak sweep
+
+### Breaking
+
+- **`.flags` specs are now eggdrop-style deltas** via a pure `applyFlagSpec()`: `+` adds, `-` removes, sections apply left to right, unnamed flags are preserved, and unknown letters are rejected with an error. Previously the spec replaced the whole flag string — `.flags self +d` wiped the caller's `+n` — and `normalizeFlags` silently stripped `-`, so a revoke like `-v` actually _granted_ `v`. The owner-escalation guard now compares current-vs-resulting `n`/`m` membership (closing the `-v+m` bypass and the ungated-revoke demotion hole), and a last-owner guard refuses removing `+n` from the only owner. Replies echo the resulting canonical flag set.
+- **`docker-compose.yml` renamed to `docker-compose.example.yml`.** Copy it to `docker-compose.yml` and edit locally; all `docker-compose.*.yml` variants except the example are now git-ignored, so personal overrides stay untracked.
+- **ai-chat: dead ambient config knobs `min_users` and `interests` removed.** Both were parsed and typed but never read by the AmbientEngine. Delete them from your ai-chat plugin config if present.
+
+### Changed
+
+- **Help output redesigned in ChanServ services style** across `.help` and `!help`: the index lists uppercased topics with aligned blurbs, commands live one level down in the topic view, and per-command detail uses the `Syntax:` / description / `Requires:` shape. New drill-downs: `.help <topic> <command>` and `.help set <scope> <group>`. All IRC bold stripped — uppercased section headers are the sole grouping cue. A shared formatting service (`src/core/help-format.ts`) holds the layout conventions so both transports emit identical intro, not-found, and index wording.
+- **Docker healthcheck simplified to a presence check.** The `-connected` marker is touched once on connect, so the old 120s mtime-freshness window falsely reported a stably-connected container unhealthy.
+- **Ollama fetch-failure errors name the target URL** instead of Node's bare `fetch failed`, preserving name/cause so error triage still classifies them as retryable network errors.
+- **Dependencies bumped to latest patch/minor versions.**
+
+### Fixed
+
+#### Memleak audit 2026-07-12 — all findings closed
+
+- **Botlink outbound flow control**: peers whose socket write buffer exceeds a 4 MB ceiling are disconnected (no frame shedding — they resync via the reconnect bootstrap), and the heartbeat probes outbound `writableLength` so stuck writers are evicted on the same cadence as inbound silence.
+- **Botlink pre-handshake OOM (remotely triggerable, pre-auth)**: a socket-level byte-count guard destroys connections the instant an un-terminated line crosses the active cap — readline's caps only fired once a newline arrived, so a peer streaming bytes without LF grew the buffer without bound. The 4 KB pre-handshake cap, previously dead code, now defaults on and lifts at the steady-state transition; pre-auth oversize feeds the per-IP auth-failure tracker so flooders escalate to an auto-ban.
+- **Botlink**: leaf wipes all virtual sessions on hub-link drop; CIDR-ban cap enforced at persist and load with expired-row sweep at startup; executor-side 10s deadline on `CMD_RESULT` delivery.
+- **Core**: `networkAccounts` bounded at 2048 with presence-based sweeps and pruned on kick/self-departure; DCC sessions keyed by insert-time stamp so a CASEMAPPING change can't orphan entries, with a 1 MB outbound buffer cap per client; dispatcher `bind()` reports acceptance so only live binds are tracked and non-stackable re-binds replace their stale entry; plugin `on*`/`onChange` subscriptions get warn/hard-cap containment mirroring the bind caps; REPL removes its process-level listeners in `stop()`; `unregisterCommand` deletes by folded name and drops the mirrored help entry.
+- **Plugins**: ai-chat user-bucket eviction is reachable and nick changes migrate buckets; `AmbientEngine.trackedChannels` capped and pruned; abort-epoch check stops post-teardown retries; chanmod gains self-removing cancelable timers, per-entry teardown try/catch, and unbinds its ChanServ notice handler; flood deletes stored permanent-ban rows on observed `-b` and caps `recentTerminal`; rss clears poll state on feed removal.
+
+#### Production fixes
+
+- **Reconnect channel-tracking deadlock**: the `disconnecting` window opened by `clearAllChannels()` could never close after a reconnect — every new-session JOIN/NAMES was dropped forever and channel tracking stayed dead until restart. The flag now resets on the client's `registered` event.
+- **Botlink hub sync wiped leaf password hashes**: `syncUser()` replaced records wholesale while sync frames deliberately never carry hashes, so every sync erased the leaf's local hash and DCC logins were rejected between syncs. The existing hash now carries across the replacement; hashes still never travel over the wire.
+- **Auto-op double-grant race**: services emits `user:identified` before `verifyUser()`'s promise resolves, so the identify reconciler started a second grant while the first was suspended — every NickServ-verified auto-op landed twice. `grantMode()` now takes a per-`channel|nick` in-flight guard. Wrong-sender services notices that parse like an ACC/STATUS reply are promoted to a `[security]` warning; the rest drop to debug.
+- **Stale pending DCC offers are replaced on retry** instead of denied — the old offer's token could no longer complete anyway. Offer logs now include the advertised address, and `attach()` warns when `dcc.ip` isn't a valid IPv4 address.
+- **`plugins.json` overrides preserved when re-enabling a plugin**: `.set core plugins.<id>.enabled true` reloaded with no config, silently falling back to on-disk `config.json` defaults (wrong provider/model/channels). New `PluginLoader.loadById` re-reads the captured `plugins.json` path and passes the merged config.
+
 ## [0.6.0] - 2026-05-11 — Live config, audit closures, and clean-cut plugin API
 
 ### Breaking
