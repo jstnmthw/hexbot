@@ -147,9 +147,11 @@ const PERMISSIONS_CHANGE_EVENTS = [
  * - Direct EventEmitter listeners attached without `api.eventBus.on(...)`.
  *   The plugin owns those and must remove them in `teardown()`.
  * - Module-level state captured before `init()` returned (top-level
- *   `let`s, imported singletons). Hot-reload re-imports the module so
- *   this state resets, but the running closure of a stale interval is
- *   not affected.
+ *   `let`s, imported singletons). The loader deliberately reuses the
+ *   cached module instance on unload/re-enable (no cache-busting — see
+ *   the plain-import rationale in plugin-loader's `load()`), so this
+ *   state is NOT reset by a disable→enable cycle. Plugins must reset
+ *   module-level mutable state in `teardown()` (or lazily in `init()`).
  */
 export interface PluginApiHandle {
   readonly api: PluginAPI;

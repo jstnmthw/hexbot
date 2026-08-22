@@ -34,6 +34,16 @@ describe('ChannelState', () => {
     state.detach();
   });
 
+  /**
+   * Seed a tracked channel via the bot's own JOIN — the only sanctioned
+   * allocation site. NAMES bursts and third-party JOINs are ignored for
+   * channels the bot has not joined, so tests exercising those paths must
+   * establish the channel first.
+   */
+  function trackChannel(channel: string, nick = 'HexBot'): void {
+    client.simulateEvent('join', { nick, ident: 'bot', hostname: 'bot.host', channel });
+  }
+
   describe('join', () => {
     it('should add a user to channel state on join', () => {
       client.simulateEvent('join', {
@@ -275,6 +285,7 @@ describe('ChannelState', () => {
 
   describe('userlist', () => {
     it('should bulk populate users from userlist event', () => {
+      trackChannel('#test');
       client.simulateEvent('userlist', {
         channel: '#test',
         users: [
@@ -374,8 +385,9 @@ describe('ChannelState', () => {
       client.simulateEvent('userlist', {
         users: [{ nick: 'Ghost', ident: 'g', hostname: 'h', modes: '' }],
       });
-      // Creates channel '' which is harmless; key assertion is no crash
-      expect(state.isUserInChannel('', 'Ghost')).toBe(true);
+      // The '' channel is untracked, so nothing is allocated for it
+      expect(state.getChannel('')).toBeUndefined();
+      expect(state.isUserInChannel('', 'Ghost')).toBe(false);
     });
 
     it('skips hostmask update when both ident and hostname are empty in userlist update', () => {
@@ -595,6 +607,7 @@ describe('ChannelState', () => {
 
   describe('parseUserlistModes', () => {
     it('should parse @ symbol as op mode', () => {
+      trackChannel('#test');
       client.simulateEvent('userlist', {
         channel: '#test',
         users: [{ nick: 'Op', ident: 'op', hostname: 'host', modes: '@' }],
@@ -603,6 +616,7 @@ describe('ChannelState', () => {
     });
 
     it('should parse + symbol as voice mode', () => {
+      trackChannel('#test');
       client.simulateEvent('userlist', {
         channel: '#test',
         users: [{ nick: 'Voice', ident: 'voice', hostname: 'host', modes: '+' }],
@@ -611,6 +625,7 @@ describe('ChannelState', () => {
     });
 
     it('should parse % symbol as halfop mode', () => {
+      trackChannel('#test');
       client.simulateEvent('userlist', {
         channel: '#test',
         users: [{ nick: 'Half', ident: 'half', hostname: 'host', modes: '%' }],
@@ -619,6 +634,7 @@ describe('ChannelState', () => {
     });
 
     it('should parse letter modes (o, v, h)', () => {
+      trackChannel('#test');
       client.simulateEvent('userlist', {
         channel: '#test',
         users: [
@@ -634,6 +650,7 @@ describe('ChannelState', () => {
     });
 
     it('should parse combined mode symbols (@+)', () => {
+      trackChannel('#test');
       client.simulateEvent('userlist', {
         channel: '#test',
         users: [{ nick: 'Both', ident: 'b', hostname: 'h', modes: '@+' }],
@@ -646,6 +663,7 @@ describe('ChannelState', () => {
     });
 
     it('should parse all three symbols together (@%+)', () => {
+      trackChannel('#test');
       client.simulateEvent('userlist', {
         channel: '#test',
         users: [{ nick: 'All', ident: 'a', hostname: 'h', modes: '@%+' }],
@@ -659,6 +677,7 @@ describe('ChannelState', () => {
     });
 
     it('should return empty modes for undefined modes string', () => {
+      trackChannel('#test');
       client.simulateEvent('userlist', {
         channel: '#test',
         users: [{ nick: 'NoMode', ident: 'n', hostname: 'h' }],
@@ -668,6 +687,7 @@ describe('ChannelState', () => {
     });
 
     it('should return empty modes for empty string', () => {
+      trackChannel('#test');
       client.simulateEvent('userlist', {
         channel: '#test',
         users: [{ nick: 'Empty', ident: 'e', hostname: 'h', modes: '' }],
@@ -1493,6 +1513,7 @@ describe('ChannelState', () => {
 
   describe('NAMES prefix-mode tracking', () => {
     it('tracks every prefix from a multi-prefix NAMES array', () => {
+      trackChannel('#test');
       // irc-framework parses `~&@%+nick` into modes = ['q','a','o','h','v'].
       // The old code silently ignored this array and stored [] for every
       // user, breaking every op-check in every plugin.
@@ -1533,6 +1554,7 @@ describe('ChannelState', () => {
     });
 
     it('maps status symbols to modes when NAMES ships symbol strings', () => {
+      trackChannel('#test');
       // Bot-link CHAN sync frames historically used a concatenated string
       // of status symbols — the fallback path should still work.
       client.simulateEvent('userlist', {
@@ -1547,6 +1569,7 @@ describe('ChannelState', () => {
     });
 
     it('dedupes a mode that arrives twice (symbol + mode char)', () => {
+      trackChannel('#test');
       client.simulateEvent('userlist', {
         channel: '#test',
         users: [{ nick: 'Dave', ident: 'd', hostname: 'h', modes: ['@', 'o', '+', 'v'] }],
@@ -1561,6 +1584,7 @@ describe('ChannelState', () => {
 
   describe('MODE events with non-default prefix modes', () => {
     it('tracks +q/+a changes against the default q/a/o/h/v prefix set', () => {
+      trackChannel('#test');
       // Seed a user in the channel so the MODE handler has someone to update.
       client.simulateEvent('userlist', {
         channel: '#test',
@@ -1840,7 +1864,15 @@ describe('ChannelState', () => {
       });
       expect(state.getChannel('#a')).toBeUndefined();
 
+      // New session registers and re-JOINs, which is what re-allocates the
+      // record; the NAMES burst that follows is then honored.
       client.simulateEvent('registered', { nick: 'HexBot' });
+      client.simulateEvent('join', {
+        nick: 'HexBot',
+        ident: 'h',
+        hostname: 'h.local',
+        channel: '#a',
+      });
       client.simulateEvent('userlist', {
         channel: '#a',
         users: [{ nick: 'Alice', ident: 'a', hostname: 'a.local', modes: [] }],
@@ -1920,6 +1952,7 @@ describe('ChannelState', () => {
   describe('networkAccounts cleanup on PART', () => {
     it('evicts networkAccounts entry when user leaves all tracked channels', () => {
       state.setBotNick('HexBot');
+      trackChannel('#test');
 
       // User joins one channel with an account
       client.simulateEvent('join', {
@@ -1938,6 +1971,8 @@ describe('ChannelState', () => {
 
     it('keeps networkAccounts entry when user is still in another channel', () => {
       state.setBotNick('HexBot');
+      trackChannel('#chan1');
+      trackChannel('#chan2');
 
       client.simulateEvent('join', {
         nick: 'Alice',
@@ -1956,6 +1991,141 @@ describe('ChannelState', () => {
       // Part from one channel — still in the other
       client.simulateEvent('part', { nick: 'Alice', channel: '#chan1' });
       expect(state.getAccountForNick('Alice')).toBe('Alice');
+    });
+  });
+
+  describe('networkAccounts cleanup on KICK and self-departure', () => {
+    beforeEach(() => {
+      state.setBotNick('HexBot');
+    });
+
+    it('evicts networkAccounts entry when the kicked user shared no other channel', () => {
+      trackChannel('#test');
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'alice.host',
+        channel: '#test',
+        account: 'AliceAcct',
+      });
+      expect(state.getAccountForNick('Alice')).toBe('AliceAcct');
+
+      client.simulateEvent('kick', { kicked: 'Alice', nick: 'Oper', channel: '#test' });
+      expect(state.getAccountForNick('Alice')).toBeUndefined();
+    });
+
+    it('keeps the networkAccounts entry when the kicked user is still in another channel', () => {
+      trackChannel('#chan1');
+      trackChannel('#chan2');
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'alice.host',
+        channel: '#chan1',
+        account: 'AliceAcct',
+      });
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'alice.host',
+        channel: '#chan2',
+      });
+
+      client.simulateEvent('kick', { kicked: 'Alice', nick: 'Oper', channel: '#chan1' });
+      expect(state.getAccountForNick('Alice')).toBe('AliceAcct');
+    });
+
+    it('sweeps members of a channel the bot PARTs', () => {
+      trackChannel('#test');
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'alice.host',
+        channel: '#test',
+        account: 'AliceAcct',
+      });
+
+      client.simulateEvent('part', { nick: 'HexBot', channel: '#test' });
+      expect(state.getChannel('#test')).toBeUndefined();
+      expect(state.getAccountForNick('Alice')).toBeUndefined();
+    });
+
+    it('sweeps members of a channel the bot is KICKed from', () => {
+      trackChannel('#test');
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'alice.host',
+        channel: '#test',
+        account: 'AliceAcct',
+      });
+
+      client.simulateEvent('kick', { kicked: 'HexBot', nick: 'Oper', channel: '#test' });
+      expect(state.getChannel('#test')).toBeUndefined();
+      expect(state.getAccountForNick('Alice')).toBeUndefined();
+    });
+
+    it('keeps entries for members of a departed channel who remain elsewhere', () => {
+      trackChannel('#chan1');
+      trackChannel('#chan2');
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'alice.host',
+        channel: '#chan1',
+        account: 'AliceAcct',
+      });
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'alice.host',
+        channel: '#chan2',
+      });
+
+      client.simulateEvent('part', { nick: 'HexBot', channel: '#chan1' });
+      expect(state.getAccountForNick('Alice')).toBe('AliceAcct');
+    });
+  });
+
+  describe('stray JOIN / NAMES containment', () => {
+    beforeEach(() => {
+      state.setBotNick('HexBot');
+    });
+
+    it('ignores a third-party JOIN for a channel the bot never joined', () => {
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'alice.host',
+        channel: '#stray',
+        account: 'AliceAcct',
+      });
+
+      expect(state.getChannel('#stray')).toBeUndefined();
+      expect(state.getAllChannels()).toHaveLength(0);
+      expect(state.getAccountForNick('Alice')).toBeUndefined();
+    });
+
+    it('tracks a third-party JOIN for a channel the bot is already in', () => {
+      trackChannel('#test');
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'alice',
+        hostname: 'alice.host',
+        channel: '#test',
+      });
+
+      expect(state.isUserInChannel('#test', 'Alice')).toBe(true);
+    });
+
+    it('ignores a NAMES burst for a channel the bot never joined', () => {
+      client.simulateEvent('userlist', {
+        channel: '#stray',
+        users: [{ nick: 'Alice', ident: 'a', hostname: 'a.local', modes: [] }],
+      });
+
+      expect(state.getChannel('#stray')).toBeUndefined();
+      expect(state.getAllChannels()).toHaveLength(0);
     });
   });
 

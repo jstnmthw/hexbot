@@ -3,6 +3,7 @@
 // without calling `start()`, which leaves `rl` null so `print()` falls
 // through to `console.log`. The test only cares about the summary text,
 // not the readline plumbing above it.
+import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BotDatabase } from '../src/database';
@@ -44,6 +45,94 @@ function buildRepl(db: BotDatabase): BotREPL {
   } as unknown as ConstructorParameters<typeof BotREPL>[0];
   return new BotREPL(fakeBot);
 }
+
+describe('BotREPL.stop listener cleanup', () => {
+  let db: BotDatabase;
+  let logSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    db = new BotDatabase(':memory:');
+    db.open();
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    logSpy.mockRestore();
+    db.close();
+  });
+
+  it('removes every process-level and IRC listener it added', async () => {
+    // stop() → rl.close() runs the REPL close handler, which calls
+    // bot.shutdown() and then process.exit(0) — stub both.
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
+    const client = new EventEmitter();
+    const fakeBot = {
+      db,
+      startedAt: BOOT_TS_MS,
+      client,
+      shutdown: async () => {},
+    } as unknown as ConstructorParameters<typeof BotREPL>[0];
+    const repl = new BotREPL(fakeBot);
+
+    const before = {
+      stdout: process.stdout.listenerCount('error'),
+      stdin: process.stdin.listenerCount('error'),
+      exit: process.listenerCount('exit'),
+      notice: client.listenerCount('notice'),
+      privmsg: client.listenerCount('privmsg'),
+    };
+
+    repl.start();
+
+    expect(process.stdout.listenerCount('error')).toBe(before.stdout + 1);
+    // readline installs its own 'error' listener on the input stream, so
+    // the post-start count is ours plus readline's — assert growth only.
+    expect(process.stdin.listenerCount('error')).toBeGreaterThan(before.stdin);
+    expect(process.listenerCount('exit')).toBe(before.exit + 1);
+
+    repl.stop();
+    // The close handler exits via shutdown().catch().finally(process.exit) —
+    // let that chain settle while the exit spy is still installed.
+    await new Promise((resolve) => setImmediate(resolve));
+    exitSpy.mockRestore();
+
+    expect(process.stdout.listenerCount('error')).toBe(before.stdout);
+    expect(process.stdin.listenerCount('error')).toBe(before.stdin);
+    expect(process.listenerCount('exit')).toBe(before.exit);
+    expect(client.listenerCount('notice')).toBe(before.notice);
+    expect(client.listenerCount('privmsg')).toBe(before.privmsg);
+  });
+
+  it('stays idempotent — a second stop() does not remove listeners it no longer owns', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
+    const client = new EventEmitter();
+    const fakeBot = {
+      db,
+      startedAt: BOOT_TS_MS,
+      client,
+      shutdown: async () => {},
+    } as unknown as ConstructorParameters<typeof BotREPL>[0];
+
+    // A foreign listener that stop() must never touch.
+    const foreign = (): void => {};
+    process.stdout.on('error', foreign);
+    try {
+      const repl = new BotREPL(fakeBot);
+      const before = process.stdout.listenerCount('error');
+      repl.start();
+      repl.stop();
+      repl.stop();
+      expect(process.stdout.listenerCount('error')).toBe(before);
+      expect(process.stdout.listeners('error')).toContain(foreign);
+    } finally {
+      process.stdout.removeListener('error', foreign);
+      // Let the close handler's shutdown().finally(process.exit) chain
+      // settle while the exit spy is still installed.
+      await new Promise((resolve) => setImmediate(resolve));
+      exitSpy.mockRestore();
+    }
+  });
+});
 
 describe('BotREPL.printStartupLoginSummary', () => {
   let db: BotDatabase;

@@ -537,6 +537,69 @@ describe('CommandHandler', () => {
   });
 
   // -------------------------------------------------------------------------
+  // unregisterCommand
+  // -------------------------------------------------------------------------
+
+  describe('unregisterCommand', () => {
+    it('removes a command registered under a mixed-case name', () => {
+      const handler = new CommandHandler();
+      handler.registerCommand(
+        'Memo',
+        {
+          flags: '-',
+          description: 'Send a memo',
+          usage: '.memo <nick> <text>',
+          category: 'general',
+        },
+        vi.fn(),
+      );
+
+      expect(handler.unregisterCommand('Memo')).toBe(true);
+      expect(handler.getCommand('memo')).toBeUndefined();
+      expect(handler.getCommands().some((c) => c.name === 'Memo')).toBe(false);
+    });
+
+    it('removes the mirrored help entry while other core help survives', () => {
+      const registry = new HelpRegistry();
+      const handler = new CommandHandler(null, '.', registry);
+      handler.registerCommand(
+        'memo',
+        {
+          flags: '-',
+          description: 'Send a memo',
+          usage: '.memo <nick> <text>',
+          category: 'general',
+        },
+        vi.fn(),
+      );
+      expect(registry.get('.memo')).toBeDefined();
+
+      handler.unregisterCommand('memo');
+
+      expect(registry.get('.memo')).toBeUndefined();
+      expect(registry.get('.help')).toBeDefined();
+    });
+
+    it('honours the configured prefix when dropping the help entry', () => {
+      const registry = new HelpRegistry();
+      const handler = new CommandHandler(null, '!', registry);
+      handler.registerCommand(
+        'Ping',
+        { flags: '-', description: 'Ping', usage: '!ping', category: 'fun' },
+        vi.fn(),
+      );
+
+      expect(handler.unregisterCommand('Ping')).toBe(true);
+      expect(registry.get('!ping')).toBeUndefined();
+    });
+
+    it('returns false for a command that was never registered', () => {
+      const handler = new CommandHandler();
+      expect(handler.unregisterCommand('nope')).toBe(false);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // .help via shared renderer
   // -------------------------------------------------------------------------
 

@@ -247,8 +247,22 @@ describe('NAMES parsing against each dialect', () => {
     state.attach();
   });
 
+  /**
+   * NAMES is only honored for channels the bot has joined, so each dialect
+   * case has to establish the channel with the bot's own JOIN first.
+   */
+  function trackChannel(channel: string): void {
+    client.simulateEvent('join', {
+      nick: 'HexBot',
+      ident: 'bot',
+      hostname: 'bot.host',
+      channel,
+    });
+  }
+
   it('tracks the classic `~foo &bar @+baz %qux +quux` multi-prefix reply', () => {
     state.setCapabilities(capsFor(INSPIRCD));
+    trackChannel('#test');
     client.simulateEvent('userlist', {
       channel: '#test',
       users: [
@@ -272,6 +286,7 @@ describe('NAMES parsing against each dialect', () => {
     // array — we should track whatever chars land, but we won't invent
     // modes the server chose not to send.
     state.setCapabilities(capsFor(SOLANUM));
+    trackChannel('#libera');
     client.simulateEvent('userlist', {
       channel: '#libera',
       users: [
@@ -294,6 +309,7 @@ describe('NAMES parsing against each dialect', () => {
     // capabilities snapshot. Switching dialects mid-test exercises that
     // path: on Solanum `~` is not a prefix, on Unreal it is.
     state.setCapabilities(capsFor(SOLANUM));
+    trackChannel('#test');
     client.simulateEvent('userlist', {
       channel: '#test',
       users: [{ nick: 'user1', ident: 'u', hostname: 'h', modes: '~' }],
@@ -316,6 +332,7 @@ describe('NAMES parsing against each dialect', () => {
     // dropped under ngIRCd's (which only supports o/v). Set caps per
     // subsim and verify.
     state.setCapabilities(capsFor(UNREAL));
+    trackChannel('#test');
     client.simulateEvent('userlist', {
       channel: '#test',
       users: [{ nick: 'alice', ident: 'a', hostname: 'h', modes: [] }],
@@ -328,6 +345,7 @@ describe('NAMES parsing against each dialect', () => {
 
     // Switch to a capabilities view where `q` is NOT a prefix.
     state.setCapabilities(capsFor(IRCNET));
+    trackChannel('#test2');
     client.simulateEvent('userlist', {
       channel: '#test2',
       users: [{ nick: 'bob', ident: 'b', hostname: 'h', modes: [] }],

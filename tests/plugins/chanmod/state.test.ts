@@ -177,6 +177,46 @@ describe('chanmod state', () => {
     });
   });
 
+  describe('cycles.scheduleCancelable()', () => {
+    it('auto-removes timer from set after firing', () => {
+      const state = createState();
+      const fn = vi.fn();
+
+      state.cycles.scheduleCancelable(200, fn);
+      expect(state.cycles.size).toBe(1);
+
+      vi.advanceTimersByTime(201);
+      expect(fn).toHaveBeenCalledOnce();
+      expect(state.cycles.size).toBe(0);
+    });
+
+    it('removes the timer from the set on cancel', () => {
+      const state = createState();
+      const fn = vi.fn();
+
+      const timer = state.cycles.scheduleCancelable(200, fn);
+      expect(state.cycles.size).toBe(1);
+
+      timer.cancel();
+      expect(state.cycles.size).toBe(0);
+
+      vi.advanceTimersByTime(201);
+      expect(fn).not.toHaveBeenCalled();
+    });
+
+    it('does not accumulate handles across repeated schedule/cancel cycles', () => {
+      // Mirrors join-recovery's sustained-presence reset: cancel the previous
+      // timer and schedule a fresh one on every bot join.
+      const state = createState();
+      let timer = state.cycles.scheduleCancelable(200, () => {});
+      for (let i = 0; i < 50; i++) {
+        timer.cancel();
+        timer = state.cycles.scheduleCancelable(200, () => {});
+      }
+      expect(state.cycles.size).toBe(1);
+    });
+  });
+
   describe('cycles.scheduleWithLock()', () => {
     it('returns false when a lock is already held and does not schedule', () => {
       const state = createState();

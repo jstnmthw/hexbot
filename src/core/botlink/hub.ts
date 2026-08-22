@@ -205,11 +205,14 @@ export class BotLinkHub {
   /**
    * Broadcast a frame to all leaves, optionally excluding one.
    *
-   * Per-leaf error containment: a `send()` that returns false (write
-   * buffer full, socket half-open) or throws is logged and the
-   * remaining leaves still receive the frame. A subsequent bootstrap
-   * or heartbeat round-trip will detect the divergence and either
-   * resync or disconnect the stuck leaf.
+   * Per-leaf error containment: a `send()` that returns false (socket
+   * closed/destroyed, or frame over the 64 KB limit) or throws is
+   * logged and the remaining leaves still receive the frame. Note that
+   * `send()` does NOT report write-buffer pressure: a slow-but-alive
+   * consumer buffers frames in its socket unbounded, and neither the
+   * heartbeat nor any resync mechanism detects that case (see the
+   * memleak audit, M-02/M-03). A leaf that missed a frame resyncs only
+   * via reconnect bootstrap.
    */
   broadcast(frame: LinkFrame, excludeBot?: string): void {
     for (const [name, leaf] of this.leaves) {
@@ -222,7 +225,7 @@ export class BotLinkHub {
       }
       if (!delivered) {
         this.logger?.warn(
-          `Broadcast ${frame.type} to "${name}" failed (write buffer full or socket half-open); state may diverge until next heartbeat/resync`,
+          `Broadcast ${frame.type} to "${name}" failed (socket closed or frame over 64KB); leaf state may diverge until it reconnects`,
         );
       }
     }

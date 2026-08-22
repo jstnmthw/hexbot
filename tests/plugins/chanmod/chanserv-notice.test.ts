@@ -25,6 +25,10 @@ function createMockApi() {
       bind: (type: string, _flags: string, _mask: string, handler: (ctx: unknown) => void) => {
         binds.push({ type, handler });
       },
+      unbind: (type: string, _mask: string, handler: (ctx: unknown) => void) => {
+        const idx = binds.findIndex((b) => b.type === type && b.handler === handler);
+        if (idx !== -1) binds.splice(idx, 1);
+      },
       ircLower: (s: string) => s.toLowerCase(),
       debug: (...args: unknown[]) => logs.push(String(args[0])),
       log: (...args: unknown[]) => logs.push(String(args[0])),
@@ -863,5 +867,83 @@ describe('ChanServ notice handler — Anope GETKEY', () => {
     // No pending GETKEY — should not throw or log errors
     notice('ChanServ', 'Key for channel \x02#other\x02 is \x02somekey\x02.');
     expect(probeState.pendingGetKey.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Untrusted-source warn bookkeeping + teardown
+// ---------------------------------------------------------------------------
+
+describe('ChanServ notice handler — untrusted source warnings', () => {
+  it('caps untrustedSourcesWarned and falls back to a time-based throttle', () => {
+    const { api, notice, logs } = createMockApi();
+    const { backend } = createMockAthemeBackend();
+    const probeState = createProbeState();
+
+    setupChanServNotice({ api, config: createMockConfig(), backend, probeState });
+
+    // Every source fails the services_host_pattern check, so the trust pin is
+    // never taken and each notice hits the first-contact warn path.
+    for (let i = 0; i < 400; i++) {
+      notice('ChanServ', '2 hexbot +o', { ident: `id${i}`, hostname: `impostor${i}.example` });
+    }
+
+    expect(probeState.untrustedSourcesWarned.size).toBe(256);
+    // 256 per-source warnings plus one throttled warning for the overflow.
+    expect(logs.filter((l) => l.includes('Dropping first ChanServ notice'))).toHaveLength(257);
+    expect(probeState.trustedServicesSource).toBeNull();
+  });
+
+  it('still dedupes repeated warnings from the same source below the cap', () => {
+    const { api, notice, logs } = createMockApi();
+    const { backend } = createMockAthemeBackend();
+    const probeState = createProbeState();
+
+    setupChanServNotice({ api, config: createMockConfig(), backend, probeState });
+
+    for (let i = 0; i < 10; i++) {
+      notice('ChanServ', '2 hexbot +o', { ident: 'evil', hostname: 'impostor.example' });
+    }
+
+    expect(probeState.untrustedSourcesWarned.size).toBe(1);
+    expect(logs.filter((l) => l.includes('Dropping first ChanServ notice'))).toHaveLength(1);
+  });
+});
+
+describe('ChanServ notice handler — teardown', () => {
+  it('unbinds the notice handler and resets probe state', () => {
+    const { api, notice, binds } = createMockApi();
+    const { backend, calls } = createMockAthemeBackend();
+    const probeState = createProbeState();
+
+    const teardown = setupChanServNotice({ api, config: createMockConfig(), backend, probeState });
+    markProbePending(api, probeState, '#test', 'atheme');
+    expect(binds.filter((b) => b.type === 'notice')).toHaveLength(1);
+
+    teardown();
+
+    expect(binds.filter((b) => b.type === 'notice')).toHaveLength(0);
+    expect(probeState.pendingAthemeProbes.size).toBe(0);
+    expect(probeState.probeTimers.size).toBe(0);
+    expect(probeState.untrustedSourcesWarned.size).toBe(0);
+    expect(probeState.lastUntrustedWarnAt).toBe(0);
+
+    // The stale handler no longer receives notices.
+    notice('ChanServ', '2 hexbot +o');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('does not stack handlers when setup is re-run after teardown', () => {
+    const { api, notice, binds } = createMockApi();
+    const { backend, calls } = createMockAthemeBackend();
+    const probeState = createProbeState();
+
+    setupChanServNotice({ api, config: createMockConfig(), backend, probeState })();
+    setupChanServNotice({ api, config: createMockConfig(), backend, probeState });
+    expect(binds.filter((b) => b.type === 'notice')).toHaveLength(1);
+
+    markProbePending(api, probeState, '#test', 'atheme');
+    notice('ChanServ', '2 hexbot +o');
+    expect(calls).toHaveLength(1);
   });
 });

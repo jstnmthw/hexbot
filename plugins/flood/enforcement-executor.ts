@@ -96,6 +96,18 @@ const SAME_BURST_MS = 2_000;
 const TERMINAL_SUPPRESSION_MS = SAME_BURST_MS;
 
 /**
+ * Hard cap on distinct keys in {@link EnforcementExecutor.recentTerminal}.
+ * Entries live only {@link TERMINAL_SUPPRESSION_MS} and are normally cleared
+ * by {@link EnforcementExecutor.sweep}, but that sweep rides a plugin time
+ * bind the dispatcher permanently disables after repeated handler failures.
+ * With the sweep dead, a nick-rotating flood would otherwise mint entries
+ * forever. Same belt-and-braces posture as {@link MAX_OFFENCE_ENTRIES} and
+ * {@link MAX_CHANNEL_RATE_KEYS}: expired entries are pruned inline and the
+ * oldest by insertion order are evicted once the cap is reached.
+ */
+const MAX_RECENT_TERMINAL = 512;
+
+/**
  * Given a flood hit, decide what action to take (warn/kick/tempban), run it,
  * and persist tempbans so they survive reloads. Also owns the per-channel
  * action-rate cap and the timed-ban lift sweep.
@@ -115,7 +127,9 @@ export class EnforcementExecutor {
    * Last-terminal-action timestamp per `${channel}:${nick}`. Used by
    * {@link apply} to suppress a follow-up kick/tempban for the same
    * target inside {@link TERMINAL_SUPPRESSION_MS}. Cleared on reload
-   * (via {@link clear}) and pruned on the periodic sweep.
+   * (via {@link clear}) and pruned on the periodic sweep, with a
+   * {@link MAX_RECENT_TERMINAL} cap enforced on insert so a dead sweep
+   * bind can't leave it growing.
    */
   private readonly recentTerminal = new Map<string, number>();
   /**
@@ -214,6 +228,30 @@ export class EnforcementExecutor {
   }
 
   /**
+   * Make room for one new {@link recentTerminal} key at
+   * {@link MAX_RECENT_TERMINAL}. Expired entries go first — with a
+   * {@link TERMINAL_SUPPRESSION_MS} TTL nearly everything in the map is dead
+   * weight the sweep would have taken anyway — then oldest-insertion-first
+   * eviction covers whatever excess remains. Evicting a live entry only
+   * releases its suppression early, so the worst case is one redundant kick,
+   * never unbounded growth.
+   */
+  private evictRecentTerminal(now: number): void {
+    for (const [key, ts] of this.recentTerminal) {
+      if (now - ts > TERMINAL_SUPPRESSION_MS) {
+        this.recentTerminal.delete(key);
+      }
+    }
+    const excess = this.recentTerminal.size - MAX_RECENT_TERMINAL + 1;
+    let evicted = 0;
+    for (const oldestKey of this.recentTerminal.keys()) {
+      if (evicted >= excess) break;
+      this.recentTerminal.delete(oldestKey);
+      evicted++;
+    }
+  }
+
+  /**
    * Record an offence against `key` and return the escalation action that
    * matches the current count (capped at the last entry in `actions`).
    * Returns `null` when the hit falls inside {@link SAME_BURST_MS} of the
@@ -268,6 +306,10 @@ export class EnforcementExecutor {
           `Flood suppression: dropping duplicate "${action}" for ${nick} in ${channel} (${now - last}ms after prior terminal action)`,
         );
         return;
+      }
+      // About to insert a new key — make room first if we're at the cap.
+      if (last === undefined && this.recentTerminal.size >= MAX_RECENT_TERMINAL) {
+        this.evictRecentTerminal(now);
       }
       this.recentTerminal.set(targetKey, now);
     }

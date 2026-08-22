@@ -119,6 +119,13 @@ export interface ConnectionLifecycleDeps {
   messageQueue: { clear(): void; flushWithDeadline?(maxMs: number): number };
   dispatcher: {
     bind(type: BindType, flags: string, mask: string, handler: BindHandler, owner?: string): void;
+    /**
+     * Needed so the returned handle can release the core INVITE bind in
+     * `removeListeners()`. Without it a repeat `registerConnectionEvents()`
+     * (STS re-connect, a future `.reconnect` command) stacks one more
+     * 'invite' bind per call — 'invite' is a stackable bind type.
+     */
+    unbind(type: BindType, mask: string, handler: BindHandler): void;
   };
   logger: LoggerLike;
   /** Channel state tracker — required for periodic presence check. */
@@ -163,6 +170,16 @@ const SOCKET_DESTROY_GRACE_MS = 5_000;
 // messages will evaporate with the socket, but a brief flush expresses
 // operator intent rather than silently dropping it.
 const DISCONNECT_FLUSH_DEADLINE_MS = 100;
+
+/**
+ * How the `identify_before_join` await ended. `'proceed'` means the wait
+ * completed on its own terms (identified, or the timeout elapsed) and the
+ * registration handler should continue into the join pass. `'aborted'`
+ * means the session or the whole lifecycle went away underneath the await
+ * — the continuation must bail out rather than JOIN and re-arm timers that
+ * teardown has already cleared.
+ */
+type IdentifyAwaitOutcome = 'proceed' | 'aborted';
 
 /**
  * Register all IRC connection lifecycle event listeners on the client.
@@ -217,7 +234,7 @@ export function registerConnectionEvents(
   // are never stacked by reconnects.
   const retrySchedule = deps.config.channel_retry_schedule_ms ?? [300_000, 900_000, 2_700_000];
   registerJoinErrorListeners(logger, listeners, permanentFailureChannels, retrySchedule);
-  bindCoreInviteHandler(deps);
+  const inviteHandler = bindCoreInviteHandler(deps);
 
   const onConnecting = (): void => {
     // Connecting event fires when client.connect() is called, even if the
@@ -309,7 +326,7 @@ export function registerConnectionEvents(
     if (svcCfg.identify_before_join) {
       const rawTimeout = svcCfg.identify_before_join_timeout_ms ?? 10_000;
       const timeoutMs = Math.min(Math.max(rawTimeout, 0), 60_000);
-      await new Promise<void>((resolve) => {
+      const outcome = await new Promise<IdentifyAwaitOutcome>((resolve) => {
         const cleanup = (): void => {
           clearTimeout(timer);
           deps.eventBus.off('bot:identified', onIdentified);
@@ -318,26 +335,37 @@ export function registerConnectionEvents(
         };
         const onIdentified = (): void => {
           cleanup();
-          resolve();
+          resolve('proceed');
         };
+        // A disconnect mid-wait ends the session this handler was started
+        // for — resume as 'aborted' so the continuation below doesn't JOIN
+        // on a dead socket or re-arm the presence timer that `onClose`
+        // just cleared.
         const onDisconnect = (): void => {
           cleanup();
-          resolve();
+          resolve('aborted');
         };
         const timer = setTimeout(() => {
           cleanup();
-          resolve();
+          resolve('proceed');
         }, timeoutMs).unref();
         deps.eventBus.once('bot:identified', onIdentified);
         deps.eventBus.once('bot:disconnected', onDisconnect);
         // Expose a cancel hook for `removeListeners()` so shutdown
         // doesn't have to wait the full timeoutMs for the join pass
-        // to unblock.
+        // to unblock. Also 'aborted': the handle has been torn down, so
+        // nothing would ever clear a timer re-armed after this point.
         cancelIdentifyAwait = (): void => {
           cleanup();
-          resolve();
+          resolve('aborted');
         };
       });
+      if (outcome === 'aborted') {
+        logger.debug(
+          'identify_before_join await aborted (disconnect or shutdown) — skipping channel join pass',
+        );
+        return;
+      }
     }
 
     joinConfiguredChannels(deps);
@@ -516,6 +544,11 @@ export function registerConnectionEvents(
     },
     removeListeners(): void {
       listeners.removeAll();
+      // Release the core INVITE bind this call registered. Keeps the handle
+      // symmetric with `registerConnectionEvents`: without it a repeat
+      // registration stacks another 'invite' bind whose closure pins that
+      // call's deps until process exit.
+      deps.dispatcher.unbind('invite', '*', inviteHandler);
       // Also clear any pending registration timeout
       if (registrationTimer !== null) {
         clearTimeout(registrationTimer);
@@ -804,26 +837,24 @@ function registerJoinErrorListeners(
  * Bind the core INVITE handler — auto-re-joins configured channels on invite.
  * No permission check: this is a bot-level feature, not user-triggered.
  * Plugins may add their own 'invite' binds with flag checking.
+ *
+ * Returns the handler so the lifecycle handle can unbind it on teardown.
  */
-function bindCoreInviteHandler(deps: ConnectionLifecycleDeps): void {
+function bindCoreInviteHandler(deps: ConnectionLifecycleDeps): BindHandler {
   const { client, configuredChannels, dispatcher, logger, getCasemapping } = deps;
-  dispatcher.bind(
-    'invite',
-    '-',
-    '*',
-    (ctx) => {
-      const channel = ctx.channel;
-      if (!channel) return;
-      // Fold under the live casemapping — fallback to rfc1459 (the safest
-      // superset) only when the lifecycle deps pre-date this field.
-      const cm = getCasemapping ? getCasemapping() : 'rfc1459';
-      const ch = configuredChannels.find((c) => ircLower(c.name, cm) === ircLower(channel, cm));
-      if (!ch) return;
-      client.join(ch.name, ch.key);
-      logger.info(`INVITE from ${ctx.nick}: re-joining configured channel ${ch.name}`);
-    },
-    'core',
-  );
+  const handler: BindHandler = (ctx) => {
+    const channel = ctx.channel;
+    if (!channel) return;
+    // Fold under the live casemapping — fallback to rfc1459 (the safest
+    // superset) only when the lifecycle deps pre-date this field.
+    const cm = getCasemapping ? getCasemapping() : 'rfc1459';
+    const ch = configuredChannels.find((c) => ircLower(c.name, cm) === ircLower(channel, cm));
+    if (!ch) return;
+    client.join(ch.name, ch.key);
+    logger.info(`INVITE from ${ctx.nick}: re-joining configured channel ${ch.name}`);
+  };
+  dispatcher.bind('invite', '-', '*', handler, 'core');
+  return handler;
 }
 
 /** Send JOIN for every channel in the configured list. */

@@ -6,7 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // beforeEach. Without this the first test consistently exceeds the 300ms
 // slow-test threshold under full-suite worker contention.
 import '../../../plugins/chanmod/index';
-import { makeChanmodPluginOverrides } from '../../helpers/chanmod-plugin-config';
+import { setupJoinRecovery } from '../../../plugins/chanmod/join-recovery';
+import type { ProtectionChain } from '../../../plugins/chanmod/protection-backend';
+import { createState } from '../../../plugins/chanmod/state';
+import type { PluginAPI } from '../../../src/types';
+import { makeChanmodConfig, makeChanmodPluginOverrides } from '../../helpers/chanmod-plugin-config';
 import { type MockBot, createMockBot } from '../../helpers/mock-bot';
 import { flush, giveBotOps, tick } from '../../helpers/plugin-test-helpers';
 
@@ -562,5 +566,124 @@ describe('chanmod join-error recovery', () => {
       const joins = bot.client.messages.filter((m) => m.type === 'join');
       expect(joins.length).toBe(0);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cycle-timer bookkeeping
+// ---------------------------------------------------------------------------
+
+describe('chanmod join-recovery — cycle timer bookkeeping', () => {
+  /**
+   * Drive `setupJoinRecovery` directly against a real `SharedState` so the
+   * cycle-timer Set is observable. The stubs cover only the surface the
+   * banned→rejoin path touches.
+   */
+  function harness() {
+    const binds = new Map<string, (ctx: unknown) => void>();
+    const api = {
+      bind: (type: string, _flags: string, _mask: string, handler: (ctx: unknown) => void) => {
+        binds.set(type, handler);
+      },
+      ircLower: (s: string) => s.toLowerCase(),
+      isBotNick: (nick: string) => nick === 'hexbot',
+      getChannelKey: () => undefined,
+      join: () => {},
+      log: () => {},
+      debug: () => {},
+      // isSet=true → chanserv_access was explicitly configured, so the
+      // join_error path skips the proactive probe and recovers directly.
+      channelSettings: { isSet: () => true },
+    } as unknown as PluginAPI;
+    const chain = {
+      getAccess: () => 'founder',
+      canUnban: () => true,
+      canInvite: () => true,
+      canRemoveKey: () => true,
+      requestUnban: () => true,
+      requestInvite: () => true,
+      requestRemoveKey: () => true,
+    } as unknown as ProtectionChain;
+    const state = createState();
+    const teardown = setupJoinRecovery({ api, chain, state, config: makeChanmodConfig() });
+
+    const fire = (type: string, ctx: Record<string, unknown>): void => {
+      binds.get(type)?.(ctx);
+    };
+    return { state, teardown, fire };
+  }
+
+  /** Create a recoveryState entry for #test and drain the retry-join timer. */
+  async function enterRecovery(h: ReturnType<typeof harness>): Promise<void> {
+    h.fire('join_error', { channel: '#test', command: 'banned_from_channel' });
+    await tick(3100);
+    expect(h.state.cycles.size).toBe(0);
+  }
+
+  it('holds at most one tracked timer across repeated bot rejoins', async () => {
+    const h = harness();
+    await enterRecovery(h);
+
+    for (let i = 0; i < 25; i++) {
+      h.fire('join', { nick: 'hexbot', channel: '#test' });
+      expect(h.state.cycles.size).toBe(1);
+    }
+
+    h.teardown();
+  });
+
+  it('drops the tracked timer when the sustained-presence reset fires', async () => {
+    const h = harness();
+    await enterRecovery(h);
+
+    h.fire('join', { nick: 'hexbot', channel: '#test' });
+    expect(h.state.cycles.size).toBe(1);
+
+    await tick(300_100);
+    expect(h.state.cycles.size).toBe(0);
+
+    h.teardown();
+  });
+
+  it('drops the tracked timer when the bot parts or is kicked', async () => {
+    const h = harness();
+    await enterRecovery(h);
+
+    h.fire('join', { nick: 'hexbot', channel: '#test' });
+    h.fire('part', { nick: 'hexbot', channel: '#test' });
+    expect(h.state.cycles.size).toBe(0);
+
+    await enterRecovery(h);
+    h.fire('join', { nick: 'hexbot', channel: '#test' });
+    h.fire('kick', { nick: 'hexbot', channel: '#test' });
+    expect(h.state.cycles.size).toBe(0);
+
+    h.teardown();
+  });
+
+  it('drops the tracked timer when a re-ban restarts the backoff cycle', async () => {
+    const h = harness();
+    await enterRecovery(h);
+
+    h.fire('join', { nick: 'hexbot', channel: '#test' });
+    expect(h.state.cycles.size).toBe(1);
+
+    // Re-banned past the backoff window — getOrCreateState cancels the
+    // pending reset, leaving only the fresh retry-join timer behind.
+    await tick(120_000);
+    h.fire('join_error', { channel: '#test', command: 'banned_from_channel' });
+    await tick(3100);
+    expect(h.state.cycles.size).toBe(0);
+
+    h.teardown();
+  });
+
+  it('leaves no tracked timers behind after teardown', async () => {
+    const h = harness();
+    await enterRecovery(h);
+    h.fire('join', { nick: 'hexbot', channel: '#test' });
+
+    h.teardown();
+    expect(h.state.cycles.size).toBe(0);
   });
 });

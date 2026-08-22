@@ -87,7 +87,7 @@ function makeHarness(): Harness {
     applyCasemapping: () => {},
     applyServerCapabilities: () => {},
     messageQueue: { clear: () => {} },
-    dispatcher: { bind: () => {} },
+    dispatcher: { bind: () => {}, unbind: () => {} },
     logger,
     reconnectDriver: driver,
   };

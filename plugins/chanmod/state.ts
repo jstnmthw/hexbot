@@ -28,13 +28,25 @@ export interface ThreatState {
 }
 
 /**
+ * Cancel handle for a timer scheduled via {@link CycleState.scheduleCancelable}.
+ * The handle — not the raw `Timeout` — is what callers retain, so the only way
+ * to cancel is through a path that also drops the timer from the tracking Set.
+ */
+export interface CycleTimer {
+  /** Cancel the pending timer and drop it from the tracking Set. */
+  cancel(): void;
+}
+
+/**
  * Cycle timer owner — centralises scheduling, tracking, and teardown of all
  * "part/rejoin/defer" timers that mode-enforce, protection, and join-recovery
  * use. Callers never touch the backing Set directly — every path goes through
  * this API so teardown is guaranteed complete on plugin unload.
  *
- * Two scheduling flavors:
+ * Three scheduling flavors, all self-removing:
  *   - schedule(ms, fn)           — one-shot, auto-removes on fire
+ *   - scheduleCancelable(ms, fn) — one-shot with a cancel handle, auto-removes
+ *                                   on fire *and* on cancel
  *   - scheduleWithLock(k, ms, fn) — keyed schedule guarded by a deduplication
  *                                   lock; caller is responsible for unlock()
  *                                   when the expected follow-up event arrives.
@@ -44,6 +56,13 @@ export interface ThreatState {
 export interface CycleState {
   /** Schedule a one-shot callback. Auto-removes the timer on fire. */
   schedule(delayMs: number, fn: () => void): void;
+  /**
+   * Schedule a one-shot callback and return a cancel handle for callers that
+   * need their own cancellation logic (join-recovery's sustained-presence
+   * reset). The timer leaves the tracking Set on fire and on cancel alike, so
+   * repeated schedule/cancel cycles cannot accumulate dead handles.
+   */
+  scheduleCancelable(delayMs: number, fn: () => void): CycleTimer;
   /**
    * Schedule a callback guarded by a dedup lock keyed by `key`. Returns true
    * if the lock was taken and the timer scheduled, false if already locked.
@@ -55,12 +74,6 @@ export interface CycleState {
   isLocked(key: string): boolean;
   /** Release a dedup lock taken by `scheduleWithLock`. */
   unlock(key: string): void;
-  /**
-   * Register an externally-created timer so it is canceled on teardown.
-   * Used where the caller must retain the timer reference for its own
-   * cancellation logic (join-recovery's sustained-presence reset timer).
-   */
-  track(timer: ReturnType<typeof setTimeout>): void;
   /** Clear all tracked timers and dedup locks. Called from teardown. */
   clearAll(): void;
   /** TTL-prune stale dedup locks — keeps state tidy when follow-up events drop. */
@@ -126,11 +139,20 @@ function createCycleState(): CycleState {
 
   const cycle: CycleState = {
     schedule(delayMs: number, fn: () => void): void {
+      cycle.scheduleCancelable(delayMs, fn);
+    },
+    scheduleCancelable(delayMs: number, fn: () => void): CycleTimer {
       const timer = setTimeout(() => {
         timers.delete(timer);
         fn();
       }, delayMs);
       timers.add(timer);
+      return {
+        cancel(): void {
+          clearTimeout(timer);
+          timers.delete(timer);
+        },
+      };
     },
     scheduleWithLock(key: string, delayMs: number, fn: () => void): boolean {
       if (locks.has(key)) return false;
@@ -143,9 +165,6 @@ function createCycleState(): CycleState {
     },
     unlock(key: string): void {
       locks.delete(key);
-    },
-    track(timer: ReturnType<typeof setTimeout>): void {
-      timers.add(timer);
     },
     clearAll(): void {
       for (const timer of timers) clearTimeout(timer);

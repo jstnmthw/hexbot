@@ -156,9 +156,16 @@ export function saveRuntimeFeed(api: PluginAPI, feed: FeedConfig): void {
   api.db.set(`rss:feed:${feed.id}`, JSON.stringify(feed));
 }
 
-/** Delete a runtime-added feed from persistence. */
+/**
+ * Delete a runtime-added feed from persistence, along with its poll clock.
+ * The `rss:last_poll:` row has no other reaper (`cleanupSeen` only sweeps
+ * the `rss:seen:` prefix), so leaving it behind both orphans a KV row per
+ * removed id forever and lets a re-added id inherit the old timestamp,
+ * skipping init()'s silent first-run seeding gate.
+ */
 export function deleteRuntimeFeed(api: PluginAPI, id: string): void {
   api.db.del(`rss:feed:${id}`);
+  api.db.del(`rss:last_poll:${id}`);
 }
 
 /** True if `id` was added at runtime (vs. defined in plugins.json config). */

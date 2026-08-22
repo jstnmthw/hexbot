@@ -4,6 +4,15 @@
 // Delegates channel state tracking to the SocialTracker.
 import type { SocialTracker } from './social-tracker';
 
+/**
+ * Hard cap on tracked channels. Mirrors `SocialTracker`, `ContextManager`
+ * and `EngagementTracker` so the ai-chat per-channel collections scale
+ * together rather than each accumulating channels independently. On
+ * overflow the oldest-inserted channel is dropped — every tracked channel
+ * past the cap is one the tick loop would iterate for the plugin lifetime.
+ */
+const MAX_CHANNELS = 256;
+
 /** Configuration for the ambient engine. */
 export interface AmbientConfig {
   enabled: boolean;
@@ -84,7 +93,23 @@ export class AmbientEngine {
 
   /** Notify the engine that activity occurred in a channel (for tracking which channels exist). */
   onChannelActivity(channel: string): void {
-    this.trackedChannels.add(channel.toLowerCase());
+    const key = channel.toLowerCase();
+    if (this.trackedChannels.has(key)) return;
+    // Evict oldest-inserted before growing past the cap — Set iteration
+    // order is insertion order, so the first key is the coldest entry.
+    if (this.trackedChannels.size >= MAX_CHANNELS) {
+      const oldest = this.trackedChannels.keys().next().value;
+      if (oldest !== undefined) this.trackedChannels.delete(oldest);
+    }
+    this.trackedChannels.add(key);
+  }
+
+  /**
+   * Stop tracking a channel. Wire to bot PART/KICK — the tick loop would
+   * otherwise iterate channels the bot has left for the plugin lifetime.
+   */
+  dropChannel(channel: string): void {
+    this.trackedChannels.delete(channel.toLowerCase());
   }
 
   /** Notify the engine that a user joined a channel. */

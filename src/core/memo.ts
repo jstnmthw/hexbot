@@ -192,8 +192,11 @@ export class MemoManager {
     if (this.eventBus) {
       // Prune the delivery-cooldown entry when a user is removed so the
       // map doesn't accumulate entries for handles that no longer exist.
+      // Handles are bot-local identities, not IRC nicks, so the fold must
+      // be plain toLowerCase() to match the insert site — ircLower would
+      // fold [ ] \ ~ differently and miss the stored key.
       this.onUserRemoved = (handle: string): void => {
-        this.deliveryCooldown.delete(this.lowerNick(handle));
+        this.deliveryCooldown.delete(handle.toLowerCase());
       };
       this.eventBus.on('user:removed', this.onUserRemoved);
     }

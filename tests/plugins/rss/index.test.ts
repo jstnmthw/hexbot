@@ -922,6 +922,55 @@ describe('rss plugin — integration', () => {
       expect(allText).toContain('removed');
     });
 
+    it('!rss remove drops the feed last_poll row', async () => {
+      await init(api);
+      mockParseURL.mockResolvedValue({ items: [] });
+
+      await dispatchRss('add pollrow https://pollrow.com/rss #test');
+      expect(db.get('rss', 'rss:last_poll:pollrow')).toBeTruthy();
+
+      await dispatchRss('remove pollrow');
+
+      expect(db.get('rss', 'rss:last_poll:pollrow')).toBeNull();
+    });
+
+    it('!rss remove clears first-poll state so a re-added id staggers again', async () => {
+      // `stagfeed` hashes to a 122,938 ms offset within a 300 s interval, so
+      // a feed last polled 200 s ago is past its first-poll stagger gate but
+      // short of a full interval. At that age the feed only polls while its
+      // id is absent from firstPollDone — which is what makes the remove
+      // path's cleanup observable from outside the plugin.
+      api = makeMockAPI(db, { ...BASE_CONFIG, feeds: [] });
+      mockParseURL.mockResolvedValue({ items: [] });
+      await init(api);
+
+      const ageFeed = (): void => {
+        db.set('rss', 'rss:last_poll:stagfeed', new Date(Date.now() - 200_000).toISOString());
+      };
+
+      await dispatchRss('add stagfeed https://stag.com/rss #test 300');
+
+      // First announce poll — eligible on the stagger offset alone.
+      ageFeed();
+      mockParseURL.mockClear();
+      await api._fireTime('60');
+      expect(mockParseURL).toHaveBeenCalledTimes(1);
+
+      // Same age, next tick: firstPollDone now demands the full interval.
+      ageFeed();
+      mockParseURL.mockClear();
+      await api._fireTime('60');
+      expect(mockParseURL).not.toHaveBeenCalled();
+
+      // Remove + re-add under the same id must restore the stagger.
+      await dispatchRss('remove stagfeed');
+      await dispatchRss('add stagfeed https://stag.com/rss #test 300');
+      ageFeed();
+      mockParseURL.mockClear();
+      await api._fireTime('60');
+      expect(mockParseURL).toHaveBeenCalledTimes(1);
+    });
+
     it('!rss remove rejects config-file feeds', async () => {
       await init(api);
       await dispatchRss('remove testfeed');

@@ -211,18 +211,15 @@ describe('ResilientProvider', () => {
   });
 
   describe('abort cancels pending retry sleep', () => {
-    it('default sleep registers in pendingSleeps and abort resolves them', async () => {
+    it('default sleep registers in pendingSleeps and abort unwinds without retrying', async () => {
       // Use the real default sleep (no injected sleep arg) so we exercise
       // the pendingSleeps tracking path. A long initialBackoffMs ensures
       // the timer is still pending when abort() fires.
-      let attempt = 0;
       const inner: AIProvider = {
         name: 'mock',
         initialize: vi.fn(async () => {}),
         complete: vi.fn(async () => {
-          attempt++;
-          if (attempt === 1) throw new AIProviderError('rate', 'rate_limit');
-          return okRes('after-abort');
+          throw new AIProviderError('rate', 'rate_limit');
         }),
         countTokens: vi.fn(async () => 1),
         getModelName: () => 'mock',
@@ -236,12 +233,48 @@ describe('ResilientProvider', () => {
       });
       const promise = p.complete('s', [{ role: 'user', content: 'q' }], 100);
       // Yield until the first attempt rejects and the sleep is scheduled,
-      // then abort: the early-resolved sleep lets the second attempt run.
+      // then abort: the early-resolved sleep must NOT start a second attempt,
+      // because teardown's inner.abort() has already fired and nothing would
+      // be left to cancel that request.
       await new Promise((r) => setImmediate(r));
       await new Promise((r) => setImmediate(r));
       p.abort();
-      await expect(promise).resolves.toMatchObject({ text: 'after-abort' });
+      await expect(promise).rejects.toMatchObject({ kind: 'network', message: 'Aborted' });
       expect(inner.abort).toHaveBeenCalled();
+      expect(inner.complete).toHaveBeenCalledTimes(1);
+    });
+
+    it('abort mid-backoff does not affect calls started afterwards', async () => {
+      let attempts = 0;
+      const inner: AIProvider = {
+        name: 'mock',
+        initialize: vi.fn(async () => {}),
+        complete: vi.fn(async () => {
+          attempts++;
+          if (attempts === 1) throw new AIProviderError('rate', 'rate_limit');
+          return okRes('fresh-call');
+        }),
+        countTokens: vi.fn(async () => 1),
+        getModelName: () => 'mock',
+        abort: vi.fn(),
+      };
+      const p = new ResilientProvider(inner, {
+        maxRetries: 2,
+        initialBackoffMs: 30_000,
+        failureThreshold: 5,
+        openDurationMs: 1000,
+      });
+      const aborted = p.complete('s', [{ role: 'user', content: 'q' }], 100);
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+      p.abort();
+      await expect(aborted).rejects.toMatchObject({ message: 'Aborted' });
+
+      // A call started after the abort captures the new epoch and retries
+      // normally — the latch is per-call, not sticky on the instance.
+      await expect(p.complete('s', [{ role: 'user', content: 'q' }], 100)).resolves.toMatchObject({
+        text: 'fresh-call',
+      });
     });
 
     it('abort with no pending sleeps is a no-op aside from forwarding', () => {

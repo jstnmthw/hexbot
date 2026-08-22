@@ -159,6 +159,8 @@ export async function init(api: PluginAPI): Promise<void> {
   // rather than the full interval so sibling feeds drift apart. Once a
   // feed polls, its `lastPoll` timestamp diverges naturally and the
   // regular `now - lastPoll >= interval` cadence preserves the stagger.
+  // Handed to the command layer via `deps` so `!rss remove` can drop the
+  // entry — see RssCommandsDeps.firstPollDone.
   const firstPollDone = new Set<string>();
   // Single 60s time bind — checks which feeds are due on each tick.
   //
@@ -237,6 +239,7 @@ export async function init(api: PluginAPI): Promise<void> {
     cfg,
     abortSignal: () => abortController?.signal,
     circuitBreaker,
+    firstPollDone,
   };
   api.bind('pub', 'm', '!rss', async (ctx) => {
     const parts = ctx.args.trim().split(/\s+/);

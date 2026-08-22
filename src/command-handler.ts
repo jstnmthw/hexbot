@@ -162,9 +162,17 @@ export class CommandHandler {
     this.helpRegistry.register('core', [entry]);
   }
 
-  /** Remove a previously registered command. Returns true if it existed. */
+  /**
+   * Remove a previously registered command. Returns true if it existed.
+   * Symmetric with {@link registerCommand}: the lookup map is keyed by the
+   * case-folded name, and the mirrored help entry is dropped from the `core`
+   * bucket under the same prefixed command it was registered with — otherwise
+   * `.help` keeps advertising a command whose handler is gone.
+   */
   unregisterCommand(name: string): boolean {
-    return this.commands.delete(name);
+    const removed = this.commands.delete(name.toLowerCase());
+    this.helpRegistry.remove('core', `${this.prefix}${name}`);
+    return removed;
   }
 
   /** Look up a single command by name. */

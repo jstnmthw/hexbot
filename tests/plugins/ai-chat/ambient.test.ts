@@ -265,6 +265,59 @@ describe('AmbientEngine', () => {
       expect(sent).toHaveLength(0);
     });
   });
+
+  describe('tracked channel lifecycle', () => {
+    /**
+     * Probe for membership in trackedChannels: onJoin returns early for any
+     * channel the engine isn't tracking, so a join_wb emission means tracked.
+     */
+    function isTracked(channel: string): boolean {
+      const before = sent.length;
+      engine.onJoin(channel, 'newcomer');
+      const fired = sent.length > before;
+      sent.length = before;
+      return fired;
+    }
+
+    it('dropChannel stops tracking a channel the bot has left', () => {
+      engine.start(sender, 999_999);
+      message('#test', 'alice', 'hello');
+      expect(isTracked('#test')).toBe(true);
+
+      engine.dropChannel('#TEST'); // case-insensitive, like the social tracker
+      expect(isTracked('#test')).toBe(false);
+
+      // The tick loop no longer visits it either.
+      now += 16 * 60_000;
+      engine.tick();
+      expect(sent).toHaveLength(0);
+    });
+
+    it('dropChannel on an untracked channel is a no-op', () => {
+      engine.start(sender, 999_999);
+      message('#test', 'alice', 'hello');
+      engine.dropChannel('#never-seen');
+      expect(isTracked('#test')).toBe(true);
+    });
+
+    it('caps tracked channels at 256, evicting the oldest-inserted', () => {
+      engine.start(sender, 999_999);
+      for (let i = 0; i < 256; i++) engine.onChannelActivity(`#chan${i}`);
+      expect(isTracked('#chan0')).toBe(true);
+
+      engine.onChannelActivity('#overflow');
+      expect(isTracked('#chan0')).toBe(false);
+      expect(isTracked('#chan1')).toBe(true);
+      expect(isTracked('#overflow')).toBe(true);
+    });
+
+    it('renewed activity on an already-tracked channel does not evict', () => {
+      engine.start(sender, 999_999);
+      for (let i = 0; i < 256; i++) engine.onChannelActivity(`#chan${i}`);
+      engine.onChannelActivity('#CHAN255');
+      expect(isTracked('#chan0')).toBe(true);
+    });
+  });
 });
 
 describe('RateLimiter ambient budget', () => {

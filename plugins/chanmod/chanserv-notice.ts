@@ -7,7 +7,7 @@
 // Backend-specific parsing lives in:
 //   - chanserv-notice-atheme.ts  (Atheme FLAGS responses)
 //   - chanserv-notice-anope.ts   (Anope ACCESS LIST, GETKEY, INFO responses)
-import type { PluginAPI } from '../../src/types';
+import type { BindHandler, PluginAPI } from '../../src/types';
 import { handleAnopeNotice } from './chanserv-notice-anope';
 import { handleAthemeNotice } from './chanserv-notice-atheme';
 import type { BackendAccess } from './protection-backend';
@@ -104,9 +104,55 @@ export interface ProbeState {
    * notice" warning for. ChanServ replies arrive line-by-line, so a
    * multi-line INFO/ACCESS response with a misconfigured
    * `services_host_pattern` would otherwise spam one WRN per line.
-   * Cleared on teardown so a `.reload chanmod` re-arms the warning.
+   * Capped at {@link MAX_UNTRUSTED_SOURCES_WARNED} — see
+   * {@link warnUntrustedSource}. Cleared on teardown so a
+   * `.reload chanmod` re-arms the warning.
    */
   untrustedSourcesWarned: Set<string>;
+  /**
+   * `Date.now()` of the last untrusted-source warning emitted through the
+   * post-cap throttle. Unused while `untrustedSourcesWarned` is below its
+   * cap.
+   */
+  lastUntrustedWarnAt: number;
+}
+
+/**
+ * Cap on {@link ProbeState.untrustedSourcesWarned}. The dedup key is
+ * `ident@host` and ident is client-supplied on most IRCds, so an impostor
+ * holding the ChanServ nick through a long services outage can mint a
+ * fresh key per reconnect. Past the cap the set stops growing and warnings
+ * fall back to {@link UNTRUSTED_WARN_THROTTLE_MS}.
+ */
+const MAX_UNTRUSTED_SOURCES_WARNED = 256;
+
+/** Minimum interval between untrusted-source warnings once the dedup set is full. */
+const UNTRUSTED_WARN_THROTTLE_MS = 60_000;
+
+/**
+ * Warn once per untrusted `ident@host`, bounded. Below the cap this is
+ * plain per-source dedup; at the cap the set is frozen and warnings are
+ * rate-limited by wall clock instead, so an attacker cycling idents can
+ * neither grow the set nor flood the log.
+ */
+function warnUntrustedSource(
+  api: PluginAPI,
+  probeState: ProbeState,
+  sourceKey: string,
+  message: string,
+): void {
+  if (probeState.untrustedSourcesWarned.has(sourceKey)) return;
+
+  if (probeState.untrustedSourcesWarned.size < MAX_UNTRUSTED_SOURCES_WARNED) {
+    probeState.untrustedSourcesWarned.add(sourceKey);
+    api.warn(message);
+    return;
+  }
+
+  const now = Date.now();
+  if (now - probeState.lastUntrustedWarnAt < UNTRUSTED_WARN_THROTTLE_MS) return;
+  probeState.lastUntrustedWarnAt = now;
+  api.warn(message);
 }
 
 /** Construct a fresh, empty {@link ProbeState}. Called once per plugin init. */
@@ -122,6 +168,7 @@ export function createProbeState(): ProbeState {
     probeTimers: new Set(),
     pendingGetKey: new Map(),
     untrustedSourcesWarned: new Set(),
+    lastUntrustedWarnAt: 0,
   };
 }
 
@@ -170,7 +217,11 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
     };
   }
 
-  api.bind('notice', '-', '*', (ctx) => {
+  // Named (not inline) so the returned teardown can unbind it — without a
+  // reference escaping, a caller that re-runs setup mid-lifecycle (e.g. on a
+  // chanserv_nick change) would stack handlers, each pinning the previous
+  // backend and ProbeState.
+  const onNotice: BindHandler<'notice'> = (ctx) => {
     // Only process notices from ChanServ (PM — channel is null)
     if (ctx.channel !== null) return;
     if (api.ircLower(ctx.nick) !== api.ircLower(csNick)) return;
@@ -205,13 +256,12 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
       const pattern = (config.services_host_pattern ?? '').trim();
       if (pattern.length > 0) {
         if (!api.util.matchWildcard(pattern, ctx.hostname, { caseInsensitive: true })) {
-          const sourceKey = `${srcIdent}@${srcHost}`;
-          if (!probeState.untrustedSourcesWarned.has(sourceKey)) {
-            probeState.untrustedSourcesWarned.add(sourceKey);
-            api.warn(
-              `Dropping first ChanServ notice from ${ctx.nick}!${ctx.ident}@${ctx.hostname} — hostname does not match services_host_pattern (${pattern}). Possible services impostor during outage. Adjust services_host_pattern in plugins.json if your services host legitimately differs.`,
-            );
-          }
+          warnUntrustedSource(
+            api,
+            probeState,
+            `${srcIdent}@${srcHost}`,
+            `Dropping first ChanServ notice from ${ctx.nick}!${ctx.ident}@${ctx.hostname} — hostname does not match services_host_pattern (${pattern}). Possible services impostor during outage. Adjust services_host_pattern in plugins.json if your services host legitimately differs.`,
+          );
           return;
         }
       }
@@ -220,13 +270,12 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
     } else {
       const pinned = probeState.trustedServicesSource;
       if (pinned.ident !== srcIdent || pinned.hostname !== srcHost) {
-        const sourceKey = `${srcIdent}@${srcHost}`;
-        if (!probeState.untrustedSourcesWarned.has(sourceKey)) {
-          probeState.untrustedSourcesWarned.add(sourceKey);
-          api.warn(
-            `Dropping notice from ${ctx.nick}!${ctx.ident}@${ctx.hostname} — does not match pinned ChanServ source (${pinned.ident}@${pinned.hostname}). Possible services spoof.`,
-          );
-        }
+        warnUntrustedSource(
+          api,
+          probeState,
+          `${srcIdent}@${srcHost}`,
+          `Dropping notice from ${ctx.nick}!${ctx.ident}@${ctx.hostname} — does not match pinned ChanServ source (${pinned.ident}@${pinned.hostname}). Possible services spoof.`,
+        );
         return;
       }
     }
@@ -238,9 +287,11 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
     } else {
       handleAnopeNotice(api, backend, probeState, text);
     }
-  });
+  };
+  api.bind('notice', '-', '*', onNotice);
 
   return () => {
+    api.unbind('notice', '*', onNotice);
     probeState.pendingAthemeProbes.clear();
     probeState.pendingAnopeProbes.clear();
     probeState.pendingInfoProbes.clear();
@@ -250,6 +301,7 @@ export function setupChanServNotice(opts: ChanServNoticeOptions): () => void {
     probeState.activeInfoChannel = null;
     probeState.trustedServicesSource = null;
     probeState.untrustedSourcesWarned.clear();
+    probeState.lastUntrustedWarnAt = 0;
     for (const t of probeState.probeTimers) clearTimeout(t);
     probeState.probeTimers.clear();
   };

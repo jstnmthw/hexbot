@@ -318,11 +318,16 @@ export function init(api: PluginAPI): void {
   });
 
   // Drop per-channel state when the bot leaves a channel — keeps
-  // long-lived sets like `takeoverWarnedChannels` from accumulating
-  // entries for channels we'll never auto-op into again. Bind handlers
-  // are auto-reaped by the loader on plugin unload.
+  // long-lived collections like `takeoverWarnedChannels` and
+  // `knownGoodTopics` from accumulating entries for channels we'll never
+  // auto-op into again. Neither is TTL-pruned by the 60s sweep, so this
+  // is their only eviction path short of teardown. Dropping the topic
+  // snapshot also stops a much-later rejoin from restoring a stale topic.
+  // Bind handlers are auto-reaped by the loader on plugin unload.
   const dropChannelState = (channel: string): void => {
-    state.takeoverWarnedChannels.delete(api.ircLower(channel));
+    const chanKey = api.ircLower(channel);
+    state.takeoverWarnedChannels.delete(chanKey);
+    state.knownGoodTopics.delete(chanKey);
   };
   api.bind('part', '-', '*', (ctx) => {
     if (api.isBotNick(ctx.nick)) dropChannelState(ctx.channel);
@@ -344,8 +349,23 @@ export function init(api: PluginAPI): void {
  * any earlier teardown reads from it. Bind handlers and command
  * registrations are reaped by the loader itself; teardown only owns
  * timers, persistent listeners on the api, and shared-state wipes.
+ *
+ * Each callback runs under its own try/catch — the loader reuses the
+ * cached ESM module across reloads, so one throw escaping this loop
+ * would strand the remaining timer clears and `clearSharedState()`
+ * behind it and pin the disposed plugin graph via the module-level
+ * `teardowns` array.
  */
 export function teardown(): void {
-  for (const td of teardowns) td();
-  teardowns = [];
+  try {
+    for (const td of teardowns) {
+      try {
+        td();
+      } catch (err) {
+        console.error('[chanmod] teardown callback threw:', err);
+      }
+    }
+  } finally {
+    teardowns = [];
+  }
 }

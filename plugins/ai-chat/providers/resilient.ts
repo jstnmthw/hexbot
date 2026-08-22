@@ -36,10 +36,19 @@ export class ResilientProvider implements AIProvider {
    * handle and the promise resolver so {@link abort} can cancel the
    * timer and resolve the awaiting promise — without resolving, the
    * await chain inside {@link complete} would hang forever after
-   * teardown. Resolving early is safe because the next iteration
-   * either succeeds or throws via the inner provider's own abort path.
+   * teardown. The resumed loop then bails out via {@link abortEpoch}
+   * rather than starting another attempt.
    */
   private pendingSleeps = new Set<{ timer: ReturnType<typeof setTimeout>; resolve: () => void }>();
+  /**
+   * Bumped by {@link abort}. Each {@link complete} call captures the epoch
+   * before its retry loop and re-checks it after every backoff await: a
+   * mismatch means abort() fired mid-backoff, so the call throws instead of
+   * launching a fresh inner request that nothing can cancel (teardown's
+   * single `abort()` has already run). Scoping by captured epoch rather
+   * than a sticky flag keeps calls started after the abort unaffected.
+   */
+  private abortEpoch = 0;
 
   constructor(
     public readonly inner: AIProvider,
@@ -81,6 +90,7 @@ export class ResilientProvider implements AIProvider {
   ): Promise<AIResponse> {
     this.assertCircuitClosed();
     let backoff = this.config.initialBackoffMs;
+    const epoch = this.abortEpoch;
 
     for (let attempt = 0; attempt <= this.config.maxRetries; attempt++) {
       try {
@@ -112,6 +122,11 @@ export class ResilientProvider implements AIProvider {
         // jitter, multi-user 429s cause every caller to retry in lockstep
         // and slam the provider the moment the window opens.
         await this.sleep(Math.floor(backoff * (0.5 + Math.random())));
+        // abort() resolves pending sleeps early, so the loop resumes here on
+        // a microtask that runs after teardown. Bail rather than retry —
+        // a fresh inner.complete() at this point has nothing left to cancel
+        // it and would keep the torn-down module graph reachable.
+        if (this.abortEpoch !== epoch) throw new AIProviderError('Aborted', 'network');
         backoff *= 2;
       }
     }
@@ -139,8 +154,9 @@ export class ResilientProvider implements AIProvider {
     // teardown mid-backoff leaves timers (and the closures they capture)
     // sitting on the event loop until the configured backoff elapses,
     // and the awaiting `complete()` chain hangs. Resolve so the await
-    // unwinds; the next iteration either succeeds or throws via the
-    // inner provider's own abort path.
+    // unwinds; the epoch bump makes the resumed loop throw instead of
+    // starting an attempt no later abort() can reach.
+    this.abortEpoch++;
     for (const entry of this.pendingSleeps) {
       clearTimeout(entry.timer);
       entry.resolve();

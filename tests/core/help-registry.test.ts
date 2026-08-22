@@ -67,6 +67,40 @@ describe('HelpRegistry', () => {
     expect(all).toContainEqual(expect.objectContaining(entryC));
   });
 
+  it('remove() drops a single entry and leaves the plugin bucket intact', () => {
+    const reg = new HelpRegistry();
+    reg.register('chanmod', [entryA, entryB]);
+
+    expect(reg.remove('chanmod', '!op')).toBe(true);
+
+    expect(reg.get('!op')).toBeUndefined();
+    expect(reg.getAll()).toHaveLength(1);
+    expect(reg.getAll()).toContainEqual(expect.objectContaining(entryB));
+  });
+
+  it('remove() is case-insensitive and reports misses', () => {
+    const reg = new HelpRegistry();
+    reg.register('chanmod', [entryA]);
+
+    expect(reg.remove('chanmod', '!OP')).toBe(true);
+    expect(reg.remove('chanmod', '!op')).toBe(false);
+    expect(reg.remove('nosuch', '!op')).toBe(false);
+  });
+
+  it('remove() drops a namespaced collision-loser entry', () => {
+    const reg = new HelpRegistry();
+    reg.register('chanmod', [entryA]);
+    // Second registration of the same trigger is stored namespaced.
+    reg.register('other', [entryA]);
+    expect(reg.get('other:!op')).toBeDefined();
+
+    expect(reg.remove('other', '!op')).toBe(true);
+
+    expect(reg.get('other:!op')).toBeUndefined();
+    expect(reg.get('!op')).toMatchObject({ pluginId: 'chanmod' });
+    expect(reg.getAll()).toHaveLength(1);
+  });
+
   it('get() finds an entry by exact command name', () => {
     const reg = new HelpRegistry();
     reg.register('chanmod', [entryA, entryB]);

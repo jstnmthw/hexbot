@@ -60,6 +60,13 @@ export interface RssCommandsDeps {
    * !rss add X` cycles leak state forever.
    */
   circuitBreaker: CircuitBreaker;
+  /**
+   * First-announce-poll tracker owned by the plugin lifecycle. Passed in for
+   * the same reason as `circuitBreaker`: `handleRemove` has to drop the feed's
+   * entry, otherwise add/remove churn of unique ids retains a string per
+   * removed feed and a re-added id skips its first-poll stagger.
+   */
+  firstPollDone: Set<string>;
 }
 
 type CmdOutcome = 'attempt' | 'rejected' | 'ok' | 'error';
@@ -352,8 +359,9 @@ function isPermanentSeedError(errMsg: string): boolean {
 }
 
 /**
- * `!rss remove <id>` — drop a runtime-added feed and its circuit-breaker
- * state. Refuses to remove config-defined feeds (those must be edited in
+ * `!rss remove <id>` — drop a runtime-added feed and every scrap of per-feed
+ * state keyed by its id (circuit breaker, first-poll tracker, KV rows).
+ * Refuses to remove config-defined feeds (those must be edited in
  * plugins.json) so a `+m` operator can't silently disable a feed the
  * operator explicitly configured at startup.
  */
@@ -387,6 +395,7 @@ export function handleRemove(
   deleteRuntimeFeed(api, id);
   activeFeeds.delete(id);
   deps.circuitBreaker.forget(id);
+  deps.firstPollDone.delete(id);
   api.notice(ctx.nick, `Feed "${id}" removed.`);
   logCmd(api, ctx, 'remove', 'ok', `id=${id}`);
   api.audit.log('rss-feed-remove', { channel: ctx.channel, target: id });

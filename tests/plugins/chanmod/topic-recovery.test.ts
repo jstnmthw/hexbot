@@ -302,6 +302,87 @@ describe('chanmod — topic recovery', () => {
     expect(topicMsgs).toHaveLength(0);
   });
 
+  it('drops the known-good snapshot when the bot parts the channel', async () => {
+    bot.channelSettings.set('#topic7', 'takeover_detection', true);
+    bot.channelSettings.set('#topic7', 'protect_topic', true);
+
+    giveBotOps(bot, '#topic7');
+    addToChannel(bot, 'Attacker', 'attacker', 'attacker.host', '#topic7');
+
+    simulateTopic(bot, 'Admin', '#topic7', 'Original topic');
+    await tick(10);
+
+    // Bot parts — the snapshot has no TTL prune, so PART is its eviction path.
+    bot.client.simulateEvent('part', {
+      nick: 'hexbot',
+      ident: 'bot',
+      hostname: 'bot.host',
+      channel: '#topic7',
+      message: '',
+    });
+    await tick(10);
+
+    // Much later: rejoin, get attacked, and have the topic vandalized.
+    giveBotOps(bot, '#topic7');
+    raiseThreatToAlert(bot, '#topic7');
+    await tick(10);
+
+    const ch = bot.channelState.getChannel('#topic7');
+    if (ch) ch.topic = 'VANDALIZED';
+    simulateTopic(bot, 'Attacker', '#topic7', 'VANDALIZED');
+    await tick(10);
+    bot.client.clearMessages();
+
+    simulateMode(bot, 'ChanServ', '#topic7', '+o', 'hexbot');
+    await tick(50);
+
+    // No TOPIC command — the pre-part snapshot was dropped, so there is
+    // nothing stale to restore.
+    const topicMsgs = bot.client.messages.filter(
+      (m) => m.type === 'raw' && m.message?.includes('TOPIC'),
+    );
+    expect(topicMsgs).toHaveLength(0);
+  });
+
+  it('drops the known-good snapshot when the bot is kicked from the channel', async () => {
+    bot.channelSettings.set('#topic8', 'takeover_detection', true);
+    bot.channelSettings.set('#topic8', 'protect_topic', true);
+
+    giveBotOps(bot, '#topic8');
+    addToChannel(bot, 'Attacker', 'attacker', 'attacker.host', '#topic8');
+
+    simulateTopic(bot, 'Admin', '#topic8', 'Original topic');
+    await tick(10);
+
+    bot.client.simulateEvent('kick', {
+      nick: 'Attacker',
+      ident: 'attacker',
+      hostname: 'attacker.host',
+      kicked: 'hexbot',
+      channel: '#topic8',
+      message: 'bye',
+    });
+    await tick(10);
+
+    giveBotOps(bot, '#topic8');
+    raiseThreatToAlert(bot, '#topic8');
+    await tick(10);
+
+    const ch = bot.channelState.getChannel('#topic8');
+    if (ch) ch.topic = 'VANDALIZED';
+    simulateTopic(bot, 'Attacker', '#topic8', 'VANDALIZED');
+    await tick(10);
+    bot.client.clearMessages();
+
+    simulateMode(bot, 'ChanServ', '#topic8', '+o', 'hexbot');
+    await tick(50);
+
+    const topicMsgs = bot.client.messages.filter(
+      (m) => m.type === 'raw' && m.message?.includes('TOPIC'),
+    );
+    expect(topicMsgs).toHaveLength(0);
+  });
+
   it('does NOT restore when topic was not changed during attack', async () => {
     bot.channelSettings.set('#topic5', 'takeover_detection', true);
     bot.channelSettings.set('#topic5', 'protect_topic', true);

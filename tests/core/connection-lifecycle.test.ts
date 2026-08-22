@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type ConnectionLifecycleDeps,
   type LifecycleIRCClient,
+  type PresenceCheckChannelState,
   type ReconnectPolicy,
   classifyCloseReason,
   registerConnectionEvents,
@@ -11,7 +12,7 @@ import {
 import type { ReconnectDriver, ReconnectState } from '../../src/core/reconnect-driver';
 import { BotEventBus } from '../../src/event-bus';
 import type { LoggerLike } from '../../src/logger';
-import type { BotConfig } from '../../src/types';
+import type { BindHandler, BindType, BotConfig } from '../../src/types';
 import { createMockLogger } from '../helpers/mock-logger';
 
 // ---------------------------------------------------------------------------
@@ -66,6 +67,41 @@ const MINIMAL_BOT_CONFIG: BotConfig = {
 
 const makeLogger = createMockLogger;
 
+/**
+ * Channel state that reports the bot as being in no channel at all, so an
+ * armed presence-check interval is guaranteed to produce a visible rejoin
+ * attempt on its first tick. Tests that assert a timer was *not* armed rely
+ * on this: with `channelState` omitted the presence check no-ops regardless.
+ */
+const DETACHED_CHANNEL_STATE: PresenceCheckChannelState = {
+  getChannel: () => undefined,
+  getAllChannels: () => [],
+};
+
+/**
+ * Stateful stand-in for the real dispatcher that keeps the live bind list, so
+ * tests can assert what a lifecycle handle actually released rather than just
+ * that `unbind` was called. Mirrors `Dispatcher.unbind`'s identity match on
+ * (type, mask, handler).
+ */
+function makeTrackingDispatcher(): ConnectionLifecycleDeps['dispatcher'] & {
+  binds: Array<{ type: BindType; mask: string; handler: BindHandler }>;
+} {
+  const binds: Array<{ type: BindType; mask: string; handler: BindHandler }> = [];
+  return {
+    binds,
+    bind(type: BindType, _flags: string, mask: string, handler: BindHandler): void {
+      binds.push({ type, mask, handler });
+    },
+    unbind(type: BindType, mask: string, handler: BindHandler): void {
+      const idx = binds.findIndex(
+        (b) => b.type === type && b.mask === mask && b.handler === handler,
+      );
+      if (idx !== -1) binds.splice(idx, 1);
+    },
+  };
+}
+
 interface MockReconnectDriver extends ReconnectDriver {
   onDisconnect: ReturnType<typeof vi.fn<(policy: ReconnectPolicy) => void>>;
   onConnected: ReturnType<typeof vi.fn<() => void>>;
@@ -102,7 +138,7 @@ interface TestContext {
   logger: LoggerLike;
   applyCasemapping: ReturnType<typeof vi.fn>;
   messageQueue: { clear: ReturnType<typeof vi.fn> };
-  dispatcher: { bind: ReturnType<typeof vi.fn> };
+  dispatcher: { bind: ReturnType<typeof vi.fn>; unbind: ReturnType<typeof vi.fn> };
   reconnectDriver: MockReconnectDriver;
   deps: ConnectionLifecycleDeps;
 }
@@ -113,7 +149,7 @@ function makeContext(overrides?: Partial<ConnectionLifecycleDeps>): TestContext 
   const logger = makeLogger();
   const applyCasemapping = vi.fn();
   const messageQueue = { clear: vi.fn() };
-  const dispatcher = { bind: vi.fn() };
+  const dispatcher = { bind: vi.fn(), unbind: vi.fn() };
   const reconnectDriver = makeMockDriver();
 
   const deps: ConnectionLifecycleDeps = {
@@ -829,6 +865,45 @@ describe('registerConnectionEvents', () => {
       expect(client.listenerCount('unknown command')).toBe(0);
     });
 
+    it('removeListeners() releases the core INVITE bind it registered', () => {
+      const dispatcher = makeTrackingDispatcher();
+      const { deps } = makeContext({ dispatcher });
+      const handle = registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      expect(dispatcher.binds).toHaveLength(1);
+      expect(dispatcher.binds[0].type).toBe('invite');
+
+      handle.removeListeners();
+      expect(dispatcher.binds).toHaveLength(0);
+    });
+
+    it('repeat registrations do not stack INVITE binds when each handle is torn down', () => {
+      const dispatcher = makeTrackingDispatcher();
+      const { deps } = makeContext({ dispatcher });
+      const first = registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      const second = registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      // 'invite' is a stackable bind type, so both registrations are live.
+      expect(dispatcher.binds).toHaveLength(2);
+
+      // Each handle releases exactly its own bind — the second lifecycle
+      // keeps working after the first is torn down.
+      first.removeListeners();
+      expect(dispatcher.binds).toHaveLength(1);
+      second.removeListeners();
+      expect(dispatcher.binds).toHaveLength(0);
+    });
+
     it('cancelReconnect() forwards to the driver', () => {
       const { deps, reconnectDriver } = makeContext();
       const handle = registerConnectionEvents(
@@ -1047,9 +1122,8 @@ describe('registerConnectionEvents', () => {
       expect(client.joins).toHaveLength(1);
     });
 
-    it('unblocks the JOIN gate when bot:disconnected fires before the timeout', async () => {
-      const eventBus = new BotEventBus();
-      const { client, deps } = makeContext({
+    it('aborts the JOIN pass and leaves no presence timer when the session disconnects mid-wait', async () => {
+      const { client, deps, logger } = makeContext({
         config: {
           ...MINIMAL_BOT_CONFIG,
           services: {
@@ -1059,7 +1133,7 @@ describe('registerConnectionEvents', () => {
           },
         },
         configuredChannels: [{ name: '#test' }],
-        eventBus,
+        channelState: DETACHED_CHANNEL_STATE,
       });
       registerConnectionEvents(
         deps,
@@ -1067,14 +1141,62 @@ describe('registerConnectionEvents', () => {
         () => {},
       );
       client.emit('registered');
-      // Yield the microtask the handler is waiting on, then fire disconnect.
+      // Yield the microtask the handler is waiting on, then close the socket.
+      // `onClose` clears the presence timer and emits bot:disconnected, which
+      // is the arm that resolves the await.
       await Promise.resolve();
-      eventBus.emit('bot:disconnected', 'test-shutdown');
+      client.emit('close');
       await vi.advanceTimersByTimeAsync(0);
-      // The disconnect arm resolved without waiting the full 30s, so the
-      // join pass proceeded. Channel list is empty-on-disconnect, so we
-      // only verify the promise resolved — no hang.
-      expect(true).toBe(true);
+
+      // The await resolved without hanging the full 30s, but as 'aborted':
+      // no JOIN goes out on the dead socket.
+      expect(client.joins).toHaveLength(0);
+
+      // …and the continuation did not re-arm the presence interval that
+      // `onClose` had just cleared — it would otherwise tick for the whole
+      // reconnect backoff window.
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(client.joins).toHaveLength(0);
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining('Not in configured channel'),
+      );
+    });
+
+    it('aborts the JOIN pass and leaves no presence timer when shutdown cancels the wait', async () => {
+      const { client, deps, logger } = makeContext({
+        config: {
+          ...MINIMAL_BOT_CONFIG,
+          services: {
+            ...MINIMAL_BOT_CONFIG.services,
+            identify_before_join: true,
+            identify_before_join_timeout_ms: 30_000,
+          },
+        },
+        configuredChannels: [{ name: '#test' }],
+        channelState: DETACHED_CHANNEL_STATE,
+      });
+      const handle = registerConnectionEvents(
+        deps,
+        () => {},
+        () => {},
+      );
+      client.emit('registered');
+      await Promise.resolve();
+      expect(client.joins).toHaveLength(0);
+
+      // Shutdown path: `removeListeners()` fires the cancel hook, which
+      // resumes the await as 'aborted'.
+      handle.removeListeners();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.joins).toHaveLength(0);
+
+      // Nothing can clear a timer armed after the handle is discarded, so
+      // the continuation must not arm one at all.
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(client.joins).toHaveLength(0);
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining('Not in configured channel'),
+      );
     });
 
     it('clamps identify_before_join_timeout_ms above 60s to 60s', async () => {

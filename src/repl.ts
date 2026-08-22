@@ -21,6 +21,13 @@ export class BotREPL {
   private logger: LoggerLike | null;
   private ircLogger: LoggerLike | null;
   private ircListeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
+  // Process-lifetime listeners. Tracked like `ircListeners` so `stop()` can
+  // detach them — process.stdout/stdin/process itself outlive the REPL, so an
+  // untracked handler would pin the whole Bot graph (captured via `this`) for
+  // the life of the process and fire against a torn-down instance.
+  private onProcessExit: (() => void) | null = null;
+  private onStdoutError: ((err: Error) => void) | null = null;
+  private onStdinError: ((err: Error) => void) | null = null;
 
   constructor(bot: Bot, logger?: LoggerLike | null) {
     this.bot = bot;
@@ -88,7 +95,8 @@ export class BotREPL {
     // (e.g. process.exit() from a close-handler error before stop() runs)
     // so a torn-down BotREPL graph doesn't survive via the static hook.
     Logger.setOutputHook((line: string) => this.print(line));
-    process.once('exit', () => Logger.setOutputHook(null));
+    this.onProcessExit = () => Logger.setOutputHook(null);
+    process.once('exit', this.onProcessExit);
 
     this.logger?.info('Interactive mode. Type .help for commands, .quit to exit.');
 
@@ -132,7 +140,7 @@ export class BotREPL {
     // with `node ... | head -n 1`) crash the bot. Without this handler
     // Node's default behavior is to surface stdout EPIPE as an
     // `'uncaughtException'` and tear the process down.
-    process.stdout.on('error', (err) => {
+    this.onStdoutError = (err: Error) => {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'EPIPE' || code === 'ERR_STREAM_DESTROYED') {
         // Operator detached. Drop the output hook and let the close
@@ -141,8 +149,9 @@ export class BotREPL {
         return;
       }
       this.logger?.error('stdout error:', err);
-    });
-    process.stdin.on('error', (err) => {
+    };
+    process.stdout.on('error', this.onStdoutError);
+    this.onStdinError = (err: Error) => {
       this.logger?.warn('stdin error:', err);
       // EPIPE / EBADF on stdin means the readline interface won't
       // recover. Trigger a clean shutdown rather than waiting for the
@@ -152,7 +161,8 @@ export class BotREPL {
       } catch {
         /* close itself can throw if rl is already torn down */
       }
-    });
+    };
+    process.stdin.on('error', this.onStdinError);
 
     this.rl.prompt();
   }
@@ -188,6 +198,21 @@ export class BotREPL {
       this.bot.client.removeListener(event, fn);
     }
     this.ircListeners = [];
+    // The 'exit' hook only existed to clear the output hook on paths that
+    // bypass stop(); we've already cleared it above, so dropping the hook
+    // loses nothing.
+    if (this.onProcessExit) {
+      process.removeListener('exit', this.onProcessExit);
+      this.onProcessExit = null;
+    }
+    if (this.onStdoutError) {
+      process.stdout.removeListener('error', this.onStdoutError);
+      this.onStdoutError = null;
+    }
+    if (this.onStdinError) {
+      process.stdin.removeListener('error', this.onStdinError);
+      this.onStdinError = null;
+    }
     if (this.rl) {
       const rl = this.rl;
       this.rl = null;

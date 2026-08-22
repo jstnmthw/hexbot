@@ -319,6 +319,21 @@ export class ChannelState {
     // the new session is allocating fresh channel state.
     this.disconnecting = false;
 
+    // Same containment as `onTopic`/`onChannelInfo`: only the bot's own JOIN
+    // may allocate a channel record. A JOIN by anyone else for a channel we
+    // do not track is stray (netsplit re-merge, server bug) and would grow
+    // `this.channels` — and `networkAccounts` via extended-join — unboundedly.
+    // Before registration `botNick` is empty and self-JOINs are
+    // indistinguishable, so allocation stays open until it is known.
+    if (
+      this.botNick &&
+      this.lowerNick(nick) !== this.lowerNick(this.botNick) &&
+      !this.channels.has(this.lowerChannel(channel))
+    ) {
+      this.logger?.debug(`ignoring JOIN by ${nick} for untracked channel ${channel}`);
+      return;
+    }
+
     // IRCv3 extended-join (cap `extended-join`, IRCv3.2): when negotiated, the
     // server appends an account name and realname to JOIN. irc-framework sets
     // `account` to `false` when the user is not identified — the wire form is
@@ -356,28 +371,14 @@ export class ChannelState {
       ch.users.delete(this.lowerNick(nick));
     }
 
-    // Bot left the channel — remove the entire channel entry
+    // Use an ircLower compare so case-insensitive nick handling stays
+    // consistent with the rest of the file — a raw `!==` would incorrectly
+    // treat `Bot` and `bot` as different nicks on RFC1459 casemapping
+    // networks.
     if (this.botNick && this.lowerNick(nick) === this.lowerNick(this.botNick)) {
-      this.channels.delete(lower);
-    }
-
-    // If the user is no longer in any tracked channel, remove from network
-    // accounts. Use an ircLower compare so case-insensitive nick handling
-    // stays consistent with the rest of the file — a raw `!==` would
-    // incorrectly treat `Bot` and `bot` as different nicks on RFC1459
-    // casemapping networks.
-    if (!this.botNick || this.lowerNick(nick) !== this.lowerNick(this.botNick)) {
-      const nickLower = this.lowerNick(nick);
-      if (this.networkAccounts.has(nickLower)) {
-        let stillPresent = false;
-        for (const ch of this.channels.values()) {
-          if (ch.users.has(nickLower)) {
-            stillPresent = true;
-            break;
-          }
-        }
-        if (!stillPresent) this.networkAccounts.delete(nickLower);
-      }
+      this.dropChannel(lower);
+    } else {
+      this.pruneAccountIfGone(this.lowerNick(nick));
     }
 
     this.eventBus.emit('channel:userLeft', channel, nick);
@@ -405,9 +406,10 @@ export class ChannelState {
       ch.users.delete(this.lowerNick(kicked));
     }
 
-    // Bot was kicked — remove the entire channel entry
     if (this.botNick && this.lowerNick(kicked) === this.lowerNick(this.botNick)) {
-      this.channels.delete(lower);
+      this.dropChannel(lower);
+    } else {
+      this.pruneAccountIfGone(this.lowerNick(kicked));
     }
 
     this.eventBus.emit('channel:userLeft', channel, kicked);
@@ -574,7 +576,14 @@ export class ChannelState {
     }
     this.disconnecting = false;
 
-    const ch = this.ensureChannel(channel);
+    // Get-only: a legitimate NAMES burst always follows the bot's own JOIN,
+    // which is the sanctioned allocation site. A 353 for a channel we do not
+    // track is stray and must not create a record.
+    const ch = this.channels.get(this.lowerChannel(channel));
+    if (!ch) {
+      this.logger?.debug(`ignoring NAMES for untracked channel ${channel}`);
+      return;
+    }
 
     for (const u of users) {
       const nick = String(u.nick ?? '');
@@ -830,6 +839,32 @@ export class ChannelState {
 
   private lowerChannel(name: string): string {
     return ircLower(name, this.casemapping);
+  }
+
+  /**
+   * Drop a nick's cached account once it is visible in no tracked channel.
+   * Every departure path must run this: `networkAccounts` is only ever
+   * trimmed on observable departures, and a user we share no channel with
+   * generates no further PART/QUIT, so a missed prune retains the entry
+   * until the next reconnect clears the whole map.
+   */
+  private pruneAccountIfGone(nickLower: string): void {
+    if (!this.networkAccounts.has(nickLower)) return;
+    for (const ch of this.channels.values()) {
+      if (ch.users.has(nickLower)) return;
+    }
+    this.networkAccounts.delete(nickLower);
+  }
+
+  /**
+   * Remove a channel record after the bot's own departure (PART or KICK).
+   * The members go out of view with the record, so their cached accounts
+   * must be pruned from a snapshot of the keys taken before the delete.
+   */
+  private dropChannel(lowerChannel: string): void {
+    const members = [...(this.channels.get(lowerChannel)?.users.keys() ?? [])];
+    this.channels.delete(lowerChannel);
+    for (const nickLower of members) this.pruneAccountIfGone(nickLower);
   }
 
   /**

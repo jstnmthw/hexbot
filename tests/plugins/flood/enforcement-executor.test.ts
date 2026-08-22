@@ -196,6 +196,93 @@ describe('EnforcementExecutor terminal suppression', () => {
   });
 });
 
+describe('EnforcementExecutor recentTerminal cap (M-31)', () => {
+  const CAP = 512;
+  // Mirrors the module-private SAME_BURST_MS/TERMINAL_SUPPRESSION_MS TTL.
+  const TERMINAL_SUPPRESSION_MS = 2_000;
+
+  /** Read the private suppression map — the cap has no public surface. */
+  function recentTerminal(ex: EnforcementExecutor): Map<string, number> {
+    return (ex as unknown as { recentTerminal: Map<string, number> }).recentTerminal;
+  }
+
+  it('never exceeds the cap even when sweep() never runs', () => {
+    vi.useFakeTimers();
+    try {
+      const api = makeApi();
+      const ex = new EnforcementExecutor(api, cfg, () => true, vi.fn());
+      // A nick-rotating flood with the sweep bind auto-disabled: every kick
+      // mints a distinct (channel, nick) key and nothing ever prunes.
+      // Entries are all inserted at the same fake `now`, so none are expired
+      // and the insertion-order eviction is what has to hold the line.
+      for (let i = 0; i < CAP * 3; i++) {
+        ex.apply('kick', '#x', `flooder${i}`, 'flood');
+      }
+      expect(recentTerminal(ex).size).toBe(CAP);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('evicts the oldest entry when inserting past the cap', () => {
+    vi.useFakeTimers();
+    try {
+      const api = makeApi();
+      const ex = new EnforcementExecutor(api, cfg, () => true, vi.fn());
+      for (let i = 0; i < CAP; i++) {
+        ex.apply('kick', '#x', `flooder${i}`, 'flood');
+      }
+      const map = recentTerminal(ex);
+      expect(map.size).toBe(CAP);
+      expect(map.has('#x:flooder0')).toBe(true);
+      // One more distinct target drops the oldest insertion, not the newest.
+      ex.apply('kick', '#x', 'newcomer', 'flood');
+      expect(map.size).toBe(CAP);
+      expect(map.has('#x:flooder0')).toBe(false);
+      expect(map.has('#x:newcomer')).toBe(true);
+      expect(map.has(`#x:flooder${CAP - 1}`)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops expired entries inline before falling back to eviction', () => {
+    vi.useFakeTimers();
+    try {
+      const api = makeApi();
+      const ex = new EnforcementExecutor(api, cfg, () => true, vi.fn());
+      for (let i = 0; i < CAP; i++) {
+        ex.apply('kick', '#x', `flooder${i}`, 'flood');
+      }
+      const map = recentTerminal(ex);
+      expect(map.size).toBe(CAP);
+      // Past the suppression TTL every entry is dead weight — the inline
+      // prune reclaims all of them, so the new key is the only survivor.
+      vi.advanceTimersByTime(TERMINAL_SUPPRESSION_MS + 1);
+      ex.apply('kick', '#x', 'newcomer', 'flood');
+      expect(map.size).toBe(1);
+      expect(map.has('#x:newcomer')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-arming an existing key does not grow the map', () => {
+    vi.useFakeTimers();
+    try {
+      const api = makeApi();
+      const ex = new EnforcementExecutor(api, cfg, () => true, vi.fn());
+      ex.apply('kick', '#x', 'alice', 'flood');
+      expect(recentTerminal(ex).size).toBe(1);
+      vi.advanceTimersByTime(TERMINAL_SUPPRESSION_MS + 1);
+      ex.apply('kick', '#x', 'alice', 'flood');
+      expect(recentTerminal(ex).size).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('EnforcementExecutor drainPending (W-FL5)', () => {
   it('apply() skips when the bot lacks ops', () => {
     const api = makeApi();

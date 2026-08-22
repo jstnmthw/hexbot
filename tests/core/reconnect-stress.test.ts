@@ -91,7 +91,7 @@ describe('reconnect stress (50 cycles)', () => {
       applyCasemapping: () => {},
       applyServerCapabilities: () => {},
       messageQueue: { clear: () => {} },
-      dispatcher: { bind: () => {} },
+      dispatcher: { bind: () => {}, unbind: () => {} },
       logger,
       reconnectDriver: driver,
     };
@@ -194,7 +194,7 @@ describe('reconnect stress (50 cycles)', () => {
       applyCasemapping: () => {},
       applyServerCapabilities: () => {},
       messageQueue: { clear: () => {} },
-      dispatcher: { bind: () => {} },
+      dispatcher: { bind: () => {}, unbind: () => {} },
       logger,
       reconnectDriver: driver,
     };

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { MAX_SEEN_PER_FEED, hasSeen, markSeen } from '../../../plugins/rss/feed-store';
+import {
+  MAX_SEEN_PER_FEED,
+  deleteRuntimeFeed,
+  getLastPoll,
+  hasSeen,
+  markSeen,
+  saveRuntimeFeed,
+  setLastPoll,
+} from '../../../plugins/rss/feed-store';
 import type { PluginAPI, PluginDB } from '../../../src/types';
 
 /**
@@ -101,5 +109,42 @@ describe('feed-store: trimSeenToCap', () => {
     expect(hasSeen(api, feedId, 'hash0000')).toBe(false);
     expect(hasSeen(api, feedId, 'hash0001')).toBe(false);
     expect(hasSeen(api, feedId, 'hash0002')).toBe(true);
+  });
+});
+
+describe('feed-store: deleteRuntimeFeed', () => {
+  it('drops the last_poll row along with the feed record', () => {
+    // No other sweep reaps `rss:last_poll:` rows, so removing a feed has to
+    // take its poll clock with it or the row is orphaned for good.
+    const db = makeMemoryDb();
+    const api = makeApi(db);
+
+    saveRuntimeFeed(api, { id: 'gone', url: 'https://x.test/rss', channels: ['#test'] });
+    setLastPoll(api, 'gone');
+    expect(db.get('rss:last_poll:gone')).toBeDefined();
+
+    deleteRuntimeFeed(api, 'gone');
+
+    expect(db.get('rss:feed:gone')).toBeUndefined();
+    expect(db.get('rss:last_poll:gone')).toBeUndefined();
+    // A re-added feed under the same id must look never-polled, so init()'s
+    // silent first-run seeding gate fires again instead of announcing a backlog.
+    expect(getLastPoll(api, 'gone')).toBe(0);
+  });
+
+  it('leaves other feeds untouched', () => {
+    const db = makeMemoryDb();
+    const api = makeApi(db);
+
+    saveRuntimeFeed(api, { id: 'a', url: 'https://a.test/rss', channels: ['#test'] });
+    saveRuntimeFeed(api, { id: 'b', url: 'https://b.test/rss', channels: ['#test'] });
+    setLastPoll(api, 'a');
+    setLastPoll(api, 'b');
+
+    deleteRuntimeFeed(api, 'a');
+
+    expect(db.get('rss:last_poll:a')).toBeUndefined();
+    expect(db.get('rss:last_poll:b')).toBeDefined();
+    expect(db.get('rss:feed:b')).toBeDefined();
   });
 });

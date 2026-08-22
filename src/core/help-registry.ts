@@ -132,6 +132,24 @@ export class HelpRegistry {
     this.entries.delete(pluginId);
   }
 
+  /**
+   * Remove a single help entry from a plugin's bucket. Returns true if an
+   * entry was removed. Mirrors `register()`: both the plain strict key and
+   * the namespaced collision-loser key (`<pluginId>:<command>`) are cleared,
+   * since the caller can't know which form `register()` chose. Used by
+   * `CommandHandler.unregisterCommand` so tearing down a single command
+   * (e.g. memo detach) doesn't leave its help listing behind — plugin unload
+   * still goes through `unregister(pluginId)`.
+   */
+  remove(pluginId: string, command: string): boolean {
+    const bucket = this.entries.get(pluginId);
+    if (!bucket) return false;
+    const key = strictKey(command);
+    const removed = bucket.delete(key) || bucket.delete(`${pluginId}:${key}`);
+    if (bucket.size === 0) this.entries.delete(pluginId);
+    return removed;
+  }
+
   /** Return all entries across all plugins. */
   getAll(): HelpEntry[] {
     const result: HelpEntry[] = [];

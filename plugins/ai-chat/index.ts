@@ -578,6 +578,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
       socialTracker?.dropChannel(ctx.channel);
       contextManager?.clearContext(ctx.channel);
       engagementTracker?.dropChannel(ctx.channel);
+      ambientEngine?.dropChannel(ctx.channel);
       rateLimiter?.forgetChannel(ctx.channel);
       lastRateLimitOpNoticeAt.delete(ctx.channel);
       return;
@@ -590,6 +591,7 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
       socialTracker?.dropChannel(ctx.channel);
       contextManager?.clearContext(ctx.channel);
       engagementTracker?.dropChannel(ctx.channel);
+      ambientEngine?.dropChannel(ctx.channel);
       rateLimiter?.forgetChannel(ctx.channel);
       lastRateLimitOpNoticeAt.delete(ctx.channel);
       return;
