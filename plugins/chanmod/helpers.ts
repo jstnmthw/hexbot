@@ -114,11 +114,20 @@ export function hasAnyFlag(flags: string | null, required: Iterable<string>): bo
  * in `channel`. Returns `null` when the nick is unknown or not in channel
  * state — callers treat "no flags" and "unknown user" identically for
  * authorization purposes.
+ *
+ * The nick's services account (from channel state) is threaded into
+ * `findByHostmask` so `$a:`-pinned records resolve by account. Without it a
+ * record intended to be identity-bound would still match on any co-present
+ * hostmask pattern it carries, silently defeating the `$a:` pin on every
+ * flag-read authorization decision (setter/kicker privilege, `+d`, etc.).
+ * Account matches also outrank hostmask matches, so passing the account
+ * picks the record that actually admitted the user.
  */
 export function getUserFlags(api: PluginAPI, channel: string, nick: string): string | null {
   const hostmask = api.getUserHostmask(channel, nick);
   if (!hostmask) return null;
-  const user = api.permissions.findByHostmask(hostmask);
+  const account = api.getChannel(channel)?.users.get(api.ircLower(nick))?.accountName ?? null;
+  const user = api.permissions.findByHostmask(hostmask, account);
   if (!user) return null;
   const globalFlags = user.global;
   const channelFlags = user.channels[api.ircLower(channel)] ?? '';

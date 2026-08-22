@@ -62,6 +62,12 @@ const ServicesConfigOnDiskSchema = z.strictObject({
   type: z.enum(['atheme', 'anope', 'dalnet', 'none']).describe('@reload:reload Services flavor'),
   nickserv: z.string().describe('@reload:reload NickServ target'),
   password_env: z.string().optional().describe('@reload:restart NickServ password env var'),
+  services_host_pattern: z
+    .string()
+    .optional()
+    .describe(
+      '@reload:reload Hostmask a NickServ notice/verify reply must match (e.g. "NickServ!*@services.libera.chat"); pin it to defeat NickServ-nick spoofing — see SECURITY.md §3.2',
+    ),
   sasl: z.boolean().describe('@reload:restart Negotiate SASL at registration'),
   sasl_mechanism: z
     .enum(['PLAIN', 'EXTERNAL'])

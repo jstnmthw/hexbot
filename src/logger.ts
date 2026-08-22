@@ -7,14 +7,23 @@ import chalk from 'chalk';
 import { format } from 'node:util';
 
 /**
- * Strip control bytes that have no business in a non-terminal log sink.
- * Drops `\r`, `\x00`, mIRC color codes (`\x02`/`\x03`/`\x0f`/`\x16`/`\x1d`/
- * `\x1e`/`\x1f`), and the lone bell. Newlines and tab survive so
- * multi-line stack traces still render correctly.
+ * Strip control bytes that have no business in a log sink from a piece of
+ * user-controlled text. Drops every C0 control character — including the
+ * ESC (`\x1b`) that introduces ANSI/terminal escape sequences, the
+ * device-control bytes `\x04`/`\x11`, `\r`, `\x00`, the mIRC formatting
+ * codes, and the bell — while preserving `\n` and `\t` so multi-line stack
+ * traces still render. `\x7f` (DEL) is dropped too.
+ *
+ * This is applied to the *arguments* of a log call, before chalk colors the
+ * fixed prefix (time/level/source). That ordering matters: chalk emits its
+ * own `\x1b[` sequences to color the prefix, and those must survive to reach
+ * the terminal sink — only the caller-supplied message text is scrubbed, so
+ * a channel line carrying `\x1b[2J` or an OSC title-set can't reach an
+ * operator's console or a DCC party line.
  */
 function stripLogControls(input: string): string {
-  // eslint-disable-next-line no-control-regex -- IRC formatting + bell
-  return input.replace(/[\x00\x02\x03\x07\x0f\x16\x1d\x1e\x1f\r]/g, '');
+  // eslint-disable-next-line no-control-regex -- strip all C0 controls + DEL except \n/\t
+  return input.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
 }
 
 /**
@@ -363,14 +372,18 @@ export class Logger implements LoggerLike {
       dccParts.push(chalk.cyan(prefixPlain));
     }
 
-    const formatted = redactCredentialFields(format(...coloredParts, ...args));
-    // Strip control bytes from sinks that lack ANSI rendering — the file
-    // sink and the DCC fanout both treat the line as literal text, so a
-    // log line carrying a sanitized but still-mIRC-colored message can
-    // poison downstream operator consoles. The colored stdout sink keeps
-    // its ANSI escapes; only `plain` / `dccFormatted` are scrubbed.
-    const plain = redactCredentialFields(stripLogControls(format(...plainParts, ...args)));
-    const dccFormatted = redactCredentialFields(format(...dccParts, ...args));
+    // Scrub caller-supplied string args of control bytes *before* chalk
+    // colors the prefix, so every sink — stdout, file, and the DCC fanout —
+    // is protected from terminal-escape/mIRC injection while the intended
+    // ANSI on the prefix survives. See {@link stripLogControls}. Non-string
+    // args (objects, Errors) are formatted by util.format as before.
+    const safeArgs = args.map((a) => (typeof a === 'string' ? stripLogControls(a) : a));
+
+    const formatted = redactCredentialFields(format(...coloredParts, ...safeArgs));
+    // `plain` carries no intended ANSI, so also strip the fully-rendered line
+    // to catch control bytes surfaced from formatted non-string args.
+    const plain = redactCredentialFields(stripLogControls(format(...plainParts, ...safeArgs)));
+    const dccFormatted = redactCredentialFields(format(...dccParts, ...safeArgs));
 
     const source = this.prefix
       ? this.category

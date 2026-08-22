@@ -21,20 +21,39 @@
 export type ReconnectPolicy =
   | { tier: 'transient'; label?: string }
   | { tier: 'rate-limited'; label: string }
-  | { tier: 'fatal'; label: string; exitCode: number };
+  | {
+      tier: 'fatal';
+      label: string;
+      exitCode: number;
+      /**
+       * When true, the driver must honor the exit on the FIRST fatal close,
+       * bypassing the fatal-retry budget. Set for credential-rejection
+       * fatals (bad SASL password / unsupported mechanism): re-submitting the
+       * same bad credential can trip a services-side account-lockout counter,
+       * so the budget that helps transient cert/DNS fatals actively harms
+       * these. Infrastructure fatals (TLS cert, DNS) leave this unset and
+       * keep the budget, since they may heal or reflect a transient hiccup.
+       */
+      firstHit?: boolean;
+    };
 
 // Exit code 2 = fatal config error. A single code keeps supervisor wrappers
 // simple; the log line carries the actual cause.
 const FATAL_EXIT_CODE = 2;
 
-const FATAL_PATTERNS: Array<[RegExp, string]> = [
+// `firstHit` (3rd tuple element) marks credential-rejection fatals that must
+// exit on the first close without spending the driver's fatal-retry budget —
+// re-submitting a bad credential can advance a services account-lockout
+// counter. Infrastructure fatals (TLS cert, DNS) omit it and keep the budget.
+const FATAL_PATTERNS: Array<[RegExp, string, boolean?]> = [
   // SASL 904 — "SASL authentication failed". Must fire on first hit, before
   // the account-lockout counter on services ticks past its threshold.
-  [/SASL.*(authentication\s+failed|failed)/i, 'SASL authentication failed'],
+  [/SASL.*(authentication\s+failed|failed)/i, 'SASL authentication failed', true],
   // SASL 908 — server advertises no acceptable mechanism for us. Config
-  // error, retrying won't fix it.
-  [/mechanism(?:s)?\s+not\s+supported/i, 'SASL mechanism not supported'],
-  [/no\s+such\s+mechanism/i, 'SASL mechanism not supported'],
+  // error, retrying won't fix it — and re-offering a rejected mechanism is
+  // pointless churn, so exit first-hit.
+  [/mechanism(?:s)?\s+not\s+supported/i, 'SASL mechanism not supported', true],
+  [/no\s+such\s+mechanism/i, 'SASL mechanism not supported', true],
   // TLS cert verification failures surfaced by node's tls module. If the
   // operator set tls_verify=true, these are permanent until config change.
   [/Hostname\/IP\s+does\s+not\s+match/i, 'TLS hostname mismatch'],
@@ -95,8 +114,12 @@ const TRANSIENT_LABEL_PATTERNS: Array<[RegExp, string]> = [
  */
 export function classifyCloseReason(reason: string | null): ReconnectPolicy {
   if (!reason) return { tier: 'transient' };
-  for (const [re, label] of FATAL_PATTERNS) {
-    if (re.test(reason)) return { tier: 'fatal', label, exitCode: FATAL_EXIT_CODE };
+  for (const [re, label, firstHit] of FATAL_PATTERNS) {
+    if (re.test(reason)) {
+      return firstHit
+        ? { tier: 'fatal', label, exitCode: FATAL_EXIT_CODE, firstHit: true }
+        : { tier: 'fatal', label, exitCode: FATAL_EXIT_CODE };
+    }
   }
   for (const [re, label] of RATE_LIMITED_PATTERNS) {
     if (re.test(reason)) return { tier: 'rate-limited', label };

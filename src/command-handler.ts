@@ -12,6 +12,7 @@ import {
   renderNotFound,
   renderScope,
 } from './core/help-render';
+import type { VerificationProvider } from './dispatcher';
 import type { HandlerContext, HelpEntry } from './types';
 
 // ---------------------------------------------------------------------------
@@ -118,6 +119,20 @@ export class CommandHandler {
    */
   private readonly helpRegistry: HelpRegistry;
 
+  /**
+   * Optional NickServ/account verification provider. When set, commands
+   * arriving over the `'irc'` transport are subject to the same ACC gate the
+   * {@link EventDispatcher} applies to bind handlers: a command whose flags
+   * meet `require_acc_for` is denied unless the caller's services account is
+   * confirmed. DCC (password-authenticated), botlink (hub-re-checked), and
+   * REPL (local-trusted) never reach this gate. No production transport
+   * constructs `source:'irc'` yet, but the surface is designed to be wired
+   * (`ctx.account` is already threaded); attaching a provider here is what
+   * keeps that future wiring from shipping the NickServ race the dispatcher
+   * gate closes. See docs/SECURITY.md §3.2.
+   */
+  private verification: VerificationProvider | null = null;
+
   constructor(
     permissions?: CommandPermissionsProvider | null,
     commandPrefix?: string,
@@ -186,6 +201,16 @@ export class CommandHandler {
   }
 
   /**
+   * Attach the account-verification provider used to gate `source:'irc'`
+   * commands. Mirrors {@link EventDispatcher.setVerification}; the two share
+   * the same {@link VerificationProvider} instance in production so a single
+   * `require_acc_for` policy governs both bind handlers and command routing.
+   */
+  setVerification(provider: VerificationProvider): void {
+    this.verification = provider;
+  }
+
+  /**
    * Parse and execute a command string. No-ops silently when the input is
    * empty or missing the configured prefix — this lets transports pipe every
    * inbound line through unconditionally without pre-filtering. Handler
@@ -223,7 +248,7 @@ export class CommandHandler {
     // THIRD. Reordering would either let the hub side double-check a command
     // we already denied locally (wasted relay frame, confusing audit trail)
     // or let an unprivileged user trigger a hub round-trip purely to be denied.
-    if (!this.checkCommandPermissions(entry, commandName, args, ctx)) return;
+    if (!(await this.checkCommandPermissions(entry, commandName, args, ctx))) return;
 
     if (await this.runPreExecuteHook(entry, args, ctx)) return;
 
@@ -244,12 +269,12 @@ export class CommandHandler {
    * botlink transports bypass the check entirely: REPL is trusted locally
    * and botlink commands are re-checked on the hub side.
    */
-  private checkCommandPermissions(
+  private async checkCommandPermissions(
     entry: CommandEntry,
     commandName: string,
     args: string,
     ctx: CommandContext,
-  ): boolean {
+  ): Promise<boolean> {
     // REPL: trusted local console — only reachable by someone who can already
     // read config/bot.json off disk, so flag enforcement is moot.
     // Botlink: the authenticator is `src/core/botlink/hub-cmd-relay.ts`:
@@ -266,6 +291,28 @@ export class CommandHandler {
       ctx.reply('Permission denied.');
       return false;
     }
+
+    // DCC: the session already proved a handle via scrypt at connect time.
+    // Authorize by that handle, not by re-resolving the session hostmask —
+    // overlapping hostmask patterns could otherwise resolve the session to a
+    // different, more-privileged record than the handle it authenticated as
+    // (the cloak-reuse scenario in docs/SECURITY.md §3.4, carried past auth).
+    // Falls through to the hostmask path only when the provider doesn't expose
+    // checkFlagsByHandle (plugin-test doubles).
+    if (ctx.source === 'dcc' && ctx.dccSession) {
+      const byHandle = this.permissions as CommandPermissionsProvider & {
+        checkFlagsByHandle?: (flags: string, handle: string, channel: string | null) => boolean;
+      };
+      if (typeof byHandle.checkFlagsByHandle === 'function') {
+        ctx.handle = ctx.dccSession.handle;
+        if (!byHandle.checkFlagsByHandle(entry.options.flags, ctx.dccSession.handle, ctx.channel)) {
+          ctx.reply('Permission denied.');
+          return false;
+        }
+        return true;
+      }
+    }
+
     const handlerCtx: HandlerContext = {
       nick: ctx.nick,
       ident: ctx.ident ?? '',
@@ -301,7 +348,48 @@ export class CommandHandler {
       ctx.reply('Permission denied.');
       return false;
     }
+
+    // ACC verification gate for the IRC transport. The flag check above can
+    // be satisfied by a weak hostmask record; for privileged commands the
+    // dispatcher additionally confirms the caller's services account before
+    // trusting that match (docs/SECURITY.md §3.2). DCC and botlink authenticate
+    // by other means and are excluded; a missing provider leaves the flag
+    // check as the sole gate exactly as before this hook existed.
+    if (ctx.source === 'irc' && this.verification) {
+      if (!(await this.verifyIrcCaller(entry.options.flags, handlerCtx))) {
+        ctx.reply('Permission denied.');
+        return false;
+      }
+    }
     return true;
+  }
+
+  /**
+   * Second-stage account gate for IRC commands, mirroring
+   * {@link EventDispatcher.checkVerification}: resolve the caller's account
+   * from the live account map (fast path) or a NickServ ACC query (slow
+   * path), fail closed on a known-unidentified nick or an unverified query,
+   * then re-run the flag check with the confirmed account bound so the
+   * record that admitted the caller still wins once identity is proven.
+   */
+  private async verifyIrcCaller(flags: string, ctx: HandlerContext): Promise<boolean> {
+    const verification = this.verification;
+    if (!verification) return true;
+    if (!verification.requiresVerificationForFlags(flags)) return true;
+
+    let confirmedAccount: string | null;
+    const known = verification.getAccountForNick(ctx.nick);
+    if (known !== undefined) {
+      if (known === null) return false; // known not identified — fail closed
+      confirmedAccount = known;
+    } else {
+      const result = await verification.verifyUser(ctx.nick);
+      if (!result.verified) return false;
+      confirmedAccount = result.account;
+    }
+
+    if (!this.permissions) return false;
+    return this.permissions.checkFlags(flags, { ...ctx, account: confirmedAccount });
   }
 
   /**

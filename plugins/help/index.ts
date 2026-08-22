@@ -1,15 +1,9 @@
 // help — IRC help system plugin
 // Responds to !help [command|category] with a permission-filtered list of available commands.
-// All rendering / lookup logic lives in `src/core/help-render` so the IRC
-// transport here and the core `.help` built-in stay in lockstep.
-import {
-  lookup,
-  renderCategory,
-  renderCommand,
-  renderIndex,
-  renderNotFound,
-  renderScope,
-} from '../../src/core/help-render';
+// All rendering / lookup logic lives in `src/core/help-render` and is reached
+// through the scoped `api.help` namespace — never a runtime `import` from
+// `src/` (§4.1) — so the IRC transport here and the core `.help` built-in stay
+// in lockstep without inlining a copy of the core code into the plugin bundle.
 import type { HandlerContext, PluginAPI } from '../../src/types';
 
 export const name = 'help';
@@ -118,23 +112,23 @@ export function init(api: PluginAPI): void {
     const helpRegistry = api.getHelpRegistry();
 
     if (arg) {
-      const result = lookup(helpRegistry, arg, ctx, api.permissions, '!');
+      const result = api.help.lookup(helpRegistry, arg, ctx, api.permissions, '!');
       switch (result.kind) {
         case 'command':
-          privateReply(ctx, renderCommand(result.entry));
+          privateReply(ctx, api.help.renderCommand(result.entry));
           return;
         case 'category':
-          privateReply(ctx, renderCategory(result.category, result.entries, '!'));
+          privateReply(ctx, api.help.renderCategory(result.category, result.entries, '!'));
           return;
         case 'scope':
           privateReply(
             ctx,
-            renderScope(result.scope, result.header, result.entries, '!', result.group),
+            api.help.renderScope(result.scope, result.header, result.entries, '!', result.group),
           );
           return;
         case 'denied':
         case 'none':
-          api.notice(ctx.nick, renderNotFound(arg, '!'));
+          api.notice(ctx.nick, api.help.renderNotFound(arg, '!'));
           return;
       }
     }
@@ -174,7 +168,7 @@ export function init(api: PluginAPI): void {
     // Empty header/footer values pass through — renderIndex supplies the
     // standard intro (verbose) or product banner (compact) for an empty
     // header, and an operator-cleared footer means "no footer".
-    const lines = renderIndex(visible, {
+    const lines = api.help.renderIndex(visible, {
       compact: api.settings.getFlag('compact_index'),
       header: api.settings.getString('header'),
       footer: api.settings.getString('footer'),

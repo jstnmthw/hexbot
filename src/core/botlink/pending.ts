@@ -10,6 +10,15 @@ import type { LoggerLike } from '../../logger';
 interface PendingEntry<T> {
   timer: ReturnType<typeof setTimeout>;
   resolve: (value: T) => void;
+  /**
+   * When set, only a {@link PendingRequestMap.resolve} call whose `responder`
+   * matches (case-insensitively) may resolve this entry. Used on the hub to
+   * bind a reply frame to the leaf the request was actually sent to, so a
+   * different (compromised) leaf can't answer another leaf's pending request
+   * by guessing its ref. Left unset for peers with a single trusted
+   * counterpart (a leaf only ever hears from the hub).
+   */
+  expectedResponder?: string;
 }
 
 /**
@@ -60,7 +69,7 @@ export class PendingRequestMap<T> {
    * Rejects at cap with the timeout value so callers see the same
    * "this relay failed, move on" signal as a real network timeout.
    */
-  create(ref: string, timeoutMs: number, timeoutValue: T): Promise<T> {
+  create(ref: string, timeoutMs: number, timeoutValue: T, expectedResponder?: string): Promise<T> {
     // Guard against unbounded growth when the remote peer stops
     // responding and every caller still schedules a new entry. After
     // the cap, resolve immediately — callers treat it the same as a
@@ -85,7 +94,7 @@ export class PendingRequestMap<T> {
         this.map.delete(ref);
         resolvePromise(timeoutValue);
       }, timeoutMs);
-      this.map.set(ref, { timer, resolve: resolvePromise });
+      this.map.set(ref, { timer, resolve: resolvePromise, expectedResponder });
     });
   }
 
@@ -99,9 +108,20 @@ export class PendingRequestMap<T> {
    * the entry has already been resolved or timed out — callers don't need
    * to guard.
    */
-  resolve(ref: string, value: T): boolean {
+  resolve(ref: string, value: T, responder?: string): boolean {
     const entry = this.map.get(ref);
     if (!entry) return false;
+    // Responder binding: if this entry names an expected responder and the
+    // caller supplied who actually answered, a mismatch is a forged reply —
+    // ignore it WITHOUT consuming the entry so the legitimate responder's
+    // reply can still resolve it (or it can time out naturally).
+    if (
+      entry.expectedResponder !== undefined &&
+      responder !== undefined &&
+      responder.toLowerCase() !== entry.expectedResponder.toLowerCase()
+    ) {
+      return false;
+    }
     clearTimeout(entry.timer);
     this.map.delete(ref);
     entry.resolve(value);

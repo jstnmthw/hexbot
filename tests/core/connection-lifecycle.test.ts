@@ -1271,5 +1271,28 @@ describe('registerConnectionEvents', () => {
         expect(policy.exitCode).toBe(2);
       }
     });
+
+    it('credential fatals are marked firstHit; infrastructure fatals are not', () => {
+      // SASL rejection / mechanism mismatch must exit on the first hit so the
+      // driver never re-submits the credential (services lockout risk).
+      for (const reason of [
+        'SASL authentication failed',
+        'SASL mechanism not supported',
+        'no such mechanism',
+      ]) {
+        const policy = classifyCloseReason(reason);
+        expect(policy.tier).toBe('fatal');
+        if (policy.tier === 'fatal') expect(policy.firstHit).toBe(true);
+      }
+      // TLS / DNS fatals keep the retry budget — firstHit stays unset.
+      for (const reason of [
+        'unable to verify the first certificate',
+        'ENOTFOUND irc.example.net',
+      ]) {
+        const policy = classifyCloseReason(reason);
+        expect(policy.tier).toBe('fatal');
+        if (policy.tier === 'fatal') expect(policy.firstHit).toBeUndefined();
+      }
+    });
   });
 });

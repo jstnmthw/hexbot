@@ -384,13 +384,36 @@ export class ModLog {
   }
 
   /**
+   * Return a copy of `options` with every display-bound text field scrubbed
+   * of CR/LF/NUL and mIRC formatting — the same treatment the write path
+   * applies via {@link scrubModLogField}. Used when routing an options
+   * object to the {@link AuditFallbackBuffer}, whose contents are rendered
+   * verbatim by whatever command later reads `snapshot()`; buffering raw
+   * fields would defer the exact log-injection the write path prevents.
+   */
+  private scrubOptionsForFallback(options: LogModActionOptions): LogModActionOptions {
+    return {
+      ...options,
+      by: scrubModLogField(options.by ?? null),
+      plugin: scrubModLogField(options.plugin ?? null),
+      channel: scrubModLogField(options.channel ?? null),
+      target: scrubModLogField(options.target ?? null),
+      reason: scrubModLogField(options.reason ?? null),
+    };
+  }
+
+  /**
    * Write a mod_log row. See {@link LogModActionOptions}. Returns the row
    * id or null when the write was skipped/degraded.
    */
   logModAction(options: LogModActionOptions): number | null {
     if (!this.modLogEnabled) return null;
     if (this.writesDisabled) {
-      this.auditFallback?.(options);
+      // Scrub before buffering: the fallback's snapshot() is rendered by the
+      // first command that reads it, so raw CR/LF/mIRC bytes in by/target/
+      // reason would inherit the same log-injection vector the write path
+      // strips. See scrubOptionsForFallback.
+      this.auditFallback?.(this.scrubOptionsForFallback(options));
       return null;
     }
 
@@ -488,7 +511,7 @@ export class ModLog {
       );
     } catch (err) {
       if (err instanceof DatabaseBusyError || err instanceof DatabaseFullError) {
-        this.auditFallback?.(options);
+        this.auditFallback?.(this.scrubOptionsForFallback(options));
         return null;
       }
       throw err;
@@ -565,8 +588,7 @@ export class ModLog {
       WHERE id = ?
     `;
     const row = this.db.prepare(sql).get(id) as
-      | (Omit<ModLogEntry, 'metadata'> & { metadata: string | null })
-      | undefined;
+      (Omit<ModLogEntry, 'metadata'> & { metadata: string | null }) | undefined;
     if (!row) return null;
     return {
       ...row,

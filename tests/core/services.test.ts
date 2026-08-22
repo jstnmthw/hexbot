@@ -253,13 +253,17 @@ describe('Services', () => {
   });
 
   describe('services type: none', () => {
-    it('should always return verified=true when type is none', async () => {
+    it('fails closed (verified=false, account=null) when type is none', async () => {
+      // A services-free network has no authority to vouch for identity, so
+      // verifyUser must NOT fabricate a verified account from the nick —
+      // that would let a plugin trust an attacker-chosen identity. See
+      // services.ts verifyUser and the security audit fix (2026-08-23).
       const { services, client } = createServices({ type: 'none' });
 
       const result = await services.verifyUser('Anyone');
 
-      expect(result.verified).toBe(true);
-      expect(result.account).toBe('Anyone');
+      expect(result.verified).toBe(false);
+      expect(result.account).toBeNull();
       // No NickServ query sent
       expect(client.sent).toHaveLength(0);
     });

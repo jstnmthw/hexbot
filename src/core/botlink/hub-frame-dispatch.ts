@@ -99,13 +99,17 @@ export type FrameHandler = (
 // Handlers
 // ---------------------------------------------------------------------------
 
-const handleCmdResult: FrameHandler = (ctx, _leaf, frame) => {
+const handleCmdResult: FrameHandler = (ctx, leaf, frame) => {
   const ref = String(frame.ref ?? '');
   const output = Array.isArray(frame.output)
     ? frame.output.filter((s): s is string => typeof s === 'string')
     : [];
-  if (ctx.pendingCmds.resolve(ref, output)) return true;
-  const originBot = ctx.routes.popCmdRoute(ref);
+  // Bind the reply to the leaf that authenticated on this connection
+  // (`leaf.botname`). Both resolvers verify it against the responder they
+  // recorded when the CMD was dispatched, so a compromised leaf can't resolve
+  // another leaf's pending command with forged output by guessing its ref.
+  if (ctx.pendingCmds.resolve(ref, output, leaf.botname)) return true;
+  const originBot = ctx.routes.popCmdRoute(ref, leaf.botname);
   if (originBot) {
     ctx.send(originBot, frame);
     return true;

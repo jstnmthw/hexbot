@@ -77,6 +77,30 @@ function clampBytes(s: string, maxBytes: number): string {
   return out;
 }
 
+/**
+ * Sanitize a *positional* (non-trailing) parameter for a hand-assembled raw
+ * IRC line and reject values that would break token framing. Mirrors the
+ * guard already applied in {@link IRCCommands.sendModeRaw}: a value containing
+ * whitespace or a comma splits into extra wire tokens — turning
+ * `KICK #c "bob,alice"` into a two-target kick or `JOIN "#a,#b"` into a
+ * two-channel join — and a leading `:` is the IRC trailing-argument sentinel
+ * that swallows the rest of the line. Trailing free-text args (kick reason,
+ * topic body) are exempt: they follow the `:` sentinel and only need
+ * CRLF/NUL sanitization plus a byte clamp. Throws on an unsafe value so the
+ * caller's surrounding try/catch fails the action closed rather than emitting
+ * a smuggled command.
+ */
+function assertSafeRawParam(value: string, label: string): string {
+  const p = sanitize(value);
+  if (/[\s,]/.test(p) || p.startsWith(':')) {
+    throw new Error(
+      `IRCCommands: refusing unsafe ${label} ${JSON.stringify(value)} — ` +
+        `must not contain whitespace, commas, or a leading ':'`,
+    );
+  }
+  return p;
+}
+
 // ---------------------------------------------------------------------------
 // Mode-string parsing
 // ---------------------------------------------------------------------------
@@ -213,8 +237,8 @@ export class IRCCommands {
    */
   join(channel: string, key?: string): void {
     if (key) {
-      const safeChan = sanitize(channel);
-      const safeKey = sanitize(key);
+      const safeChan = assertSafeRawParam(channel, 'channel');
+      const safeKey = assertSafeRawParam(key, 'channel key');
       this.dispatchSend(channel, () => this.client.raw(`JOIN ${safeChan} ${safeKey}`));
     } else {
       this.dispatchSend(channel, () => this.client.join(channel));
@@ -227,8 +251,8 @@ export class IRCCommands {
 
   kick(channel: string, nick: string, reason?: string, actor?: ModActor): void {
     const safe = clampBytes(sanitize(reason ?? ''), MAX_KICK_REASON_BYTES);
-    const safeChan = sanitize(channel);
-    const safeNick = sanitize(nick);
+    const safeChan = assertSafeRawParam(channel, 'channel');
+    const safeNick = assertSafeRawParam(nick, 'nick');
     this.dispatchSend(channel, () => this.client.raw(`KICK ${safeChan} ${safeNick} :${safe}`));
     this.logMod('kick', channel, nick, actor, reason ?? null);
   }
@@ -277,15 +301,15 @@ export class IRCCommands {
     // RFC 2812 §3.2.7 INVITE: arg order is `<nick> <channel>`, the inverse of
     // the natural English reading. Easy to invert by accident — the sanitize()
     // calls also serve as a checkpoint for that order.
-    const safeChan = sanitize(channel);
-    const safeNick = sanitize(nick);
+    const safeChan = assertSafeRawParam(channel, 'channel');
+    const safeNick = assertSafeRawParam(nick, 'nick');
     this.dispatchSend(channel, () => this.client.raw(`INVITE ${safeNick} ${safeChan}`));
     this.logMod('invite', channel, nick, actor, null);
   }
 
   topic(channel: string, text: string, actor?: ModActor): void {
     const safe = clampBytes(sanitize(text), MAX_TOPIC_BYTES);
-    const safeChan = sanitize(channel);
+    const safeChan = assertSafeRawParam(channel, 'channel');
     this.dispatchSend(channel, () => this.client.raw(`TOPIC ${safeChan} :${safe}`));
     // Persist the new topic as `reason` so audit queries can grep topic
     // changes by substring. Text is user-controlled but safely stored
@@ -393,9 +417,9 @@ export class IRCCommands {
   // -------------------------------------------------------------------------
 
   private sendMode(channel: string, mode: string, param: string): void {
-    const safeChan = sanitize(channel);
+    const safeChan = assertSafeRawParam(channel, 'channel');
     const safeMode = sanitize(mode);
-    const safeParam = sanitize(param);
+    const safeParam = assertSafeRawParam(param, 'mode param');
     if (this.client.mode) {
       this.dispatchSend(channel, () => this.client.mode!(safeChan, safeMode, safeParam));
     } else {

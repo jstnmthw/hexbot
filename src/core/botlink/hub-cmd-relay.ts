@@ -86,7 +86,9 @@ export function handleCmdRelay(ctx: HubCmdRelayContext, fromBot: string, frame: 
       return;
     }
 
-    ctx.routes.trackCmdRoute(ref, fromBot);
+    // Record `toBot` as the expected responder so only that leaf's CMD_RESULT
+    // can be routed back to `fromBot` — a different leaf can't forge the reply.
+    ctx.routes.trackCmdRoute(ref, fromBot, toBot);
     ctx.send(toBot, frame);
     return;
   }

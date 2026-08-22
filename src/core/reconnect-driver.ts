@@ -189,6 +189,22 @@ export function createReconnectDriver(deps: ReconnectDriverDeps): ReconnectDrive
 
       if (policy.tier === 'fatal') {
         consecutiveFatals++;
+        // Credential-rejection fatals (bad SASL password / unsupported
+        // mechanism) exit on the first hit — spending the retry budget here
+        // re-submits the rejected credential and can trip a services-side
+        // account-lockout counter. Only infrastructure fatals (TLS cert, DNS)
+        // get the budget, since those can heal or reflect a transient hiccup.
+        if (policy.firstHit) {
+          logger.error(
+            `FATAL: ${policy.label} (credential rejection — exiting on first hit, ` +
+              `not retrying) — exiting with code ${policy.exitCode}`,
+          );
+          eventBus.emit('bot:disconnected', `fatal: ${policy.label}`);
+          status = 'stopped';
+          nextAttemptAt = null;
+          exit(policy.exitCode);
+          return;
+        }
         if (consecutiveFatals < FATAL_BUDGET) {
           // Under the budget — treat as rate-limited so the next attempt
           // waits the long backoff while services / cert / DNS either

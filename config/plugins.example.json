@@ -1,7 +1,7 @@
 {
   "chanmod": {
     "config": {
-      "services_host_pattern": "services.*"
+      "services_host_pattern": "services.libera.chat"
     }
   },
   "rss": {

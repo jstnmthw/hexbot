@@ -11,6 +11,14 @@ import type { BanStore } from './core/ban-store';
 import type { ChannelSettings } from './core/channel-settings';
 import type { ChannelState } from './core/channel-state';
 import type { HelpRegistry } from './core/help-registry';
+import {
+  lookup as helpLookup,
+  renderCategory as helpRenderCategory,
+  renderCommand as helpRenderCommand,
+  renderIndex as helpRenderIndex,
+  renderNotFound as helpRenderNotFound,
+  renderScope as helpRenderScope,
+} from './core/help-render';
 import { patternSpecificity } from './core/hostmask-matcher';
 import type { IRCCommands } from './core/irc-commands';
 import type { MessageQueue } from './core/message-queue';
@@ -40,6 +48,7 @@ import type {
   PluginChannelSettings,
   PluginCoreSettingsView,
   PluginDB,
+  PluginHelp,
   PluginModActor,
   PluginPermissions,
   PluginServices,
@@ -173,6 +182,7 @@ const SUB_API_KEYS = new Set([
   'settings',
   'audit',
   'util',
+  'help',
 ]);
 
 /**
@@ -386,8 +396,13 @@ export function createPluginApi(
     },
     unbind<T extends BindType>(type: T, mask: string, handler: BindHandler<T>): void {
       const widenedHandler = handler as BindHandler;
+      // Compare masks with the network's casemapping, exactly as the scoped
+      // bind path does — a plugin that binds `!Foo` then unbinds `!foo` must
+      // still find and drop the tracked entry, otherwise the live bind (and
+      // its tracking record) leak until unload, defeating the §4.3 cleanup.
+      const cm = getCasemapping();
       const idx = wrappedHandlers.findIndex(
-        (e) => e.handler === widenedHandler && e.type === type && e.mask === mask,
+        (e) => e.handler === widenedHandler && e.type === type && caseCompare(e.mask, mask, cm),
       );
       const actual = idx === -1 ? widenedHandler : wrappedHandlers[idx].wrapped;
       dispatcher.unbind(type, mask, actual);
@@ -444,6 +459,7 @@ export function createPluginApi(
       return stripFormatting(text);
     },
     util: createPluginUtilApi(getCasemapping),
+    help: createPluginHelpRenderApi(),
     audit: createPluginAuditApi(deps.db, pluginId, pluginLogger),
     auditActor(ctx: HandlerContext): PluginModActor {
       // Force `source='plugin'` and `plugin=<pluginId>` so a plugin can't
@@ -1327,6 +1343,26 @@ function createPluginHelpApi(
  * factory returns the canonical {@link SlidingWindowCounter} class, which
  * structurally satisfies {@link PluginSlidingWindowCounter}.
  */
+/**
+ * Build the `api.help` namespace — the pure lookup/render helpers from
+ * `src/core/help-render`. Exposing them here is the runtime boundary that
+ * lets the `help` plugin render identically to the core `.help` built-in
+ * without a value `import` from `src/` (docs/SECURITY.md §4.1): the plugin's
+ * bundle would otherwise inline a copy that goes stale on a core change and
+ * runs outside the frozen API. Stateless — the same frozen object is safe
+ * across every plugin.
+ */
+function createPluginHelpRenderApi(): PluginHelp {
+  return Object.freeze({
+    lookup: helpLookup,
+    renderCommand: helpRenderCommand,
+    renderCategory: helpRenderCategory,
+    renderScope: helpRenderScope,
+    renderNotFound: helpRenderNotFound,
+    renderIndex: helpRenderIndex,
+  });
+}
+
 function createPluginUtilApi(getCasemapping: () => Casemapping): PluginUtil {
   return Object.freeze({
     matchWildcard(pattern: string, text: string, opts?: { caseInsensitive?: boolean }): boolean {

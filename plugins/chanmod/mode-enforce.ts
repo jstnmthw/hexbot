@@ -37,6 +37,8 @@ import {
   botHasOps,
   getBotNick,
   getParamModes,
+  getUserFlags,
+  hasAnyFlag,
   markIntentional,
   parseChannelModes,
 } from './helpers';
@@ -136,19 +138,55 @@ function handleBotBannedThreat(
 }
 
 /**
+ * Minimum specificity a `+b` mask must clear before enforcebans will kick
+ * anyone matching it. A partially-hostile op's `*!*@*` (specificity ≈ 17) or
+ * `*!*@*` variants would otherwise turn the bot into a mass-kick weapon
+ * against the whole channel. `patternSpecificity` = literal_chars*10 −
+ * wildcards, so this floor rejects the catch-all masks while still honoring
+ * ordinary host/domain bans (e.g. `*!*@some.host` clears it comfortably).
+ */
+const ENFORCEBANS_MIN_MASK_SPECIFICITY = 30;
+
+/** Flags that make a channel member exempt from enforcebans auto-kicking. */
+const ENFORCEBANS_EXEMPT_FLAGS = 'nmov';
+
+/**
  * Enforcebans: kick channel members matching a new ban mask.
  * Returns true if this event was handled (halts further processing).
+ *
+ * Hardened against a partially-hostile op weaponizing the bot (SECURITY.md
+ * §chanmod): the mask must clear a specificity floor so a catch-all `*!*@*`
+ * can't sweep the whole channel, and flagged/opped/voiced members are never
+ * kicked — those are exactly who a hostile ban would target first. (No
+ * setter-flag gate: setting `+b` already requires channel +o, and enforcebans
+ * exists precisely to amplify a channel op's ban; a bot-flag requirement
+ * would break the ordinary case of a human op banning a spammer.)
  */
 function handleEnforceBans(api: PluginAPI, state: SharedState, mctx: ModeContext): boolean {
   const { channel, modeStr, target } = mctx;
   const enforcebans = api.channelSettings.getFlag(channel, 'enforcebans');
   if (!enforcebans || modeStr !== '+b' || !target || !botHasOps(api, channel)) return false;
 
+  // Mask specificity floor: refuse to act on a catch-all mask that would
+  // sweep the entire channel.
+  if (api.util.patternSpecificity(target) < ENFORCEBANS_MIN_MASK_SPECIFICITY) {
+    api.warn(
+      `Enforcebans: refusing to enforce overly-broad ban mask ${target} in ${channel} ` +
+        `(specificity ${api.util.patternSpecificity(target)} < ${ENFORCEBANS_MIN_MASK_SPECIFICITY})`,
+    );
+    return true;
+  }
+
   // Non-null cast safe: `botHasOps` above returned true, which is only
   // possible when `getChannel(channel)` returned a populated record.
   const ch = api.getChannel(channel)!;
   for (const user of ch.users.values()) {
     if (api.isBotNick(user.nick)) continue;
+    // Never kick a trusted member: a currently-opped/voiced user, or one
+    // holding an exempt chanmod flag, is exactly who a hostile ban would
+    // target first.
+    if (/[ohv]/.test(user.modes)) continue;
+    if (hasAnyFlag(getUserFlags(api, channel, user.nick), ENFORCEBANS_EXEMPT_FLAGS)) continue;
     const hostmask = api.buildHostmask(user);
     if (api.util.matchWildcard(target, hostmask)) {
       api.log(`Enforcebans: kicking ${user.nick} from ${channel} (matches ${target})`);

@@ -169,8 +169,7 @@ export function registerPasswordCommands(deps: PasswordCommandDeps): void {
 // ---------------------------------------------------------------------------
 
 type ResolvedCall =
-  | { targetHandle: string; newpass: string; isSelfRotation: boolean }
-  | { error: string };
+  { targetHandle: string; newpass: string; isSelfRotation: boolean } | { error: string };
 
 /**
  * Decide whether `.chpass <arg1> [arg2]` is a self-rotation or a rotation of
@@ -248,6 +247,12 @@ function resolveCallerAndTarget(
  */
 function resolveCallerHandle(ctx: CommandContext, permissions: Permissions): string | null {
   if (ctx.source !== 'dcc') return null;
+  // Prefer the handle the DCC session proved via scrypt at connect time.
+  // Re-resolving by hostmask here is unsafe: on cloak-persistent networks
+  // overlapping patterns can match a *different* record than the one the
+  // session authenticated as, letting a session rotate someone else's
+  // password on the self-rotation path. See docs/SECURITY.md §3.4.
+  if (ctx.dccSession) return ctx.dccSession.handle;
   const fullHostmask = `${ctx.nick}!${ctx.ident ?? ''}@${ctx.hostname ?? ''}`;
   const caller = permissions.findByHostmask(fullHostmask);
   return caller?.handle ?? null;

@@ -58,9 +58,14 @@ describe('requiresVerificationForFlags', () => {
     expect(requiresVerificationForFlags('o', ['+z'])).toBe(false);
   });
 
-  it('returns false when bindFlags contains only unrecognized characters', () => {
-    // 'x' is not in FLAG_LEVEL — bindLevel resolves to 0 via the ?? 0 fallback
-    expect(requiresVerificationForFlags('x', ['+o'])).toBe(false);
+  it('fails closed when bindFlags contains an unrecognized character', () => {
+    // 'x' is outside VALID_FLAGS. We can't know its privilege level, so with
+    // require_acc_for active we require verification rather than silently
+    // dropping the ACC gate on a typo (e.g. an uppercase 'O' for 'o').
+    expect(requiresVerificationForFlags('x', ['+o'])).toBe(true);
+    // A recognized-but-privilege-neutral flag ('d') still resolves to level 0
+    // and does not trip the gate on its own.
+    expect(requiresVerificationForFlags('d', ['+o'])).toBe(false);
   });
 });
 

@@ -3,6 +3,7 @@
 // Type-only definitions for the scoped API that every plugin receives via
 // init(), plus the channel-state / permission-record / help / channel-setting
 // shapes that cross the plugin boundary. Pure types — no runtime code.
+import type { LookupResult, RenderIndexOptions, RenderPermissions } from '../core/help-render';
 import type {
   ChanmodBotConfig,
   IdentityConfig,
@@ -355,6 +356,15 @@ export interface PluginAPI {
   getHelpRegistry(): HelpRegistryView;
 
   /**
+   * Help lookup + rendering helpers. Exposes the pure functions in
+   * `src/core/help-render` through the scoped API so the IRC-facing `help`
+   * plugin renders identically to the core `.help` built-in without a
+   * runtime `import` from `src/` (which would inline a stale copy across a
+   * core change and run outside the frozen API — see docs/SECURITY.md §4.1).
+   */
+  help: PluginHelp;
+
+  /**
    * Strip IRC formatting and control characters from a string.
    * Use whenever user-controlled values appear in security-relevant output
    * (permission grants, op/kick/ban announcements, log messages).
@@ -655,6 +665,38 @@ export interface HelpRegistryView {
   get(command: string): HelpEntry | undefined;
   /** All entries across every owner bucket. */
   getAll(): HelpEntry[];
+}
+
+/**
+ * Scoped help lookup + rendering surface (see {@link PluginAPI.help}).
+ * Method signatures mirror the pure functions in `src/core/help-render`
+ * one-to-one; the API exposes them so plugins never runtime-`import` core.
+ */
+export interface PluginHelp {
+  /** Resolve a help query against the unified corpus, permission-filtered. */
+  lookup(
+    registry: HelpRegistryView,
+    query: string,
+    ctx: HandlerContext,
+    perms: RenderPermissions | null,
+    prefix: string,
+  ): LookupResult;
+  /** Render the detail view for a single command. */
+  renderCommand(entry: HelpEntry): string[];
+  /** Render the command list for a category. */
+  renderCategory(category: string, entries: HelpEntry[], prefix: string): string[];
+  /** Render a settings/topic scope view (folded, or expanded for `group`). */
+  renderScope(
+    scope: string,
+    header: HelpEntry | null,
+    entries: HelpEntry[],
+    prefix: string,
+    group?: string,
+  ): string[];
+  /** Render the "no such help topic" line for an unresolved query. */
+  renderNotFound(query: string, prefix: string): string;
+  /** Render the top-level help index from the visible entries. */
+  renderIndex(entries: HelpEntry[], opts: RenderIndexOptions): string[];
 }
 
 // ---------------------------------------------------------------------------

@@ -358,7 +358,10 @@ export class BotLinkHub {
     // to cover a network blip + a slow command executing on the remote
     // leaf, short enough that an unresponsive leaf doesn't pin the IRC
     // user's session forever.
-    return this.pendingCmds.create(ref, CMD_EXEC_TIMEOUT_MS, ['Command relay timed out.']);
+    // Bind the pending reply to the leaf we sent to (`botname`): only a
+    // CMD_RESULT authenticated as coming from that leaf may resolve it, so a
+    // different compromised leaf can't answer this ref with forged output.
+    return this.pendingCmds.create(ref, CMD_EXEC_TIMEOUT_MS, ['Command relay timed out.'], botname);
   }
 
   // -----------------------------------------------------------------------

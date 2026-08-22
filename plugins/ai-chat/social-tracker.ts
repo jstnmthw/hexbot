@@ -40,6 +40,13 @@ export interface PendingQuestion {
 const USER_INTERACTION_PREFIX = 'user-interaction:';
 /** Drop user-interaction rows whose lastSeen is older than this. */
 const USER_INTERACTION_RETENTION_MS = 90 * 24 * 60 * 60_000;
+/**
+ * Hard cap on stored user-interaction rows. The 90-day age-out alone can't
+ * stop a nick-rotation flood minting one row per unique nick within a single
+ * day; this cap evicts the oldest-`lastSeen` rows first, mirroring the `seen`
+ * plugin's defense against the same storage-exhaustion vector (§2.4).
+ */
+const MAX_USER_INTERACTION_ROWS = 10_000;
 
 export interface UserInteraction {
   lastSeen: number;
@@ -328,6 +335,39 @@ export class SocialTracker {
     }
 
     this.db.set(key, JSON.stringify(stats));
+
+    // Enforce the hard row cap only when we just minted a NEW nick's row —
+    // that is exactly when a nick-rotation flood grows the namespace, and it
+    // bounds the O(n) list/sort cost to once per unique nick rather than once
+    // per message.
+    if (!raw) this.enforceUserInteractionCap();
+  }
+
+  /**
+   * Evict the oldest-`lastSeen` user-interaction rows until the namespace is
+   * at or below {@link MAX_USER_INTERACTION_ROWS}. Corrupt rows are dropped.
+   * Mirrors the `seen` plugin's `enforceEntryCap`.
+   */
+  private enforceUserInteractionCap(): void {
+    if (!this.db) return;
+    const rows = this.db.list(USER_INTERACTION_PREFIX);
+    if (rows.length <= MAX_USER_INTERACTION_ROWS) return;
+    const parsed: Array<{ key: string; lastSeen: number }> = [];
+    for (const row of rows) {
+      try {
+        const stats = JSON.parse(row.value) as Partial<UserInteraction>;
+        parsed.push({
+          key: row.key,
+          lastSeen: typeof stats.lastSeen === 'number' ? stats.lastSeen : 0,
+        });
+      } catch {
+        this.db.del(row.key);
+      }
+    }
+    if (parsed.length <= MAX_USER_INTERACTION_ROWS) return;
+    parsed.sort((a, b) => a.lastSeen - b.lastSeen);
+    const excess = parsed.length - MAX_USER_INTERACTION_ROWS;
+    for (let i = 0; i < excess; i++) this.db.del(parsed[i].key);
   }
 
   /**

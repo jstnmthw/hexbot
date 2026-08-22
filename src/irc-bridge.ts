@@ -652,8 +652,10 @@ export class IRCBridge {
 
   /**
    * Flood-check a PRIVMSG/ACTION and fan it out to one or more dispatcher
-   * event types. The flood key prefers the full hostmask for accuracy and
-   * falls back to the bare nick when ident/host are missing.
+   * event types. The flood key is `ident@host` — the persistent portion of
+   * the identity — so a nick-rotating flooder can't reset the sliding window
+   * on every `/nick`. Matches the CTCP limiter's keying (see `onCtcp`). Falls
+   * back to the bare nick only when ident/host are both missing.
    */
   private dispatchMessage(
     floodType: 'pub' | 'msg',
@@ -661,7 +663,7 @@ export class IRCBridge {
     dispatchTypes: BindType[],
   ): void {
     const { nick, ident, hostname, ctx } = source;
-    const floodKey = ident && hostname ? `${nick}!${ident}@${hostname}` : nick;
+    const floodKey = ident && hostname ? `${ident}@${hostname}` : nick;
     const flood = this.dispatcher.floodCheck(floodType, floodKey, ctx);
     if (flood.blocked) return;
     for (const type of dispatchTypes) {

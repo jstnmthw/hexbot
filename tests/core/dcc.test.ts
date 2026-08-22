@@ -1947,7 +1947,8 @@ describe('DCCManager.openSession prompt integration', () => {
 
   it('rejects a currently-locked-out identity without prompting', () => {
     const tracker = new DCCAuthTracker({ maxFailures: 1, baseLockMs: 60_000 });
-    tracker.recordFailure('AliceNick!alice@alice.host');
+    // Lockout is keyed on ident@host (nick stripped) — see authLockoutKey.
+    tracker.recordFailure('alice@alice.host');
 
     const client = new MockIRCClient();
     const mgr = new DCCManager({
@@ -1999,7 +2000,9 @@ describe('DCCManager.openSession prompt integration', () => {
     mgr.onAuthFailure(key, 'eve');
     mgr.onAuthFailure(key, 'eve');
 
-    expect(tracker.check(key).locked).toBe(true);
+    // The tracker is keyed on ident@host (nick stripped) so a nick-rotating
+    // brute-forcer can't reset the backoff — see DCCManager.authLockoutKey.
+    expect(tracker.check('eve@evil.host').locked).toBe(true);
   });
 
   it('onAuthFailure writes an auth-fail mod_log row on every attempt', async () => {
@@ -2084,8 +2087,10 @@ describe('DCCManager.openSession prompt integration', () => {
       sessions: localSessions,
     });
 
-    // Seed a failure so recordSuccess has something to clear
-    tracker.recordFailure('AliceNick!alice@alice.host');
+    // Seed a failure so recordSuccess has something to clear. The lockout
+    // tracker is keyed on ident@host (nick stripped) so nick rotation can't
+    // reset the backoff — see DCCManager.authLockoutKey.
+    tracker.recordFailure('alice@alice.host');
     const fakeSession: DCCSessionEntry = {
       handle: 'alice',
       nick: 'AliceNick',
@@ -2109,7 +2114,7 @@ describe('DCCManager.openSession prompt integration', () => {
 
     mgr.onAuthSuccess(fakeSession);
 
-    expect(tracker.check('AliceNick!alice@alice.host').failures).toBe(0);
+    expect(tracker.check('alice@alice.host').failures).toBe(0);
     expect(localSessions.size).toBe(1);
   });
 

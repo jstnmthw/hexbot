@@ -40,11 +40,6 @@ export const DEFAULT_MAX_FEED_BYTES = 5 * 1024 * 1024;
  *  re-validated through `validateFeedUrl`, so a chain of 5 still requires
  *  5 successful SSRF checks. */
 const MAX_REDIRECTS = 5;
-/** Bytes from the start of the body that {@link containsDoctype} scans.
- *  4 KiB easily covers the XML prolog where DOCTYPE declarations are
- *  legal; bytes past that are element content and can't legally
- *  re-introduce a DOCTYPE. */
-const DOCTYPE_SCAN_WINDOW = 4096;
 /** Hard wall-clock cap as a multiple of the socket inactivity timeout.
  *  3× lets a legitimately slow server complete while still bounding the
  *  total time a single fetch can hold a socket and the plugin's abort
@@ -341,9 +336,11 @@ function doRequest(
  * has historically been vulnerable to.
  */
 function containsDoctype(body: string): boolean {
-  // Scan only the first few KiB: DOCTYPE declarations must appear in the XML
-  // prolog before any element, so a scan window covers every legitimate
-  // position and keeps the check cheap on large bodies.
-  return /<!DOCTYPE/i.test(body.slice(0, DOCTYPE_SCAN_WINDOW));
+  // Scan the WHOLE body, not a fixed prolog window. The XML prolog may
+  // legally carry arbitrarily long comments before the DOCTYPE, so a hostile
+  // feed can pad past any fixed window and then slip an entity-expansion
+  // DOCTYPE into the parser. The body is already capped at `max_feed_bytes`
+  // upstream, so a full scan is bounded and cheap.
+  return /<!DOCTYPE/i.test(body);
 }
 /* v8 ignore stop */

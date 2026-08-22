@@ -400,9 +400,16 @@ export class Services {
    * @param timeoutMs - Timeout in milliseconds (default 5000)
    */
   async verifyUser(nick: string, timeoutMs: number = 5000): Promise<VerifyResult> {
-    // Services type 'none' — always verified
+    // Services type 'none' — no authority can vouch for identity, so fail
+    // CLOSED. Returning `{verified:true, account:<nick>}` here would hand
+    // plugin callers a fabricated, attacker-chosen account: a nick-squatter
+    // becomes a "verified" account and can satisfy `$a:`-style logic that
+    // trusts this result. The dispatcher never installs the ACC gate on a
+    // services-free network (see bot.ts), and the auto-op path only calls us
+    // behind `isAvailable()`, so this affects only plugins that reach
+    // `api.verifyUser()` directly — for them, "unknown identity" must deny.
     if (this.servicesConfig.type === 'none') {
-      return { verified: true, account: nick };
+      return { verified: false, account: null };
     }
 
     // If the bot is known-unidentified, NickServ will ignore STATUS/ACC

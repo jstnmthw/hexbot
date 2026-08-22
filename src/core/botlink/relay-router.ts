@@ -17,6 +17,12 @@ interface RelayEntry {
 interface PendingEntry {
   botname: string;
   createdAt: number;
+  /**
+   * The leaf the request was forwarded to — the only bot whose reply may
+   * pop this route. Guards against a compromised leaf resolving another
+   * leaf's pending CMD/PROTECT by guessing its (non-secret, sequential) ref.
+   */
+  expectedResponder?: string;
 }
 
 /**
@@ -162,22 +168,38 @@ export class BotLinkRelayRouter {
     this.activeRelays.delete(handle);
   }
 
-  /** Track a pending CMD being forwarded to another leaf so CMD_RESULT can be returned. */
-  trackCmdRoute(ref: string, fromBot: string): boolean {
+  /**
+   * Track a pending CMD being forwarded to another leaf so CMD_RESULT can be
+   * returned to `fromBot`. `expectedResponder` is the leaf the CMD was
+   * forwarded to — the only bot whose CMD_RESULT may pop this route.
+   */
+  trackCmdRoute(ref: string, fromBot: string, expectedResponder?: string): boolean {
     if (this.cmdRoutes.size >= MAX_PENDING_ROUTES) {
       this.deps.logger?.warn(
         `cmdRoutes at cap (${MAX_PENDING_ROUTES}) — dropping CMD ref ${ref} from ${fromBot}`,
       );
       return false;
     }
-    this.cmdRoutes.set(ref, { botname: fromBot, createdAt: Date.now() });
+    this.cmdRoutes.set(ref, { botname: fromBot, createdAt: Date.now(), expectedResponder });
     return true;
   }
 
-  /** Resolve a CMD_RESULT frame to its origin leaf, returning that bot's name if known. */
-  popCmdRoute(ref: string): string | null {
+  /**
+   * Resolve a CMD_RESULT frame to its origin leaf, returning that bot's name
+   * if known. When `responder` is supplied and the route recorded an expected
+   * responder, a mismatch is a forged reply: return null WITHOUT consuming the
+   * route so the real leaf's result can still be forwarded (or it TTL-sweeps).
+   */
+  popCmdRoute(ref: string, responder?: string): string | null {
     const origin = this.cmdRoutes.get(ref);
     if (!origin) return null;
+    if (
+      origin.expectedResponder !== undefined &&
+      responder !== undefined &&
+      responder.toLowerCase() !== origin.expectedResponder.toLowerCase()
+    ) {
+      return null;
+    }
     this.cmdRoutes.delete(ref);
     return origin.botname;
   }

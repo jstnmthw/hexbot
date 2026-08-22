@@ -80,7 +80,9 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
 
       const total = localBans.length + sharedEntries.length;
       if (total === 0) {
-        ctx.reply(channelArg ? `No tracked bans for ${channelArg}.` : 'No tracked bans.');
+        ctx.reply(
+          channelArg ? `No tracked bans for ${stripFormatting(channelArg)}.` : 'No tracked bans.',
+        );
         return;
       }
 
@@ -186,7 +188,7 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
       }
 
       const durStr = durationMs === 0 ? 'permanent' : formatDuration(durationMs);
-      ctx.reply(`Banned ${mask} in ${channel} (${durStr}).`);
+      ctx.reply(`Banned ${stripFormatting(mask)} in ${stripFormatting(channel)} (${durStr}).`);
     },
   );
 
@@ -228,7 +230,7 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
         hub.broadcast({ type: 'CHAN_BAN_DEL', channel, mask });
       }
 
-      ctx.reply(`Unbanned ${mask} in ${channel}.`);
+      ctx.reply(`Unbanned ${stripFormatting(mask)} in ${stripFormatting(channel)}.`);
     },
   );
 
@@ -253,10 +255,10 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
       const { channel, mask } = parsed;
 
       if (!banStore.setSticky(channel, mask, true)) {
-        ctx.reply(`No tracked ban for ${mask} in ${channel}.`);
+        ctx.reply(`No tracked ban for ${stripFormatting(mask)} in ${stripFormatting(channel)}.`);
         return;
       }
-      ctx.reply(`Ban ${mask} in ${channel} is now sticky.`);
+      ctx.reply(`Ban ${stripFormatting(mask)} in ${stripFormatting(channel)} is now sticky.`);
       tryAudit(db, ctx, { action: 'stick', channel, target: mask });
     },
   );
@@ -282,10 +284,10 @@ export function registerBanCommands(deps: BanCommandsDeps): void {
       const { channel, mask } = parsed;
 
       if (!banStore.setSticky(channel, mask, false)) {
-        ctx.reply(`No tracked ban for ${mask} in ${channel}.`);
+        ctx.reply(`No tracked ban for ${stripFormatting(mask)} in ${stripFormatting(channel)}.`);
         return;
       }
-      ctx.reply(`Ban ${mask} in ${channel} is no longer sticky.`);
+      ctx.reply(`Ban ${stripFormatting(mask)} in ${stripFormatting(channel)} is no longer sticky.`);
       tryAudit(db, ctx, { action: 'unstick', channel, target: mask });
     },
   );

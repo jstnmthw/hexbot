@@ -107,7 +107,7 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
           .filter((u) => u.global.includes(OWNER_FLAG)).length;
         if (ownerCount <= 1) {
           ctx.reply(
-            `Refusing to delete "${handle}" — they are the only +n owner. Add another owner first.`,
+            `Refusing to delete "${stripFormatting(handle)}" — they are the only +n owner. Add another owner first.`,
           );
           return;
         }
@@ -115,7 +115,7 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
 
       const source = getAuditSource(ctx);
       permissions.removeUser(handle, source, ctx.source);
-      ctx.reply(`User "${handle}" removed`);
+      ctx.reply(`User "${stripFormatting(handle)}" removed`);
     },
   );
 
@@ -227,7 +227,7 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
       const handle = parts[0];
       const user = permissions.getUser(handle);
       if (!user) {
-        ctx.reply(`User "${handle}" not found`);
+        ctx.reply(`User "${stripFormatting(handle)}" not found`);
         return;
       }
 
@@ -251,9 +251,19 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
       const source = getAuditSource(ctx);
 
       // Channel-specific path: `.flags <handle> <flags> #channel`. Channel
-      // names start with `#` or `&` per RFC 2812, but the legacy `.flags`
-      // grammar only documents `#`, so keep the narrow check here.
-      const channel = parts.length >= 3 && parts[2].startsWith('#') ? parts[2] : null;
+      // names start with `#` or `&` per RFC 2812. A third argument that
+      // *looks* channel-shaped but matches neither prefix must be rejected,
+      // not silently dropped: dropping it (the old `#`-only check) turned a
+      // `&channel`-scoped grant into a global grant — silent scope escalation.
+      let channel: string | null = null;
+      if (parts.length >= 3 && parts[2]) {
+        if (/^[#&]/.test(parts[2])) {
+          channel = parts[2];
+        } else {
+          ctx.reply(`Invalid channel "${stripFormatting(parts[2])}" — must start with # or &.`);
+          return;
+        }
+      }
 
       // The spec is a delta against the current flags, never a replacement.
       // Replacement semantics let `.flags self +d` (an owner toggling
@@ -284,10 +294,22 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
       // handle, not by the synthetic hostmask, which would never match a
       // real user record.
       if (ctx.source !== 'repl') {
+        // Resolve the caller to the *same* record that admitted them. For
+        // IRC/DCC, `ctx.handle` is the record the command-handler flag check
+        // already resolved (account-tag-aware); preferring it avoids a
+        // second hostmask lookup that — because account matches outrank
+        // hostmask matches — could pick a different, weaker-owner record and
+        // let a `+m` user slip past the master/owner-touch guard. Fall back
+        // to an account-aware hostmask lookup only when no handle was pinned.
         const caller =
           ctx.source === 'botlink'
             ? permissions.getUser(ctx.nick)
-            : permissions.findByHostmask(`${ctx.nick}!${ctx.ident ?? ''}@${ctx.hostname ?? ''}`);
+            : ctx.handle
+              ? permissions.getUser(ctx.handle)
+              : permissions.findByHostmask(
+                  `${ctx.nick}!${ctx.ident ?? ''}@${ctx.hostname ?? ''}`,
+                  ctx.account ?? null,
+                );
         const callerIsOwner = caller?.global.includes(OWNER_FLAG) ?? false;
         const touchesMasterOrHigher = [OWNER_FLAG, 'm'].some(
           (f) => next.includes(f) !== current.includes(f),

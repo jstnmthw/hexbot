@@ -128,6 +128,9 @@ describe('createReconnectDriver', () => {
   });
 
   describe('fatal tier', () => {
+    // Infrastructure fatals (TLS cert, DNS) are budget-eligible — they may
+    // heal or reflect a transient hiccup. Credential fatals are covered
+    // separately below (they exit first-hit via policy.firstHit).
     it('calls exit with the policy code on the third consecutive fatal (W1.2 budget)', () => {
       const { driver, exit, eventBus } = makeHarness();
       const disconnectSpy = vi.fn();
@@ -135,7 +138,7 @@ describe('createReconnectDriver', () => {
 
       const fatal = {
         tier: 'fatal' as const,
-        label: 'SASL authentication failed',
+        label: 'TLS certificate untrusted',
         exitCode: 2,
       };
       // Under-budget — should treat as rate-limited.
@@ -147,14 +150,14 @@ describe('createReconnectDriver', () => {
       driver.onDisconnect(fatal);
 
       expect(exit).toHaveBeenCalledWith(2);
-      expect(disconnectSpy).toHaveBeenCalledWith('fatal: SASL authentication failed');
+      expect(disconnectSpy).toHaveBeenCalledWith('fatal: TLS certificate untrusted');
     });
 
     it('sets status to stopped on the third consecutive fatal', () => {
       const { driver } = makeHarness();
       const fatal = {
         tier: 'fatal' as const,
-        label: 'SASL mechanism not supported',
+        label: 'TLS certificate expired',
         exitCode: 2,
       };
       driver.onDisconnect(fatal);
@@ -170,12 +173,12 @@ describe('createReconnectDriver', () => {
 
       driver.onDisconnect({
         tier: 'fatal',
-        label: 'SASL authentication failed',
+        label: 'TLS certificate untrusted',
         exitCode: 2,
       });
 
       expect(exit).not.toHaveBeenCalled();
-      expect(disconnectSpy).toHaveBeenCalledWith('fatal-budget: SASL authentication failed');
+      expect(disconnectSpy).toHaveBeenCalledWith('fatal-budget: TLS certificate untrusted');
       expect(driver.getState().status).toBe('reconnecting');
       // Advance past rate-limited initial delay; the driver should retry.
       vi.advanceTimersByTime(10 * 60 * 1000);
@@ -186,7 +189,7 @@ describe('createReconnectDriver', () => {
       const { driver, exit } = makeHarness();
       const fatal = {
         tier: 'fatal' as const,
-        label: 'SASL authentication failed',
+        label: 'TLS certificate untrusted',
         exitCode: 2,
       };
       driver.onDisconnect(fatal);
@@ -197,6 +200,25 @@ describe('createReconnectDriver', () => {
       driver.onDisconnect(fatal);
       driver.onDisconnect(fatal);
       expect(exit).not.toHaveBeenCalled();
+    });
+
+    it('exits on the FIRST hit for a credential fatal (firstHit), bypassing the budget', () => {
+      const { driver, exit, eventBus } = makeHarness();
+      const disconnectSpy = vi.fn();
+      eventBus.on('bot:disconnected', disconnectSpy);
+
+      // A single SASL-rejection close must exit immediately — re-submitting
+      // the bad credential could trip a services account-lockout counter.
+      driver.onDisconnect({
+        tier: 'fatal',
+        label: 'SASL authentication failed',
+        exitCode: 2,
+        firstHit: true,
+      });
+
+      expect(exit).toHaveBeenCalledWith(2);
+      expect(disconnectSpy).toHaveBeenCalledWith('fatal: SASL authentication failed');
+      expect(driver.getState().status).toBe('stopped');
     });
   });
 

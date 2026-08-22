@@ -551,6 +551,10 @@ export class Bot {
     };
     if (this.config.identity.require_acc_for.length > 0 && this.config.services.type !== 'none') {
       this.dispatcher.setVerification(verificationProvider);
+      // Share the same provider with the command router so a future IRC
+      // command transport (source:'irc') is gated identically to bind
+      // handlers — see CommandHandler.setVerification / docs/SECURITY.md §3.2.
+      this.commandHandler.setVerification(verificationProvider);
     } else if (
       this.config.identity.require_acc_for.length > 0 &&
       this.config.services.type === 'none'
@@ -704,6 +708,7 @@ export class Bot {
     // ghost_on_recover on a plaintext link) silently lose TLS protection of
     // the password. Warn loudly. See SECURITY.md §3.2.
     this.warnServicesPlaintextRisks();
+    this.warnServicesHostPatternRisk();
   }
 
   /**
@@ -786,22 +791,38 @@ export class Bot {
           'Enable irc.tls or set ghost_on_recover=false.',
       );
     }
+  }
 
-    // Empty `services_host_pattern` + a configured services password
-    // disables the defense-in-depth check that drops NickServ-nick
-    // notices from arbitrary hosts. On services-free networks this is
-    // unavoidable, but most networks have a stable services hostname
-    // (or hostmask) and operators who haven't set the pattern usually
-    // just forgot. See SECURITY.md §3.2.
+  /**
+   * Warn when NickServ replies are authenticated by nick alone. With
+   * `services.services_host_pattern` empty, the ServicesManager accepts a
+   * "please identify" prompt *or* an `ACC`/`STATUS` verification reply from
+   * anyone currently holding the nick `NickServ` — during a services split a
+   * client can grab that nick and answer a pending `verifyUser` with
+   * `<target> ACC 3`, passing the ACC gate. This is unrelated to TLS (the
+   * spoofer is another IRC client, not a MITM) and unrelated to whether a
+   * services password is set (the verify path is driven by `require_acc_for`),
+   * so it lives outside {@link warnServicesPlaintextRisks}. See SECURITY.md §3.2.
+   */
+  private warnServicesHostPatternRisk(): void {
+    const cfg = this.config;
+    if (cfg.services.type === 'none') return;
     const pattern = cfg.services.services_host_pattern;
-    if (cfg.services.password && (!pattern || pattern.trim().length === 0)) {
-      this.botLogger.warn(
-        '[security] services.password is set with services.services_host_pattern empty — ' +
-          'a NickServ-nick spoofer can craft fake "please identify" / ACC notices that ' +
-          "the bot will accept. Pin services.services_host_pattern to your network's services " +
-          'hostmask (e.g. "NickServ!*@services.libera.chat") to enable the defense-in-depth filter.',
-      );
-    }
+    if (pattern && pattern.trim().length > 0) return;
+
+    // Only warn when the bot actually trusts NickServ replies for something:
+    // it identifies (password set) or it gates commands on ACC verification.
+    const usesVerification = this.config.identity.require_acc_for.length > 0;
+    if (!cfg.services.password && !usesVerification) return;
+
+    this.botLogger.warn(
+      '[security] services.services_host_pattern is empty — NickServ notices and ' +
+        'ACC/STATUS verification replies are authenticated by nick alone. A client that ' +
+        'grabs the "NickServ" nick during a services split can spoof "please identify" ' +
+        'prompts or answer a pending verification, passing the ACC gate. Pin ' +
+        "services.services_host_pattern to your network's services hostmask " +
+        '(e.g. "NickServ!*@services.libera.chat") to enable the defense-in-depth filter.',
+    );
   }
 
   /**

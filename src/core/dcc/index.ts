@@ -388,6 +388,14 @@ export function createInMemoryConsoleFlagStore(): ConsoleFlagStore {
  */
 const MAX_WRITE_BUFFER_BYTES = 1 * 1024 * 1024;
 
+/**
+ * Residual C0 control bytes + DEL to strip from post-auth DCC input after
+ * mIRC formatting has been removed. Covers NUL and terminal/ANSI escapes
+ * (`\x1b`) that `stripFormatting` leaves behind. See {@link DCCSession.onLine}.
+ */
+// eslint-disable-next-line no-control-regex -- deliberately matching C0 controls + DEL
+const DCC_CONTROL_BYTES_RE = /[\x00-\x1f\x7f]/g;
+
 export class DCCSession implements DCCSessionEntry {
   readonly handle: string;
   /**
@@ -830,7 +838,16 @@ export class DCCSession implements DCCSessionEntry {
       return;
     }
 
-    const trimmed = line.trim();
+    // Sanitize DCC input before it reaches command handlers, the party line,
+    // or linked bots. Unlike the IRC bridge — which strips control bytes from
+    // every inbound field — the DCC socket delivers raw bytes, so NUL, ANSI /
+    // terminal escapes (`\x1b`), and mIRC formatting would otherwise flow
+    // verbatim into every operator's console (writeLine below) and out to
+    // remote bots via onPartyChat. Strip mIRC codes (with their numeric args)
+    // first, then any residual C0 control byte + DEL. The password phase
+    // above deliberately runs on the raw line — passwords may contain any
+    // character — so this only touches post-auth command / chat input.
+    const trimmed = stripFormatting(line).replace(DCC_CONTROL_BYTES_RE, '').trim();
     this.resetIdle();
 
     if (!trimmed) return;
@@ -1288,9 +1305,23 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
    * "previous login" query. Returns `null` when no row was written
    * (`db` is absent, retention disabled, or the write was degraded).
    */
+  /**
+   * Reduce a `nick!ident@host` rate-limit key to the `ident@host` the
+   * auth-lockout tracker keys on. Dropping the nick means a brute-forcer
+   * can't reset their exponential backoff by cycling nicks against a
+   * nick-wildcarded record — the same rationale (and the same
+   * nick-independent key) the CTCP limiter already uses (SECURITY.md §10.2).
+   * The full key is still used for session identity, audit metadata, and
+   * log lines so operators keep the nick context.
+   */
+  private authLockoutKey(rateLimitKey: string): string {
+    const bang = rateLimitKey.indexOf('!');
+    return bang === -1 ? rateLimitKey : rateLimitKey.slice(bang + 1);
+  }
+
   onAuthSuccess(session: DCCSessionEntry): number | null {
     const key = session.rateLimitKey;
-    this.authTracker.recordSuccess(key);
+    this.authTracker.recordSuccess(this.authLockoutKey(key));
     // Promotion out of `awaiting_password`: drop from the pending set so
     // the live session map is the only place it lives from here on.
     this.pendingSessions.delete(session);
@@ -1352,7 +1383,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
         break;
       }
     }
-    const status = this.authTracker.recordFailure(key);
+    const status = this.authTracker.recordFailure(this.authLockoutKey(key));
     // Per-identity rate gate: at most one `auth-fail` row per 60s window.
     // A brute-force storm against a single identity would otherwise drive
     // O(maxFailures) synchronous SQLite inserts per cycle; collapsing them
@@ -1956,7 +1987,8 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     const key = `${pending.nick}!${pending.ident}@${pending.hostname}`;
 
     // Rate-limit gate — refuse new prompts for recently-abused identities.
-    const status = this.authTracker.check(key);
+    // Keyed on ident@host (nick stripped) so nick rotation can't dodge it.
+    const status = this.authTracker.check(this.authLockoutKey(key));
     if (status.locked) {
       const seconds = Math.max(1, Math.ceil((status.lockedUntil - Date.now()) / 1000));
       // Wrap the rejection write + destroy in try/catch: a late RST during

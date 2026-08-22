@@ -1,5 +1,6 @@
 // HexBot — Flag-level verification utility
 // Determines whether a bind's required flags meet the NickServ ACC threshold.
+import { VALID_FLAGS } from '../core/permissions';
 import type { LoggerLike } from '../logger';
 import type { IdentityConfig } from '../types';
 
@@ -51,11 +52,14 @@ export function validateRequireAccFor(
  * Determine whether the bind's required flags are at or above any threshold
  * in `config.identity.require_acc_for`. Used by the VerificationProvider.
  *
- * Invariant: unknown flags resolve to level 0. Taken in isolation that's a
- * fail-open shape ("treat the unknown flag as not meeting the threshold"),
- * but every upstream caller already rejects unknown flags before this point
- * (binds reject at registration, command flags reject at parse). The net
- * behavior is fail-closed — verify this holds before relaxing either path.
+ * Fail-closed invariant: this function does NOT rely on unknown flags being
+ * rejected upstream (they are not — `bind()`/`registerCommand()`/`api.bind()`
+ * accept any flag string). Instead, any character outside {@link VALID_FLAGS}
+ * is treated as potentially privileged and forces verification on: an
+ * uppercase typo (`'O'` for `'o'`) or a stray `'z'` must not silently drop
+ * the ACC gate the operator was trying to enable. Recognized-but-privilege-
+ * neutral flags (e.g. `'d'`, which restricts rather than grants) map to
+ * level 0 and correctly do not trip the gate on their own.
  */
 export function requiresVerificationForFlags(
   bindFlags: string,
@@ -79,6 +83,14 @@ export function requiresVerificationForFlags(
   // but this insulates the lookup from the syntax surface.
   const normalized = bindFlags.replace(/[+\-|!]/g, '');
   if (normalized.length === 0) return false;
+
+  // Fail closed on any unrecognized flag character. We can't know the
+  // privilege level of a flag we don't recognize, so — with require_acc_for
+  // active — assume it's privileged and require verification rather than
+  // treating it as level 0 and skipping the gate.
+  for (const ch of normalized) {
+    if (!VALID_FLAGS.includes(ch)) return true;
+  }
 
   // Find the highest flag level among the bind's required flags
   const bindLevel = Math.max(...[...normalized].map((f) => FLAG_LEVEL[f] ?? 0));

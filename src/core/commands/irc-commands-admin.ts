@@ -228,7 +228,7 @@ export function registerIRCAdminCommands(deps: IrcAdminCommandsDeps): void {
         return;
       }
       client.raw(`INVITE ${sanitize(nick)} ${sanitize(channel)}`);
-      ctx.reply(`Invited ${nick} to ${channel}`);
+      ctx.reply(`Invited ${stripFormatting(nick)} to ${stripFormatting(channel)}`);
       tryAudit(db, ctx, { action: 'invite', channel, target: nick });
     },
   );

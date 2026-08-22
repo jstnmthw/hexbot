@@ -1,5 +1,13 @@
 import { vi } from 'vitest';
 
+import {
+  lookup,
+  renderCategory,
+  renderCommand,
+  renderIndex,
+  renderNotFound,
+  renderScope,
+} from '../../src/core/help-render';
 import type { PluginAPI } from '../../src/types';
 
 /**
@@ -152,6 +160,14 @@ export function createMockPluginAPI(overrides: Partial<PluginAPI> = {}): PluginA
         sweep: noop,
         size: 0,
       }),
+    },
+    help: {
+      lookup,
+      renderCommand,
+      renderCategory,
+      renderScope,
+      renderNotFound,
+      renderIndex,
     },
     log: noop,
     error: noop,
