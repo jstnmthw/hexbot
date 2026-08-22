@@ -124,10 +124,9 @@ export interface AiChatConfig {
   >;
   ambient: {
     enabled: boolean;
-    idle: { afterMinutes: number; chance: number; minUsers: number };
+    idle: { afterMinutes: number; chance: number };
     unansweredQuestions: { enabled: boolean; waitSeconds: number };
     chattiness: number;
-    interests: string[];
     eventReactions: { joinWb: boolean; topicChange: boolean };
   };
   security: {
@@ -329,14 +328,12 @@ export function parseConfig(
         idle: {
           afterMinutes: asNum(idle.after_minutes, 15),
           chance: asNum(idle.chance, 0.3),
-          minUsers: asNum(idle.min_users, 2),
         },
         unansweredQuestions: {
           enabled: asBool(uq.enabled, true),
           waitSeconds: asNum(uq.wait_seconds, 90),
         },
         chattiness: asNum(ambient.chattiness, 0.08),
-        interests: asStringArr(ambient.interests, []),
         eventReactions: {
           joinWb: asBool(er.join_wb, false),
           topicChange: asBool(er.topic_change, false),

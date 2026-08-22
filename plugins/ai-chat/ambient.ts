@@ -19,7 +19,6 @@ export interface AmbientConfig {
   idle: {
     afterMinutes: number;
     chance: number;
-    minUsers: number;
   };
   unansweredQuestions: {
     enabled: boolean;
@@ -27,8 +26,6 @@ export interface AmbientConfig {
   };
   /** Base chattiness (0-1). Scaled by the active character's chattiness trait. */
   chattiness: number;
-  /** Topic keywords that increase the chance of ambient participation. */
-  interests: string[];
   eventReactions: {
     joinWb: boolean;
     topicChange: boolean;

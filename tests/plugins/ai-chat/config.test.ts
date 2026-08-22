@@ -137,20 +137,18 @@ describe('parseConfig', () => {
     const cfg = parseConfig({
       ambient: {
         enabled: true,
-        idle: { after_minutes: 20, chance: 0.5, min_users: 3 },
+        idle: { after_minutes: 20, chance: 0.5 },
         unanswered_questions: { enabled: false, waitSeconds: 60 },
         chattiness: 0.2,
-        interests: ['linux', 'irc'],
         event_reactions: { join_wb: true, topic_change: true },
       },
     });
     expect(cfg.ambient.enabled).toBe(true);
-    expect(cfg.ambient.idle).toEqual({ afterMinutes: 20, chance: 0.5, minUsers: 3 });
+    expect(cfg.ambient.idle).toEqual({ afterMinutes: 20, chance: 0.5 });
     // The snake_case key is `wait_seconds`; the camelCase typo above must
     // therefore *not* be respected. Default of 90 should hold.
     expect(cfg.ambient.unansweredQuestions).toEqual({ enabled: false, waitSeconds: 90 });
     expect(cfg.ambient.chattiness).toBe(0.2);
-    expect(cfg.ambient.interests).toEqual(['linux', 'irc']);
     expect(cfg.ambient.eventReactions).toEqual({ joinWb: true, topicChange: true });
   });
 

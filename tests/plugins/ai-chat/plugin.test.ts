@@ -438,10 +438,9 @@ describe('shouldRespond logic', () => {
     input: { maxPromptChars: 2000, maxInflight: 4, coalesceWindowMs: 0 },
     ambient: {
       enabled: false,
-      idle: { afterMinutes: 15, chance: 0.3, minUsers: 2 },
+      idle: { afterMinutes: 15, chance: 0.3 },
       unansweredQuestions: { enabled: true, waitSeconds: 90 },
       chattiness: 0.08,
-      interests: [],
       eventReactions: { joinWb: false, topicChange: false },
     },
     security: {

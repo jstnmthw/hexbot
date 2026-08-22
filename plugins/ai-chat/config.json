@@ -64,15 +64,13 @@
     "enabled": false,
     "idle": {
       "after_minutes": 15,
-      "chance": 0.3,
-      "min_users": 2
+      "chance": 0.3
     },
     "unanswered_questions": {
       "enabled": true,
       "wait_seconds": 90
     },
     "chattiness": 0.08,
-    "interests": [],
     "event_reactions": {
       "join_wb": false,
       "topic_change": false

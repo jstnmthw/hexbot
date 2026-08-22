@@ -12,10 +12,9 @@ import { SocialTracker } from '../../../plugins/ai-chat/social-tracker';
 
 const BASE_CONFIG: AmbientConfig = {
   enabled: true,
-  idle: { afterMinutes: 15, chance: 1.0, minUsers: 2 },
+  idle: { afterMinutes: 15, chance: 1.0 },
   unansweredQuestions: { enabled: true, waitSeconds: 90 },
   chattiness: 0.5,
-  interests: [],
   eventReactions: { joinWb: true, topicChange: true },
 };
 
@@ -388,7 +387,7 @@ describe('RateLimiter ambient budget', () => {
 describe('AmbientEngine error surfacing', () => {
   const config: AmbientConfig = {
     ...BASE_CONFIG,
-    idle: { afterMinutes: 1, chance: 1.0, minUsers: 1 },
+    idle: { afterMinutes: 1, chance: 1.0 },
     unansweredQuestions: { enabled: true, waitSeconds: 1 },
   };
 
@@ -484,7 +483,7 @@ describe('AmbientEngine error surfacing', () => {
     let now = 1_000;
     const social = new SocialTracker(null, () => now);
     const engine = new AmbientEngine(
-      { ...config, idle: { afterMinutes: 9999, chance: 0, minUsers: 99 } },
+      { ...config, idle: { afterMinutes: 9999, chance: 0 } },
       social,
       () => now,
       (msg) => warns.push(msg),

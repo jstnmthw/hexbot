@@ -428,18 +428,16 @@ On the `small` tier the plugin hardens the prompt path against small-model patho
 
 ### `ambient`
 
-| Key                                 | Type     | Default | Description                                               |
-| ----------------------------------- | -------- | ------- | --------------------------------------------------------- |
-| `enabled`                           | boolean  | `false` | Master switch for unprompted speaking.                    |
-| `idle.after_minutes`                | number   | `15`    | Minutes of silence before an idle remark is considered.   |
-| `idle.chance`                       | number   | `0.3`   | Probability (0–1) of speaking when the idle gate fires.   |
-| `idle.min_users`                    | number   | `2`     | Skip idle remarks below this active user count.           |
-| `unanswered_questions.enabled`      | boolean  | `true`  | Allow replies to unanswered human questions.              |
-| `unanswered_questions.wait_seconds` | number   | `90`    | Seconds to wait before considering a question unanswered. |
-| `chattiness`                        | number   | `0.08`  | Base per-tick chance of speaking in normal channels.      |
-| `interests`                         | string[] | `[]`    | Topics that bias the bot toward chiming in.               |
-| `event_reactions.join_wb`           | boolean  | `false` | React to returning users with a welcome-back.             |
-| `event_reactions.topic_change`      | boolean  | `false` | React to topic changes.                                   |
+| Key                                 | Type    | Default | Description                                               |
+| ----------------------------------- | ------- | ------- | --------------------------------------------------------- |
+| `enabled`                           | boolean | `false` | Master switch for unprompted speaking.                    |
+| `idle.after_minutes`                | number  | `15`    | Minutes of silence before an idle remark is considered.   |
+| `idle.chance`                       | number  | `0.3`   | Probability (0–1) of speaking when the idle gate fires.   |
+| `unanswered_questions.enabled`      | boolean | `true`  | Allow replies to unanswered human questions.              |
+| `unanswered_questions.wait_seconds` | number  | `90`    | Seconds to wait before considering a question unanswered. |
+| `chattiness`                        | number  | `0.08`  | Base per-tick chance of speaking in normal channels.      |
+| `event_reactions.join_wb`           | boolean | `false` | React to returning users with a welcome-back.             |
+| `event_reactions.topic_change`      | boolean | `false` | React to topic changes.                                   |
 
 ### `security`
 
@@ -548,15 +546,13 @@ Every key at its shipped default, wrapped in a `plugins.json` entry. Copy, trim 
         "enabled": false,
         "idle": {
           "after_minutes": 15,
-          "chance": 0.3,
-          "min_users": 2
+          "chance": 0.3
         },
         "unanswered_questions": {
           "enabled": true,
           "wait_seconds": 90
         },
         "chattiness": 0.08,
-        "interests": [],
         "event_reactions": {
           "join_wb": false,
           "topic_change": false
