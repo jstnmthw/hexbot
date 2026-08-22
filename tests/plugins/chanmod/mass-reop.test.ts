@@ -111,6 +111,43 @@ describe('chanmod — mass re-op on recovery', () => {
     expect(rawOpMsg!.message).toContain('Bob');
   });
 
+  it('does NOT re-op a flagged user whose only mask is too weak to trust', async () => {
+    // Security: mass re-op runs the same hard identity gate as the auto-op
+    // join path. On a services-free network a weak mask (`weak!*@*`) falls
+    // below the specificity floor, so a nick-squatter matching it must not be
+    // re-opped — while a flagged user with a strong mask still is. Guards the
+    // recovery-path bypass in SECURITY.md §3.2.
+    bot.channelSettings.set('#test', 'mass_reop_on_recovery', true);
+    bot.channelSettings.set('#test', 'takeover_detection', true);
+
+    bot.permissions.addUser('weak', 'weak!*@*', 'o', 'test');
+    bot.permissions.addUser('strong', '*!strong@strong.host', 'o', 'test');
+
+    giveBotOps(bot, '#test');
+    addToChannel(bot, 'Weak', 'anything', 'anywhere.example', '#test');
+    addToChannel(bot, 'Strong', 'strong', 'strong.host', '#test');
+    addToChannel(bot, 'Attacker', 'attacker', 'attacker.host', '#test');
+
+    raiseThreatLevel('#test');
+    await tick(50);
+    bot.client.clearMessages();
+
+    simulateMode(bot, 'ChanServ', '#test', '+o', 'hexbot');
+    await tick(50);
+
+    // Weak-mask user is refused.
+    const weakOp = bot.client.messages.find(
+      (m) => m.type === 'raw' && m.message?.includes('+o') && m.message?.includes('Weak'),
+    );
+    expect(weakOp).toBeUndefined();
+
+    // Strong-mask user is still re-opped.
+    const strongOp = bot.client.messages.find(
+      (m) => m.type === 'raw' && m.message?.includes('+o') && m.message?.includes('Strong'),
+    );
+    expect(strongOp).toBeDefined();
+  });
+
   it('deops unauthorized ops during mass re-op when bitch mode is on', async () => {
     bot.channelSettings.set('#test', 'mass_reop_on_recovery', true);
     bot.channelSettings.set('#test', 'bitch', true);

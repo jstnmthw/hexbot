@@ -16,6 +16,7 @@ import {
   isValidIP,
 } from '../botlink';
 import type { BotlinkDCCView } from '../dcc';
+import { SECRET_COMMANDS } from './secret-commands';
 
 // Commands forbidden from traveling over `.bot` because their positional
 // arguments are secrets. These never reach mod_log metadata and are refused
@@ -30,12 +31,12 @@ const BOT_RELAY_FORBIDDEN_COMMANDS = new Set(['chpass', 'bot']);
 
 // Subcommands whose args land in mod_log as `[redacted]` even when they are
 // allowed to dispatch. Kept separate from the hard-refusal list so future
-// secret-bearing admin verbs can be redacted without blocking them outright.
-// Currently identical to the forbidden set, but the redaction list is
-// consulted on the audit-write path while the forbidden list short-circuits
-// the dispatch — keep them as distinct sets so the layered defense stays
-// explicit.
-const BOT_RELAY_REDACTED_COMMANDS = new Set(['chpass']);
+// secret-bearing admin verbs can be redacted without blocking them outright:
+// the redaction list is consulted on the audit-write path while the
+// forbidden list short-circuits the dispatch. Sourced from the shared
+// `SECRET_COMMANDS` set so REPL logging, mod_log redaction, and relay
+// redaction can never drift apart.
+const BOT_RELAY_REDACTED_COMMANDS = SECRET_COMMANDS;
 
 // ---------------------------------------------------------------------------
 // Helpers — guard and dispatch between hub/leaf

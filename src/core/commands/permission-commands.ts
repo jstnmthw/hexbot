@@ -14,7 +14,7 @@ export interface PermissionCommandsDeps {
 
 /**
  * Register permission management commands (`.adduser`, `.deluser`,
- * `.flags`, `.users`) on the given command handler.
+ * `.addhost`, `.delhost`, `.flags`, `.users`) on the given command handler.
  *
  * These commands write to the permissions database via {@link Permissions},
  * which is itself responsible for writing `mod_log` rows — the handlers
@@ -28,6 +28,13 @@ export interface PermissionCommandsDeps {
  */
 export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
   const { handler, permissions } = deps;
+
+  // Shared with .adduser/.addhost/.delhost — hostmasks are bounded to
+  // prevent unbounded DB rows and reject embedded control characters as
+  // a defense against log / audit injection from a compromised transport.
+  const isValidHostmask = (hostmask: string): boolean =>
+    hostmask.length > 0 && hostmask.length <= 200 && !/[\r\n\0]/.test(hostmask);
+
   handler.registerCommand(
     'adduser',
     {
@@ -45,9 +52,7 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
 
       // Shape and length validation — reject garbage arguments before they
       // hit the DB. Handles follow the same character set as plugin
-      // directory names; hostmasks are bounded to prevent unbounded DB
-      // rows; all three reject embedded control characters as a defense
-      // against log / audit injection from a compromised transport.
+      // directory names; flags reject control characters like hostmasks do.
       // Regex: leading [A-Za-z0-9], then 0–31 of [A-Za-z0-9_-] → 1–32 chars total.
       if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/.test(handle)) {
         ctx.reply(
@@ -55,7 +60,7 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
         );
         return;
       }
-      if (hostmask.length === 0 || hostmask.length > 200 || /[\r\n\0]/.test(hostmask)) {
+      if (!isValidHostmask(hostmask)) {
         ctx.reply('Invalid hostmask — max 200 chars and no control characters.');
         return;
       }
@@ -111,6 +116,88 @@ export function registerPermissionCommands(deps: PermissionCommandsDeps): void {
       const source = getAuditSource(ctx);
       permissions.removeUser(handle, source, ctx.source);
       ctx.reply(`User "${handle}" removed`);
+    },
+  );
+
+  handler.registerCommand(
+    'addhost',
+    {
+      flags: '+n',
+      description: 'Add a hostmask to an existing user',
+      usage: '.addhost <handle> <hostmask>',
+      category: 'permissions',
+      relayToHub: true,
+    },
+    (args, ctx) => {
+      const parts = parseCommandArgs(args, 2, 'Usage: .addhost <handle> <hostmask>', ctx);
+      if (!parts) return;
+      const [handle, hostmask] = parts;
+
+      if (!isValidHostmask(hostmask)) {
+        ctx.reply('Invalid hostmask — max 200 chars and no control characters.');
+        return;
+      }
+
+      const user = permissions.getUser(handle);
+      if (!user) {
+        ctx.reply(`User "${stripFormatting(handle)}" not found`);
+        return;
+      }
+      if (user.hostmasks.includes(hostmask)) {
+        ctx.reply(
+          `User "${stripFormatting(user.handle)}" already has hostmask ${stripFormatting(hostmask)}`,
+        );
+        return;
+      }
+
+      const source = getAuditSource(ctx);
+      permissions.addHostmask(handle, hostmask, source, ctx.source);
+      ctx.reply(`Hostmask ${stripFormatting(hostmask)} added to "${stripFormatting(user.handle)}"`);
+    },
+  );
+
+  handler.registerCommand(
+    'delhost',
+    {
+      flags: '+n',
+      description: 'Remove a hostmask from a user',
+      usage: '.delhost <handle> <hostmask>',
+      category: 'permissions',
+      relayToHub: true,
+    },
+    (args, ctx) => {
+      const parts = parseCommandArgs(args, 2, 'Usage: .delhost <handle> <hostmask>', ctx);
+      if (!parts) return;
+      const [handle, hostmask] = parts;
+
+      const user = permissions.getUser(handle);
+      if (!user) {
+        ctx.reply(`User "${stripFormatting(handle)}" not found`);
+        return;
+      }
+      if (!user.hostmasks.includes(hostmask)) {
+        ctx.reply(
+          `Hostmask ${stripFormatting(hostmask)} not found on "${stripFormatting(user.handle)}"`,
+        );
+        return;
+      }
+
+      // Last-hostmask guard: a record with no hostmasks can never be
+      // matched by findByHostmask, so the user silently loses all access
+      // while still appearing in .users. Deleting the whole user is the
+      // honest spelling of that intent.
+      if (user.hostmasks.length <= 1) {
+        ctx.reply(
+          `Refusing to remove the only hostmask on "${stripFormatting(user.handle)}" — use .deluser to remove the user entirely.`,
+        );
+        return;
+      }
+
+      const source = getAuditSource(ctx);
+      permissions.removeHostmask(handle, hostmask, source, ctx.source);
+      ctx.reply(
+        `Hostmask ${stripFormatting(hostmask)} removed from "${stripFormatting(user.handle)}"`,
+      );
     },
   );
 

@@ -246,7 +246,7 @@ Connected to irc.example.net:6697 (TLS)...
 
 ## Command relay
 
-Commands can be configured to execute on the hub instead of locally. This is useful for permission management — `.adduser`, `.deluser`, `.flags` should modify the hub's authoritative database.
+Commands can be configured to execute on the hub instead of locally. This is useful for permission management — `.adduser`, `.deluser`, `.addhost`, `.delhost`, `.flags` should modify the hub's authoritative database.
 
 Commands with `relayToHub: true` in their registration options are automatically intercepted on leaf bots and forwarded to the hub for execution. The hub verifies permissions using its own database and returns the result.
 

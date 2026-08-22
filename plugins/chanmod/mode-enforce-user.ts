@@ -5,6 +5,7 @@
 // - user mode enforcement: re-op/re-halfop/re-voice users per their flag set
 // - punish deop: kick+ban operators who strip ops from a recognized op
 import type { PluginAPI } from '../../src/types';
+import { verifyGrantEligibility } from './auto-op';
 import {
   botCanHalfop,
   botHasOps,
@@ -82,13 +83,13 @@ export function handleBitchMode(
 }
 
 /** User op/halfop/voice enforcement (+ optional punish deop). */
-export function handleUserModeEnforcement(
+export async function handleUserModeEnforcement(
   api: PluginAPI,
   config: ChanmodConfig,
   state: SharedState,
   mctx: ModeContext,
   onThreat?: ThreatCallback,
-): void {
+): Promise<void> {
   const { channel, setter, modeStr, target, enforceModes, isNodesynch } = mctx;
   if (modeStr !== '-o' && modeStr !== '-h' && modeStr !== '-v') return;
   if (api.isBotNick(setter)) return;
@@ -100,8 +101,17 @@ export function handleUserModeEnforcement(
   // -o: process if either feature is enabled
   if (modeStr === '-o' && !enforceModes && !protectOps) return;
 
-  const flags = getUserFlags(api, channel, target);
-  if (!flags) return; // Unknown user — neither feature applies
+  // Resolve the target's record with their tracked account threaded in, so
+  // `$a:`-pinned records match and so the re-grant below can run the same
+  // hard identity gate as the auto-op join path. Re-enforcing a prefix mode
+  // on a hostmask match alone would re-op a nick-squatter who matches a
+  // flagged user's weak mask (SECURITY.md §3.2).
+  const hostmask = api.getUserHostmask(channel, target);
+  if (!hostmask) return; // Unknown user — neither feature applies
+  const account = api.getChannel(channel)?.users.get(api.ircLower(target))?.accountName ?? null;
+  const record = api.permissions.findByHostmask(hostmask, account);
+  if (!record) return; // Unknown user — neither feature applies
+  const flags = record.global + (record.channels[api.ircLower(channel)] ?? '');
 
   const cooldownKey = `${api.ircLower(channel)}:${api.ircLower(target)}`;
   const now = Date.now();
@@ -123,13 +133,10 @@ export function handleUserModeEnforcement(
   if (modeStr === '-o') {
     if (!botHasOps(api, channel)) return;
     const shouldBeOpped = hasAnyFlag(flags, config.op_flags) && !flags.includes('d');
-    if (shouldBeOpped && enforceModes) {
-      api.log(`Re-enforcing +o on ${target} in ${channel} (deopped by ${setter})`);
-      state.scheduleEnforcement(config.enforce_delay_ms, () => {
-        api.op(channel, target);
-      });
-    }
-    // Report friendly op deopped to threat detection
+
+    // Threat detection and punishment key off flag membership (an attack
+    // signal), independent of whether we can safely re-op — so they run
+    // synchronously, before the awaited identity gate below.
     if (onThreat && shouldBeOpped && !isNodesynch) {
       onThreat(channel, 'friendly_deopped', 2, setter, target);
     }
@@ -146,25 +153,69 @@ export function handleUserModeEnforcement(
         }
       }
     }
+
+    // Re-op only a verified identity — same hard gate as the join path.
+    if (shouldBeOpped && enforceModes) {
+      const gate = await verifyGrantEligibility(
+        api,
+        config,
+        channel,
+        target,
+        'o',
+        account ?? undefined,
+        record,
+        hostmask,
+      );
+      if (gate.ok) {
+        api.log(`Re-enforcing +o on ${target} in ${channel} (deopped by ${setter})`);
+        state.scheduleEnforcement(config.enforce_delay_ms, () => {
+          api.op(channel, target);
+        });
+      }
+    }
   } else if (modeStr === '-h') {
     if (!botCanHalfop(api, channel)) return;
     const shouldBeHalfopped =
       config.halfop_flags.length > 0 && hasAnyFlag(flags, config.halfop_flags);
     if (shouldBeHalfopped) {
-      api.log(`Re-enforcing +h on ${target} in ${channel} (dehalfopped by ${setter})`);
-      state.scheduleEnforcement(config.enforce_delay_ms, () => {
-        api.halfop(channel, target);
-      });
+      const gate = await verifyGrantEligibility(
+        api,
+        config,
+        channel,
+        target,
+        'h',
+        account ?? undefined,
+        record,
+        hostmask,
+      );
+      if (gate.ok) {
+        api.log(`Re-enforcing +h on ${target} in ${channel} (dehalfopped by ${setter})`);
+        state.scheduleEnforcement(config.enforce_delay_ms, () => {
+          api.halfop(channel, target);
+        });
+      }
     }
   } else {
     // modeStr is '-v' here — the guard above only passes -o/-h/-v, and -o/-h are handled above
     if (!botHasOps(api, channel)) return;
     const shouldBeVoiced = hasAnyFlag(flags, config.voice_flags);
     if (shouldBeVoiced) {
-      api.log(`Re-enforcing +v on ${target} in ${channel} (devoiced by ${setter})`);
-      state.scheduleEnforcement(config.enforce_delay_ms, () => {
-        api.voice(channel, target);
-      });
+      const gate = await verifyGrantEligibility(
+        api,
+        config,
+        channel,
+        target,
+        'v',
+        account ?? undefined,
+        record,
+        hostmask,
+      );
+      if (gate.ok) {
+        api.log(`Re-enforcing +v on ${target} in ${channel} (devoiced by ${setter})`);
+        state.scheduleEnforcement(config.enforce_delay_ms, () => {
+          api.voice(channel, target);
+        });
+      }
     }
   }
 }

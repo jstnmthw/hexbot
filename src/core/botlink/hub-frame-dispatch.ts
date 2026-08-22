@@ -123,6 +123,7 @@ const handleCmd: FrameHandler = (ctx, leaf, frame) => {
         routes: ctx.routes,
         send: ctx.send,
         hasLeaf: ctx.hasLeaf,
+        logger: ctx.logger,
       },
       leaf.botname,
       frame,

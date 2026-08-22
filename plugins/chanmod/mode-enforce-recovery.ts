@@ -6,7 +6,8 @@
 //
 // Also owns `performMassReop` and `performHostileResponse`, the batch
 // recovery helpers called from handleBotOpped during elevated threat.
-import type { PluginAPI } from '../../src/types';
+import type { PluginAPI, PublicUserRecord } from '../../src/types';
+import { verifyGrantEligibility } from './auto-op';
 import {
   botHasOps,
   buildBanMask,
@@ -184,7 +185,9 @@ export function handleBotOpped(
     const massReop = api.channelSettings.getFlag(channel, 'mass_reop_on_recovery');
     if (massReop) {
       state.scheduleEnforcement(recoveryDelay, () => {
-        performMassReop(api, config, channel, state);
+        performMassReop(api, config, channel, state).catch((err) => {
+          api.error(`performMassReop failed for ${channel}:`, err);
+        });
       });
     }
 
@@ -208,12 +211,12 @@ export function handleBotOpped(
  * After the bot regains ops during an elevated threat, scan all channel
  * users and batch re-op/halfop/voice flagged users, deop unauthorized ops.
  */
-function performMassReop(
+async function performMassReop(
   api: PluginAPI,
   config: ChanmodConfig,
   channel: string,
   state?: SharedState,
-): void {
+): Promise<void> {
   const ch = api.getChannel(channel);
   if (!ch) return;
 
@@ -224,11 +227,27 @@ function performMassReop(
   const toHalfop: string[] = [];
   const toVoice: string[] = [];
 
+  // Prefix-mode grants (op/halfop/voice) go through the same hard identity
+  // gate as the auto-op join path — a hostmask match is NOT sufficient. A
+  // nick-squatter matching a flagged user's weak mask would otherwise be
+  // re-opped here on hostmask alone (SECURITY.md §3.2). Deops need no such
+  // gate (removing a mode is always safe), so they're batched immediately.
+  type Grant = {
+    nick: string;
+    desired: 'o' | 'h' | 'v';
+    record: PublicUserRecord;
+    hostmask: string;
+    account: string | null | undefined;
+  };
+  const grantCandidates: Grant[] = [];
+
   for (const [, user] of ch.users) {
     if (api.isBotNick(user.nick)) continue;
 
     const hostmask = api.buildHostmask(user);
-    const rec = api.permissions.findByHostmask(hostmask);
+    // Thread the tracked account so `$a:`-pinned records resolve — matching
+    // the join/reconcile paths, which pass accountName to findByHostmask.
+    const rec = api.permissions.findByHostmask(hostmask, user.accountName ?? null);
     const globalFlags = rec?.global ?? '';
     const channelFlags = rec?.channels[api.ircLower(channel)] ?? '';
     const allFlags = globalFlags + channelFlags;
@@ -246,22 +265,61 @@ function performMassReop(
       hasAnyFlag(allFlags, config.halfop_flags);
     const shouldVoice = !shouldOp && !shouldHalfop && hasAnyFlag(allFlags, config.voice_flags);
 
+    // A record is required to justify any grant; `rec` is always set when
+    // shouldOp/shouldHalfop/shouldVoice is true (flags came from it).
     // Re-op flagged users who lost ops
-    if (shouldOp && !hasOps) {
-      toOp.push(user.nick);
+    if (shouldOp && !hasOps && rec) {
+      grantCandidates.push({
+        nick: user.nick,
+        desired: 'o',
+        record: rec,
+        hostmask,
+        account: user.accountName ?? undefined,
+      });
     }
     // Deop unauthorized ops (bitch mode logic applied en masse)
     if (bitch && hasOps && !shouldOp) {
       toDeop.push(user.nick);
     }
     // Re-halfop
-    if (shouldHalfop && !hasHalfop) {
-      toHalfop.push(user.nick);
+    if (shouldHalfop && !hasHalfop && rec) {
+      grantCandidates.push({
+        nick: user.nick,
+        desired: 'h',
+        record: rec,
+        hostmask,
+        account: user.accountName ?? undefined,
+      });
     }
     // Re-voice
-    if (shouldVoice && !hasVoice) {
-      toVoice.push(user.nick);
+    if (shouldVoice && !hasVoice && rec) {
+      grantCandidates.push({
+        nick: user.nick,
+        desired: 'v',
+        record: rec,
+        hostmask,
+        account: user.accountName ?? undefined,
+      });
     }
+  }
+
+  // Run each candidate through the identity gate; only verified grants make
+  // it into the batches.
+  for (const c of grantCandidates) {
+    const gate = await verifyGrantEligibility(
+      api,
+      config,
+      channel,
+      c.nick,
+      c.desired,
+      c.account,
+      c.record,
+      c.hostmask,
+    );
+    if (!gate.ok) continue;
+    if (c.desired === 'o') toOp.push(c.nick);
+    else if (c.desired === 'h') toHalfop.push(c.nick);
+    else toVoice.push(c.nick);
   }
 
   // Cap each batch at MASS_REOP_BATCH_SIZE per tick. A 30-flagged-user

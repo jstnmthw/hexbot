@@ -1257,9 +1257,34 @@ describe('chanmod plugin — mode enforcement', () => {
     ).toBeDefined();
   });
 
+  it('should NOT re-op a deopped user whose only mask is too weak to trust', async () => {
+    // Security: reactive re-op enforcement runs the same hard identity gate
+    // as the auto-op join path. A flagged user matched only by a weak mask
+    // (`squat!*@*`) is below the specificity floor on a services-free
+    // network, so a squatter who gets deopped must not be re-opped on
+    // hostmask alone. Guards the recovery-path bypass in SECURITY.md §3.2.
+    bot.permissions.addUser('squat', 'squat!*@*', 'o', 'test');
+    addToChannel(bot, 'Squat', 'anything', 'anywhere.example', '#test');
+    await tick(20);
+    bot.client.clearMessages();
+
+    simulateMode(bot, 'EvilOp', '#test', '-o', 'Squat');
+    await tick(50);
+
+    expect(
+      bot.client.messages.find(
+        (m) => m.type === 'mode' && m.message === '+o' && m.args?.includes('Squat'),
+      ),
+    ).toBeUndefined();
+  });
+
   it('should NOT re-op when the bot itself set -o', async () => {
     bot.permissions.addUser('alice', '*!alice@alice.host', 'o', 'test');
     addToChannel(bot, 'Alice', 'alice', 'alice.host', '#test');
+    // Let the async auto-op join grant (+o Alice — a valid flagged user with
+    // a strong mask) settle and be cleared, so it can't leak into the
+    // assertion window below and be mistaken for a re-op.
+    await tick(20);
     bot.client.clearMessages();
 
     simulateMode(bot, 'hexbot', '#test', '-o', 'Alice');
@@ -4888,6 +4913,10 @@ describe('chanmod plugin — enforce_modes:false skips -v enforcement', () => {
       freshBot.permissions.addUser('bob', '*!bob@bob.host', 'v', 'test');
       addToChannel(freshBot, 'Bob', 'bob', 'bob.host', '#test');
       giveBotOps(freshBot, '#test');
+      // Flush the async auto-op join +v (Bob is a valid flagged user with a
+      // strong mask) before asserting the enforce_modes:false path stays
+      // silent — otherwise the join grant leaks into the window below.
+      await tick(20);
       freshBot.client.clearMessages();
 
       simulateMode(freshBot, 'Badguy', '#test', '-v', 'Bob');

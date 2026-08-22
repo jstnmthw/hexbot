@@ -313,7 +313,7 @@ export class Permissions {
   }
 
   /** Add an additional hostmask to an existing user. */
-  addHostmask(handle: string, hostmask: string, source?: string): void {
+  addHostmask(handle: string, hostmask: string, source?: string, transport?: ModLogSource): void {
     const record = this.getUser(handle);
     if (!record) {
       throw new Error(`User "${handle}" not found`);
@@ -327,12 +327,18 @@ export class Permissions {
     }
 
     const by = source ?? 'unknown';
+    this.recordModAction('addhost', null, handle, by, `mask=${hostmask}`, transport);
     this.logger?.info(`Hostmask added to ${handle}: ${hostmask} by ${by}`);
     this.eventBus?.emit('user:hostmaskAdded', handle, hostmask);
   }
 
   /** Remove a hostmask from a user. */
-  removeHostmask(handle: string, hostmask: string, source?: string): void {
+  removeHostmask(
+    handle: string,
+    hostmask: string,
+    source?: string,
+    transport?: ModLogSource,
+  ): void {
     const record = this.getUser(handle);
     if (!record) {
       throw new Error(`User "${handle}" not found`);
@@ -347,6 +353,7 @@ export class Permissions {
     this.persist();
 
     const by = source ?? 'unknown';
+    this.recordModAction('delhost', null, handle, by, `mask=${hostmask}`, transport);
     this.logger?.info(`Hostmask removed from ${handle}: ${hostmask} by ${by}`);
     this.eventBus?.emit('user:hostmaskRemoved', handle, hostmask);
   }

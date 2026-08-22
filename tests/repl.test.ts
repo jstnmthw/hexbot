@@ -208,3 +208,74 @@ describe('BotREPL.printStartupLoginSummary', () => {
     expect(warning).toMatch(/1 lockout\(s\)/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Secret redaction: a REPL `.chpass <password>` must never leak the plaintext
+// to any durable sink — the console log, the botnet ANNOUNCE stream, or the
+// mod_log audit row. The raw line still reaches the command handler, which
+// hashes it. (SECURITY.md §6.)
+// ---------------------------------------------------------------------------
+
+describe('BotREPL.handleLine — secret redaction', () => {
+  let db: BotDatabase;
+  let logSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    db = new BotDatabase(':memory:');
+    db.open();
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    logSpy.mockRestore();
+    db.close();
+  });
+
+  it('never leaks the password to the log, the botnet announce stream, or mod_log', async () => {
+    const PASSWORD = 'sup3r-s3cret-pw';
+
+    const info = vi.fn();
+    const fakeLogger = {
+      child: () => ({ info, error: vi.fn(), warn: vi.fn() }),
+    } as unknown as import('../src/logger').LoggerLike;
+
+    const announce = vi.fn();
+    const execute = vi.fn().mockResolvedValue(undefined);
+    const fakeBot = {
+      db,
+      startedAt: BOOT_TS_MS,
+      dccManager: { announce },
+      commandHandler: { execute },
+    } as unknown as ConstructorParameters<typeof BotREPL>[0];
+
+    const repl = new BotREPL(fakeBot, fakeLogger);
+    await (repl as unknown as { handleLine(line: string): Promise<void> }).handleLine(
+      `.chpass alice ${PASSWORD}`,
+    );
+
+    // 1) Console/logger sink.
+    const loggedLine = info.mock.calls.map((a: unknown[]) => String(a[0])).join('\n');
+    expect(loggedLine).toContain('[redacted]');
+    expect(loggedLine).not.toContain(PASSWORD);
+
+    // 2) Botnet ANNOUNCE sink.
+    const announced = announce.mock.calls.map((a: unknown[]) => String(a[0])).join('\n');
+    expect(announced).toContain('[redacted]');
+    expect(announced).not.toContain(PASSWORD);
+
+    // 3) mod_log audit sink.
+    const rows = db
+      .rawHandleForTests()
+      .prepare(`SELECT reason FROM mod_log WHERE action = 'repl-command'`)
+      .all() as Array<{ reason: string | null }>;
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.reason ?? '').not.toContain(PASSWORD);
+    }
+
+    // 4) But the command handler still received the raw line so it can hash
+    // the real password — redaction is for logging only, not execution.
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(String(execute.mock.calls[0][0])).toContain(PASSWORD);
+  });
+});

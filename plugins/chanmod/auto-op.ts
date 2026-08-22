@@ -58,6 +58,143 @@ function computeDesiredMode(allFlags: string, config: ChanmodConfig): DesiredMod
 }
 
 /**
+ * Result of the shared prefix-mode identity gate. `notifyFail` is set only
+ * for identification failures (account-tag says not-identified, or a
+ * NickServ round-trip came back unverified) so callers that want to nudge
+ * the user (`notify_on_fail`) can distinguish those from a silent
+ * specificity-floor refusal.
+ */
+export type GrantGateResult = { ok: true } | { ok: false; notifyFail: boolean };
+
+/**
+ * HARD identity gate for a `+o/+h/+v` grant, applied regardless of
+ * `require_acc_for`. Returns `{ ok: true }` only when the grant is
+ * justified. This is the single source of truth for "may we give this user
+ * a prefix mode" and is shared by every grant path:
+ *
+ *   - the join / reconcile path (via {@link applyGrant}), whose `join` bind
+ *     uses flag `-` and so bypasses the dispatcher's verification gate; and
+ *   - the recovery re-op paths (mass re-op, reactive `-o/-h/-v`
+ *     re-enforcement), which previously re-granted `+o` on a hostmask match
+ *     alone — reintroducing exactly the NickServ race SECURITY.md §3.2
+ *     forbids. Routing them through this gate closes that bypass.
+ *
+ * Two stages:
+ *
+ *   Stage A — identification: confirm *someone legitimate* is behind the
+ *   nick. Short-circuits via the fast path if the account-tag matches a
+ *   `$a:` pattern on the record; otherwise requires a services round-trip,
+ *   or is skipped on services-free networks where no identification signal
+ *   is possible.
+ *
+ *   Stage B — authorisation: confirm the signal connects to THIS record.
+ *   For `$a:`-pinned records the fast path already did that. Otherwise the
+ *   matched hostmask pattern must clear the project-wide specificity
+ *   threshold — records with weak masks (`nick!*@*`, `*!*@*.com`) are
+ *   refused regardless of services availability, because the mask alone is
+ *   trivially spoofable. Strong masks (`nick!ident@stable.cloak.example`)
+ *   clear.
+ *
+ * `knownAccount`: a non-empty string came from IRCv3 account-tag /
+ * extended-join / account-notify (authoritative). `null` means the server
+ * explicitly said "not identified" — refuse when services are available.
+ * `undefined` means no account data was attached — fall through to
+ * `verifyUser()`. Callers reading the channel-state account map (recovery
+ * paths) should pass `accountName ?? undefined`, since a tracked `null`
+ * there means "not currently known to be identified", not the authoritative
+ * account-tag "not identified" — the NickServ round-trip is the correct
+ * arbiter in that case.
+ *
+ * See SECURITY.md §3.1 for the specificity tiers.
+ */
+export async function verifyGrantEligibility(
+  api: PluginAPI,
+  config: ChanmodConfig,
+  channel: string,
+  nick: string,
+  desired: 'o' | 'h' | 'v',
+  knownAccount: string | null | undefined,
+  user: PublicUserRecord | null,
+  fullHostmask: string | null,
+): Promise<GrantGateResult> {
+  const flagToApply: '+o' | '+h' | '+v' = desired === 'o' ? '+o' : desired === 'h' ? '+h' : '+v';
+  const safeNick = api.stripFormatting(nick);
+
+  // ---- Stage A: identification ----
+  const accountTagMatched =
+    typeof knownAccount === 'string' &&
+    knownAccount.length > 0 &&
+    !!user &&
+    user.hostmasks.some(
+      (pattern) =>
+        pattern.startsWith('$a:') && api.util.matchWildcard(pattern.slice(3), knownAccount),
+    );
+
+  if (accountTagMatched) {
+    api.log(
+      // safe: knownAccount is a non-empty string on this branch
+      `Verified ${safeNick} via IRCv3 account-tag match against $a:-pinned record (${api.stripFormatting(knownAccount as string)}) — applying ${flagToApply} in ${channel}`,
+    );
+    // Fast path: fully authenticated. Skip Stage B.
+    return { ok: true };
+  }
+
+  if (api.services.isAvailable()) {
+    if (knownAccount === null) {
+      api.log(
+        `Skipping ${flagToApply} for ${safeNick} in ${channel} — IRCv3 account-tag says not identified`,
+      );
+      return { ok: false, notifyFail: true };
+    }
+    if (typeof knownAccount === 'string' && knownAccount.length > 0) {
+      // Account-tag present but doesn't match any `$a:` on this record —
+      // they ARE identified, just not to an account pinned on this record.
+      // Stage B decides whether the matched hostmask is strong enough to
+      // stand in as the identity binding.
+      api.log(
+        `${safeNick} identified via account-tag (${api.stripFormatting(knownAccount)}); falling through to hostmask specificity check for ${flagToApply} in ${channel}`,
+      );
+    } else {
+      // No account-tag. Must wait for NickServ.
+      api.log(`Verifying ${safeNick} via NickServ before applying ${flagToApply} in ${channel}`);
+      const result = await api.services.verifyUser(nick);
+      if (!result.verified) {
+        api.log(`Verification failed for ${safeNick} in ${channel} — not applying ${flagToApply}`);
+        return { ok: false, notifyFail: true };
+      }
+      api.log(
+        `${safeNick} identified via NickServ (account: ${result.account ? api.stripFormatting(result.account) : 'unknown'}); falling through to hostmask specificity check for ${flagToApply} in ${channel}`,
+      );
+    }
+  }
+  // Services unavailable + no `$a:` match: skip Stage A entirely. Stage B
+  // is the only defense.
+
+  // ---- Stage B: authorisation (unless already satisfied via $a:) ----
+  if (!user || !fullHostmask) {
+    api.warn(
+      `Skipping ${flagToApply} for ${safeNick} in ${channel} — no record context available for hostmask specificity check`,
+    );
+    return { ok: false, notifyFail: false };
+  }
+  const matched = user.hostmasks.filter((pattern) => api.util.matchWildcard(pattern, fullHostmask));
+  const bestSpecificity = matched.reduce(
+    (max, pattern) => Math.max(max, api.util.patternSpecificity(pattern)),
+    0,
+  );
+  if (bestSpecificity < AUTO_OP_WEAK_HOSTMASK_THRESHOLD) {
+    api.warn(
+      `Refusing ${flagToApply} for ${safeNick} in ${channel} — user's matching hostmask pattern is too broad to trust (specificity ${bestSpecificity} < ${AUTO_OP_WEAK_HOSTMASK_THRESHOLD}). Tighten the mask with .addhostmask, add a $a:<account> pattern, or raise the record's strongest matching mask above the floor.`,
+    );
+    return { ok: false, notifyFail: false };
+  }
+  api.debug(
+    `Hostmask specificity check passed for ${safeNick} in ${channel} (best ${bestSpecificity} >= ${AUTO_OP_WEAK_HOSTMASK_THRESHOLD}) — applying ${flagToApply}`,
+  );
+  return { ok: true };
+}
+
+/**
  * Apply `desired` to `nick` in `channel`. For `+o/+h/+v` grants this
  * function applies a HARD GATE regardless of `require_acc_for`: no grant
  * is ever issued unless the caller's identity is vouched for by either
@@ -122,104 +259,27 @@ async function applyGrant(
   user: PublicUserRecord | null = null,
   fullHostmask: string | null = null,
 ): Promise<void> {
-  const flagToApply: '+o' | '+h' | '+v' = desired === 'o' ? '+o' : desired === 'h' ? '+h' : '+v';
   const safeNick = api.stripFormatting(nick);
 
-  // Hard gate for prefix-mode grants. Two stages:
-  //
-  //   Stage A — identification: confirm *someone legitimate* is behind
-  //   the nick. Short-circuits via the fast path if the account-tag
-  //   matches a `$a:` pattern on the record; otherwise requires a
-  //   services round-trip, or is skipped on services-free networks where
-  //   no identification signal is possible.
-  //
-  //   Stage B — authorisation: confirm the signal connects to THIS
-  //   record. For `$a:`-pinned records the fast path already did that.
-  //   Otherwise the matched hostmask pattern must clear the project-wide
-  //   specificity threshold — records with weak masks (`nick!*@*`,
-  //   `*!*@*.com`) are refused regardless of services availability,
-  //   because the mask alone is trivially spoofable. Strong masks
-  //   (`nick!ident@stable.cloak.example`) clear.
-  //
-  // See SECURITY.md §3.1 for the specificity tiers.
-
-  // ---- Stage A: identification ----
-  const accountTagMatched =
-    typeof knownAccount === 'string' &&
-    knownAccount.length > 0 &&
-    !!user &&
-    user.hostmasks.some(
-      (pattern) =>
-        pattern.startsWith('$a:') && api.util.matchWildcard(pattern.slice(3), knownAccount),
-    );
-
-  if (accountTagMatched) {
-    api.log(
-      // safe: knownAccount is a non-empty string on this branch
-      `Verified ${safeNick} via IRCv3 account-tag match against $a:-pinned record (${api.stripFormatting(knownAccount as string)}) — applying ${flagToApply} in ${channel}`,
-    );
-    // Fast path: fully authenticated. Skip Stage B.
-  } else if (api.services.isAvailable()) {
-    if (knownAccount === null) {
-      api.log(
-        `Skipping ${flagToApply} for ${safeNick} in ${channel} — IRCv3 account-tag says not identified`,
-      );
-      if (config.notify_on_fail) {
-        api.notice(nick, 'Auto-op: NickServ verification failed. Please identify and rejoin.');
-      }
-      return;
+  // Single source of truth for the prefix-mode identity gate. The join bind
+  // uses flag `-`, so the dispatcher's verification gate never runs — this
+  // is the sole identity check on the auto-op path. See
+  // {@link verifyGrantEligibility} for the two-stage rationale.
+  const gate = await verifyGrantEligibility(
+    api,
+    config,
+    channel,
+    nick,
+    desired,
+    knownAccount,
+    user,
+    fullHostmask,
+  );
+  if (!gate.ok) {
+    if (gate.notifyFail && config.notify_on_fail) {
+      api.notice(nick, 'Auto-op: NickServ verification failed. Please identify and rejoin.');
     }
-    if (typeof knownAccount === 'string' && knownAccount.length > 0) {
-      // Account-tag present but doesn't match any `$a:` on this record —
-      // they ARE identified, just not to an account pinned on this
-      // record. Stage B will decide whether the matched hostmask is
-      // strong enough to stand in as the identity binding.
-      api.log(
-        `${safeNick} identified via account-tag (${api.stripFormatting(knownAccount)}); falling through to hostmask specificity check for ${flagToApply} in ${channel}`,
-      );
-    } else {
-      // No account-tag. Must wait for NickServ.
-      api.log(`Verifying ${safeNick} via NickServ before applying ${flagToApply} in ${channel}`);
-      const result = await api.services.verifyUser(nick);
-      if (!result.verified) {
-        api.log(`Verification failed for ${safeNick} in ${channel} — not applying ${flagToApply}`);
-        if (config.notify_on_fail) {
-          api.notice(nick, 'Auto-op: NickServ verification failed. Please identify and rejoin.');
-        }
-        return;
-      }
-      api.log(
-        `${safeNick} identified via NickServ (account: ${result.account ? api.stripFormatting(result.account) : 'unknown'}); falling through to hostmask specificity check for ${flagToApply} in ${channel}`,
-      );
-    }
-  }
-  // Services unavailable + no `$a:` match: skip Stage A entirely. Stage B
-  // is the only defense.
-
-  // ---- Stage B: authorisation (unless already satisfied via $a:) ----
-  if (!accountTagMatched) {
-    if (!user || !fullHostmask) {
-      api.warn(
-        `Skipping ${flagToApply} for ${safeNick} in ${channel} — no record context available for hostmask specificity check`,
-      );
-      return;
-    }
-    const matched = user.hostmasks.filter((pattern) =>
-      api.util.matchWildcard(pattern, fullHostmask),
-    );
-    const bestSpecificity = matched.reduce(
-      (max, pattern) => Math.max(max, api.util.patternSpecificity(pattern)),
-      0,
-    );
-    if (bestSpecificity < AUTO_OP_WEAK_HOSTMASK_THRESHOLD) {
-      api.warn(
-        `Refusing ${flagToApply} for ${safeNick} in ${channel} — user's matching hostmask pattern is too broad to trust (specificity ${bestSpecificity} < ${AUTO_OP_WEAK_HOSTMASK_THRESHOLD}). Tighten the mask with .addhostmask, add a $a:<account> pattern, or raise the record's strongest matching mask above the floor.`,
-      );
-      return;
-    }
-    api.debug(
-      `Hostmask specificity check passed for ${safeNick} in ${channel} (best ${bestSpecificity} >= ${AUTO_OP_WEAK_HOSTMASK_THRESHOLD}) — applying ${flagToApply}`,
-    );
+    return;
   }
 
   if (desired === 'o') {

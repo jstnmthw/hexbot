@@ -2336,6 +2336,105 @@ describe('BotLinkHub CMD routing between leaves', () => {
 
     hub.close();
   });
+
+  it('refuses to relay a cross-leaf CMD when the claimed handle lacks the required flags', async () => {
+    // A compromised leaf1 forges a CMD frame naming a low-privilege handle
+    // ("viewer") for a privileged command targeted at leaf2. The hub must
+    // authorize against its OWN permission DB before forwarding — mirroring
+    // the BSAY re-check — and refuse, rather than blindly forwarding and
+    // trusting leaf2 to catch it. SECURITY.md §11.
+    const eventBus = new BotEventBus();
+    const perms = new Permissions(null, null, eventBus);
+    perms.addUser('viewer', '*!v@host', ''); // no flags
+    const handler = new CommandHandler(perms);
+    handler.registerCommand(
+      'die',
+      { flags: '+n', description: 'privileged', usage: '.die', category: 'test' },
+      (_a, ctx) => ctx.reply('boom'),
+    );
+
+    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    hub.setCommandRelay(handler, perms, eventBus);
+
+    const { socket: s1, written: w1, duplex: d1 } = createMockSocket();
+    hub.addConnection(s1);
+    answerHelloChallenge(w1, d1, TEST_LINK_KEY, 'leaf1');
+    await tick();
+
+    const { socket: s2, written: w2, duplex: d2 } = createMockSocket();
+    hub.addConnection(s2);
+    answerHelloChallenge(w2, d2, TEST_LINK_KEY, 'leaf2');
+    await tick();
+
+    w1.length = 0;
+    w2.length = 0;
+
+    pushFrame(d1, {
+      type: 'CMD',
+      command: 'die',
+      args: '',
+      fromHandle: 'viewer',
+      fromBot: 'leaf1',
+      toBot: 'leaf2',
+      channel: null,
+      ref: 'ref-forged',
+    });
+    await tick();
+
+    // Nothing forwarded to leaf2.
+    const toLeaf2 = parseWritten(w2);
+    expect(toLeaf2.find((f) => f.type === 'CMD' && f.ref === 'ref-forged')).toBeUndefined();
+
+    // leaf1 gets a Permission denied CMD_RESULT.
+    const toLeaf1 = parseWritten(w1);
+    const denied = toLeaf1.find((f) => f.type === 'CMD_RESULT' && f.ref === 'ref-forged');
+    expect(denied).toBeDefined();
+    expect((denied!.output as string[])[0]).toBe('Permission denied.');
+
+    hub.close();
+  });
+
+  it('refuses to relay an unknown cross-leaf CMD instead of forwarding it', async () => {
+    const eventBus = new BotEventBus();
+    const perms = new Permissions(null, null, eventBus);
+    perms.addUser('admin', '*!a@host', 'nmov');
+    const handler = new CommandHandler(perms);
+
+    const hub = new BotLinkHub(hubConfig(), '1.0.0');
+    hub.setCommandRelay(handler, perms, eventBus);
+
+    const { socket: s1, written: w1, duplex: d1 } = createMockSocket();
+    hub.addConnection(s1);
+    answerHelloChallenge(w1, d1, TEST_LINK_KEY, 'leaf1');
+    await tick();
+
+    const { socket: s2, written: w2, duplex: d2 } = createMockSocket();
+    hub.addConnection(s2);
+    answerHelloChallenge(w2, d2, TEST_LINK_KEY, 'leaf2');
+    await tick();
+
+    w1.length = 0;
+    w2.length = 0;
+
+    pushFrame(d1, {
+      type: 'CMD',
+      command: 'nonexistent',
+      args: '',
+      fromHandle: 'admin',
+      fromBot: 'leaf1',
+      toBot: 'leaf2',
+      channel: null,
+      ref: 'ref-unknown',
+    });
+    await tick();
+
+    expect(parseWritten(w2).find((f) => f.type === 'CMD')).toBeUndefined();
+    const denied = parseWritten(w1).find((f) => f.type === 'CMD_RESULT' && f.ref === 'ref-unknown');
+    expect(denied).toBeDefined();
+    expect((denied!.output as string[])[0]).toContain('Unknown command');
+
+    hub.close();
+  });
 });
 
 // ---------------------------------------------------------------------------

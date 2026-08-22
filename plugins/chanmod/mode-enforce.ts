@@ -223,7 +223,9 @@ export function setupModeEnforce(
 
     if (handleEnforceBans(api, state, mctx)) return;
 
-    handleUserModeEnforcement(api, config, state, mctx, onThreat);
+    handleUserModeEnforcement(api, config, state, mctx, onThreat).catch((err) => {
+      api.error(`handleUserModeEnforcement failed for ${channel}:`, err);
+    });
   });
 
   // --- Immediate sync on .chanset changes ---

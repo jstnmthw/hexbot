@@ -143,7 +143,7 @@ See [`docs/CONFIG.md`](CONFIG.md) for the full key matrix and reload-class hints
 
 ## Adding users
 
-The owner account (from `bot.json`) is created automatically. To add more users, use `.adduser` from the REPL or IRC:
+The owner account (from `HEX_OWNER_HANDLE` / `HEX_OWNER_HOSTMASK` in `config/bot.env`) is created automatically. To add more users, use `.adduser` from the REPL or IRC:
 
 ```
 .adduser <handle> <hostmask> <flags>
@@ -155,6 +155,15 @@ Example:
 .adduser alice *!alice@home.example.com o
 .adduser bob *!*@trusted.host.net m
 ```
+
+Users can carry multiple hostmasks — manage them with `.addhost` / `.delhost`:
+
+```
+.addhost alice *!alice@work.example.com
+.delhost alice *!alice@home.example.com
+```
+
+`.delhost` refuses to remove a user's only hostmask (use `.deluser` instead), and note that changing `HEX_OWNER_HOSTMASK` _appends_ to the owner's list on the next restart — `.delhost` the stale mask afterwards.
 
 Flag reference:
 

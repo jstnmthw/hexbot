@@ -317,6 +317,103 @@ describe('permission-commands', () => {
   });
 
   // -------------------------------------------------------------------------
+  // .addhost / .delhost
+  // -------------------------------------------------------------------------
+
+  describe('.addhost', () => {
+    it('should add a hostmask to an existing user', async () => {
+      await handler.execute('.adduser alice *!a@home o', makeCtx());
+
+      const ctx = makeCtx();
+      await handler.execute('.addhost alice *!a@work', ctx);
+
+      expect(perms.getUser('alice')!.hostmasks).toEqual(['*!a@home', '*!a@work']);
+      expect(ctx.reply.mock.calls[0][0]).toContain('added');
+    });
+
+    it('should show usage when missing the hostmask', async () => {
+      const ctx = makeCtx();
+      await handler.execute('.addhost alice', ctx);
+
+      expect(ctx.reply.mock.calls[0][0]).toContain('Usage');
+    });
+
+    it('should reject an over-long hostmask', async () => {
+      await handler.execute('.adduser alice *!a@home o', makeCtx());
+
+      const ctx = makeCtx();
+      await handler.execute(`.addhost alice *!a@${'x'.repeat(201)}`, ctx);
+
+      expect(ctx.reply.mock.calls[0][0]).toContain('Invalid hostmask');
+      expect(perms.getUser('alice')!.hostmasks).toEqual(['*!a@home']);
+    });
+
+    it('should report unknown user', async () => {
+      const ctx = makeCtx();
+      await handler.execute('.addhost nobody *!n@h', ctx);
+
+      expect(ctx.reply.mock.calls[0][0]).toContain('not found');
+    });
+
+    it('should refuse a duplicate hostmask', async () => {
+      await handler.execute('.adduser alice *!a@home o', makeCtx());
+
+      const ctx = makeCtx();
+      await handler.execute('.addhost alice *!a@home', ctx);
+
+      expect(ctx.reply.mock.calls[0][0]).toContain('already has');
+      expect(perms.getUser('alice')!.hostmasks).toEqual(['*!a@home']);
+    });
+  });
+
+  describe('.delhost', () => {
+    it('should remove a hostmask when the user has more than one', async () => {
+      await handler.execute('.adduser alice *!a@home o', makeCtx());
+      await handler.execute('.addhost alice *!a@work', makeCtx());
+
+      const ctx = makeCtx();
+      await handler.execute('.delhost alice *!a@home', ctx);
+
+      expect(perms.getUser('alice')!.hostmasks).toEqual(['*!a@work']);
+      expect(ctx.reply.mock.calls[0][0]).toContain('removed');
+    });
+
+    it('refuses to remove the only hostmask', async () => {
+      await handler.execute('.adduser alice *!a@home o', makeCtx());
+
+      const ctx = makeCtx();
+      await handler.execute('.delhost alice *!a@home', ctx);
+
+      expect(perms.getUser('alice')!.hostmasks).toEqual(['*!a@home']);
+      expect(ctx.reply.mock.calls[0][0]).toContain('only hostmask');
+    });
+
+    it('should report unknown user', async () => {
+      const ctx = makeCtx();
+      await handler.execute('.delhost nobody *!n@h', ctx);
+
+      expect(ctx.reply.mock.calls[0][0]).toContain('not found');
+    });
+
+    it('should report a hostmask not on the user', async () => {
+      await handler.execute('.adduser alice *!a@home o', makeCtx());
+
+      const ctx = makeCtx();
+      await handler.execute('.delhost alice *!a@elsewhere', ctx);
+
+      expect(ctx.reply.mock.calls[0][0]).toContain('not found');
+      expect(perms.getUser('alice')!.hostmasks).toEqual(['*!a@home']);
+    });
+
+    it('should show usage when missing the hostmask', async () => {
+      const ctx = makeCtx();
+      await handler.execute('.delhost alice', ctx);
+
+      expect(ctx.reply.mock.calls[0][0]).toContain('Usage');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // .flags — no args (legend)
   // -------------------------------------------------------------------------
 
@@ -393,6 +490,25 @@ describe('permission-commands (IRC source)', () => {
 
     expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('removed'));
     expect(perms.getUser('todel')).toBeNull();
+  });
+
+  it('addhost/delhost from IRC write attributed mod_log rows', async () => {
+    perms.addUser('alice', '*!a@home', 'o', 'setup');
+    const ctx = makeCtx({ source: 'irc', nick: 'owner', ident: 'owner', hostname: 'host' });
+    await handler.execute('.addhost alice *!a@work', ctx);
+    await handler.execute('.delhost alice *!a@home', ctx);
+
+    expect(perms.getUser('alice')!.hostmasks).toEqual(['*!a@work']);
+
+    const added = db.getModLog({ action: 'addhost' });
+    expect(added).toHaveLength(1);
+    expect(added[0].target).toBe('alice');
+    expect(added[0].source).toBe('irc');
+    expect(added[0].reason).toBe('mask=*!a@work');
+
+    const removed = db.getModLog({ action: 'delhost' });
+    expect(removed).toHaveLength(1);
+    expect(removed[0].reason).toBe('mask=*!a@home');
   });
 
   it('flags set from IRC uses ctx.nick as the audit source', async () => {

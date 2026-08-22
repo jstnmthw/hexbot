@@ -6,6 +6,7 @@ import { type Interface as ReadlineInterface, createInterface } from 'node:readl
 import type { Bot } from './bot';
 import { tryAudit } from './core/audit';
 import { clearAuditTailForSession } from './core/commands/modlog-commands';
+import { redactCommandLine } from './core/commands/secret-commands';
 import { buildReplStartupLine, buildReplStartupSummary } from './core/dcc/login-summary';
 import { Logger, type LoggerLike } from './logger';
 import { toEventObject } from './utils/irc-event';
@@ -242,10 +243,16 @@ export class BotREPL {
 
     this.busy = true;
     try {
-      this.logger?.info(`Command: ${trimmed}`);
+      // Redact secret-bearing commands (e.g. `.chpass <newpass>`) before any
+      // durable sink. The raw line reaches the command handler below where
+      // the password is used and then hashed; it must never reach the
+      // console log, the botnet ANNOUNCE stream, or a mod_log row — all of
+      // which would defeat the scrypt hashing outright. See SECURITY.md §6.
+      const safeLine = redactCommandLine(trimmed);
+      this.logger?.info(`Command: ${safeLine}`);
 
       // Announce REPL activity to botnet so DCC-connected users see local admin work
-      this.bot.dccManager?.announce(`*** REPL: ${trimmed}`);
+      this.bot.dccManager?.announce(`*** REPL: ${safeLine}`);
 
       // One audit row per REPL line, regardless of whether the command
       // itself writes its own row. Without this, a REPL session that
@@ -254,7 +261,7 @@ export class BotREPL {
       // run" would have to guess from secondary logs.
       tryAudit(this.bot.db, makeReplCtx(this.print.bind(this)), {
         action: 'repl-command',
-        reason: trimmed.slice(0, 256),
+        reason: safeLine.slice(0, 256),
       });
 
       // Route through the command handler (REPL has implicit owner privileges)
