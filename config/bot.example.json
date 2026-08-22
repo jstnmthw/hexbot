@@ -30,6 +30,10 @@
     "level": "info",
     "mod_actions": true
   },
+  "flood": {
+    "pub": { "count": 5, "window": 10 },
+    "msg": { "count": 5, "window": 10 }
+  },
   "chanmod": {
     "nick_recovery_password_env": "HEX_CHANMOD_RECOVERY_PASSWORD"
   }

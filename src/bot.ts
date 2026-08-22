@@ -571,9 +571,11 @@ export class Bot {
       );
     }
 
-    if (this.config.flood) {
-      this.dispatcher.setFloodConfig(this.config.flood);
-    }
+    // Turn flood limiting on unconditionally: an omitted `flood` block means
+    // "use the defaults" (FLOOD_DEFAULTS in flood-limiter.ts), not "disabled".
+    // Without this a bot deployed from the example config shipped with command
+    // flood protection entirely off, violating §7 secure-defaults.
+    this.dispatcher.setFloodConfig(this.config.flood ?? {});
     this.dispatcher.setFloodNotice({
       sendNotice: (nick: string, msg: string) => {
         this.messageQueue.enqueue(nick, () => this.client.notice(nick, msg));
