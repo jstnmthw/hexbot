@@ -41,8 +41,7 @@ vi.mock('../../src/core/botlink', async () => {
     onLeafConnected: ((botname: string) => void) | null = null;
     onLeafDisconnected: ((botname: string, reason: string) => void) | null = null;
     onLeafFrame:
-      | ((botname: string, frame: import('../../src/core/botlink').LinkFrame) => void)
-      | null = null;
+      ((botname: string, frame: import('../../src/core/botlink').LinkFrame) => void) | null = null;
     onBsay: ((target: string, message: string) => void) | null = null;
     getLocalPartyUsers: (() => unknown[]) | null = null;
     constructor(..._args: unknown[]) {
@@ -641,6 +640,34 @@ describe('RelayOrchestrator', () => {
 
       expect(orch.hasRelayConsole('alice')).toBe(false);
       expect(orch.hasRelayConsole('bob')).toBe(true);
+      orch.stop();
+    });
+
+    it('leaf: hub-link drop clears ALL virtual sessions regardless of fromBot', async () => {
+      const dcc = makeDcc();
+      const orch = new RelayOrchestrator(buildDeps(bot, { role: 'leaf', dcc }));
+      await orch.start();
+      bot.permissions.addUser('alice', '*!a@h', 'n');
+      bot.permissions.addUser('bob', '*!b@h', 'n');
+      // The hub stamps fromBot with the origin bot's real name before
+      // forwarding — never the literal 'hub' the leaf disconnect emits.
+      leafInstances()[0].onFrame!({
+        type: 'RELAY_REQUEST',
+        handle: 'alice',
+        fromBot: 'originA',
+      });
+      leafInstances()[0].onFrame!({
+        type: 'RELAY_REQUEST',
+        handle: 'bob',
+        fromBot: 'originB',
+      });
+      expect(orch.hasRelayConsole('alice')).toBe(true);
+      expect(orch.hasRelayConsole('bob')).toBe(true);
+
+      leafInstances()[0].onDisconnected!('socket reset');
+
+      expect(orch.hasRelayConsole('alice')).toBe(false);
+      expect(orch.hasRelayConsole('bob')).toBe(false);
       orch.stop();
     });
   });

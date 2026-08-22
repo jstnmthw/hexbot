@@ -15,6 +15,7 @@ function makeSession(handle: string, nick: string): DCCSessionEntry {
   return {
     handle,
     nick,
+    storeKey: null,
     connectedAt: 1000,
     isRelaying: false,
     relayTarget: null,
@@ -114,6 +115,58 @@ describe('DCCSessionStore: casemapping fold', () => {
     store.setCasemapping('ascii');
     expect(store.has('foo[bar]')).toBe(false); // ascii fold ≠ stored key
     expect(store.has('foo{bar}')).toBe(true); // stored key still reachable
+  });
+});
+
+describe('DCCSessionStore: removal across a casemapping change', () => {
+  it('set() stamps the folded key on the entry', () => {
+    const store = new DCCSessionStore(new Map());
+    store.setCasemapping('rfc1459');
+    const sess = makeSession('alice', 'Foo[bar]');
+    store.set('Foo[bar]', sess);
+    expect(sess.storeKey).toBe('foo{bar}');
+  });
+
+  it('delete() falls back to a scan when the re-folded key misses', () => {
+    // Inserted under rfc1459 (key `foo{bar}`), deleted under ascii (fresh
+    // fold `foo[bar]` — a map miss). The fallback scan must still remove
+    // the entry so the max_sessions slot is released.
+    const store = new DCCSessionStore(new Map());
+    store.setCasemapping('rfc1459');
+    store.set('Foo[bar]', makeSession('alice', 'Foo[bar]'));
+    store.setCasemapping('ascii');
+    expect(store.delete('Foo[bar]')).toBe(true);
+    expect(store.size).toBe(0);
+  });
+
+  it('deleteEntry() removes by the stamped key regardless of casemapping', () => {
+    const store = new DCCSessionStore(new Map());
+    store.setCasemapping('rfc1459');
+    const sess = makeSession('alice', 'Foo[bar]');
+    store.set('Foo[bar]', sess);
+    store.setCasemapping('ascii');
+    expect(store.deleteEntry(sess)).toBe(true);
+    expect(store.size).toBe(0);
+  });
+
+  it('deleteEntry() does not evict a replacement session occupying the same key', () => {
+    const store = new DCCSessionStore(new Map());
+    const old = makeSession('alice', 'alice');
+    const replacement = makeSession('alice', 'alice');
+    store.set('alice', old);
+    store.set('alice', replacement); // same folded key — replaces `old`
+    expect(store.deleteEntry(old)).toBe(false);
+    expect(store.get('alice')).toBe(replacement);
+  });
+
+  it('deleteEntry() falls back to an identity scan for unstamped entries', () => {
+    // Pre-seeded test maps insert entries without going through set().
+    const map = new Map<string, DCCSessionEntry>();
+    const sess = makeSession('alice', 'alice');
+    map.set('alice', sess);
+    const store = new DCCSessionStore(map);
+    expect(store.deleteEntry(sess)).toBe(true);
+    expect(store.size).toBe(0);
   });
 });
 

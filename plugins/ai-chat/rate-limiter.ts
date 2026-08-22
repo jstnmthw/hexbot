@@ -53,14 +53,22 @@ export interface RateLimiterInitialState {
   ambientGlobalWindow?: readonly number[];
 }
 
-// A bucket that has been at full capacity longer than this is indistinguishable
-// from a freshly created one — safe to evict so nick-rotation doesn't grow
+// A bucket idle longer than this is safe to evict regardless of its token
+// count: `getOrCreateBucket` recreates evicted keys at full burst, which is
+// exactly what lazy refill would have produced after an hour of idleness at
+// any sane refill rate. Eviction keeps nick-rotation from growing
 // `userBuckets` without bound.
 const STALE_BUCKET_IDLE_MS = 3_600_000;
 
 // Floor on map size before opportunistic eviction runs — prevents thrashing
 // in small deployments where the natural cardinality stays well below this.
 const EVICTION_MIN_BUCKETS = 64;
+
+// Run the stale-bucket sweep once per this many bucket lookups. The trigger
+// must be independent of any one bucket's post-refill state — refill advances
+// `lastRefill` to within one refill interval of now, so a staleness check on
+// the just-touched bucket can never fire.
+const EVICTION_CHECK_INTERVAL = 64;
 
 /**
  * Hard cap on tracked ambient channels. Mirrors `ContextManager.MAX_CHANNELS`
@@ -79,6 +87,7 @@ export class RateLimiter {
   private dayWindow: number[] = [];
   private ambientChannelWindows = new Map<string, number[]>();
   private ambientGlobalWindow: number[] = [];
+  private bucketLookupsSinceSweep = 0;
 
   constructor(
     private config: RateLimiterConfig,
@@ -234,6 +243,12 @@ export class RateLimiter {
     this.dayWindow = [];
     this.ambientChannelWindows.clear();
     this.ambientGlobalWindow = [];
+    this.bucketLookupsSinceSweep = 0;
+  }
+
+  /** Number of tracked per-user buckets (observability + eviction tests). */
+  get userBucketCount(): number {
+    return this.userBuckets.size;
   }
 
   /**
@@ -278,6 +293,15 @@ export class RateLimiter {
   }
 
   private getOrCreateBucket(userKey: string, now: number): UserBucket {
+    // Opportunistic sweep on a lookup-count cadence, gated by the size floor.
+    // Runs before the lookup so a stale entry for this very key is replaced
+    // by a fresh full-burst bucket below instead of being lazily refilled.
+    if (++this.bucketLookupsSinceSweep >= EVICTION_CHECK_INTERVAL) {
+      this.bucketLookupsSinceSweep = 0;
+      if (this.userBuckets.size > EVICTION_MIN_BUCKETS) {
+        this.evictStaleBuckets(now);
+      }
+    }
     // Defence-in-depth: normalise the key here so a future caller that forgets
     // to lowercase doesn't silently split one user's bucket across casings.
     const key = userKey.toLowerCase();
@@ -302,23 +326,18 @@ export class RateLimiter {
     if (earned <= 0) return;
     bucket.tokens = Math.min(this.config.userBurst, bucket.tokens + earned);
     bucket.lastRefill += earned * refillMs;
-    // Opportunistic eviction: only when the map is large AND this bucket has
-    // been idle past STALE_BUCKET_IDLE_MS AND is at full capacity. The size
-    // floor prevents thrashing in small deployments; the idle+full check
-    // ensures we only evict buckets that look indistinguishable from fresh.
-    if (
-      bucket.tokens >= this.config.userBurst &&
-      now - bucket.lastRefill > STALE_BUCKET_IDLE_MS &&
-      this.userBuckets.size > EVICTION_MIN_BUCKETS
-    ) {
-      this.evictStaleBuckets(now);
-    }
   }
 
+  /**
+   * Drop every bucket idle past STALE_BUCKET_IDLE_MS, regardless of token
+   * count. Deletion is equivalent to lazy refill for these entries: an hour
+   * of earned refills fills any bucket to burst at sane configs, and
+   * `getOrCreateBucket` recreates evicted keys at full burst anyway.
+   */
   private evictStaleBuckets(now: number): void {
     const cutoff = now - STALE_BUCKET_IDLE_MS;
     for (const [key, b] of this.userBuckets) {
-      if (b.lastRefill < cutoff && b.tokens >= this.config.userBurst) {
+      if (b.lastRefill < cutoff) {
         this.userBuckets.delete(key);
       }
     }

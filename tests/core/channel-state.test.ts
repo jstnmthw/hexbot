@@ -1739,6 +1739,71 @@ describe('ChannelState', () => {
   });
 
   // -------------------------------------------------------------------------
+  // networkAccounts bounding — PM-only nick sweep + hard cap (M-05)
+  // -------------------------------------------------------------------------
+
+  describe('networkAccounts size bounding', () => {
+    const CAP = 2048;
+
+    it('retains PM-only entries while under the cap', () => {
+      for (let i = 0; i < 100; i++) {
+        state.setAccountForNick(`pm${i}`, `Acct${i}`);
+      }
+      expect(state.getAccountForNick('pm0')).toBe('Acct0');
+      expect(state.getAccountForNick('pm99')).toBe('Acct99');
+    });
+
+    it('sweeps PM-only entries once the cap trips, keeping in-channel nicks', () => {
+      trackChannel('#test');
+      client.simulateEvent('join', {
+        nick: 'Alice',
+        ident: 'a',
+        hostname: 'host',
+        channel: '#test',
+      });
+      state.setAccountForNick('Alice', 'AliceAcct');
+
+      // Fill past the cap with nicks the bot shares no channel with —
+      // PM account-tags / NickServ verification results. The insert that
+      // pushes size over the cap triggers the presence-based sweep.
+      for (let i = 0; i < CAP; i++) {
+        state.setAccountForNick(`stranger${i}`, `Acct${i}`);
+      }
+
+      expect(state.getAccountForNick('Alice')).toBe('AliceAcct');
+      expect(state.getAccountForNick('stranger0')).toBeUndefined();
+      expect(state.getAccountForNick(`stranger${CAP - 1}`)).toBeUndefined();
+    });
+
+    it('evicts oldest-inserted in-channel entries when the sweep alone cannot reach the cap', () => {
+      trackChannel('#huge');
+      for (let i = 0; i <= CAP; i++) {
+        client.simulateEvent('join', {
+          nick: `user${i}`,
+          ident: 'u',
+          hostname: 'host',
+          channel: '#huge',
+        });
+      }
+      for (let i = 0; i <= CAP; i++) {
+        state.setAccountForNick(`user${i}`, `Acct${i}`);
+      }
+
+      // Every entry is in-channel, so the presence sweep removes nothing —
+      // the oldest-inserted entry is evicted to respect the hard cap.
+      expect(state.getAccountForNick('user0')).toBeUndefined();
+      expect(state.getAccountForNick('user1')).toBe('Acct1');
+      expect(state.getAccountForNick(`user${CAP}`)).toBe(`Acct${CAP}`);
+
+      let retained = 0;
+      for (let i = 0; i <= CAP; i++) {
+        if (state.getAccountForNick(`user${i}`) !== undefined) retained++;
+      }
+      expect(retained).toBe(CAP);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // clearNetworkAccounts — reconnect hygiene
   // -------------------------------------------------------------------------
 

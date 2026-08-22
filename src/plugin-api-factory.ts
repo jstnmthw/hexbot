@@ -19,7 +19,7 @@ import { coerceFromJson, pickByDottedPath } from './core/seed-from-json';
 import type { Services } from './core/services';
 import type { SettingsRegistry } from './core/settings-registry';
 import type { BotDatabase } from './database';
-import type { BindRegistrar } from './dispatcher';
+import { type BindRegistrar, NON_STACKABLE_TYPES } from './dispatcher';
 import type { BotEventBus } from './event-bus';
 import type { LoggerLike } from './logger';
 import type {
@@ -54,7 +54,7 @@ import { sanitize } from './utils/sanitize';
 import { SlidingWindowCounter } from './utils/sliding-window';
 import { splitMessage } from './utils/split-message';
 import { stripFormatting } from './utils/strip-formatting';
-import { ircLower, wildcardMatch } from './utils/wildcard';
+import { caseCompare, ircLower, wildcardMatch } from './utils/wildcard';
 
 // ---------------------------------------------------------------------------
 // Dependencies
@@ -176,6 +176,53 @@ const SUB_API_KEYS = new Set([
 ]);
 
 /**
+ * Per-plugin caps for the event-subscription surfaces (the `on*` family plus
+ * `channelSettings`/`coreSettings`/`settings.onChange`). Mirrors the
+ * dispatcher's PLUGIN_BIND_WARN / PLUGIN_BIND_HARDCAP containment for
+ * `api.bind()`: a plugin that registers per-call fresh closures (e.g. inside
+ * a bind handler) grows event-bus listener arrays and registry callback
+ * stacks for its whole lifetime, so the same runaway-loop threat model
+ * applies. One shared counter spans all these surfaces — per-surface counts
+ * would add bookkeeping without changing the failure mode being contained.
+ */
+export const PLUGIN_SUBSCRIPTION_WARN = 500;
+export const PLUGIN_SUBSCRIPTION_HARDCAP = 1000;
+
+/** Shared per-plugin counter across all subscription surfaces. */
+interface SubscriptionBudget {
+  /** Count one registration. Returns `false` (refused, logged) at the hard cap. */
+  tryAcquire(surface: string): boolean;
+  /** Return capacity when subscriptions are released (off* / offChange). */
+  release(count?: number): void;
+}
+
+function createSubscriptionBudget(pluginId: string, logger: LoggerLike | null): SubscriptionBudget {
+  let count = 0;
+  let warnFired = false;
+  return {
+    tryAcquire(surface: string): boolean {
+      if (count >= PLUGIN_SUBSCRIPTION_HARDCAP) {
+        logger?.error(
+          `Plugin "${pluginId}" hit subscription cap (${PLUGIN_SUBSCRIPTION_HARDCAP}) — refusing ${surface} registration. Suspect a runaway subscription loop.`,
+        );
+        return false;
+      }
+      if (count >= PLUGIN_SUBSCRIPTION_WARN && !warnFired) {
+        warnFired = true;
+        logger?.warn(
+          `Plugin "${pluginId}" has ${count} event subscriptions (warn threshold ${PLUGIN_SUBSCRIPTION_WARN}). Hard cap fires at ${PLUGIN_SUBSCRIPTION_HARDCAP}.`,
+        );
+      }
+      count += 1;
+      return true;
+    },
+    release(released = 1): void {
+      count = Math.max(0, count - released);
+    },
+  };
+}
+
+/**
  * Build the scoped `PluginAPI` a plugin's `init(api)` receives. Returns a
  * handle containing the frozen api and a `dispose()` hook so plugin-loader
  * can neutralize the api post-teardown. See {@link PluginApiHandle}.
@@ -194,6 +241,10 @@ export function createPluginApi(
 ): PluginApiHandle {
   const pluginLogger = deps.rootLogger?.child(`plugin:${pluginId}`) ?? null;
   const { getCasemapping, getServerSupports, dispatcher, botConfig } = deps;
+
+  // One counter shared by every subscription surface on this api instance
+  // (on* family + the three *.onChange views) — see PLUGIN_SUBSCRIPTION_*.
+  const subscriptionBudget = createSubscriptionBudget(pluginId, pluginLogger);
 
   // Build channel scope set for filtering bind handlers.
   // When defined (even if empty), only channel events matching the set fire.
@@ -224,10 +275,10 @@ export function createPluginApi(
     mask: string;
     wrapped: BindHandler;
   }
-  // Implicit cap: the dispatcher rejects any bind() past PLUGIN_BIND_HARDCAP
-  // (1000) per plugin, so this array is bounded by that limit even though
-  // it carries no cap of its own. A plugin that hits the dispatcher cap
-  // never makes it into wrappedHandlers either.
+  // Implicit cap: entries are pushed only after dispatcher.bind() reports
+  // acceptance, and non-stackable re-binds replace their prior entry, so
+  // this array mirrors the dispatcher's per-plugin bind list — bounded by
+  // its PLUGIN_BIND_HARDCAP (1000) even though it carries no cap of its own.
   const wrappedHandlers: WrappedEntry[] = [];
 
   // Build plugin-facing bot config (password omitted; filesystem paths omitted).
@@ -309,8 +360,26 @@ export function createPluginApi(
           }
           return widenedHandler(ctx);
         };
+        // Record the wrapper only if the dispatcher actually accepted the
+        // bind — a hard-cap refusal must not leave a stale tracking entry
+        // that api.unbind() would later match instead of a live one.
+        const accepted = dispatcher.bind(type, flags, mask, wrapped, pluginId);
+        if (!accepted) return;
+        // Mirror the dispatcher's non-stackable overwrite: it just evicted
+        // any prior pub/msg bind on this (type, mask), so drop the matching
+        // tracking entries before recording the replacement. Without this,
+        // re-bind-to-replace accumulates one dead entry per call and the
+        // stale-entry-first unbind lookup detaches the wrong handler.
+        if (NON_STACKABLE_TYPES.has(type)) {
+          const cm = getCasemapping();
+          for (let i = wrappedHandlers.length - 1; i >= 0; i--) {
+            const e = wrappedHandlers[i];
+            if (e.type === type && caseCompare(e.mask, mask, cm)) {
+              wrappedHandlers.splice(i, 1);
+            }
+          }
+        }
         wrappedHandlers.push({ handler: widenedHandler, type, mask, wrapped });
-        dispatcher.bind(type, flags, mask, wrapped, pluginId);
       } else {
         dispatcher.bind(type, flags, mask, widenedHandler, pluginId);
       }
@@ -335,6 +404,7 @@ export function createPluginApi(
       deps.userDeidentifiedListeners,
       deps.botIdentifiedListeners,
       pluginLogger,
+      subscriptionBudget,
     ),
     permissions: createPluginPermissionsApi(deps.permissions),
     services: createPluginServicesApi(deps.services),
@@ -362,9 +432,13 @@ export function createPluginApi(
       }
       return undefined;
     },
-    channelSettings: createPluginChannelSettingsApi(deps.channelSettings, pluginId),
-    coreSettings: createPluginCoreSettingsView(deps.coreSettings, pluginId),
-    settings: createPluginSettingsApi(deps.pluginSettings, pluginId, config),
+    channelSettings: createPluginChannelSettingsApi(
+      deps.channelSettings,
+      pluginId,
+      subscriptionBudget,
+    ),
+    coreSettings: createPluginCoreSettingsView(deps.coreSettings, pluginId, subscriptionBudget),
+    settings: createPluginSettingsApi(deps.pluginSettings, pluginId, config, subscriptionBudget),
     ...createPluginHelpApi(deps.helpRegistry, pluginId),
     stripFormatting(text: string): string {
       return stripFormatting(text);
@@ -763,6 +837,7 @@ function createPluginChannelStateApi(
   userDeidentifiedListeners: Map<string, Array<(nick: string, previousAccount: string) => void>>,
   botIdentifiedListeners: Map<string, Array<() => void>>,
   pluginLogger: LoggerLike | null,
+  budget: SubscriptionBudget,
 ): Pick<
   PluginAPI,
   | 'getChannel'
@@ -813,6 +888,7 @@ function createPluginChannelStateApi(
   return {
     onModesReady(callback: (channel: string) => void): void {
       if (modesReadyByCallback.has(callback)) return; // idempotent
+      if (!budget.tryAcquire('onModesReady')) return;
       const wrappedListener = (channel: string): void => {
         safeInvoke('channel:modesReady', () => callback(channel));
       };
@@ -831,6 +907,7 @@ function createPluginChannelStateApi(
       if (!wrapped) return;
       eventBus.off('channel:modesReady', wrapped);
       modesReadyByCallback.delete(callback);
+      budget.release();
       const list = modesReadyListeners.get(pluginId);
       if (list) {
         const idx = list.indexOf(wrapped);
@@ -839,6 +916,10 @@ function createPluginChannelStateApi(
     },
     onPermissionsChanged(callback: (handle: string) => void): void {
       if (permissionsByCallback.has(callback)) return; // idempotent
+      // One logical subscription against the budget even though the wrapper
+      // attaches to three bus events — the budget counts registrations, not
+      // listener fan-out.
+      if (!budget.tryAcquire('onPermissionsChanged')) return;
       // One wrapper fans three events into the plugin callback. The three
       // events carry different tail params (global flags, hostmask, ...);
       // we only surface `handle` (arg 0) and discard the rest.
@@ -861,6 +942,7 @@ function createPluginChannelStateApi(
         eventBus.off(ev, wrapped);
       }
       permissionsByCallback.delete(callback);
+      budget.release();
       const list = permissionsChangedListeners.get(pluginId);
       if (list) {
         const idx = list.indexOf(wrapped);
@@ -869,6 +951,7 @@ function createPluginChannelStateApi(
     },
     onUserIdentified(callback: (nick: string, account: string) => void): void {
       if (userIdentifiedByCallback.has(callback)) return; // idempotent
+      if (!budget.tryAcquire('onUserIdentified')) return;
       const wrappedListener = (nick: string, account: string): void => {
         safeInvoke('user:identified', () => callback(nick, account));
       };
@@ -884,6 +967,7 @@ function createPluginChannelStateApi(
       if (!wrapped) return;
       eventBus.off('user:identified', wrapped);
       userIdentifiedByCallback.delete(callback);
+      budget.release();
       const list = userIdentifiedListeners.get(pluginId);
       if (list) {
         const idx = list.indexOf(wrapped);
@@ -892,6 +976,7 @@ function createPluginChannelStateApi(
     },
     onUserDeidentified(callback: (nick: string, previousAccount: string) => void): void {
       if (userDeidentifiedByCallback.has(callback)) return; // idempotent
+      if (!budget.tryAcquire('onUserDeidentified')) return;
       const wrappedListener = (nick: string, previousAccount: string): void => {
         safeInvoke('user:deidentified', () => callback(nick, previousAccount));
       };
@@ -907,6 +992,7 @@ function createPluginChannelStateApi(
       if (!wrapped) return;
       eventBus.off('user:deidentified', wrapped);
       userDeidentifiedByCallback.delete(callback);
+      budget.release();
       const list = userDeidentifiedListeners.get(pluginId);
       if (list) {
         const idx = list.indexOf(wrapped);
@@ -915,6 +1001,7 @@ function createPluginChannelStateApi(
     },
     onBotIdentified(callback: () => void): void {
       if (botIdentifiedByCallback.has(callback)) return; // idempotent
+      if (!budget.tryAcquire('onBotIdentified')) return;
       const wrappedListener = (): void => {
         safeInvoke('bot:identified', callback);
       };
@@ -930,6 +1017,7 @@ function createPluginChannelStateApi(
       if (!wrapped) return;
       eventBus.off('bot:identified', wrapped);
       botIdentifiedByCallback.delete(callback);
+      budget.release();
       const list = botIdentifiedListeners.get(pluginId);
       if (list) {
         const idx = list.indexOf(wrapped);
@@ -989,6 +1077,7 @@ function createPluginChannelStateApi(
 function createPluginChannelSettingsApi(
   channelSettings: ChannelSettings | null | undefined,
   pluginId: string,
+  budget: SubscriptionBudget,
 ): PluginChannelSettings {
   // When channelSettings is absent (e.g. minimal test harness), reads return
   // the "nothing registered" default for that return type rather than throwing.
@@ -1015,7 +1104,11 @@ function createPluginChannelSettingsApi(
       return channelSettings?.isSet(channel, key) ?? false;
     },
     onChange(callback: (channel: string, key: string, value: ChannelSettingValue) => void): void {
-      channelSettings?.onChange(pluginId, callback);
+      if (!channelSettings) return;
+      // No per-callback offChange exists on this surface, so acquired
+      // budget is only returned at unload (the loader's offChange drain).
+      if (!budget.tryAcquire('channelSettings.onChange')) return;
+      channelSettings.onChange(pluginId, callback);
     },
   } satisfies PluginChannelSettings);
 }
@@ -1035,6 +1128,7 @@ function createPluginChannelSettingsApi(
 function createPluginCoreSettingsView(
   registry: SettingsRegistry | null,
   pluginId: string,
+  budget: SubscriptionBudget,
 ): PluginCoreSettingsView {
   if (!registry) {
     return Object.freeze({
@@ -1057,6 +1151,9 @@ function createPluginCoreSettingsView(
       offChange(): void {},
     });
   }
+  // Subscriptions charged to the budget by this view — offChange drains the
+  // registry's whole per-owner stack, so it returns them all at once.
+  let activeSubscriptions = 0;
   return Object.freeze({
     get(key: string): ChannelSettingValue {
       return registry.get('', key);
@@ -1074,6 +1171,8 @@ function createPluginCoreSettingsView(
       return registry.isSet('', key);
     },
     onChange(callback: SettingsChangeCallback): void {
+      if (!budget.tryAcquire('coreSettings.onChange')) return;
+      activeSubscriptions += 1;
       // The registry's onChange callback signature is
       // `(instance, key, value)`; for core scope `instance` is always `''`
       // so we discard it and only surface `(key, value)` to plugins.
@@ -1084,6 +1183,8 @@ function createPluginCoreSettingsView(
       // registered under this plugin id; per-callback off is unnecessary
       // because we only attach one wrapper per plugin via createPluginCoreSettingsView.
       registry.offChange(pluginId);
+      budget.release(activeSubscriptions);
+      activeSubscriptions = 0;
     },
   });
 }
@@ -1103,6 +1204,7 @@ function createPluginSettingsApi(
   registry: SettingsRegistry | null,
   pluginId: string,
   jsonConfig: Record<string, unknown>,
+  budget: SubscriptionBudget,
 ): PluginSettings {
   // Deep-freeze: `jsonConfig` is the merged plugins.json/config.json bag
   // with nested objects (e.g. ai-chat.channel_characters, rss.feeds).
@@ -1135,6 +1237,9 @@ function createPluginSettingsApi(
       bootConfig: frozenBootConfig,
     });
   }
+  // Subscriptions charged to the budget by this view — see the matching
+  // counter in createPluginCoreSettingsView.
+  let activeSubscriptions = 0;
   return Object.freeze({
     register(defs: PluginSettingDef[]): void {
       registry.register(pluginId, defs);
@@ -1176,10 +1281,15 @@ function createPluginSettingsApi(
       return registry.isSet('', key);
     },
     onChange(callback: SettingsChangeCallback): void {
+      if (!budget.tryAcquire('settings.onChange')) return;
+      activeSubscriptions += 1;
       registry.onChange(pluginId, (_instance, key, value) => callback(key, value));
     },
     offChange(_callback: SettingsChangeCallback): void {
+      // Owner-scoped drain — every callback this view registered goes at once.
       registry.offChange(pluginId);
+      budget.release(activeSubscriptions);
+      activeSubscriptions = 0;
     },
     bootConfig: frozenBootConfig,
   });

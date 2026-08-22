@@ -6,8 +6,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { SettingsRegistry } from '../src/core/settings-registry';
 import { BotDatabase } from '../src/database';
+import { EventDispatcher } from '../src/dispatcher';
 import { BotEventBus } from '../src/event-bus';
-import { type PluginApiDeps, createPluginApi } from '../src/plugin-api-factory';
+import {
+  PLUGIN_SUBSCRIPTION_HARDCAP,
+  PLUGIN_SUBSCRIPTION_WARN,
+  type PluginApiDeps,
+  createPluginApi,
+} from '../src/plugin-api-factory';
 
 function makeDeps(): PluginApiDeps {
   const eventBus = new BotEventBus();
@@ -305,5 +311,166 @@ describe('api.settings register-time JSON seed', () => {
     api.settings.unset('x');
     api.settings.onChange(() => {});
     api.settings.offChange(() => {});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M-11: wrappedHandlers must mirror dispatcher bind state for scoped plugins
+// ---------------------------------------------------------------------------
+
+function makeLogger() {
+  const logger = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: () => logger,
+    setLevel: () => {},
+    getLevel: () => 'info' as const,
+  };
+  return logger;
+}
+
+describe('channel-scoped api.bind wrappedHandlers reconciliation (M-11)', () => {
+  it('a dispatcher-refused bind leaves no tracking entry behind', () => {
+    const deps = makeDeps();
+    // Simulate the dispatcher's hard-cap refusal: bind() reports rejection.
+    deps.dispatcher = {
+      bind: vi.fn().mockReturnValue(false),
+      unbind: vi.fn(),
+      unbindAll: vi.fn(),
+    };
+    const { api } = createPluginApi(deps, 'demo', {}, ['#chan']);
+    const handler = () => {};
+
+    api.bind('pubm', '-', 'refused', handler);
+    expect(deps.dispatcher.bind).toHaveBeenCalledTimes(1);
+
+    // With no stale tracking entry, unbind falls through to the plugin's
+    // own handler reference. A stale entry would surface as a wrapper
+    // function (!== handler) being passed to dispatcher.unbind.
+    api.unbind('pubm', 'refused', handler);
+    expect(deps.dispatcher.unbind).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(deps.dispatcher.unbind).mock.calls[0][2]).toBe(handler);
+  });
+
+  it('refused binds at the real dispatcher hard cap do not grow dispatcher state', () => {
+    const dispatcher = new EventDispatcher(null, makeLogger());
+    const deps = makeDeps();
+    deps.dispatcher = dispatcher;
+    const { api } = createPluginApi(deps, 'demo', {}, ['#chan']);
+    const handler = () => {};
+
+    for (let i = 0; i < 1000; i++) {
+      api.bind('pubm', '-', `m${i}`, handler);
+    }
+    expect(dispatcher.listBinds({ pluginId: 'demo' })).toHaveLength(1000);
+
+    // Past the cap: refused by the dispatcher; the factory must not track it.
+    api.bind('pub', '-', 'overflow', handler);
+    expect(dispatcher.listBinds({ pluginId: 'demo' })).toHaveLength(1000);
+    // Unbinding the refused mask must not detach anything that is live.
+    api.unbind('pub', 'overflow', handler);
+    expect(dispatcher.listBinds({ pluginId: 'demo' })).toHaveLength(1000);
+  });
+
+  it('non-stackable re-bind replaces the tracking entry and unbind detaches the live handler', () => {
+    const dispatcher = new EventDispatcher(null, makeLogger());
+    const deps = makeDeps();
+    deps.dispatcher = dispatcher;
+    const { api } = createPluginApi(deps, 'demo', {}, ['#chan']);
+    const handler = () => {};
+
+    // Documented overwrite semantics: re-bind the same (type, mask) to
+    // replace the handler. Each call evicts the previous dispatcher bind.
+    api.bind('pub', '-', 'cmd', handler);
+    api.bind('pub', '-', 'cmd', handler);
+    api.bind('pub', '-', 'cmd', handler);
+    expect(dispatcher.listBinds({ pluginId: 'demo' })).toHaveLength(1);
+
+    // Pre-fix, the stale-entry-first lookup unbinds a dead wrapper and the
+    // live bind stays attached. Post-fix a single unbind detaches it.
+    api.unbind('pub', 'cmd', handler);
+    expect(dispatcher.listBinds({ pluginId: 'demo' })).toHaveLength(0);
+  });
+
+  it('re-binding with a new handler still allows unbinding via the new handler', () => {
+    const dispatcher = new EventDispatcher(null, makeLogger());
+    const deps = makeDeps();
+    deps.dispatcher = dispatcher;
+    const { api } = createPluginApi(deps, 'demo', {}, ['#chan']);
+    const first = () => {};
+    const second = () => {};
+
+    api.bind('msg', '-', 'cmd', first);
+    api.bind('msg', '-', 'cmd', second); // overwrites (msg is non-stackable)
+    expect(dispatcher.listBinds({ pluginId: 'demo' })).toHaveLength(1);
+
+    api.unbind('msg', 'cmd', second);
+    expect(dispatcher.listBinds({ pluginId: 'demo' })).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M-13: per-plugin cap on the on*/onChange subscription surfaces
+// ---------------------------------------------------------------------------
+
+describe('subscription budget on on*/onChange surfaces (M-13)', () => {
+  it('warns at the soft cap and refuses registrations past the hard cap with a log', () => {
+    const deps = makeDeps();
+    const logger = makeLogger();
+    deps.rootLogger = logger;
+    const { api } = createPluginApi(deps, 'demo', {});
+
+    // Fresh closure per call — the runaway pattern the cap exists to contain.
+    for (let i = 0; i < PLUGIN_SUBSCRIPTION_WARN; i++) {
+      api.onModesReady(() => {});
+    }
+    const warnCalls = () =>
+      logger.warn.mock.calls.filter((c) => String(c[0]).includes('warn threshold'));
+    expect(warnCalls()).toHaveLength(0);
+
+    // Crossing the warn threshold logs exactly once.
+    api.onModesReady(() => {});
+    expect(warnCalls()).toHaveLength(1);
+
+    for (let i = PLUGIN_SUBSCRIPTION_WARN + 1; i < PLUGIN_SUBSCRIPTION_HARDCAP; i++) {
+      api.onModesReady(() => {});
+    }
+    expect(deps.modesReadyListeners.get('demo')).toHaveLength(PLUGIN_SUBSCRIPTION_HARDCAP);
+    expect(warnCalls()).toHaveLength(1); // warn fires once, not per call
+
+    // Past the hard cap: refused, logged, and nothing is registered.
+    const overflow = vi.fn();
+    api.onModesReady(overflow);
+    expect(deps.modesReadyListeners.get('demo')).toHaveLength(PLUGIN_SUBSCRIPTION_HARDCAP);
+    const errorCalls = logger.error.mock.calls.filter((c) =>
+      String(c[0]).includes('hit subscription cap'),
+    );
+    expect(errorCalls).toHaveLength(1);
+    deps.eventBus.emit('channel:modesReady', '#x');
+    expect(overflow).not.toHaveBeenCalled();
+  });
+
+  it('the cap is shared across surfaces and off* returns capacity', () => {
+    const deps = makeDeps();
+    deps.rootLogger = makeLogger();
+    const { api } = createPluginApi(deps, 'demo', {});
+
+    const tracked = vi.fn();
+    api.onModesReady(tracked); // 1 of HARDCAP
+    for (let i = 1; i < PLUGIN_SUBSCRIPTION_HARDCAP; i++) {
+      api.onBotIdentified(() => {}); // fill the rest of the shared budget
+    }
+
+    // One shared counter: a different surface is refused at the cap.
+    const cb = vi.fn();
+    api.onUserIdentified(cb);
+    expect(deps.userIdentifiedListeners.get('demo') ?? []).toHaveLength(0);
+
+    // off* releases capacity, so the next registration succeeds.
+    api.offModesReady(tracked);
+    api.onUserIdentified(cb);
+    expect(deps.userIdentifiedListeners.get('demo')).toHaveLength(1);
   });
 });

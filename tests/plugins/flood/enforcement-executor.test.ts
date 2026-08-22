@@ -423,6 +423,69 @@ describe('EnforcementExecutor liftExpiredBans (W-FL6)', () => {
   });
 });
 
+describe('EnforcementExecutor onBanLifted (M-30)', () => {
+  it('deletes the stored permanent-ban row when its -b is observed', async () => {
+    // ban_duration_minutes=0 → expires:0 rows that liftExpiredBans never
+    // touches; the observed -b is their only reclamation path.
+    const permCfg = { ...cfg, banDurationMinutes: 0 };
+    const api = makeApi();
+    const stored = new Map<string, string>();
+    const set = vi.fn((key: string, value: string) => void stored.set(key, value));
+    const get = vi.fn((key: string) => stored.get(key));
+    const del = vi.fn((key: string) => void stored.delete(key));
+    const getUserHostmask = vi.fn().mockReturnValue('alice!~ident@evil.com');
+    const a = {
+      ...api,
+      db: { ...api.db, set, get, del },
+      getUserHostmask,
+    } as unknown as PluginAPI;
+    const ex = new EnforcementExecutor(a, permCfg, () => true, vi.fn());
+    ex.apply('tempban', '#X', 'alice', 'spam');
+    await ex.drainPending();
+    expect(stored.size).toBe(1);
+    const [key, value] = [...stored.entries()][0];
+    expect(key).toBe('ban:#x:*!*@evil.com');
+    expect(JSON.parse(value).expires).toBe(0);
+    // Operator lifts the ban; channel arrives in server case.
+    ex.onBanLifted('#X', '*!*@evil.com');
+    expect(del).toHaveBeenCalledWith('ban:#x:*!*@evil.com');
+    expect(stored.size).toBe(0);
+  });
+
+  it('is a no-op for a -b on a mask the executor never stored', () => {
+    const api = makeApi();
+    const get = vi.fn().mockReturnValue(undefined);
+    const del = vi.fn();
+    const log = vi.fn();
+    const a = { ...api, log, db: { ...api.db, get, del } } as unknown as PluginAPI;
+    const ex = new EnforcementExecutor(a, cfg, () => true, vi.fn());
+    ex.onBanLifted('#x', '*!*@unrelated.com');
+    expect(del).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('timed bans still lift on expiry independent of the -b hook', () => {
+    // Regression guard: the M-30 hook must not disturb the existing
+    // timed-lift path — an expired expires>0 row is still lifted and
+    // deleted by the sweep with no mode event required.
+    const api = makeApi();
+    const record = {
+      mask: '*!*@evil.com',
+      channel: '#x',
+      ts: 1000,
+      expires: 2000,
+    };
+    (api.db.list as ReturnType<typeof vi.fn>).mockReturnValue([
+      { key: 'ban:#x:*!*@evil.com', value: JSON.stringify(record) },
+    ]);
+    const ex = new EnforcementExecutor(api, cfg, () => true, vi.fn());
+    api.mode = vi.fn();
+    ex.liftExpiredBans();
+    expect(api.mode).toHaveBeenCalledWith('#x', '-b', '*!*@evil.com');
+    expect(api.db.del).toHaveBeenCalledWith('ban:#x:*!*@evil.com');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Tempban mask shape validation
 // ---------------------------------------------------------------------------

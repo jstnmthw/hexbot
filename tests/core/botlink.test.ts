@@ -9,6 +9,7 @@ import {
   type LinkFrame,
   MAX_FRAME_SIZE,
   MAX_PRE_HANDSHAKE_FRAME_SIZE,
+  MAX_WRITE_BUFFER_BYTES,
   RateCounter,
   type SocketFactory,
   computeHelloHmac,
@@ -16,6 +17,7 @@ import {
   sanitizeFrame,
   verifyHelloHmac,
 } from '../../src/core/botlink';
+import { Heartbeat } from '../../src/core/botlink/heartbeat';
 import { Permissions } from '../../src/core/permissions';
 import { BotEventBus } from '../../src/event-bus';
 import type { BotlinkConfig } from '../../src/types';
@@ -453,6 +455,43 @@ describe('BotLinkProtocol', () => {
     expect(protocol.isClosed).toBe(true);
   });
 
+  it('propagates socket.write() backpressure from send() without closing', () => {
+    const { socket } = createMockSocket();
+    const protocol = new BotLinkProtocol(socket, null);
+    // Simulate a socket whose internal buffer crossed the highWaterMark —
+    // write() buffers the chunk and asks the caller to back off.
+    (socket as unknown as { write: () => boolean }).write = () => false;
+
+    expect(protocol.send({ type: 'PING', seq: 1 })).toBe(false);
+    // Backpressure is transient buffering, not a dead peer — stay open.
+    expect(protocol.isClosed).toBe(false);
+  });
+
+  it('destroys the connection when the write buffer exceeds MAX_WRITE_BUFFER_BYTES', () => {
+    const { socket, written } = createMockSocket();
+    const protocol = new BotLinkProtocol(socket, null);
+    Object.defineProperty(socket, 'writableLength', {
+      get: () => MAX_WRITE_BUFFER_BYTES + 1,
+      configurable: true,
+    });
+
+    expect(protocol.send({ type: 'PING', seq: 1 })).toBe(false);
+    expect(protocol.isClosed).toBe(true);
+    // The over-ceiling frame is never serialized onto the dead socket.
+    expect(written).toEqual([]);
+  });
+
+  it('exposes writeBufferBytes from socket.writableLength', () => {
+    const { socket } = createMockSocket();
+    const protocol = new BotLinkProtocol(socket, null);
+    Object.defineProperty(socket, 'writableLength', {
+      get: () => 1234,
+      configurable: true,
+    });
+
+    expect(protocol.writeBufferBytes).toBe(1234);
+  });
+
   it('fires onClose when socket closes', async () => {
     const { socket, written: _written, duplex } = createMockSocket();
     const protocol = new BotLinkProtocol(socket, null);
@@ -485,6 +524,93 @@ describe('BotLinkProtocol', () => {
 
   // onError is a trivial passthrough — not tested directly because
   // Duplex streams throw on emit('error') in unit test contexts.
+});
+
+// ---------------------------------------------------------------------------
+// Heartbeat — outbound-health probe
+// ---------------------------------------------------------------------------
+
+describe('Heartbeat write-buffer probe', () => {
+  it('fires onTimeout when the probe exceeds maxWriteBufferBytes despite fresh inbound', () => {
+    vi.useFakeTimers();
+    try {
+      let timedOut = false;
+      const pings: number[] = [];
+      const hb = new Heartbeat({
+        intervalMs: 100,
+        timeoutMs: 10_000,
+        // Inbound is always fresh — only the outbound probe can trip.
+        getLastMessageAt: () => Date.now(),
+        getWriteBufferBytes: () => MAX_WRITE_BUFFER_BYTES + 1,
+        maxWriteBufferBytes: MAX_WRITE_BUFFER_BYTES,
+        sendPing: (seq) => pings.push(seq),
+        onTimeout: () => {
+          timedOut = true;
+        },
+      });
+      hb.start();
+      vi.advanceTimersByTime(100);
+
+      expect(timedOut).toBe(true);
+      expect(pings).toEqual([]);
+      // The driver stopped itself before onTimeout — no double-fire.
+      vi.advanceTimersByTime(500);
+      expect(pings).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps pinging while the probe is at or below the max', () => {
+    vi.useFakeTimers();
+    try {
+      let timedOut = false;
+      const pings: number[] = [];
+      const hb = new Heartbeat({
+        intervalMs: 100,
+        timeoutMs: 10_000,
+        getLastMessageAt: () => Date.now(),
+        getWriteBufferBytes: () => MAX_WRITE_BUFFER_BYTES,
+        maxWriteBufferBytes: MAX_WRITE_BUFFER_BYTES,
+        sendPing: (seq) => pings.push(seq),
+        onTimeout: () => {
+          timedOut = true;
+        },
+      });
+      hb.start();
+      vi.advanceTimersByTime(300);
+
+      expect(timedOut).toBe(false);
+      expect(pings).toEqual([1, 2, 3]);
+      hb.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores the probe when maxWriteBufferBytes is not set', () => {
+    vi.useFakeTimers();
+    try {
+      let timedOut = false;
+      const hb = new Heartbeat({
+        intervalMs: 100,
+        timeoutMs: 10_000,
+        getLastMessageAt: () => Date.now(),
+        getWriteBufferBytes: () => Number.MAX_SAFE_INTEGER,
+        sendPing: () => {},
+        onTimeout: () => {
+          timedOut = true;
+        },
+      });
+      hb.start();
+      vi.advanceTimersByTime(300);
+
+      expect(timedOut).toBe(false);
+      hb.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1156,6 +1282,38 @@ describe('BotLinkHub', () => {
 
         expect(disconnected).toContain('leaf1');
         expect(hub.getLeaves()).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('drops a leaf whose write buffer exceeds the ceiling before any inactivity', async () => {
+      vi.useFakeTimers();
+      try {
+        // Long link_timeout_ms so only the write-buffer probe can fire.
+        const hub = new BotLinkHub(
+          hubConfig({ ping_interval_ms: 100, link_timeout_ms: 60_000 }),
+          '1.0.0',
+        );
+        const disconnected: string[] = [];
+        hub.onLeafDisconnected = (name) => disconnected.push(name);
+
+        const { socket, written, duplex } = createMockSocket();
+        hub.addConnection(socket);
+        answerHelloChallenge(written, duplex, TEST_LINK_KEY, 'leaf1');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(hub.getLeaves()).toEqual(['leaf1']);
+
+        // Peer stops reading: 4 MB+ queued in its socket's write buffer.
+        Object.defineProperty(socket, 'writableLength', {
+          get: () => MAX_WRITE_BUFFER_BYTES + 1,
+          configurable: true,
+        });
+        await vi.advanceTimersByTimeAsync(150);
+
+        expect(disconnected).toContain('leaf1');
+        expect(hub.getLeaves()).toEqual([]);
+        hub.close();
       } finally {
         vi.useRealTimers();
       }
@@ -2958,6 +3116,41 @@ describe('BotLinkLeaf heartbeat', () => {
 
       await vi.advanceTimersByTimeAsync(300);
       expect(disconnected).toBe(true);
+      leaf.disconnect();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops the link when the hub-bound write buffer exceeds the ceiling', async () => {
+    vi.useFakeTimers();
+    try {
+      // Long link_timeout_ms so only the write-buffer probe can fire.
+      const leaf = new BotLinkLeaf(
+        leafConfig({ ping_interval_ms: 100, link_timeout_ms: 60_000 }),
+        '1.0.0',
+      );
+      const { socket, written: _written, duplex } = createMockSocket();
+      let disconnected = false;
+      leaf.onDisconnected = () => {
+        disconnected = true;
+      };
+
+      leaf.connectWithSocket(socket);
+      pushFrame(duplex, { type: 'HELLO_CHALLENGE', nonce: 'a'.repeat(64), hubBotname: 'hub' });
+      pushFrame(duplex, { type: 'WELCOME', botname: 'hub', version: '1.0' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(leaf.isConnected).toBe(true);
+
+      // Hub stops reading: 4 MB+ queued in the socket's write buffer.
+      Object.defineProperty(socket, 'writableLength', {
+        get: () => MAX_WRITE_BUFFER_BYTES + 1,
+        configurable: true,
+      });
+      await vi.advanceTimersByTimeAsync(150);
+
+      expect(disconnected).toBe(true);
+      expect(leaf.isConnected).toBe(false);
       leaf.disconnect();
     } finally {
       vi.useRealTimers();

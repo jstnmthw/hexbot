@@ -608,6 +608,14 @@ export async function init(api: PluginAPI, deps: unknown = {}): Promise<void> {
       onUserLeave(channel, ctx.nick);
     }
   });
+  // A nick change strands the old nick's rate bucket under the abandoned key
+  // — later PART/QUIT cleanup only ever sees the final nick. Release it
+  // eagerly; the new nick earns a fresh full-burst bucket on first use.
+  // Session/engagement/social state is deliberately left alone: a rename
+  // mid-conversation shouldn't reset the conversation.
+  api.bind('nick', '-', '*', (ctx: HandlerContext) => {
+    rateLimiter?.forgetUser(ctx.nick);
+  });
 
   // -----------------------------------------------------------------------
   // pubm * — context feed, engagement updates, unified reply decision

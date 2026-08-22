@@ -49,6 +49,20 @@ export interface ChannelInfo {
 }
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/**
+ * Hard cap on `networkAccounts` entries. The map is fed by paths that fire
+ * for nicks sharing NO channel with the bot (IRCv3 account-tag on private
+ * PRIVMSG/NOTICE, NickServ ACC verification), and for such nicks no PART or
+ * QUIT is ever observable — without a cap the map grows one entry per unique
+ * identified stranger until reconnect. Mirrors the FloodLimiter
+ * MAX_WARNED_KEYS pattern: opportunistic sweep on insert, no timer.
+ */
+const MAX_NETWORK_ACCOUNTS = 2048;
+
+// ---------------------------------------------------------------------------
 // ChannelState
 // ---------------------------------------------------------------------------
 
@@ -286,6 +300,11 @@ export class ChannelState {
     const previous = this.networkAccounts.get(lower);
     if (previous === account) return;
     this.networkAccounts.set(lower, account);
+    // This is the only insert path reachable for nicks the bot shares no
+    // channel with (PM account-tags, NickServ verification), so the
+    // presence-based sweep hangs off it — the event-driven inserts above
+    // are all channel-gated and pruned by observed departures.
+    this.maybeSweepNetworkAccounts();
     // Mirror the change onto any per-channel UserInfo records so plugin code
     // reading `user.accountName` sees the same value as the dispatcher.
     this.updateUserAcrossChannels(lower, (user) => {
@@ -854,6 +873,47 @@ export class ChannelState {
       if (ch.users.has(nickLower)) return;
     }
     this.networkAccounts.delete(nickLower);
+  }
+
+  /**
+   * Bound `networkAccounts` to {@link MAX_NETWORK_ACCOUNTS}. Cheap size
+   * short-circuit in the hot path; when the cap is exceeded, first delete
+   * every entry whose nick is present in no tracked channel (PM-only nicks
+   * whose departure the bot can never observe — the observed-departure
+   * prunes in onPart/onQuit/onKick/dropChannel never fire for them). If
+   * that alone cannot get under the cap (every survivor is in-channel —
+   * enormous channels), evict oldest-inserted entries to respect the hard
+   * cap; those refresh naturally from account-notify/account-tag traffic.
+   */
+  private maybeSweepNetworkAccounts(): void {
+    if (this.networkAccounts.size <= MAX_NETWORK_ACCOUNTS) return;
+
+    const present = new Set<string>();
+    for (const ch of this.channels.values()) {
+      for (const nickLower of ch.users.keys()) present.add(nickLower);
+    }
+
+    let swept = 0;
+    for (const nickLower of this.networkAccounts.keys()) {
+      if (!present.has(nickLower)) {
+        this.networkAccounts.delete(nickLower);
+        swept++;
+      }
+    }
+
+    let evicted = 0;
+    // Map iteration follows insertion order, so this walks oldest-first.
+    for (const nickLower of this.networkAccounts.keys()) {
+      if (this.networkAccounts.size <= MAX_NETWORK_ACCOUNTS) break;
+      this.networkAccounts.delete(nickLower);
+      evicted++;
+    }
+
+    this.logger?.debug(
+      `networkAccounts sweep: dropped ${swept} out-of-channel entries` +
+        (evicted > 0 ? `, evicted ${evicted} oldest in-channel entries` : '') +
+        ` (${this.networkAccounts.size} remain, cap ${MAX_NETWORK_ACCOUNTS})`,
+    );
   }
 
   /**

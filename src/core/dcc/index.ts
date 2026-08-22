@@ -148,7 +148,7 @@ export interface DCCSessionManager {
   getSessionList(): Array<{ handle: string; nick: string; connectedAt: number }>;
   broadcast(fromHandle: string, message: string): void;
   announce(message: string): void;
-  removeSession(nick: string): void;
+  removeSession(session: DCCSessionEntry): void;
   notifyPartyPart(handle: string, nick: string): void;
   getBotName(): string;
   getStats(): BannerStats | null;
@@ -226,6 +226,14 @@ export interface RelayEnterOptions {
 export interface DCCSessionEntry {
   readonly handle: string;
   readonly nick: string;
+  /**
+   * Exact map key this entry was inserted under, stamped by
+   * `DCCSessionStore.set()`. Teardown deletes this key verbatim instead
+   * of re-folding the nick, which would compute a different key — and
+   * orphan the entry — if the server's CASEMAPPING changed across an IRC
+   * reconnect. `null` until the session is stored.
+   */
+  storeKey: string | null;
   readonly connectedAt: number;
   readonly isRelaying: boolean;
   /** The botname this session is currently relaying to, or null if not relaying. */
@@ -369,6 +377,17 @@ export function createInMemoryConsoleFlagStore(): ConsoleFlagStore {
 // DCCSession
 // ---------------------------------------------------------------------------
 
+/**
+ * Ceiling on bytes buffered in Node userland for a session's socket
+ * (`socket.writableLength`). The idle timer resets on inbound lines only,
+ * so an authenticated client that types occasionally but never reads would
+ * otherwise pin an unbounded outbound queue of log fanout, party-line
+ * broadcasts, and command replies for the session lifetime. Flow-control
+ * policy matches the manager's stale-session posture: close the session,
+ * don't shed lines.
+ */
+const MAX_WRITE_BUFFER_BYTES = 1 * 1024 * 1024;
+
 export class DCCSession implements DCCSessionEntry {
   readonly handle: string;
   /**
@@ -381,6 +400,8 @@ export class DCCSession implements DCCSessionEntry {
   readonly ident: string;
   readonly hostname: string;
   readonly connectedAt: number;
+  /** Exact store key stamped by `DCCSessionStore.set()` — see {@link DCCSessionEntry.storeKey}. */
+  storeKey: string | null = null;
 
   private socket: Socket;
   private manager: DCCSessionManager;
@@ -695,9 +716,20 @@ export class DCCSession implements DCCSessionEntry {
   }
 
   private write(data: string): void {
-    if (!this.closed && !this.socket.destroyed) {
-      this.socket.write(data);
+    if (this.closed || this.socket.destroyed) return;
+    // Outbound ceiling — see MAX_WRITE_BUFFER_BYTES. Checked before the
+    // write so a stalled reader costs no further heap. No recursion risk:
+    // close() sets `closed` first and writes its farewell directly to the
+    // socket, never back through write().
+    const buffered = this.socket.writableLength;
+    if (buffered > MAX_WRITE_BUFFER_BYTES) {
+      this.logger?.warn(
+        `DCC client not reading (${this.handle}): ${buffered} bytes buffered (cap ${MAX_WRITE_BUFFER_BYTES}) — closing session`,
+      );
+      this.close('write buffer overflow — client not reading');
+      return;
     }
+    this.socket.write(data);
   }
 
   /**
@@ -1085,7 +1117,7 @@ export class DCCSession implements DCCSessionEntry {
     // process restart. Idempotent: Set.delete on a missing entry is a
     // no-op, so the post-active path stays safe.
     this.manager.unregisterPendingSession?.(this);
-    this.manager.removeSession(this.nick);
+    this.manager.removeSession(this);
     this.manager.announce(`*** ${this.handle} has left the console`);
     this.manager.notifyPartyPart(this.handle, this.nick);
     clearPagerForSession(`dcc:${this.handle}`);
@@ -1632,9 +1664,13 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     return this.getStatsFn?.() ?? null;
   }
 
-  /** Remove a session by IRC nick (called by DCCSession.onClose). */
-  removeSession(nick: string): void {
-    this.sessionStore.delete(nick);
+  /**
+   * Remove a session entry (called by DCCSession.teardownSession). Deletes
+   * by the exact key the entry was stored under so the slot is released
+   * even when the server casemapping changed since insert.
+   */
+  removeSession(session: DCCSessionEntry): void {
+    this.sessionStore.deleteEntry(session);
   }
 
   // -------------------------------------------------------------------------
@@ -1737,7 +1773,7 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
         // — which used to rely on close()'s early-return and skip
         // cleanup — still releases the `dcc:<handle>` entries.
         if (session.isClosed) {
-          this.sessionStore.delete(nick);
+          this.sessionStore.deleteEntry(session);
         } else {
           this.logger?.info(`DCC: evicting stale session for ${nick}`);
           session.close('Stale session replaced.');

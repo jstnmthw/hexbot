@@ -833,21 +833,21 @@ Every finding appears exactly once below. Checkboxes are for downstream skills (
 
 ### Medium effort (refactoring needed)
 
-- [ ] **M-01** `src/core/botlink/protocol.ts:264` — **CRITICAL**: add a byte-counting `data` guard mirroring DCC `dataGuard` (`dcc/index.ts:541-560`) in the `BotLinkProtocol` constructor so hub and leaf both inherit it; enforce `MAX_PRE_HANDSHAKE_FRAME_SIZE`/`MAX_FRAME_SIZE` on raw bytes, not completed lines
-- [ ] **M-02** `src/core/botlink/protocol.ts:400` — return the real `socket.write()` boolean from `send()` and enforce a `writableLength` ceiling (1–4 MB) that closes stuck peers
-- [ ] **M-03** `src/core/botlink/heartbeat.ts:73` — have the heartbeat tick also inspect outbound `writableLength` so stuck-writer peers are disconnected on the same cadence as inbound silence (pairs with M-02)
-- [ ] **M-04** `src/core/botlink/relay-handler.ts:130` — purge virtual relay sessions when a leaf's hub link drops (the designed orphan-cleanup key never matches)
-- [ ] **M-05** `src/core/channel-state.ts:288` — add TTL or cap for `networkAccounts` entries whose departure the bot can never observe (PM/NOTICE-only identified nicks)
-- [ ] **M-07** `src/core/dcc/session-store.ts:54` — use casemapping-stable keys (or fold with the insert-time mapping at delete) so sessions survive a CASEMAPPING change across reconnect
-- [ ] **M-08** `plugins/ai-chat/rate-limiter.ts:287` — make the existing stale-user-bucket eviction reachable so `userBuckets` stops growing with nick churn
-- [ ] **M-11** `src/plugin-api-factory.ts:310` — reconcile `wrappedHandlers` when `bind()` is refused or overwrites a non-stackable mask
-- [ ] **M-13** `src/plugin-api-factory.ts:825` — add a cap (or explicit accounting) for the plugin `on*`/`onChange` subscription surfaces, analogous to the bind hardcap
-- [ ] **M-18** `src/core/botlink/auth-store.ts:93` — enforce `MAX_CIDR_BANS` before persistence and sweep permanent rows on load
-- [ ] **M-19** `src/core/botlink/cmd-exec.ts:56` — add an executor-side timeout / outstanding-count cap for relayed CMD closures
-- [ ] **M-21** `src/core/dcc/index.ts:699` — cap per-session outbound `writableLength` for DCC clients that type but never read
-- [ ] **M-30** `plugins/flood/enforcement-executor.ts:446` — stop persisting (or periodically sweep) permanent flood-ban KV rows; avoid re-parsing the whole namespace every 60s
+- [x] **M-01** `src/core/botlink/protocol.ts:264` — **CRITICAL**: add a byte-counting `data` guard mirroring DCC `dataGuard` (`dcc/index.ts:541-560`) in the `BotLinkProtocol` constructor so hub and leaf both inherit it; enforce `MAX_PRE_HANDSHAKE_FRAME_SIZE`/`MAX_FRAME_SIZE` on raw bytes, not completed lines _(fixed in commit 9b10339, 2026-07-13)_
+- [x] **M-02** `src/core/botlink/protocol.ts:400` — return the real `socket.write()` boolean from `send()` and enforce a `writableLength` ceiling (1–4 MB) that closes stuck peers
+- [x] **M-03** `src/core/botlink/heartbeat.ts:73` — have the heartbeat tick also inspect outbound `writableLength` so stuck-writer peers are disconnected on the same cadence as inbound silence (pairs with M-02)
+- [x] **M-04** `src/core/botlink/relay-handler.ts:130` — purge virtual relay sessions when a leaf's hub link drops (the designed orphan-cleanup key never matches)
+- [x] **M-05** `src/core/channel-state.ts:288` — add TTL or cap for `networkAccounts` entries whose departure the bot can never observe (PM/NOTICE-only identified nicks)
+- [x] **M-07** `src/core/dcc/session-store.ts:54` — use casemapping-stable keys (or fold with the insert-time mapping at delete) so sessions survive a CASEMAPPING change across reconnect
+- [x] **M-08** `plugins/ai-chat/rate-limiter.ts:287` — make the existing stale-user-bucket eviction reachable so `userBuckets` stops growing with nick churn
+- [x] **M-11** `src/plugin-api-factory.ts:310` — reconcile `wrappedHandlers` when `bind()` is refused or overwrites a non-stackable mask
+- [x] **M-13** `src/plugin-api-factory.ts:825` — add a cap (or explicit accounting) for the plugin `on*`/`onChange` subscription surfaces, analogous to the bind hardcap
+- [x] **M-18** `src/core/botlink/auth-store.ts:93` — enforce `MAX_CIDR_BANS` before persistence and sweep permanent rows on load
+- [x] **M-19** `src/core/botlink/cmd-exec.ts:56` — add an executor-side timeout / outstanding-count cap for relayed CMD closures
+- [x] **M-21** `src/core/dcc/index.ts:699` — cap per-session outbound `writableLength` for DCC clients that type but never read
+- [x] **M-30** `plugins/flood/enforcement-executor.ts:446` — stop persisting (or periodically sweep) permanent flood-ban KV rows; avoid re-parsing the whole namespace every 60s
 
 ### Architectural (design changes needed)
 
-- [ ] **Botlink outbound flow-control policy** (umbrella for M-02/M-03/M-20): decide disconnect-vs-shed semantics for slow peers — disconnect is simpler and safe since peers resync on reconnect; frame-class shedding (RELAY_OUTPUT, PARTY_CHAT, BSAY) preserves the link at the cost of divergence bookkeeping
+- [x] **Botlink outbound flow-control policy** (umbrella for M-02/M-03/M-20): decide disconnect-vs-shed semantics for slow peers — disconnect is simpler and safe since peers resync on reconnect; frame-class shedding (RELAY_OUTPUT, PARTY_CHAT, BSAY) preserves the link at the cost of divergence bookkeeping _(decided 2026-08-22: disconnect at a 4 MB writableLength ceiling, no shedding — peers resync via reconnect bootstrap)_
 - [ ] **Seam-focused audit pass** (critic-identified structural gap): per-file scans cannot see Node-internal buffer growth or cross-module closure retention; add a periodic audit that traces retained references across module seams (socket owner ↔ protocol wrapper, loader ↔ api factory ↔ registries)

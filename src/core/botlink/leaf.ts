@@ -7,10 +7,15 @@ import type { Socket } from 'node:net';
 import type { CommandContext } from '../../command-handler';
 import type { LoggerLike } from '../../logger';
 import type { BotlinkConfig } from '../../types';
-import { executeCmdFrame } from './cmd-exec.js';
+import { CMD_EXEC_TIMEOUT_MS, executeCmdFrame } from './cmd-exec.js';
 import { Heartbeat } from './heartbeat';
 import { PendingRequestMap } from './pending';
-import { BotLinkProtocol, computeHelloHmac, deriveLinkKey } from './protocol';
+import {
+  BotLinkProtocol,
+  MAX_WRITE_BUFFER_BYTES,
+  computeHelloHmac,
+  deriveLinkKey,
+} from './protocol';
 import { RateCounter } from './rate-counter.js';
 import type {
   CommandRelay,
@@ -180,7 +185,11 @@ export class BotLinkLeaf {
     this.initProtocol(socket);
   }
 
-  /** Send a raw frame to the hub. Returns false if not connected. */
+  /**
+   * Send a raw frame to the hub. Returns false if not connected, or for
+   * any {@link BotLinkProtocol.send} false path (frame over 64 KB, write
+   * buffer over ceiling, or transient socket backpressure).
+   */
   send(frame: LinkFrame): boolean {
     if (!this.protocol || !this.connected) return false;
     return this.protocol.send(frame);
@@ -270,11 +279,12 @@ export class BotLinkLeaf {
       ...(toBot ? { toBot } : {}),
     });
 
-    // 10s — same ceiling as hub-originated `.bot` CMDs (see hub.ts).
-    // Covers a slow remote handler without leaving the IRC user's command
-    // hanging when the hub or the target leaf is wedged.
-    const CMD_TIMEOUT_MS = 10_000;
-    const output = await this.pendingCmds.create(ref, CMD_TIMEOUT_MS, ['Command relay timed out.']);
+    // Shared with the executor-side deadline in cmd-exec.ts — covers a
+    // slow remote handler without leaving the IRC user's command hanging
+    // when the hub or the target leaf is wedged.
+    const output = await this.pendingCmds.create(ref, CMD_EXEC_TIMEOUT_MS, [
+      'Command relay timed out.',
+    ]);
 
     for (const line of output) {
       ctx.reply(line);
@@ -604,6 +614,11 @@ export class BotLinkLeaf {
       intervalMs: this.pingIntervalMs,
       timeoutMs: this.linkTimeoutMs,
       getLastMessageAt: () => this.lastHeartbeatAt,
+      // Outbound-health probe: a hub that keeps sending its own frames
+      // refreshes lastHeartbeatAt forever, so inbound age never catches
+      // a stuck reader — the write-buffer ceiling does.
+      getWriteBufferBytes: () => this.protocol?.writeBufferBytes ?? 0,
+      maxWriteBufferBytes: MAX_WRITE_BUFFER_BYTES,
       sendPing: (seq) => this.protocol?.send({ type: 'PING', seq }),
       onTimeout: () => {
         this.logger?.warn('Hub timed out');

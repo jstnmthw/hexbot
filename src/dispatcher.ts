@@ -55,7 +55,14 @@ const DISPATCH_FAILURE_THRESHOLD = 25;
 
 /** Minimal bind management interface for consumers that only register/remove binds. */
 export interface BindRegistrar {
-  bind(type: BindType, flags: string, mask: string, handler: BindHandler, pluginId: string): void;
+  /** Returns `true` when the bind was accepted, `false` when refused (per-plugin hard cap). */
+  bind(
+    type: BindType,
+    flags: string,
+    mask: string,
+    handler: BindHandler,
+    pluginId: string,
+  ): boolean;
   unbind(type: BindType, mask: string, handler: BindHandler): void;
   unbindAll(pluginId: string): void;
 }
@@ -97,7 +104,7 @@ export interface BindFilter {
 // ---------------------------------------------------------------------------
 
 /** Types where only one handler per mask is kept (last one wins). */
-const NON_STACKABLE_TYPES: ReadonlySet<BindType> = new Set(['pub', 'msg']);
+export const NON_STACKABLE_TYPES: ReadonlySet<BindType> = new Set(['pub', 'msg']);
 
 /**
  * Per-plugin warning threshold for `binds[]` accumulation. The non-stackable
@@ -193,8 +200,19 @@ export class EventDispatcher {
   /**
    * Register a handler for an event type.
    * Non-stackable types (pub, msg) overwrite any existing bind on the same mask.
+   *
+   * Returns `true` when the bind was accepted (entered `binds[]`) and `false`
+   * when it was refused at the per-plugin hard cap — callers that mirror bind
+   * state (e.g. the plugin API factory's wrappedHandlers) must not record a
+   * refused bind.
    */
-  bind(type: BindType, flags: string, mask: string, handler: BindHandler, pluginId: string): void {
+  bind(
+    type: BindType,
+    flags: string,
+    mask: string,
+    handler: BindHandler,
+    pluginId: string,
+  ): boolean {
     // Timer binds are fired directly from `setInterval` and never run
     // through the dispatch path, so any flags the caller supplies are
     // silently ignored. Reject non-'-' flags at bind time so plugin
@@ -214,7 +232,7 @@ export class EventDispatcher {
       this.logger?.error(
         `Plugin "${pluginId}" hit bind cap (${PLUGIN_BIND_HARDCAP}) — refusing bind ${type} "${mask}". Suspect a runaway api.bind() loop.`,
       );
-      return;
+      return false;
     }
     if (currentForPlugin >= PLUGIN_BIND_WARN && !this.bindWarnFired.has(pluginId)) {
       this.bindWarnFired.add(pluginId);
@@ -253,7 +271,9 @@ export class EventDispatcher {
       const rawMs = parseInt(mask, 10) * 1000;
       if (!Number.isFinite(rawMs) || rawMs <= 0) {
         this.logger?.error(`Invalid time bind mask: "${mask}" — must be seconds as a string`);
-        return;
+        // The entry is already in `binds[]` (and counted), so this is still
+        // an accepted bind from the caller's perspective — it just never fires.
+        return true;
       }
       const intervalMs = Math.max(rawMs, MIN_TIMER_MS);
       if (rawMs < MIN_TIMER_MS) {
@@ -313,6 +333,7 @@ export class EventDispatcher {
       }, intervalMs);
       this.timers.set(entry, timer);
     }
+    return true;
   }
 
   /** Remove a specific handler. */

@@ -346,7 +346,8 @@ export class EnforcementExecutor {
    * sweep bind. Without the grace-period branch, a ban persists forever
    * if the bot permanently loses ops on the channel — the record would
    * grow the `ban:` KV space unboundedly and slow every `db.list('ban:')`
-   * scan.
+   * scan. `expires: 0` rows are intentionally skipped here; their
+   * reclamation path is {@link onBanLifted} on an observed `-b`.
    */
   liftExpiredBans(): void {
     const now = Date.now();
@@ -381,6 +382,33 @@ export class EnforcementExecutor {
         }
       }
     }
+  }
+
+  /**
+   * Reconcile an observed `-b` with the stored KV row. Wired from the
+   * plugin's `mode` bind in index.ts: when any operator (or the bot's own
+   * {@link liftExpiredBans}) removes a ban we persisted, the matching
+   * `ban:<chan>:<mask>` row is deleted here. This is the only reclamation
+   * path for `expires: 0` ("permanent until operator lifts") rows —
+   * {@link liftExpiredBans} deliberately never touches them, and without
+   * this hook they would accumulate forever and inflate every 60s
+   * `db.list('ban:')` sweep.
+   *
+   * Chosen over the sweep-side alternative (age out expires=0 rows whose
+   * mask left the banlist) because the plugin API exposes no server
+   * banlist to check against, while a `-b` mode bind is an established
+   * plugin pattern (see chanmod's sticky-ban watcher) and reclaims the
+   * row at the exact moment its semantics ("until operator lifts") end.
+   * Deletion is keyed on the exact stored mask, so an unrelated `-b`
+   * is a cheap no-op. A `-b` the bot never observes (lifted while the
+   * bot was offline or parted) leaves the row behind; that residue is
+   * bounded by rare operator action, not by flood volume.
+   */
+  onBanLifted(channel: string, mask: string): void {
+    const key = `ban:${this.api.ircLower(channel)}:${mask}`;
+    if (this.api.db.get(key) === undefined) return;
+    this.api.db.del(key);
+    this.api.log(`Ban ${mask} on ${channel} was lifted; dropped stored flood-ban record`);
   }
 
   /**

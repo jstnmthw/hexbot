@@ -171,6 +171,30 @@ describe('ai-chat plugin (integration)', () => {
     expect(limited.replyPrivate.mock.calls[0][0]).toMatch(/Rate limited/);
   });
 
+  it('releases the old nick rate bucket on a nick change', async () => {
+    // Exhaust alice's burst (userBurst: 3), fourth call is rate-limited.
+    for (let i = 0; i < 3; i++) {
+      await dispatcher.dispatch('pubm', makePubCtx('alice', `hexbot: msg ${i}`));
+    }
+    const limited = makePubCtx('alice', 'hexbot: fourth');
+    await dispatcher.dispatch('pubm', limited);
+    expect(limited.replyPrivate).toHaveBeenCalledOnce();
+
+    // alice → alice_away: the bucket keyed by the abandoned nick is dropped.
+    const nickCtx = makePubCtx('alice', 'alice_away');
+    nickCtx.channel = null;
+    nickCtx.command = 'NICK';
+    nickCtx.args = 'alice_away';
+    await dispatcher.dispatch('nick', nickCtx);
+
+    // Whoever claims the old nick next starts at full burst instead of
+    // inheriting the stranded drained bucket.
+    const fresh = makePubCtx('alice', 'hexbot: hello again');
+    await dispatcher.dispatch('pubm', fresh);
+    expect(fresh.reply).toHaveBeenCalledOnce();
+    expect(fresh.replyPrivate).not.toHaveBeenCalled();
+  });
+
   it('handles provider errors gracefully', async () => {
     (mockProvider.complete as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new AIProviderError('api down', 'network'),

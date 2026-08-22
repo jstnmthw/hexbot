@@ -286,42 +286,50 @@ describe('RateLimiter', () => {
   });
 
   describe('stale bucket eviction', () => {
-    it('evicts idle+full buckets AND preserves in-use ones when size > 64', () => {
+    it('evicts a fully drained drive-by bucket idle past the cutoff once the sweep cadence fires', () => {
       const rl = makeLimiter({ userBurst: 3, userRefillSeconds: 12 });
       // 70 buckets at t=0 — pushes size past the 64 floor.
-      // Drain bucket `victim-inuse` mid-burst so it's NOT full at eviction
-      // time; the eviction loop must skip it (non-match branch of the inner
-      // filter).
-      for (let i = 0; i < 70; i++) {
-        rl.record(`user${i}`, 0);
-      }
-      // Drain an additional token on one bucket so tokens < burst.
-      rl.record('user5', 1);
-      rl.record('user5', 2);
-      rl.record('user5', 3);
-      // Trigger eviction via user0's next record at t=2h.
-      const later = 2 * 3_600_000 + 1;
-      rl.record('user0', later);
-      // Most idle+full buckets were evicted — but user5's state at eviction
-      // time had tokens < burst (not yet refilled in-place), so the loop's
-      // second condition (`b.tokens >= burst`) was false and user5 stayed.
-      // Covers both sides of that branch.
-      for (let i = 1; i < 70; i++) {
-        if (i === 5) continue;
-        expect(rl.check(`user${i}`, later).allowed).toBe(true);
-      }
+      for (let i = 0; i < 70; i++) rl.record(`user${i}`, 0);
+      // A drive-by drains their whole burst and vanishes — tokens frozen at
+      // 0 (< burst), the case the old `tokens >= burst` filter never matched.
+      for (let i = 0; i < 3; i++) rl.record('driveby', i);
+      expect(rl.userBucketCount).toBe(71);
+      // 2h later everything above is idle past the 1h cutoff. Drive enough
+      // bucket lookups to guarantee the sweep cadence (every 64th lookup)
+      // fires at least once, regardless of the counter's current phase.
+      const later = 2 * 3_600_000;
+      for (let i = 0; i < 128; i++) rl.check('active', later + i);
+      // Every stale bucket — including the drained drive-by — was evicted;
+      // only the freshly created 'active' bucket remains.
+      expect(rl.userBucketCount).toBe(1);
+      // The drive-by returning gets a fresh full-burst bucket, exactly what
+      // lazy refill would have produced after 2h idle.
+      expect(rl.check('driveby', later + 200).allowed).toBe(true);
     });
 
-    it('skips eviction when bucket size is below the 64 floor', () => {
-      const rl = makeLimiter({ userBurst: 3 });
-      // Small deployment — only 10 buckets. Even after 2h idle + full tokens,
-      // the `size > 64` gate keeps them alive (eviction scan never runs).
+    it('preserves recently active buckets while sweeping stale ones', () => {
+      const rl = makeLimiter({ userBurst: 3, userRefillSeconds: 12 });
+      for (let i = 0; i < 70; i++) rl.record(`user${i}`, 0);
+      const later = 2 * 3_600_000;
+      // alice drains her burst moments before the sweep window — recently
+      // active AND drained, so eviction would wrongly grant her a refill.
+      for (let i = 0; i < 3; i++) rl.record('alice', later - 3 + i);
+      for (let i = 0; i < 128; i++) rl.check('driver', later + i);
+      // The stale t=0 cohort is gone; alice and the driver remain.
+      expect(rl.userBucketCount).toBe(2);
+      // alice's drained bucket survived — a recreated bucket would have
+      // allowed at full burst.
+      expect(rl.check('alice', later + 200).allowed).toBe(false);
+    });
+
+    it('skips the sweep while bucket count stays at or below the 64 floor', () => {
+      const rl = makeLimiter({ userBurst: 3, userRefillSeconds: 12 });
+      // Small deployment — only 10 buckets. Even 2h idle, the `size > 64`
+      // gate keeps the sweep from running.
       for (let i = 0; i < 10; i++) rl.record(`user${i}`, 0);
-      const later = 2 * 3_600_000 + 1;
-      rl.record('user0', later);
-      for (let i = 1; i < 10; i++) {
-        expect(rl.check(`user${i}`, later).allowed).toBe(true);
-      }
+      const later = 2 * 3_600_000;
+      for (let i = 0; i < 128; i++) rl.check('driver', later + i);
+      expect(rl.userBucketCount).toBe(11);
     });
   });
 

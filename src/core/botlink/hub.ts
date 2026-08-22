@@ -12,10 +12,11 @@ import type { LoggerLike } from '../../logger';
 import type { BotlinkConfig } from '../../types';
 import type { Permissions } from '../permissions';
 import { type AuthBanEntry, BotLinkAuthManager, isPrivateOrLoopback } from './auth';
+import { CMD_EXEC_TIMEOUT_MS } from './cmd-exec.js';
 import { Heartbeat } from './heartbeat';
 import { type HubFrameDispatchContext, dispatchSteadyStateFrame } from './hub-frame-dispatch.js';
 import { PendingRequestMap } from './pending';
-import { BotLinkProtocol } from './protocol';
+import { BotLinkProtocol, MAX_WRITE_BUFFER_BYTES } from './protocol';
 import { RateCounter } from './rate-counter.js';
 import { BotLinkRelayRouter } from './relay-router';
 import { PermissionSyncer } from './sync';
@@ -205,14 +206,14 @@ export class BotLinkHub {
   /**
    * Broadcast a frame to all leaves, optionally excluding one.
    *
-   * Per-leaf error containment: a `send()` that returns false (socket
-   * closed/destroyed, or frame over the 64 KB limit) or throws is
-   * logged and the remaining leaves still receive the frame. Note that
-   * `send()` does NOT report write-buffer pressure: a slow-but-alive
-   * consumer buffers frames in its socket unbounded, and neither the
-   * heartbeat nor any resync mechanism detects that case (see the
-   * memleak audit, M-02/M-03). A leaf that missed a frame resyncs only
-   * via reconnect bootstrap.
+   * Per-leaf error containment: a `send()` that returns false or throws
+   * is logged and the remaining leaves still receive the frame. `send()`
+   * returns false for a closed/destroyed socket, a frame over the 64 KB
+   * limit, a write buffer over the 4 MB ceiling (send() destroys the
+   * connection), or plain socket backpressure — the last is transient
+   * buffering, the frame is still delivered once the socket drains.
+   * Peers stuck over the ceiling are disconnected by send() or by the
+   * heartbeat's write-buffer probe and resync via reconnect bootstrap.
    */
   broadcast(frame: LinkFrame, excludeBot?: string): void {
     for (const [name, leaf] of this.leaves) {
@@ -225,7 +226,7 @@ export class BotLinkHub {
       }
       if (!delivered) {
         this.logger?.warn(
-          `Broadcast ${frame.type} to "${name}" failed (socket closed or frame over 64KB); leaf state may diverge until it reconnects`,
+          `Broadcast ${frame.type} to "${name}" not flushed (socket closed, frame over 64KB, write buffer over ceiling, or backpressure); backpressured frames deliver on drain, disconnected leaves resync on reconnect`,
         );
       }
     }
@@ -353,12 +354,11 @@ export class BotLinkHub {
       toBot: botname,
     });
 
-    // 10s — the same ceiling DCC operators see for any single command they
-    // run via `.bot`. Long enough to cover a network blip + a slow command
-    // executing on the remote leaf, short enough that an unresponsive leaf
-    // doesn't pin the IRC user's session forever.
-    const CMD_TIMEOUT_MS = 10_000;
-    return this.pendingCmds.create(ref, CMD_TIMEOUT_MS, ['Command relay timed out.']);
+    // Shared with the executor-side deadline in cmd-exec.ts — long enough
+    // to cover a network blip + a slow command executing on the remote
+    // leaf, short enough that an unresponsive leaf doesn't pin the IRC
+    // user's session forever.
+    return this.pendingCmds.create(ref, CMD_EXEC_TIMEOUT_MS, ['Command relay timed out.']);
   }
 
   // -----------------------------------------------------------------------
@@ -866,6 +866,11 @@ export class BotLinkHub {
       intervalMs: this.pingIntervalMs,
       timeoutMs: this.linkTimeoutMs,
       getLastMessageAt: () => conn.lastMessageAt,
+      // Outbound-health probe: a leaf that keeps sending its own frames
+      // refreshes lastMessageAt forever, so inbound age never catches a
+      // stuck reader — the write-buffer ceiling does.
+      getWriteBufferBytes: () => conn.protocol.writeBufferBytes,
+      maxWriteBufferBytes: MAX_WRITE_BUFFER_BYTES,
       sendPing: (seq) => conn.protocol.send({ type: 'PING', seq }),
       onTimeout: () => {
         this.logger?.warn(`Leaf "${conn.botname}" timed out`);

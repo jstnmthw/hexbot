@@ -51,12 +51,53 @@ export class DCCSessionStore {
 
   /** Insert or replace the session entry for this nick. */
   set(nick: string, session: DCCSessionEntry): void {
-    this.sessions.set(this.sessionKey(nick), session);
+    const key = this.sessionKey(nick);
+    // Stamp the exact key we insert under. Re-folding the nick at delete
+    // time computes a different key when the server-advertised CASEMAPPING
+    // changed across an IRC reconnect (DCC sessions deliberately survive
+    // those), which would orphan the entry — and its max_sessions slot —
+    // for the life of the process.
+    session.storeKey = key;
+    this.sessions.set(key, session);
   }
 
   /** Remove the session entry for this nick. Returns true if one was removed. */
   delete(nick: string): boolean {
-    return this.sessions.delete(this.sessionKey(nick));
+    const key = this.sessionKey(nick);
+    if (this.sessions.delete(key)) return true;
+    // Belt-and-braces: a casemapping change between insert and delete can
+    // make the fresh fold miss the stored key. Fall back to scanning for
+    // an entry whose nick folds to the same key under the current
+    // casemapping (the iterate-then-delete pattern closeForHandle uses).
+    for (const [storedKey, session] of this.sessions.entries()) {
+      if (this.sessionKey(session.nick) === key) {
+        return this.sessions.delete(storedKey);
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Remove this exact session entry, deleting by the key stamped at
+   * {@link set} time. This is the teardown path's primary removal: the
+   * stored key survives casemapping changes, so a session always releases
+   * its map slot even when a reconnect re-folded its nick differently.
+   * Returns true if the entry was removed.
+   */
+  deleteEntry(session: DCCSessionEntry): boolean {
+    const key = session.storeKey;
+    // Identity check before deleting: if the slot was re-used by a
+    // replacement session for the same nick, the stale entry's stored key
+    // now points at someone else's live session — leave it alone.
+    if (key !== null && this.sessions.get(key) === session) {
+      return this.sessions.delete(key);
+    }
+    // Fallback for entries inserted without a stamp (pre-seeded test maps):
+    // scan for the exact object and delete by its iterated key.
+    for (const [storedKey, stored] of this.sessions.entries()) {
+      if (stored === session) return this.sessions.delete(storedKey);
+    }
+    return false;
   }
 
   /** True if there is a live session for this nick. */

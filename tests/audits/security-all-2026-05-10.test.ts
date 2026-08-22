@@ -290,7 +290,7 @@ describe('audit security-all-2026-05-10 regressions', () => {
         const handle = createPluginApi(
           {
             dispatcher: {
-              bind: () => {},
+              bind: () => true,
               unbind: () => {},
               unbindAll: () => {},
             },

@@ -198,6 +198,7 @@ function mockSession(
   overrides: Partial<DCCSessionEntry> & { handle: string; nick: string },
 ): DCCSessionEntry {
   return {
+    storeKey: null,
     connectedAt: Date.now(),
     isRelaying: false,
     relayTarget: null,
@@ -705,19 +706,25 @@ describe('DCCManager', () => {
     expect(closeSpy).toHaveBeenCalledWith('test shutdown');
   });
 
-  it('removeSession deletes by nick', () => {
+  it('removeSession deletes the exact entry', () => {
     const fakeSession = mockSession({ handle: 'alice', nick: 'alice' });
     sessions.set('alice', fakeSession);
     expect(manager.getSessionList().length).toBe(1);
-    manager.removeSession('alice');
+    manager.removeSession(fakeSession);
     expect(manager.getSessionList().length).toBe(0);
   });
 
-  it('setCasemapping changes session key lookup', () => {
+  it('removeSession frees the slot after a casemapping change re-folds the nick', () => {
+    // Regression: the entry is stored under the rfc1459 fold (`foo{bar}`),
+    // then the server re-advertises CASEMAPPING=ascii across a reconnect.
+    // Teardown must still delete the exact stored key — re-folding the
+    // nick at delete time would miss and orphan the max_sessions slot.
+    const fakeSession = mockSession({ handle: 'alice', nick: 'Foo[bar]' });
+    manager.setCasemapping('rfc1459');
+    manager.onAuthSuccess(fakeSession);
+    expect(manager.getSessionList().length).toBe(1);
     manager.setCasemapping('ascii');
-    const fakeSession = mockSession({ handle: 'bob', nick: 'bob' });
-    sessions.set('bob', fakeSession);
-    manager.removeSession('bob');
+    manager.removeSession(fakeSession);
     expect(manager.getSessionList().length).toBe(0);
   });
 
@@ -1132,8 +1139,50 @@ describe('DCCSession', () => {
     session.startActiveForTesting('1.0.0', 'hexbot');
     duplex.destroy();
     await flushAsync(3);
-    expect(mgr.removeSession).toHaveBeenCalledWith('testnick');
+    expect(mgr.removeSession).toHaveBeenCalledWith(session);
     expect(mgr.announce).toHaveBeenCalledWith(expect.stringContaining('has left the console'));
+  });
+
+  it('write buffer overflow closes the session and frees its store slot', () => {
+    const sessMap = new Map<string, DCCSessionEntry>();
+    const mgr = new DCCManager({
+      client: new MockIRCClient(),
+      dispatcher: makeDispatcher(),
+      permissions: makePermissions(makeUser()),
+      services: makeServices(),
+      commandHandler: makeCommandHandler(),
+      config: makeConfig(),
+      version: '1.0.0',
+      botNick: 'hexbot',
+      sessions: sessMap,
+    });
+    const { socket, duplex } = makeMockSocket();
+    const session = buildSession(socket, { manager: mgr });
+    session.startActiveForTesting('1.0.0', 'hexbot');
+    mgr.onAuthSuccess(session);
+    expect(mgr.getSessionList()).toHaveLength(1);
+
+    // Simulate a client that stopped reading: report a userland write
+    // buffer over the 1 MB cap. The next write must close the session
+    // through the normal teardown path (releasing the map slot), not
+    // buffer indefinitely.
+    Object.defineProperty(duplex, 'writableLength', {
+      value: 1024 * 1024 + 1,
+      configurable: true,
+    });
+    session.writeLine('one more line');
+
+    expect(session.isClosed).toBe(true);
+    expect(duplex.destroyed).toBe(true);
+    expect(mgr.getSessionList()).toHaveLength(0);
+  });
+
+  it('writes below the buffer cap pass through unchanged', () => {
+    const { socket, written } = makeMockSocket();
+    const session = buildSession(socket);
+    session.writeLine('normal traffic');
+    expect(session.isClosed).toBe(false);
+    expect(written.join('')).toContain('normal traffic\r\n');
   });
 
   it('idle timeout fires and closes session', () => {
@@ -2040,6 +2089,7 @@ describe('DCCManager.openSession prompt integration', () => {
     const fakeSession: DCCSessionEntry = {
       handle: 'alice',
       nick: 'AliceNick',
+      storeKey: null,
       connectedAt: Date.now(),
       isRelaying: false,
       relayTarget: null,
@@ -2082,6 +2132,7 @@ describe('DCCManager.openSession prompt integration', () => {
     const fakeSession: DCCSessionEntry = {
       handle: 'alice',
       nick: 'AliceNick',
+      storeKey: null,
       connectedAt: Date.now(),
       isRelaying: false,
       relayTarget: null,
@@ -2129,6 +2180,7 @@ describe('DCCManager.openSession prompt integration', () => {
     const fakeSession: DCCSessionEntry = {
       handle: 'alice',
       nick: 'AliceNick',
+      storeKey: null,
       connectedAt: Date.now(),
       isRelaying: false,
       relayTarget: null,
@@ -2186,6 +2238,7 @@ describe('DCCManager.openSession prompt integration', () => {
     const fakeSession: DCCSessionEntry = {
       handle: 'alice',
       nick: 'AliceNick',
+      storeKey: null,
       connectedAt: Date.now(),
       isRelaying: false,
       relayTarget: null,

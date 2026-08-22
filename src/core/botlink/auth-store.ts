@@ -87,22 +87,24 @@ export class BotLinkAuthStore {
    * into `manualCidrBans` (subject to `MAX_CIDR_BANS`); single IPs are
    * injected into `authTracker` with a far-future `bannedUntil` so the
    * per-IP admission check catches them without a CIDR scan. Returns
-   * `false` when a CIDR ban is rejected because the cap is full.
+   * `false` when a CIDR ban is rejected because the cap is full — a
+   * rejected ban is never written to the DB, so the `_linkbans`
+   * namespace stays bounded along with the in-memory map.
    */
   addManualBan(ban: LinkBan): boolean {
-    this.linkBanStore?.set(ban);
-
     if (ban.ip.includes('/')) {
       // CIDR range — enforce cap to prevent connection-path DoS
       if (!this.manualCidrBans.has(ban.ip) && this.manualCidrBans.size >= MAX_CIDR_BANS) {
         this.logger?.warn(`CIDR ban limit (${MAX_CIDR_BANS}) reached, rejecting ${ban.ip}`);
         return false;
       }
+      this.linkBanStore?.set(ban);
       this.manualCidrBans.set(ban.ip, ban);
       return true;
     }
 
     // Single IP — set in authTracker for fast Map lookup
+    this.linkBanStore?.set(ban);
     const tracker = this.authTracker.get(ban.ip) ?? newTracker(ban.setAt);
     // For permanent bans, use a far-future timestamp
     tracker.bannedUntil = ban.bannedUntil === 0 ? Number.MAX_SAFE_INTEGER : ban.bannedUntil;
@@ -161,16 +163,31 @@ export class BotLinkAuthStore {
     );
   }
 
-  /** Load persisted manual bans from DB into the hot path on startup. */
+  /**
+   * Load persisted manual bans from DB into the hot path on startup.
+   * Expired timed rows (`bannedUntil` non-zero and in the past) are deleted
+   * from the store — mirroring the runtime expiry sweep in auth.ts — so
+   * restarts reclaim dead rows instead of re-listing them forever. CIDR
+   * loads honor `MAX_CIDR_BANS`; rows past the cap are skipped with a
+   * single summary warning so the map never exceeds its documented bound.
+   */
   private loadPersistedBans(): void {
     if (!this.linkBanStore) return;
     const now = Date.now();
     let loaded = 0;
+    let skippedOverCap = 0;
     for (const ban of this.linkBanStore.list()) {
-      // Skip expired non-permanent bans
-      if (ban.bannedUntil !== 0 && ban.bannedUntil <= now) continue;
+      // Expired non-permanent ban — dead row, sweep it from the DB
+      if (ban.bannedUntil !== 0 && ban.bannedUntil <= now) {
+        this.linkBanStore.del(ban.ip);
+        continue;
+      }
 
       if (ban.ip.includes('/')) {
+        if (!this.manualCidrBans.has(ban.ip) && this.manualCidrBans.size >= MAX_CIDR_BANS) {
+          skippedOverCap++;
+          continue;
+        }
         this.manualCidrBans.set(ban.ip, ban);
       } else {
         const tracker = this.authTracker.get(ban.ip) ?? newTracker(ban.setAt);
@@ -178,6 +195,11 @@ export class BotLinkAuthStore {
         this.authTracker.set(ban.ip, tracker);
       }
       loaded++;
+    }
+    if (skippedOverCap > 0) {
+      this.logger?.warn(
+        `CIDR ban limit (${MAX_CIDR_BANS}) reached during load, skipped ${skippedOverCap} persisted CIDR ban(s)`,
+      );
     }
     if (loaded > 0) {
       this.logger?.info(`Loaded ${loaded} persisted link ban(s)`);

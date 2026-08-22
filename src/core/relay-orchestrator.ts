@@ -222,6 +222,15 @@ export class RelayOrchestrator {
     // instance would otherwise be pinned by this listener's closure over
     // virtualSessions.
     this.onDisconnectedCleanup = (botname: string, _reason: string) => {
+      // Leaf role: the hub link is the only transport, so when it drops every
+      // origin bot is unreachable — clear everything. Matching on `botname`
+      // would never fire here: the leaf emits the literal 'hub' while each
+      // session's fromBot holds the origin bot's real name stamped by the hub.
+      if (this._leaf) {
+        this.virtualSessions.clear();
+        return;
+      }
+      // Hub role: prune only the disconnected leaf's sessions.
       for (const [handle, session] of this.virtualSessions) {
         if (session.fromBot === botname) {
           this.virtualSessions.delete(handle);

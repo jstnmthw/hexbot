@@ -14,6 +14,7 @@ export {
   HUB_ONLY_FRAMES,
   MAX_FRAME_SIZE,
   MAX_PRE_HANDSHAKE_FRAME_SIZE,
+  MAX_WRITE_BUFFER_BYTES,
   computeHelloHmac,
   deriveLinkKey,
   sanitizeFrame,

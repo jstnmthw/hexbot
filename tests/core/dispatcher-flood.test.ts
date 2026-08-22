@@ -318,6 +318,21 @@ describe('EventDispatcher — per-plugin bind cap', () => {
     expect(dispatcher.listBinds({ pluginId: 'noisy-plugin' })).toHaveLength(1);
   });
 
+  it('bind() reports acceptance: true when registered, false at the hard cap', () => {
+    const dispatcher = new EventDispatcher();
+    const handler = () => {};
+
+    expect(dispatcher.bind('pubm', '-', 'first', handler, 'capped-plugin')).toBe(true);
+    for (let i = 1; i < 1000; i++) {
+      dispatcher.bind('pubm', '-', `m${i}`, handler, 'capped-plugin');
+    }
+    // Refused at the cap — callers mirroring bind state key off this.
+    expect(dispatcher.bind('pubm', '-', 'overflow', handler, 'capped-plugin')).toBe(false);
+    // A non-stackable overwrite is still an acceptance.
+    expect(dispatcher.bind('pub', '-', 'cmd', handler, 'other-plugin')).toBe(true);
+    expect(dispatcher.bind('pub', '-', 'cmd', handler, 'other-plugin')).toBe(true);
+  });
+
   it('recomputes per-plugin bind counts when a non-stackable type replaces a sibling plugin bind', () => {
     const dispatcher = new EventDispatcher();
     const handler = () => {};

@@ -24,6 +24,18 @@ import type { LinkFrame } from './types.js';
 export const MAX_FRAME_SIZE = 64 * 1024;
 
 /**
+ * Ceiling on bytes buffered in Node userland for a peer's socket
+ * (`socket.writableLength`). A peer this far behind is not reading —
+ * a stalled process or a closed TCP receive window — and every further
+ * frame would be retained on our heap indefinitely. Flow-control policy
+ * is disconnect, not frame shedding: a peer 4 MB behind has diverged
+ * from botnet state anyway and resyncs via the reconnect bootstrap
+ * (full CHAN / ADDUSER / CHAN_BAN_SYNC snapshots). Enforced in
+ * {@link BotLinkProtocol.send} and probed each heartbeat tick.
+ */
+export const MAX_WRITE_BUFFER_BYTES = 4 * 1024 * 1024;
+
+/**
  * Per-frame cap during the pre-handshake window. A hostile peer cannot
  * otherwise drive `JSON.parse` + `sanitizeFrame` on 64 KB junk for the
  * full handshake-timeout duration — at line rate this is unbounded CPU
@@ -467,9 +479,26 @@ export class BotLinkProtocol {
     this.preHandshake = false;
   }
 
-  /** Send a frame. Returns false if the connection is closed or the frame is too large. */
+  /**
+   * Send a frame. Returns false if the connection is closed, the frame is
+   * too large, the peer's write buffer is over the ceiling (the connection
+   * is destroyed in that case), or the socket asks for backpressure —
+   * `socket.write()`'s boolean is propagated, so `false` from an otherwise
+   * healthy socket means "buffered, not yet flushed", not "lost".
+   */
   send(frame: LinkFrame): boolean {
     if (this.closed || this.socket.destroyed) return false;
+
+    // Outbound ceiling — see MAX_WRITE_BUFFER_BYTES. Checked before the
+    // frame is serialized so a stuck peer costs no further CPU or heap.
+    const buffered = this.socket.writableLength;
+    if (buffered > MAX_WRITE_BUFFER_BYTES) {
+      this.logger?.error(
+        `Peer not reading, ${buffered} bytes buffered (cap ${MAX_WRITE_BUFFER_BYTES}) — dropping connection`,
+      );
+      this.close();
+      return false;
+    }
 
     // Symmetry with the inbound path: scrub control chars from every
     // string field on the way out too. Without this an audit log line
@@ -486,8 +515,7 @@ export class BotLinkProtocol {
       return false;
     }
 
-    this.socket.write(json + '\r\n');
-    return true;
+    return this.socket.write(json + '\r\n');
   }
 
   /** Close the connection. */
@@ -510,6 +538,16 @@ export class BotLinkProtocol {
 
   get isClosed(): boolean {
     return this.closed;
+  }
+
+  /**
+   * Bytes queued in Node userland awaiting the peer's read
+   * (`socket.writableLength`). The heartbeat probes this each tick so a
+   * quiet link — no send() calls to trip the ceiling — with a stuck
+   * reader is still disconnected within one heartbeat interval.
+   */
+  get writeBufferBytes(): number {
+    return this.socket.writableLength;
   }
 
   get remoteAddress(): string | undefined {

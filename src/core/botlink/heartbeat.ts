@@ -1,9 +1,11 @@
 // HexBot — Bot link heartbeat driver
 //
 // Both hub and leaf run the same loop: every `intervalMs`, check whether
-// the last inbound frame's age has crossed `timeoutMs`; if so, fire the
-// supplied `onTimeout` callback so the caller can tear down the
-// connection; otherwise increment a sequence number and send a PING. The
+// the last inbound frame's age has crossed `timeoutMs` — or, when the
+// optional outbound probe is wired, whether the peer's socket write
+// buffer has crossed `maxWriteBufferBytes`; if so, fire the supplied
+// `onTimeout` callback so the caller can tear down the connection;
+// otherwise increment a sequence number and send a PING. The
 // hub also sweeps stale relay routes on each tick (via `onTick`). Lifting
 // this into a shared driver removes the ~20-line duplicate loop that
 // drifted twice before being unified here.
@@ -35,6 +37,19 @@ export interface HeartbeatOptions {
   onTimeout: () => void;
   /** Optional per-tick hook (e.g. route sweeps on the hub). Fires AFTER the PING send. */
   onTick?: () => void;
+  /**
+   * Optional outbound-health probe: returns bytes queued in the peer's
+   * socket write buffer (`BotLinkProtocol.writeBufferBytes`). A peer that
+   * keeps sending its own frames refreshes `getLastMessageAt` forever, so
+   * inbound age alone never catches a stuck *reader*; this probe closes
+   * that gap. Only consulted when `maxWriteBufferBytes` is also set.
+   */
+  getWriteBufferBytes?: () => number;
+  /**
+   * Ceiling for `getWriteBufferBytes`. When exceeded, treated exactly
+   * like the inactivity timeout: the loop stops, then `onTimeout` fires.
+   */
+  maxWriteBufferBytes?: number;
 }
 
 /**
@@ -70,7 +85,14 @@ export class Heartbeat {
   }
 
   private tick(): void {
-    if (Date.now() - this.opts.getLastMessageAt() > this.opts.timeoutMs) {
+    const inactive = Date.now() - this.opts.getLastMessageAt() > this.opts.timeoutMs;
+    // Outbound-health probe: a peer whose write buffer is over the
+    // ceiling is a stuck reader — same fate as an inactivity timeout.
+    const stuckWriter =
+      this.opts.getWriteBufferBytes !== undefined &&
+      this.opts.maxWriteBufferBytes !== undefined &&
+      this.opts.getWriteBufferBytes() > this.opts.maxWriteBufferBytes;
+    if (inactive || stuckWriter) {
       // Stop before invoking onTimeout so the callback's own cleanup
       // sequence cannot re-trigger this branch on a concurrent tick.
       this.stop();

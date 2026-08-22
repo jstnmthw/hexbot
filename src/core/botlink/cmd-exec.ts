@@ -7,6 +7,15 @@ import type { CommandContext } from '../../command-handler';
 import type { CommandRelay, LinkFrame, LinkPermissions } from './types.js';
 
 /**
+ * Executor-side deadline for a relayed command handler. Matches the
+ * requester's 10s ceiling (`CMD_TIMEOUT_MS` in hub.ts / leaf.ts): by the
+ * time this fires the requesting side has already given up, so the only
+ * job left is to release the frame/output/ctx closures a never-settling
+ * handler would otherwise retain forever.
+ */
+export const CMD_EXEC_TIMEOUT_MS = 10_000;
+
+/**
  * Execute an incoming CMD frame and return the output via a callback.
  * Shared between BotLinkHub.handleCmdRelay and BotLinkLeaf.handleIncomingCmd
  * to avoid duplicating the parse->lookup->check->execute->respond pattern.
@@ -53,14 +62,28 @@ export function executeCmdFrame(
     },
   };
 
+  // Race the handler against a deadline so a never-settling handler (e.g.
+  // a plugin awaiting an outbound fetch with no timeout) can't retain the
+  // frame/output/ctx/sendResult closure set forever. `finished` guards
+  // sendResult to at-most-once: a handler settling after the deadline must
+  // become a no-op, not a second CMD_RESULT.
+  let finished = false;
+  const finishOnce = (lines: string[]): void => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(deadline);
+    sendResult(ref, lines);
+  };
+  const deadline = setTimeout(() => {
+    finishOnce(['Command timed out.']);
+  }, CMD_EXEC_TIMEOUT_MS);
+
   cmdHandler
     .execute(`.${command} ${args}`.trim(), ctx)
     .then(() => {
-      sendResult(ref, output);
+      finishOnce(output);
     })
-    /* v8 ignore start -- .catch only fires if command handler throws */
     .catch((err) => {
-      sendResult(ref, [`Error: ${err instanceof Error ? err.message : String(err)}`]);
+      finishOnce([`Error: ${err instanceof Error ? err.message : String(err)}`]);
     });
-  /* v8 ignore stop */
 }

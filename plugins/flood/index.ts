@@ -490,6 +490,15 @@ export function init(pluginApi: PluginAPI): void {
     }
   });
   api.bind('nick', '-', '*', handleNickFlood);
+  // Reconcile observed ban lifts with stored tempban records. With
+  // ban_duration_minutes=0 the KV row has expires=0 and liftExpiredBans
+  // never deletes it — an operator's manual `-b` is the row's intended end
+  // of life, so observing it is the reclamation path (M-30). No bot-nick
+  // guard: the bot's own lift already deleted the row, making this a no-op.
+  api.bind('mode', '-', '*', (ctx) => {
+    if (ctx.command !== '-b' || !ctx.args) return;
+    enforcement.onBanLifted(ctx.channel, ctx.args);
+  });
   api.bind('kick', '-', '*', (ctx) => {
     if (api.isBotNick(ctx.nick)) {
       lockdown.dropChannel(ctx.channel);

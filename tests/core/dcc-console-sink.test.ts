@@ -63,6 +63,7 @@ function fakeSession(
   return {
     handle,
     nick: handle,
+    storeKey: null,
     connectedAt: Date.now(),
     isRelaying: false,
     relayTarget: null,
