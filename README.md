@@ -1,6 +1,15 @@
-# HexBot
+<p align="center">
+  <img src="https://hexbot.net/hexbot.svg" alt="HexBot" width="128" height="128" />
+</p>
 
-![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/jstnmthw/50c25c1f05168b07d48f34f8c8351ca5/raw/hexbot-coverage.json)
+<p align="center">
+  <a href="https://github.com/jstnmthw/hexbot/actions/workflows/ci.yml"><img src="https://github.com/jstnmthw/hexbot/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/jstnmthw/50c25c1f05168b07d48f34f8c8351ca5/raw/hexbot-coverage.json" alt="Coverage" />
+  <img src="https://img.shields.io/badge/node-%3E%3D24-brightgreen" alt="Node >=24" />
+  <img src="https://img.shields.io/badge/pnpm-10-orange" alt="pnpm 10" />
+</p>
+
+# HexBot
 
 HexBot is a modular Internet Relay Chat bot for Node.js, written in TypeScript. Designed for reliability and extensibility, HexBot runs on any IRC network and can be deployed in seconds using Docker.
 
