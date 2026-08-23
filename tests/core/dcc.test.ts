@@ -1767,10 +1767,12 @@ describe('DCCAuthTracker', () => {
 
   it('exponential backoff doubles each re-ban', () => {
     const tracker = new DCCAuthTracker({ maxFailures: 2, baseLockMs: 1000 });
-    // First lock
-    tracker.recordFailure('k');
-    const first = tracker.recordFailure('k');
-    const firstDuration = first.lockedUntil - Date.now();
+    // First lock — pin the clock via the injected `now` parameter so the
+    // duration math never races a real millisecond tick.
+    const now = Date.now();
+    tracker.recordFailure('k', now);
+    const first = tracker.recordFailure('k', now);
+    const firstDuration = first.lockedUntil - now;
 
     // Fast-forward: pretend the first lock has expired and trigger a re-lock.
     // Use the injected `now` parameter so we don't need fake timers.
