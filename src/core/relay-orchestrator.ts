@@ -399,9 +399,12 @@ export class RelayOrchestrator {
       const bot = stripFormatting(String(frame.fromBot ?? ''));
       dcc.announce(`*** ${handle} has left the console (on ${bot})`);
     }
-    // System announcements from linked bots
+    // System announcements from linked bots. stripFormatting for parity
+    // with the PARTY_* paths above — sanitizeFrame already removed line
+    // separators, but mIRC color/bold bytes would otherwise reach every
+    // connected operator console verbatim.
     if (frame.type === 'ANNOUNCE' && dcc) {
-      dcc.announce(String(frame.message ?? ''));
+      dcc.announce(stripFormatting(String(frame.message ?? '')));
     }
     // Ban sharing: apply incoming ban frames
     if (frame.type.startsWith('CHAN_BAN') || frame.type.startsWith('CHAN_EXEMPT')) {

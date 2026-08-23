@@ -134,6 +134,16 @@ export function createSpotifyRadio(): SpotifyRadio {
    */
   let teardownController: AbortController | null = null;
 
+  /**
+   * Per-sender cooldown for the public `!listen` reply, keyed on
+   * `ident@host` (the persistent identity portion — nick rotation must not
+   * reset it). `!listen` replies into the channel, so without a cooldown
+   * any user can make the bot repeat itself at line rate. 30s mirrors the
+   * help plugin's house pattern.
+   */
+  const listenCooldown = new Map<string, number>();
+  const LISTEN_COOLDOWN_MS = 30_000;
+
   // -------------------------------------------------------------------------
   // Lifecycle
   // -------------------------------------------------------------------------
@@ -194,6 +204,18 @@ export function createSpotifyRadio(): SpotifyRadio {
       await routeRadio(api, ctx);
     });
     api.bind('pub', '-', '!listen', async (ctx) => {
+      // Cooldown gate — !listen is unauthenticated and replies into the
+      // channel, so rate-limit per persistent identity. Sweep expired
+      // entries inline (map stays tiny; one !listen per unique identity
+      // per window).
+      const key = `${ctx.ident}@${ctx.hostname}`.toLowerCase();
+      const now = Date.now();
+      for (const [k, expires] of listenCooldown) {
+        if (expires <= now) listenCooldown.delete(k);
+      }
+      const expires = listenCooldown.get(key) ?? 0;
+      if (now < expires) return; // silent drop — a notice would defeat the point
+      listenCooldown.set(key, now + LISTEN_COOLDOWN_MS);
       await handleStatus(api, ctx, true);
     });
   }

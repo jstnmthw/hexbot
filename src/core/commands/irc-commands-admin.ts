@@ -185,9 +185,10 @@ export function registerIRCAdminCommands(deps: IrcAdminCommandsDeps): void {
       // .msg accepts any non-whitespace target (channel, nick, service)
       // — services targets like `NickServ@services.` are valid here
       // even though they fail `isValidCommandTarget`'s channel/nick
-      // rules. The `\S+` check still rejects empty / whitespace-only
-      // targets that would split into an extra wire token.
-      if (!/^\S+$/.test(parsed.target)) {
+      // rules. Still rejected: whitespace (extra wire token), commas
+      // (multi-target smuggling — `bob,alice` sends to both), and a
+      // leading `:` (IRC trailing-parameter sentinel).
+      if (!/^[^\s:,][^\s,]*$/.test(parsed.target)) {
         ctx.reply('Invalid target.');
         return;
       }

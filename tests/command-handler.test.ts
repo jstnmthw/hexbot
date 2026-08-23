@@ -100,6 +100,24 @@ describe('CommandHandler', () => {
   // registerCommand
   // -------------------------------------------------------------------------
 
+  describe('command word formatting strip', () => {
+    it('resolves a formatting-wrapped command word on non-IRC transports', async () => {
+      // REPL/DCC/botlink pass the line verbatim (only the IRC bridge strips
+      // pre-dispatch) — execute() must strip the command word itself so a
+      // \x02-wrapped verb resolves everywhere (2026-08-23 audit INFO).
+      const handler = new CommandHandler();
+      const impl = vi.fn();
+      handler.registerCommand(
+        'ping',
+        { flags: '-', description: 'Ping', usage: '.ping', category: 'general' },
+        impl,
+      );
+      const ctx = makeCtx({ source: 'dcc' });
+      await handler.execute('.\x02ping\x02', ctx);
+      expect(impl).toHaveBeenCalled();
+    });
+  });
+
   describe('registerCommand', () => {
     it('should register and execute a custom command', async () => {
       const handler = new CommandHandler();

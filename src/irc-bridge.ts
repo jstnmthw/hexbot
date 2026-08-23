@@ -265,6 +265,12 @@ export class IRCBridge {
     const isChannel = this.isValidChannel(target);
     const channel = isChannel ? target : null;
 
+    // ACTION carries the same server-set `account` tag as PRIVMSG — prime
+    // the dispatcher's verification fast path from it so a user whose only
+    // recent traffic is `/me` lines doesn't degrade every flag-gated bind
+    // to the slow NickServ round-trip.
+    const account = this.checkAccount(event, nick);
+
     const ctx = this.buildContext({
       nick,
       ident,
@@ -274,6 +280,7 @@ export class IRCBridge {
       command: '',
       args: message,
     });
+    if (account !== undefined) ctx.account = account;
 
     // CTCP ACTION is the same primitive as PRIVMSG from the spam/flood
     // perspective — one inbound frame counts against the same bucket so an
@@ -477,12 +484,17 @@ export class IRCBridge {
     // bit — dropping it is what closes the loophole. Falls back to the
     // nick only if both ident and hostname are empty, which is rare and
     // typically indicates a server-generated pseudo-source.
+    const rateLimitKey = ident && hostname ? `${ident}@${hostname}` : nick;
+    if (!this.ctcpAllowed(rateLimitKey)) {
+      // Rate-limited hits log at debug only — logging every blocked CTCP
+      // at info would let the flood itself set the log volume, defeating
+      // the point of the limiter for the log sinks.
+      this.logger?.debug(`CTCP ${type} from ${nick}!${ident}@${hostname} dropped (rate limit)`);
+      return;
+    }
     this.logger?.info(
       `CTCP ${type}${payload ? ' ' + payload : ''} from ${nick}!${ident}@${hostname}`,
     );
-
-    const rateLimitKey = ident && hostname ? `${ident}@${hostname}` : nick;
-    if (!this.ctcpAllowed(rateLimitKey)) return;
     this.dispatcher.dispatch('ctcp', ctx).catch(this.dispatchError('ctcp'));
   }
 

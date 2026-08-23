@@ -18,13 +18,18 @@ const MAX_MSG_BYTES = 400;
 const MAX_LINES = 4;
 
 /**
- * Hard ceiling on input size (UTF-16 code units). A plugin forwarding a
- * multi-MB string still incurs `Buffer.byteLength` scans on every newline
- * segment before truncation; clip at the top of {@link splitMessage} so the
- * byte-length path never sees more than ~10 MiB. Chosen loose enough that
- * no legitimate pipeline hits it (ai-chat caps at 2 KiB; feeds at 5 MiB).
+ * Hard ceiling on input size, measured in UTF-16 code units — NOT bytes.
+ * A clip at N code units admits up to ~3N UTF-8 bytes (CJK/emoji-heavy
+ * input); that slack is deliberate. This is a DoS backstop, not a wire
+ * limit: a plugin forwarding a multi-MB string still incurs
+ * `Buffer.byteLength` scans on every newline segment before truncation, so
+ * we clip at the top of {@link splitMessage} to bound that work. Code-unit
+ * slicing is O(1) where a byte-accurate clip would need another full scan,
+ * and per-line early truncation downstream enforces the real byte limits.
+ * Chosen loose enough that no legitimate pipeline hits it (ai-chat caps at
+ * 2 KiB; feeds at 5 MiB).
  */
-const MAX_INPUT_BYTES = 10 * 1024 * 1024;
+const MAX_INPUT_CODE_UNITS = 10 * 1024 * 1024;
 
 /** ASCII `" ..."` — 4 bytes, appended to the last line on truncation. */
 const ELLIPSIS = ' ...';
@@ -49,8 +54,8 @@ export function splitMessage(
   reservedBytes = 0,
 ): string[] {
   const budget = Math.max(1, maxBytes - reservedBytes);
-  if (text.length > MAX_INPUT_BYTES) {
-    text = text.slice(0, MAX_INPUT_BYTES);
+  if (text.length > MAX_INPUT_CODE_UNITS) {
+    text = text.slice(0, MAX_INPUT_CODE_UNITS);
   }
   const inputLines = text.split('\n');
   const outputLines: string[] = [];

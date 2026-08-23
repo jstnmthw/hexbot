@@ -14,6 +14,7 @@ import {
 } from './core/help-render';
 import type { VerificationProvider } from './dispatcher';
 import type { HandlerContext, HelpEntry } from './types';
+import { stripFormatting } from './utils/strip-formatting';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -224,13 +225,18 @@ export class CommandHandler {
     // Must start with the configured command prefix.
     if (!trimmed.startsWith(this.prefix)) return;
 
-    // Parse command name and arguments
+    // Parse command name and arguments. The command word is formatting-
+    // stripped for parity with the IRC dispatch path — REPL/DCC/botlink
+    // hand us the line verbatim, and a `\x02`-wrapped verb should resolve
+    // to the same command everywhere instead of failing lookup on some
+    // transports.
     const withoutPrefix = trimmed.substring(this.prefix.length);
     const spaceIdx = withoutPrefix.indexOf(' ');
-    const commandName =
+    const commandName = stripFormatting(
       spaceIdx === -1
         ? withoutPrefix.toLowerCase()
-        : withoutPrefix.substring(0, spaceIdx).toLowerCase();
+        : withoutPrefix.substring(0, spaceIdx).toLowerCase(),
+    );
     const args = spaceIdx === -1 ? '' : withoutPrefix.substring(spaceIdx + 1).trim();
 
     if (!commandName) return;

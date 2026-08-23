@@ -44,10 +44,16 @@ function ipv4ToNum(ip: string): number {
   return num >>> 0; // unsigned
 }
 
-/** Normalize IPv6-mapped IPv4 (::ffff:10.0.0.1 → 10.0.0.1). Returns the input unchanged for pure IPv6/IPv4. */
+/**
+ * Normalize IPv6-mapped IPv4 (::ffff:10.0.0.1 → 10.0.0.1) and lowercase the
+ * result. Lowercasing matters for the IPv6 prefix checks downstream
+ * ({@link isPrivateOrLoopback} matches `fc`/`fd`/`fe80:` by lowercase
+ * prefix) — an uppercase ULA/link-local literal would otherwise misclassify
+ * as public.
+ */
 export function normalizeIP(ip: string): string {
   const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
-  return mapped ? mapped[1] : ip;
+  return (mapped ? mapped[1] : ip).toLowerCase();
 }
 
 /** Validate that a string is a valid IPv4 address or IPv4 CIDR range. */
@@ -302,8 +308,6 @@ export class BotLinkAuthManager {
    * caller must call `releasePending(ip)` once the handshake completes or fails.
    */
   admit(ip: string): AdmissionResult {
-    this.sweepStaleTrackers();
-
     const whitelisted = this.isWhitelisted(ip);
     if (ip === 'unknown') {
       // No IP available — allow through without tracking.
@@ -335,6 +339,15 @@ export class BotLinkAuthManager {
           return { allowed: false, reason: 'cidr-banned' };
         }
       }
+
+      // Sweep AFTER the ban checks, not on entry: a banned IP hammering
+      // SYNs must stay zero-cost (SECURITY.md §11), and an on-entry sweep
+      // handed the attacker an O(tracker-size) walk per connection. The
+      // sweep still runs on every *admitted* connection (plus the 5-minute
+      // timer), which is what keeps the maps bounded. Expired bans need no
+      // sweep to un-ban — the `bannedUntil > now` check above already
+      // treats them as inactive.
+      this.sweepStaleTrackers();
 
       // Per-IP pending handshake limit
       const maxPending = this.config.max_pending_handshakes ?? 3;

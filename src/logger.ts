@@ -38,10 +38,16 @@ const REDACT_FIELDS = [
   'password',
   'password_env',
   'password_hash',
+  // `pass` is the key the SOCKS5 proxy credential travels under
+  // (src/core/socks.ts) — keep it even though no current path logs it.
+  'pass',
   'sasl',
   'sasl_password',
   'token',
   'secret',
+  // Not secret on its own, but combined with the botlink password it forms
+  // the per-deployment key — don't leak it for free.
+  'link_salt',
   'api_key',
   'apiKey',
 ];

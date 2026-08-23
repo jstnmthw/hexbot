@@ -721,16 +721,19 @@ function runShow(
     }
   }
   const ts = new Date(row.timestamp * 1000).toISOString();
+  // Read-time stripping (matching `renderRow`): write-time scrubbing covers
+  // rows written since it landed, but legacy migrated rows were never
+  // scrubbed, and by/target/reason all carry attacker-seedable text.
   const lines: string[] = [
     `Row #${row.id}`,
     `  when:    ${ts} (${relativeTime(row.timestamp)})`,
     `  action:  ${row.action}`,
-    `  source:  ${row.source}${row.plugin ? ` (plugin=${row.plugin})` : ''}`,
-    `  by:      ${row.by ?? '—'}`,
-    `  channel: ${row.channel ?? '—'}`,
-    `  target:  ${row.target ?? '—'}`,
+    `  source:  ${row.source}${row.plugin ? ` (plugin=${stripFormatting(row.plugin)})` : ''}`,
+    `  by:      ${row.by ? stripFormatting(row.by) : '—'}`,
+    `  channel: ${row.channel ? stripFormatting(row.channel) : '—'}`,
+    `  target:  ${row.target ? stripFormatting(row.target) : '—'}`,
     `  outcome: ${row.outcome}`,
-    `  reason:  ${row.reason ?? '—'}`,
+    `  reason:  ${row.reason ? stripFormatting(row.reason) : '—'}`,
   ];
   if (row.metadata) {
     // Strip formatting on the JSON dump — metadata values can contain

@@ -1783,9 +1783,15 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
     return false;
   }
 
-  /** Cap total concurrent sessions. */
+  /**
+   * Cap total concurrent sessions. Counts `awaiting_password` sessions
+   * (not yet in the store) too — otherwise the prompt phase is a free
+   * side-channel past `max_sessions`, bounded only by the port range and
+   * the 30s prompt timeout.
+   */
   private checkSessionLimit(nick: string): boolean {
-    if (this.sessionStore.size < (this.config.max_sessions ?? 5)) return true;
+    const active = this.sessionStore.size + this.pendingSessions.size;
+    if (active < (this.config.max_sessions ?? 5)) return true;
     this.client.notice(nick, 'DCC CHAT: request denied.');
     return false;
   }
@@ -1872,6 +1878,12 @@ export class DCCManager implements DCCSessionManager, BotlinkDCCView {
   ): void {
     /* v8 ignore start -- TCP server lifecycle (listen, connection, timeout, close); requires real TCP */
     const server = createServer();
+    // Exactly one connection per offer. The 'connection' handler below also
+    // closes the server, but a second TCP connection already sitting in the
+    // kernel backlog would still be emitted after close() — with no
+    // listener attached it would dangle un-destroyed. maxConnections makes
+    // the kernel-level race unrepresentable.
+    server.maxConnections = 1;
     this.portAllocator.markUsed(port);
 
     server.listen(port, '0.0.0.0', () => {

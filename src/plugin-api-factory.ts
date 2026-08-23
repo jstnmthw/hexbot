@@ -737,8 +737,19 @@ function createPluginIrcActionsApi(
     ban(channel: string, mask: string, actor?: PluginModActor): void {
       ircCommands?.ban(channel, mask, resolveActor(actor));
     },
-    mode(channel: string, modes: string, ...params: string[]): void {
-      ircCommands?.mode(channel, modes, ...params);
+    mode(channel: string, modes: string, ...paramsAndActor: Array<string | PluginModActor>): void {
+      // Trailing-actor split mirrors IRCCommands.mode: a non-string final
+      // arg is the actor. resolveActor() re-stamps source/plugin so the
+      // attribution can't be spoofed, exactly as for op/kick/ban.
+      const last = paramsAndActor[paramsAndActor.length - 1];
+      const actor =
+        typeof last === 'object' ? resolveActor(paramsAndActor.pop() as PluginModActor) : undefined;
+      const params = paramsAndActor as string[];
+      if (actor) {
+        ircCommands?.mode(channel, modes, ...params, actor);
+      } else {
+        ircCommands?.mode(channel, modes, ...params);
+      }
     },
     requestChannelModes(channel: string): void {
       ircCommands?.requestChannelModes(channel);

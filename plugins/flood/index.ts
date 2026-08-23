@@ -291,11 +291,17 @@ function handleNickFlood(ctx: NickContext): void {
     if (!botHasOps(channel)) continue;
     if (action === undefined) action = enforcement.recordOffence(key);
     if (action === null) return;
+    // Pass the triggering event's hostmask so enforcement can (a) verify
+    // the new nick still belongs to the offender before kicking — a
+    // bystander adopting the just-vacated nick inside the enqueue window
+    // must not eat the punishment — and (b) build the ban mask from the
+    // offender's host rather than a by-nick channel-state lookup.
     enforcement.apply(
       action,
       channel,
       newNick,
       `nick-change spam (${cfg.nickThreshold}+ changes/${cfg.nickWindowSecs}s)`,
+      hostmask,
     );
   }
 }

@@ -242,7 +242,12 @@ export function init(api: PluginAPI): void {
       }
       previewCooldown.set(cooldownKey, nowMs + PREVIEW_COOLDOWN_MS);
 
-      const sampleText = parts.length > 1 ? parts.slice(1).join(' ') : 'Sample Topic Text';
+      // stripFormatting for parity with the !topic set path — the preview
+      // is NOTICEd only to the +o invoker, but echoing their own color
+      // bytes back would misrender the theme comparison anyway.
+      const sampleText = api.stripFormatting(
+        parts.length > 1 ? parts.slice(1).join(' ') : 'Sample Topic Text',
+      );
       api.notice(ctx.nick, `Theme previews using: "${sampleText}"`);
       for (const themeName of themeNames) {
         // Function form of replace() — string-form replacements interpret

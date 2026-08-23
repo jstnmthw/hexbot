@@ -107,6 +107,22 @@ describe('irc-commands-admin', () => {
       expect(mockClient.say).not.toHaveBeenCalled();
       expect(ctx.reply).toHaveBeenCalledWith('Usage: .say <target> <message>');
     });
+
+    it('should reject comma multi-target smuggling', async () => {
+      const ctx = makeCtx();
+      await handler.execute('.say bob,alice one message, two recipients', ctx);
+
+      expect(mockClient.say).not.toHaveBeenCalled();
+      expect(ctx.reply).toHaveBeenCalledWith('Invalid target.');
+    });
+
+    it('should reject a leading-colon target (IRC trailing-arg sentinel)', async () => {
+      const ctx = makeCtx();
+      await handler.execute('.say :#test message', ctx);
+
+      expect(mockClient.say).not.toHaveBeenCalled();
+      expect(ctx.reply).toHaveBeenCalledWith('Invalid target.');
+    });
   });
 
   describe('.msg', () => {
@@ -139,6 +155,32 @@ describe('irc-commands-admin', () => {
 
       expect(mockClient.say).not.toHaveBeenCalled();
       expect(ctx.reply).toHaveBeenCalledWith('Usage: .msg <target> <message>');
+    });
+
+    it('should still accept services-style targets', async () => {
+      const ctx = makeCtx();
+      await handler.execute('.msg NickServ@services.libera.chat IDENTIFY check', ctx);
+
+      expect(mockClient.say).toHaveBeenCalledWith(
+        'NickServ@services.libera.chat',
+        'IDENTIFY check',
+      );
+    });
+
+    it('should reject comma multi-target smuggling', async () => {
+      const ctx = makeCtx();
+      await handler.execute('.msg bob,alice hello both', ctx);
+
+      expect(mockClient.say).not.toHaveBeenCalled();
+      expect(ctx.reply).toHaveBeenCalledWith('Invalid target.');
+    });
+
+    it('should reject a leading-colon target', async () => {
+      const ctx = makeCtx();
+      await handler.execute('.msg :bob hello', ctx);
+
+      expect(mockClient.say).not.toHaveBeenCalled();
+      expect(ctx.reply).toHaveBeenCalledWith('Invalid target.');
     });
 
     it('should strip newlines from messages', async () => {

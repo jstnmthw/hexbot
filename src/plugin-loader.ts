@@ -859,7 +859,32 @@ export class PluginLoader {
     // Resolve any `<field>_env` references from process.env so plugins see
     // fully-resolved config values and never touch process.env directly.
     // See docs/PLUGIN_API.md for the contract.
-    return resolveSecrets({ ...defaults, ...overrides }, this.logger);
+    const merged = { ...defaults, ...overrides };
+    this.warnInlineSecrets(pluginName, merged);
+    return resolveSecrets(merged, this.logger);
+  }
+
+  /**
+   * Warn when a secret-shaped plugin config field carries an inline value
+   * instead of an `_env` reference. `plugins.json` is a plaintext file on
+   * disk — an operator setting `api_key` directly there sidesteps the §6
+   * secrets convention with no feedback. Warning only (not fatal): the
+   * value still works, and some fields matching the name shapes are
+   * legitimately non-secret.
+   */
+  private warnInlineSecrets(pluginName: string, config: Record<string, unknown>): void {
+    const SECRET_SHAPE = /(_key|_token|_secret|password|passwd)$/i;
+    for (const [key, value] of Object.entries(config)) {
+      if (key.endsWith('_env')) continue;
+      if (!SECRET_SHAPE.test(key)) continue;
+      if (typeof value !== 'string' || value === '') continue;
+      if (`${key}_env` in config) continue; // _env sibling wins during resolution anyway
+      this.logger?.warn(
+        `[security] Plugin "${pluginName}" config field "${key}" holds an inline value — ` +
+          `prefer "${key}_env": "<VAR_NAME>" with the secret in the environment ` +
+          `(see docs/SECURITY.md §6.1)`,
+      );
+    }
   }
 
   // -------------------------------------------------------------------------

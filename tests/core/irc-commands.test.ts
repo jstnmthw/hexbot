@@ -321,6 +321,15 @@ describe('IRCCommands', () => {
       expect(rows[0].metadata).toEqual({ params: ['Alice', 'Bob'] });
     });
 
+    it('mode() accepts a trailing actor and attributes the row to it', () => {
+      irc.mode('#t', '+b', '*!*@evil', { by: 'alice', source: 'dcc' });
+      const [row] = db.getModLog({ action: 'mode' });
+      expect(row.by).toBe('alice');
+      expect(row.source).toBe('dcc');
+      // The actor must not leak into the wire params.
+      expect(row.metadata).toEqual({ params: ['*!*@evil'] });
+    });
+
     it('explicit actor parameter overrides the default', () => {
       irc.op('#t', 'Alice', { by: 'alice', source: 'dcc' });
       const [row] = db.getModLog({ action: 'op' });

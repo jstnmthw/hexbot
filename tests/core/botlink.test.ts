@@ -5057,5 +5057,11 @@ describe('hub listen() non-loopback warning', () => {
     expect(isPrivateOrLoopback('0.0.0.0')).toBe(false);
     expect(isPrivateOrLoopback('::')).toBe(false);
     expect(isPrivateOrLoopback('2001:db8::1')).toBe(false);
+    // normalizeIP lowercases, so uppercase ULA/link-local literals classify
+    // the same as their lowercase forms instead of falling through to
+    // "public" (2026-08-23 audit INFO).
+    expect(isPrivateOrLoopback('FD00::1')).toBe(true);
+    expect(isPrivateOrLoopback('FE80::1')).toBe(true);
+    expect(isPrivateOrLoopback('2001:DB8::1')).toBe(false);
   });
 });

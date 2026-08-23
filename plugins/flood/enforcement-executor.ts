@@ -288,8 +288,22 @@ export class EnforcementExecutor {
     return this.actionFor(0);
   }
 
-  /** Apply the named action (warn/kick/tempban). Fire-and-forget errors are logged. */
-  apply(action: string, channel: string, nick: string, reason: string): void {
+  /**
+   * Apply the named action (warn/kick/tempban). Fire-and-forget errors are
+   * logged. `offenderHostmask` is the hostmask from the *triggering event*;
+   * when supplied, kick/tempban verify the nick still resolves to that
+   * ident@host in channel state before acting — without it, a bystander
+   * adopting a just-vacated nick inside the enqueue window could eat the
+   * flooder's punishment (nick-flood enforcement targets the new nick by
+   * name). The ban mask is also built from it rather than from a re-lookup.
+   */
+  apply(
+    action: string,
+    channel: string,
+    nick: string,
+    reason: string,
+    offenderHostmask?: string,
+  ): void {
     if (!this.botHasOps(channel)) return;
     // Terminal-action suppression per (channel, nick): if we already
     // kicked or tempbanned this target inside TERMINAL_SUPPRESSION_MS,
@@ -323,7 +337,7 @@ export class EnforcementExecutor {
       );
       return;
     }
-    const p = this.applyInner(action, channel, nick, reason).catch(this.logError);
+    const p = this.applyInner(action, channel, nick, reason, offenderHostmask).catch(this.logError);
     this.inFlight.add(p);
     // The `finally` keeps the Set bounded: each promise removes itself on
     // settle so the Set only holds truly-in-flight work at any moment.
@@ -434,6 +448,7 @@ export class EnforcementExecutor {
     channel: string,
     nick: string,
     reason: string,
+    offenderHostmask?: string,
   ): Promise<void> {
     // Disposed-during-microtask guard. `apply()` schedules this via
     // `applyInner(...).catch(...)` and pushes the promise into `inFlight`,
@@ -441,6 +456,20 @@ export class EnforcementExecutor {
     // (e.g. plugin reload mid-flood-burst), the side-effect calls would
     // otherwise hit a disposed plugin api. Bail before any `api.kick`.
     if (this.disposed) return;
+    // Bystander guard: when the caller pinned the offender's hostmask,
+    // require the nick to still resolve to the same ident@host before any
+    // kick/tempban. A mismatch means someone else now holds the nick —
+    // skip rather than punish the wrong user.
+    if (offenderHostmask && action !== 'warn') {
+      const current = this.api.getUserHostmask(channel, nick);
+      if (current && identHost(current) !== identHost(offenderHostmask)) {
+        this.api.log(
+          `Flood enforcement skipped: ${nick} in ${channel} now resolves to ${current}, ` +
+            `not the offending ${offenderHostmask} (nick reused by a bystander)`,
+        );
+        return;
+      }
+    }
     if (action === 'warn') {
       this.api.notice(nick, `[flood] ${reason}`);
       this.api.log(`Warned ${nick} in ${channel}: ${reason}`);
@@ -453,8 +482,10 @@ export class EnforcementExecutor {
       this.auditLog('flood-kick', channel, nick, reason);
       return;
     }
-    // action is 'tempban' — last valid action after 'warn' and 'kick'
-    const hostmask = this.api.getUserHostmask(channel, nick);
+    // action is 'tempban' — last valid action after 'warn' and 'kick'.
+    // Prefer the triggering event's hostmask so the ban lands on the
+    // offender's host even if channel state is stale or the nick moved.
+    const hostmask = offenderHostmask ?? this.api.getUserHostmask(channel, nick);
     if (!hostmask) {
       this.api.kick(channel, nick, `[flood] ${reason}`);
       this.auditLog('flood-kick', channel, nick, reason);
@@ -540,6 +571,19 @@ const HOST_SHAPE_RE = /^[A-Za-z0-9.\-:/]+$/;
  * record was still persisted.
  */
 const MAX_BAN_MASK_LEN = 256;
+
+/**
+ * Extract the `ident@host` tail of a `nick!ident@host` hostmask — the
+ * persistent portion of an IRC identity. Used by the bystander guard to
+ * compare "who triggered the flood" against "who holds the nick now"
+ * without the rotatable nick participating. Case-insensitive compare via
+ * lowercasing: hosts are case-insensitive, and idents are on every ircd
+ * we target.
+ */
+function identHost(hostmask: string): string {
+  const bangIdx = hostmask.indexOf('!');
+  return (bangIdx === -1 ? hostmask : hostmask.substring(bangIdx + 1)).toLowerCase();
+}
 
 /**
  * Build a simple *!*@host ban mask from a hostmask. For cloaked hosts

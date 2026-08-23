@@ -5,8 +5,8 @@
 // bootstrap before any structured logger is available — the writes go
 // to console with a `<3>`/`[security]` prefix so journald can route them
 // without setup.
-import { statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readdirSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 /**
  * Enforce POSIX-mode permissions on a file that holds credentials. World-
@@ -57,8 +57,51 @@ export function checkDotenvPermissions(): void {
     candidates.push(`.env.${env}`);
     candidates.push(`config/bot.env.${env}`);
   }
+  // Multi-bot deployments keep per-instance env files at arbitrary paths
+  // under config/ (e.g. `config/<net>/<bot>.env`) that the fixed candidate
+  // list can't anticipate — sweep the config tree for anything env-shaped
+  // so those files get the same fatal world-readable check. An operator
+  // sourcing an env file from outside the project tree can point
+  // `HEX_ENV_FILE` at it to opt in to the check.
+  for (const path of findEnvFiles(resolve('config'), 3)) {
+    candidates.push(path);
+  }
+  const hinted = process.env.HEX_ENV_FILE;
+  if (hinted) candidates.push(hinted);
   for (const name of candidates) {
     const path = resolve(name);
     enforceSecretFilePermissions(path, { fatal: true });
   }
+}
+
+/**
+ * Recursively collect files under `dir` whose name is `.env`, ends in
+ * `.env`, or contains `.env.` (covers `bot.env.production`). Depth-capped
+ * and silent on unreadable directories — this runs pre-logger during
+ * bootstrap and must never be the thing that breaks startup.
+ */
+function findEnvFiles(dir: string, maxDepth: number): string[] {
+  if (maxDepth <= 0) return [];
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const found: string[] = [];
+  for (const entry of entries) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      found.push(...findEnvFiles(path, maxDepth - 1));
+    } else if (
+      entry.isFile() &&
+      (entry.name === '.env' || entry.name.endsWith('.env') || entry.name.includes('.env.')) &&
+      // Example files (`bot.env.example`) hold no secrets and are meant to
+      // be world-readable — a fatal check on them would break fresh checkouts.
+      !entry.name.includes('example')
+    ) {
+      found.push(path);
+    }
+  }
+  return found;
 }

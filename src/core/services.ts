@@ -549,10 +549,14 @@ export class Services {
       restartTimer,
     });
 
+    // sanitize() for parity with the IDENTIFY/GHOST send paths — the
+    // bridge strips CR/LF from event-derived nicks, but `api.verifyUser()`
+    // accepts arbitrary plugin strings, and a `\n` here would inject a
+    // second line into the NickServ PRIVMSG.
     if (method === 'status') {
-      this.client.say(target, `STATUS ${nick}`);
+      this.client.say(target, `STATUS ${sanitize(nick)}`);
     } else {
-      this.client.say(target, `ACC ${nick}`);
+      this.client.say(target, `ACC ${sanitize(nick)}`);
     }
 
     return promise;
@@ -617,7 +621,11 @@ export class Services {
 
     // Only process notices from NickServ
     const nickServTarget = this.getNickServTarget();
-    // NickServ might be 'NickServ' or 'nickserv@services.dal.net' — compare the nick part
+    // NickServ might be 'NickServ' or 'nickserv@services.dal.net' — compare the nick part.
+    // `toLowerCase()` (not the network casemapping) is deliberate here and in
+    // the pattern match below: services identities are ASCII on every network
+    // we target, and none contain the `[]\~` chars where rfc1459 folding
+    // diverges from Unicode lowercasing.
     const fromNick = nickServTarget.includes('@') ? nickServTarget.split('@')[0] : nickServTarget;
 
     if (nick.toLowerCase() !== fromNick.toLowerCase()) {
@@ -674,6 +682,13 @@ export class Services {
       this.pendingGhostResolver();
     }
 
+    // KNOWN LIMITATION: ACC/STATUS replies carry no account name, so the
+    // slow path reports the *nick* as the account. For a grouped alt nick
+    // this differs from the primary account name, and a `$a:<primary>`
+    // pattern will NOT match — the user is denied (fail closed), never
+    // escalated. Users on grouped nicks should either use their primary
+    // nick or be reached via the account-tag fast path (account-notify /
+    // extended-join), which carries the real account name.
     const acc = tryParseAccResponse(message);
     if (acc) {
       this.logger?.debug(`ACC response: nick=${acc.nick} level=${acc.level}`);

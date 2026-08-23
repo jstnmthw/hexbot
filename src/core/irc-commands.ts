@@ -351,9 +351,16 @@ export class IRCCommands {
    *
    * @param channel - Target channel
    * @param modeString - Mode string, e.g. `'+ov'`, `'+mo'`, `'+o-v'`, `'+i'`
-   * @param params - Mode parameters for the param-taking chars only
+   * @param paramsAndActor - Mode parameters for the param-taking chars only.
+   *   The final argument may be a {@link ModActor} object (unambiguous —
+   *   real mode params are always strings) so callers can attribute the
+   *   `mod_log` row to the triggering user, matching the trailing-actor
+   *   convention of `op`/`kick`/`ban`.
    */
-  mode(channel: string, modeString: string, ...params: string[]): void {
+  mode(channel: string, modeString: string, ...paramsAndActor: Array<string | ModActor>): void {
+    const last = paramsAndActor[paramsAndActor.length - 1];
+    const actor = typeof last === 'object' ? (paramsAndActor.pop() as ModActor) : undefined;
+    const params = paramsAndActor as string[];
     const segments = parseModeString(modeString);
     const caps = this.capabilities;
 
@@ -409,7 +416,7 @@ export class IRCCommands {
     // Log the mode mutation as a single row — `reason` carries the full mode
     // string and `metadata.params` the param list so audit queries can still
     // answer "who set +m on #foo".
-    this.logMod('mode', channel, null, undefined, modeString, { params });
+    this.logMod('mode', channel, null, actor, modeString, { params });
   }
 
   // -------------------------------------------------------------------------

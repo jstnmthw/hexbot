@@ -138,7 +138,7 @@ DCC CHAT and in-channel commands use **different authentication models** on purp
 - Stored via scrypt (`src/core/password.ts`) with a 16-byte random salt and N=16384/r=8/p=1 parameters. Format prefix `scrypt$` so future rotation to argon2 is unambiguous.
 - Set via `.chpass` from the REPL or from inside an existing DCC session. The IRC PRIVMSG path is hard-rejected — passwords never travel over channel messages.
 - Minimum length 8 characters. No additional policy — operators are responsible for their own hygiene on a small admin user base.
-- Never logged. `mod_log` records `(action=chpass, target=<handle>, by=<source>)` with no plaintext or hash material.
+- Never logged. `mod_log` records `(action=chpass, target=<handle>, by=<source>)` with no plaintext or hash material. Secret-bearing command verbs are centralized in `SECRET_COMMANDS` (`src/core/commands/secret-commands.ts`); every transport that echoes command lines (REPL logger, DCC/botnet announce, `mod_log` audit rows) runs them through `redactCommandLine()` before the sink, so a `.chpass` line is redacted everywhere while the raw line still reaches the handler for hashing.
 
 **Plaintext over DCC:** The password is sent in the clear over the DCC TCP connection. This is the same failure mode as NickServ IDENTIFY on most networks — a passive observer of the socket already sees every subsequent command, so the password adds no incremental exposure. TLS DCC (DCC SCHAT) is out of scope. Operators who need end-to-end encryption should run a bot-to-user TLS tunnel at the transport layer.
 
@@ -150,7 +150,7 @@ DCC CHAT and in-channel commands use **different authentication models** on purp
 - The listener accepts exactly one connection, then closes.
 - Permission flags are checked before the port is offered.
 - The session enters an `awaiting_password` phase on connect — no commands run, no party-line broadcast, until the prompt succeeds.
-- Repeated bad-password attempts from the same hostmask trigger a per-identity lockout with exponential backoff (`DCCAuthTracker`).
+- Repeated bad-password attempts trigger a per-identity lockout with exponential backoff (`DCCAuthTracker`), keyed on `ident@host` — the persistent portion of the identity — so a brute-forcer cannot reset the backoff by rotating nicks.
 - Session limits cap total concurrent DCC sessions.
 - Users with no `password_hash` on file are rejected at connect with a migration notice pointing at `.chpass`.
 
@@ -160,7 +160,7 @@ DCC CHAT and in-channel commands use **different authentication models** on purp
 
 Commands from the REPL run with implicit owner privileges — the person at the terminal has physical access. However:
 
-- Log all REPL commands the same way IRC commands are logged
+- Log all REPL commands the same way IRC commands are logged — with secret-bearing commands (`SECRET_COMMANDS`, e.g. `.chpass`) redacted via `redactCommandLine()` before the logger, the DCC announce stream, and `mod_log`
 - Never expose the REPL over a network socket without authentication (future web panel must have its own auth)
 
 ---
@@ -177,13 +177,13 @@ Plugins receive a `PluginAPI` object. They must NOT:
 - Access other plugins' state or database namespaces
 - **Call `eval()` or `new Function()` on user-supplied input** — this is a critical vulnerability class. CVE-2019-19010 (Limnoria, CVSS 9.8) demonstrated that an IRC bot plugin using `eval()` for user-submitted math expressions allows full code execution in the bot's process. Any plugin that needs to evaluate expressions must use a sandboxed library with no access to Node.js builtins.
 
-**Enforcement:** The plugin loader validates exports. The scoped `PluginAPI` object returned by `createPluginApi()` is frozen at the top level via `Object.freeze(api)`, and every sub-object (`db`, `permissions`, `services`, `banStore`, `botConfig`, `config`, `channelSettings`) is individually `Object.freeze()`-d. Database namespace isolation is enforced at the `BotDatabase` class level — every plugin DB call is scoped to `pluginId` as the namespace, not by convention. The plugin-facing `botConfig` is a separate `PluginBotConfig` view with the NickServ password omitted and filesystem paths (`database`, `pluginDir`) excluded.
+**Enforcement:** The plugin loader validates exports. The scoped `PluginAPI` object returned by `createPluginApi()` is frozen at the top level via `Object.freeze(api)`, and every sub-object (`db`, `permissions`, `services`, `banStore`, `botConfig`, `config`, `channelSettings`) is individually `Object.freeze()`-d. Database namespace isolation is enforced in the plugin-API factory closure (`src/plugin-api-factory.ts`): the scoped `api.db` binds `pluginId` as the namespace for every call, the plugin never supplies a namespace argument, and the loader's plugin-name validation rules prevent one plugin from registering under another's identity. The plugin-facing `botConfig` is a separate `PluginBotConfig` view with the NickServ password omitted and filesystem paths (`database`, `pluginDir`) excluded.
 
 ### 4.2 Plugin error containment
 
 - A thrown error in a plugin handler MUST NOT crash the bot or prevent other handlers from firing
 - The dispatcher wraps every handler call in try/catch and logs the error with `(pluginId, type:mask)` context
-- A plugin that throws repeatedly should be logged but not auto-unloaded (that's an admin decision)
+- **Per-bind circuit breaker:** a bind that throws on 25 _consecutive_ dispatches (any success resets the counter) is automatically **tripped** — the dispatcher stops calling that one handler. The plugin itself is never auto-unloaded; every other bind keeps firing. Tripped binds are visible in `.binds` as `[tripped]`, and reloading the plugin resets the breaker. This is deliberate containment: a handler that fails on every event is pure log spam and wasted dispatch time, while the unload decision stays with the admin.
 
 ### 4.3 Plugin resource cleanup
 
@@ -238,17 +238,18 @@ The full audit contract — schema, action vocabulary, plugin author rules, the 
 - High-value secrets are **never** stored inline in `config/bot.json`. Each secret field is named via a `<field>_env` suffix that points to an environment variable; the loader resolves it from `process.env` at startup. Fields covered: `services.password_env` (NickServ/SASL password), `botlink.password_env` (bot-link shared secret), `chanmod.nick_recovery_password_env` (NickServ GHOST password), `proxy.password_env` (SOCKS5 auth). Plugins also follow this convention: `ai-chat` reads `HEX_GEMINI_API_KEY` via `api_key_env`, and `spotify-radio` reads `HEX_SPOTIFY_CLIENT_ID` / `HEX_SPOTIFY_CLIENT_SECRET` / `HEX_SPOTIFY_REFRESH_TOKEN` via the corresponding `*_env` fields. See [docs/plans/config-secrets-env.md](plans/config-secrets-env.md) for the full spec.
 - **SASL PLAIN over plaintext is refused.** The bot will not start if `services.sasl` is `true`, `sasl_mechanism` is `"PLAIN"` (the default), and `irc.tls` is `false`. SASL PLAIN over cleartext leaks the NickServ password on the wire. Either enable TLS or use `sasl_mechanism: "EXTERNAL"` with a client certificate.
 - **SASL EXTERNAL (CertFP)** is the most secure authentication method: no password at all. Set `services.sasl_mechanism: "EXTERNAL"` and configure `irc.tls_cert` + `irc.tls_key` pointing to PEM files. The bot authenticates via the TLS client certificate fingerprint registered with NickServ.
-- **SASL authentication failure is a fatal exit, not a retry loop.** When the server rejects the SASL credential (numeric 904) or advertises no acceptable mechanism (numeric 908), the reconnect driver exits the process with code 2 instead of retrying. Retrying a bad password against services — especially on networks with failure counters — risks the account being locked or flagged. The operator must fix the credential in `.env`, then the supervisor can restart the bot. TLS certificate errors (`unable to verify the first certificate`, hostname mismatch, expired cert) are treated the same way: permanent until config changes. See `src/core/reconnect-driver.ts` and DESIGN.md §5 for the full tiering.
+- **SASL authentication failure is a first-hit fatal exit, not a retry loop.** When the server rejects the SASL credential (numeric 904) or advertises no acceptable mechanism (numeric 908), the reconnect driver exits the process with code 2 immediately — before any services-side account-lockout counter can tick again. Retrying a bad password against services risks the account being locked or flagged. The operator must fix the credential in `.env`, then the supervisor can restart the bot. Infrastructure fatals — TLS certificate errors (`unable to verify the first certificate`, hostname mismatch, expired cert), persistent DNS failure — are also permanent-until-config-changes but get a small retry budget (`FATAL_BUDGET`) before exiting, since they can be transient middlebox/deployment artifacts rather than a credential being burned. See `src/core/reconnect-driver.ts` and DESIGN.md §5 for the full tiering.
 - **Channel `+k` keys are an exception**: they're low-sensitivity join tokens shared with every channel member and visible to any channel op via `/mode`. They may live inline on a channel entry (`{"name": "#chan", "key": "..."}`). For operators who want them out of the config anyway, `key_env` is available as an alternative. Note that channel keys may also surface in `mod_log.metadata.params` whenever chanmod's mode-enforcer issues a `+k` (e.g. via `.chanset`); rows are scrubbed of CR/LF/control bytes at write time but the key string itself is preserved for audit fidelity.
 - `.env` files hold the actual secret values and MUST be in `.gitignore` (they are, via `.env` and `.env.*` patterns).
 - `config/bot.json` still MUST be in `.gitignore` — while it no longer contains secrets directly, it does contain operational details (hostmasks, connection details) that should not be public.
 - Example configs (`config/bot.example.json`, `config/bot.env.example`) must never contain real credentials. By construction, `*.example.json` can only reference env var _names_, not secrets.
-- The bot refuses to start if `config/bot.json` is world-readable. Apply the same `chmod 600` to `.env*` files.
+- The bot refuses to start if `config/bot.json` is world-readable. The same fatal check sweeps env files: the root-level `.env*` candidates, everything env-shaped under `config/` (including multi-bot per-instance files like `config/<net>/<bot>.env`; `*example*` files are exempt), and any file named by the `HEX_ENV_FILE` env var for operators who keep their env file outside the project tree.
 - Startup validation enforces that every enabled feature has its required env var set — the bot fails loudly with the exact var name when a secret is missing (see `validateResolvedSecrets` in `src/config.ts`).
 
 ### 6.1 Env var handling
 
 - **Plugins must never read `process.env` directly.** Declare a `<field>_env` field in the plugin's `config.json` (or in the `plugins.json` override) and read `api.config.<field>` from init. The loader resolves the env var before the plugin sees its config. Plugins reading `process.env` can exfiltrate unrelated ambient secrets (AWS keys, cloud provider creds) that don't belong to the bot.
+- **The loader warns on inline plugin secrets.** A secret-shaped plugin config key (`*_key`, `*_token`, `*_secret`, `*password*`) holding an inline string value with no `_env` sibling surfaces a `[security]` warning at load time — `plugins.json` is a plaintext file on disk, and an inline `api_key` there sidesteps this whole section. The value still works (some name-shape matches are legitimately non-secret), but the warning makes the sidestep visible.
 - Never log resolved secret values, even at debug level. Log the env var name instead if a breadcrumb is useful ("HEX_NICKSERV_PASSWORD missing" — not the value).
 - Never reference env vars that don't belong to HexBot just because they're in the ambient environment. Every `_env` field should be documented in `config/bot.env.example`.
 - Rotate secrets after migrating from inline JSON to `_env` (the old values were in a plaintext file on disk).
@@ -257,21 +258,23 @@ The full audit contract — schema, action vocabulary, plugin author rules, the 
 
 ## 7. Secure defaults
 
-The bot should be safe out of the box, without requiring the admin to harden it:
+The bot should be safe out of the box, without requiring the admin to harden it. Settings marked **required (explicit)** are mandatory fields in `bot.json` — omitting them is a fatal startup error rather than a silent default, which is fail-closed by construction; the values shown are what the example config ships.
 
-| Setting                    | Default        | Why                                                         |
-| -------------------------- | -------------- | ----------------------------------------------------------- |
-| `identity.method`          | `"hostmask"`   | Works on all networks, no services dependency               |
-| `identity.require_acc_for` | `["+o", "+n"]` | Privileged ops require NickServ verification when available |
-| `services.sasl`            | `true`         | SASL is more secure than PRIVMSG IDENTIFY                   |
-| `services.sasl_mechanism`  | `"PLAIN"`      | Falls back to EXTERNAL (CertFP) if configured               |
-| SASL PLAIN + plaintext     | **Refused**    | Bot refuses to start if SASL PLAIN is used without TLS      |
-| `irc.tls`                  | `true`         | Encrypted connection by default                             |
-| IRCv3 STS                  | Enforced       | Persisted per-host; prevents TLS downgrade on reconnect     |
-| Admin commands flag        | `+n`           | Only owner can run admin commands                           |
-| `.help` flag               | `-`            | Help is available to everyone (no info leak risk)           |
-| Plugin API `permissions`   | Read-only      | Plugins can check flags but not grant them                  |
-| Plugin API object          | Frozen         | `Object.freeze()` on the API and all sub-objects            |
+| Setting                      | Default / requirement                              | Why                                                                                                                                                   |
+| ---------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `identity.method`            | `"hostmask"`                                       | Works on all networks, no services dependency                                                                                                         |
+| `identity.require_acc_for`   | required (explicit) — example ships `["+o", "+n"]` | Privileged ops require NickServ verification when available                                                                                           |
+| `services.sasl`              | required (explicit) — example ships `true`         | SASL is more secure than PRIVMSG IDENTIFY                                                                                                             |
+| `services.sasl_mechanism`    | `"PLAIN"`                                          | Falls back to EXTERNAL (CertFP) if configured                                                                                                         |
+| SASL PLAIN + plaintext       | **Refused**                                        | Bot refuses to start if SASL PLAIN is used without TLS                                                                                                |
+| `irc.tls`                    | required (explicit) — example ships `true`         | Encrypted connection; omission is a config error, not a silent plaintext fallback                                                                     |
+| IRCv3 STS                    | Enforced                                           | Persisted per-host; prevents TLS downgrade on reconnect                                                                                               |
+| Input flood limiting         | On (5 commands / 10s)                              | `FLOOD_DEFAULTS` apply even when `config.flood` is omitted                                                                                            |
+| Permission-mutating commands | `+n`                                               | `.adduser` / `.deluser` / `.flags` — owner only                                                                                                       |
+| Operational IRC commands     | `+o`                                               | `.say` / `.msg` / `.join` / `.part` / `.invite` / `.status` — note `.say` lets any `+o` holder speak as the bot; raise per-deployment if that matters |
+| `.help` flag                 | `-`                                                | Help is available to everyone (no info leak risk)                                                                                                     |
+| Plugin API `permissions`     | Read-only                                          | Plugins can check flags but not grant them                                                                                                            |
+| Plugin API object            | Frozen                                             | `Object.freeze()` on the API and all sub-objects                                                                                                      |
 
 ---
 
@@ -312,6 +315,8 @@ HexBot implements IRCv3 STS (`src/core/sts.ts`) — the IRC equivalent of HTTP H
 
 The dispatcher (`src/dispatcher.ts`) implements per-user sliding-window flood protection, configured via `config.flood`:
 
+- **On by default:** when the config omits the `flood` block entirely, `FLOOD_DEFAULTS` (5 messages per 10 seconds) apply — flood protection is never silently disabled
+- **Keyed on `ident@host`** (the persistent portion of the identity), not the nick — rotating nicks does not reset the window. The bare nick is used only when both ident and hostname are missing (server-generated pseudo-sources)
 - `pub`: limits channel commands (pub + pubm share one counter)
 - `msg`: limits private message commands (msg + msgm share one counter)
 - Users with the `n` (owner) flag bypass flood protection entirely

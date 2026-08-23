@@ -196,6 +196,45 @@ describe('EnforcementExecutor terminal suppression', () => {
   });
 });
 
+describe('EnforcementExecutor bystander guard (offenderHostmask)', () => {
+  it('skips kick when the nick now resolves to a different ident@host', async () => {
+    const api = makeApi();
+    const kick = vi.fn();
+    // Channel state says the nick belongs to a bystander now.
+    const getUserHostmask = vi.fn().mockReturnValue('victim!~other@innocent.example');
+    const a = { ...api, kick, getUserHostmask } as unknown as PluginAPI;
+    const ex = new EnforcementExecutor(a, cfg, () => true, vi.fn());
+    ex.apply('kick', '#x', 'victim', 'nick-change spam', 'flooder!~evil@bad.example');
+    await ex.drainPending();
+    expect(kick).not.toHaveBeenCalled();
+  });
+
+  it('proceeds when the nick still resolves to the offending ident@host (nick differs)', async () => {
+    const api = makeApi();
+    const kick = vi.fn();
+    const getUserHostmask = vi.fn().mockReturnValue('newnick!~evil@bad.example');
+    const a = { ...api, kick, getUserHostmask } as unknown as PluginAPI;
+    const ex = new EnforcementExecutor(a, cfg, () => true, vi.fn());
+    ex.apply('kick', '#x', 'newnick', 'nick-change spam', 'oldnick!~evil@bad.example');
+    await ex.drainPending();
+    expect(kick).toHaveBeenCalledWith('#x', 'newnick', expect.stringContaining('nick-change spam'));
+  });
+
+  it('builds the tempban mask from the offender hostmask, not a channel-state re-lookup', async () => {
+    const api = makeApi();
+    const kick = vi.fn();
+    const ban = vi.fn();
+    // Channel state has no entry (e.g. state lag after the nick change) —
+    // the pinned hostmask must still produce a ban.
+    const getUserHostmask = vi.fn().mockReturnValue(null);
+    const a = { ...api, kick, ban, getUserHostmask } as unknown as PluginAPI;
+    const ex = new EnforcementExecutor(a, cfg, () => true, vi.fn());
+    ex.apply('tempban', '#x', 'newnick', 'nick-change spam', 'oldnick!~evil@bad.example');
+    await ex.drainPending();
+    expect(ban).toHaveBeenCalledWith('#x', '*!*@bad.example');
+  });
+});
+
 describe('EnforcementExecutor recentTerminal cap (M-31)', () => {
   const CAP = 512;
   // Mirrors the module-private SAME_BURST_MS/TERMINAL_SUPPRESSION_MS TTL.

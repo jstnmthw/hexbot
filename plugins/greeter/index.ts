@@ -215,7 +215,11 @@ export function init(api: PluginAPI): void {
       if (custom !== undefined) greeting = custom;
     }
 
-    const text = greeting
+    // Display-time strip on the whole template, not just the nick: write-
+    // time stripping covers greets set since it landed, but rows persisted
+    // before then were never scrubbed and would render raw mIRC bytes.
+    const text = api
+      .stripFormatting(greeting)
       .replace(/\{channel\}/g, channel)
       .replace(/\{nick\}/g, api.stripFormatting(ctx.nick));
 
@@ -226,7 +230,8 @@ export function init(api: PluginAPI): void {
     }
 
     if (joinNotice) {
-      const noticeText = joinNotice
+      const noticeText = api
+        .stripFormatting(joinNotice)
         .replace(/[\r\n]/g, '')
         .replace(/\{channel\}/g, channel)
         .replace(/\{nick\}/g, api.stripFormatting(ctx.nick));

@@ -102,8 +102,12 @@ export function parseTargetMessage(args: string): { target: string; message: str
 
 /**
  * Validate a target as either a channel (`#`/`&`-prefixed) or a bare nick.
- * Does NOT accept arbitrary targets with embedded whitespace or control chars.
+ * Does NOT accept arbitrary targets with embedded whitespace or control
+ * chars. Commas and colons are rejected anywhere in the target: RFC 2812
+ * excludes both from channel names and nicks, a comma would turn one
+ * PRIVMSG into a multi-target send (`bob,alice`), and a leading colon is
+ * the IRC trailing-parameter sentinel.
  */
 export function isValidCommandTarget(target: string): boolean {
-  return !!target && /^[#&]?[^\s\r\n]+$/.test(target);
+  return !!target && /^[#&]?[^\s\r\n,:]+$/.test(target);
 }

@@ -183,35 +183,69 @@ This directly violates §3.4 ("Never logged. `mod_log` records ... with no plain
 
 ## Info findings
 
-- [ ] **[INFO] `onAction` does not extract the `account` tag** — `src/irc-bridge.ts:258-286`. ACTION traffic doesn't prime the account fast path; degrades to the slow verification path (never to a grant). Fix: call `checkAccount` in `onAction`.
-- [ ] **[INFO] `MAX_INPUT_BYTES` clip compares UTF-16 code units against a byte-named constant** — `src/utils/split-message.ts:27, 52-54`. Admits ~2× the intended byte ceiling; harmless given per-line early truncation. Fix: `Buffer.byteLength` or rename.
-- [ ] **[INFO] `.say`/`.msg` target validation permits comma multi-target and leading `:`** — `src/utils/parse-args.ts:108`, `irc-commands-admin.ts:190`. `+o`-gated, hygiene gap only.
-- [ ] **[INFO] `CommandHandler.execute` does not formatting-strip the command word** — `src/command-handler.ts:203-209`. REPL/DCC/botlink pass the line verbatim; a `\x02`-wrapped command fails lookup (fail-closed). Consistency only.
-- [ ] **[INFO] Slow-path verification conflates account name with nick — grouped nicks break `$a:` matching** — `src/core/services.ts:673, 680-684`. ACC/STATUS carry no account name, so a grouped alt nick won't match their `$a:<primary>` record; fail closed (denial), not escalation. Worth a comment/doc note.
-- [ ] **[INFO] `verifyUser` interpolates the nick into `ACC`/`STATUS` without `sanitize()`** — `src/core/services.ts:546-549`. Sibling IDENTIFY/GHOST paths sanitize; `api.verifyUser(nick)` accepts arbitrary plugin strings. Fix: `sanitize(nick)`.
-- [ ] **[INFO] `services_host_pattern`/NickServ-sender comparisons use default casemapping, not the network's** — `src/core/services.ts:593, 616, 648`. Negligible (services identities are ASCII); folding-contract inconsistency.
-- [ ] **[INFO] SASL secure-defaults are required fields, not defaults** — `src/config/schemas.ts:35, 65, 56-58`. `irc.tls`/`services.sasl`/`require_acc_for` are mandatory (fail-closed, arguably stronger); the "default" lives only in the example. §7 doc/code wording mismatch.
-- [ ] **[INFO] §7 says admin commands are `+n`; the IRC admin commands are `+o`** — `src/core/commands/irc-commands-admin.ts`. Permission-mutating commands are `+n` as documented; `.say`/`.join`/`.part`/`.status` are `+o` (`.say` lets any op speak as the bot). Clarify the table or raise `.say`.
-- [ ] **[INFO] Multi-bot per-instance env files escape the dotenv permission check** — `src/config/file-permissions.ts:55`. `config/<net>/<bot>.env` paths aren't in the candidate list, so a world-readable per-bot env file starts the bot without the fatal check. Fix: `HEX_ENV_FILE` hint or scan `config/**/*.env`.
-- [ ] **[INFO] Logger redaction list omits `pass`** — `src/logger.ts:28-38`, the key the SOCKS credential travels under (`socks.ts:46`). No current path logs it; defense-in-depth only. Fix: add `'pass'` (and `'link_salt'`).
-- [ ] **[INFO] `.modlog show` prints by/target/reason without read-time stripping; legacy migrated rows never scrubbed** — `src/core/commands/modlog-commands.ts:724-739`. Write-time scrubbing covers new rows; apply `stripFormatting()` in `runShow` as `renderRow` already does.
-- [ ] **[INFO] CTCP events are logged before the rate-limit check** — `src/irc-bridge.ts:480-485`. Every inbound CTCP (incl. attacker payload) logs at the sender's rate. Fix: log after `ctcpAllowed`, or demote blocked hits to debug.
-- [ ] **[INFO] `MessageQueue.flush()` bypasses the token bucket on shutdown** — `src/core/message-queue.ts:174-188`. Up to 500 unpaced sends on `.restart`; accepted-risk per its comment (disconnect path uses `flushWithDeadline`).
-- [ ] **[INFO] Second racing DCC TCP connection is never destroyed** — `src/core/dcc/index.ts:1909-1913`. A connection accepted from the backlog before `close()` is emitted with no listener and left dangling. No auth impact. Fix: `server.maxConnections = 1`.
-- [ ] **[INFO] `awaiting_password` DCC sessions don't count toward `max_sessions`** — `src/core/dcc/index.ts:1756-1760`. Bounded in practice by port range + 30s timeout. Optional: include `pendingSessions.size`.
-- [ ] **[INFO] botlink `sweepStaleTrackers()` runs on every `admit()` before the ban check** — `src/core/botlink/auth.ts:304-305`. Contradicts §11's "banned IPs = zero resource cost"; O(n≤10000) per SYN, attacker-amplifiable. Fix: check ban state first, return before sweeping.
-- [ ] **[INFO] botlink `ANNOUNCE` payload not stripped of formatting before DCC delivery** — `src/core/relay-orchestrator.ts:403-405`. PARTY_* strip; ANNOUNCE doesn't (no line injection — `sanitizeFrame` ran). Cosmetic. Fix: `stripFormatting()`.
-- [ ] **[INFO] botlink `normalizeIP` does not lowercase, contradicting comments** — `src/core/botlink/auth.ts:48-51`. Uppercase IPv6 ULA/link-local literals misclassify; fails safe in every direction. Fix: lowercase, or drop the misleading comments.
-- [ ] **[INFO] botlink `unknown` remote address bypasses per-IP tracking** — `src/core/botlink/auth.ts:308-311`. Untracked lane, but must still pass HMAC (not an auth bypass). Low impact under loopback-only default.
-- [ ] **[INFO] chanmod takeover hostile-response targets nicks from the threat log** — `mode-enforce-recovery.ts:327-463`. Correctly skips bot/nodesynch/exempt-flag holders and confirms presence; narrow residual window, well-guarded.
-- [ ] **[INFO] chanmod `!unban` with explicit mask issues `-b` after only `!`/`@` presence check** — `ban-commands.ts:215-276`. `-b` only removes bans and needs `+o` + bot ops. Low risk.
-- [ ] **[INFO] flood nick-flood enforcement targets the new nick by name** — `plugins/flood/index.ts:271-300`. A bystander adopting the just-vacated nick inside the enqueue window could be kicked/tempbanned. Core rate keys are hostmask-based so floods can't be attributed to others. Fix: build the ban mask from the triggering event's hostmask.
-- [ ] **[INFO] greeter emits stored greet text without display-time formatting strip** — `plugins/greeter/index.ts:214-225, 249`. Strip happens only on write; pre-3.0 rows render raw. Formatting-spoofing only. Fix: strip at emit time.
-- [ ] **[INFO] `!topics preview` echoes unstripped sample text** — `plugins/topic/index.ts:245-252`. NOTICEd only to the `+o` invoker. Fix: strip for parity.
-- [ ] **[INFO] Unthrottled public reply commands** — `spotify-radio/index.ts:196-198` (`!listen`), `ai-chat/index.ts:1130-1134`, `8ball/index.ts:58-68`. Noise, not DoS (message queue caps output). The help plugin's ident@host cooldown is the house pattern worth copying for `!listen`.
-- [ ] **[INFO] ai-chat accepts an inline `api_key` in config** — `plugins/ai-chat/config.ts:247`. An operator can set it inline in plugins.json, sidestepping §6 with no warning. Fix: warn when `api_key` is present raw rather than resolved from `api_key_env`.
-- [ ] **[INFO] `api.mode()` carries no actor — plugin-driven mode changes lose triggering-user attribution** — `src/plugin-api-factory.ts:724-726`. Core `IRCCommands.mode` signature gap (not a spoofing hole). Fix: thread an optional actor through.
-- [ ] **[INFO] Dispatcher auto-trips repeat-throwing binds — stricter than §4.2's "logged but not auto-unloaded"** — `src/dispatcher.ts:447-454`. A reasonable circuit breaker, but an automatic containment action §4.2 assigns to the admin. Fix: document the thresholds in §4.2, or emit an event-bus notice.
+> **ALL INFO FINDINGS RESOLVED (2026-08-23).** Code fixes landed for 20;
+> the remainder are accepted-risk or already-well-guarded dispositions,
+> each noted inline. Suite green after the batch (typecheck + lint clean,
+> 4422 tests, 10 new regression tests).
+
+- [x] **[INFO] `onAction` does not extract the `account` tag** — `src/irc-bridge.ts:258-286`. ACTION traffic doesn't prime the account fast path; degrades to the slow verification path (never to a grant). Fix: call `checkAccount` in `onAction`.
+  - _Fixed 2026-08-23:_ `onAction` calls `checkAccount(event, nick)` and stamps `ctx.account`, matching `onMessage`/`onNotice`/`onJoin`.
+- [x] **[INFO] `MAX_INPUT_BYTES` clip compares UTF-16 code units against a byte-named constant** — `src/utils/split-message.ts:27, 52-54`. Admits ~2× the intended byte ceiling; harmless given per-line early truncation. Fix: `Buffer.byteLength` or rename.
+  - _Fixed 2026-08-23:_ renamed to `MAX_INPUT_CODE_UNITS` with a doc comment stating the ~3× byte slack is deliberate — it's a DoS backstop where an O(1) code-unit slice beats a second full byte scan; downstream per-line truncation enforces the real byte limits.
+- [x] **[INFO] `.say`/`.msg` target validation permits comma multi-target and leading `:`** — `src/utils/parse-args.ts:108`, `irc-commands-admin.ts:190`. `+o`-gated, hygiene gap only.
+  - _Fixed 2026-08-23:_ `isValidCommandTarget` rejects `,` and `:` anywhere (RFC 2812 excludes both from channels and nicks); `.msg` keeps its looser services-target shape but rejects commas and a leading `:`. Regression tests for both commands.
+- [x] **[INFO] `CommandHandler.execute` does not formatting-strip the command word** — `src/command-handler.ts:203-209`. REPL/DCC/botlink pass the line verbatim; a `\x02`-wrapped command fails lookup (fail-closed). Consistency only.
+  - _Fixed 2026-08-23:_ `execute()` runs the parsed command word through `stripFormatting()` so a wrapped verb resolves identically on every transport. Test added.
+- [x] **[INFO] Slow-path verification conflates account name with nick — grouped nicks break `$a:` matching** — `src/core/services.ts:673, 680-684`. ACC/STATUS carry no account name, so a grouped alt nick won't match their `$a:<primary>` record; fail closed (denial), not escalation. Worth a comment/doc note.
+  - _Fixed 2026-08-23:_ KNOWN LIMITATION comment added at the ACC/STATUS parse site documenting the fail-closed behavior and the account-tag fast path as the grouped-nick escape hatch.
+- [x] **[INFO] `verifyUser` interpolates the nick into `ACC`/`STATUS` without `sanitize()`** — `src/core/services.ts:546-549`. Sibling IDENTIFY/GHOST paths sanitize; `api.verifyUser(nick)` accepts arbitrary plugin strings. Fix: `sanitize(nick)`.
+  - _Fixed 2026-08-23:_ both the ACC and STATUS sends sanitize the nick, matching IDENTIFY/GHOST.
+- [x] **[INFO] `services_host_pattern`/NickServ-sender comparisons use default casemapping, not the network's** — `src/core/services.ts:593, 616, 648`. Negligible (services identities are ASCII); folding-contract inconsistency.
+  - _Accepted 2026-08-23:_ comment added at the sender-compare site documenting that `toLowerCase()` is deliberate — services identities are ASCII on every target network and contain none of the `[]\~` chars where rfc1459 folding diverges.
+- [x] **[INFO] SASL secure-defaults are required fields, not defaults** — `src/config/schemas.ts:35, 65, 56-58`. `irc.tls`/`services.sasl`/`require_acc_for` are mandatory (fail-closed, arguably stronger); the "default" lives only in the example. §7 doc/code wording mismatch.
+  - _Fixed 2026-08-23 (docs):_ SECURITY.md §7 table now marks these rows as required-explicit (fail-closed: omission is a startup error, not a silent default).
+- [x] **[INFO] §7 says admin commands are `+n`; the IRC admin commands are `+o`** — `src/core/commands/irc-commands-admin.ts`. Permission-mutating commands are `+n` as documented; `.say`/`.join`/`.part`/`.status` are `+o` (`.say` lets any op speak as the bot). Clarify the table or raise `.say`.
+  - _Fixed 2026-08-23 (docs):_ SECURITY.md §7 table split into "permission-mutating commands `+n`" and "operational IRC commands `+o`" rows, with the `.say` implication called out.
+- [x] **[INFO] Multi-bot per-instance env files escape the dotenv permission check** — `src/config/file-permissions.ts:55`. `config/<net>/<bot>.env` paths aren't in the candidate list, so a world-readable per-bot env file starts the bot without the fatal check. Fix: `HEX_ENV_FILE` hint or scan `config/**/*.env`.
+  - _Fixed 2026-08-23:_ both suggestions landed — `checkDotenvPermissions` now sweeps `config/` (depth 3) for env-shaped files (`.env`, `*.env`, `*.env.*`; `*example*` excluded so fresh checkouts don't trip the fatal check) and honors an operator-set `HEX_ENV_FILE` for files outside the tree.
+- [x] **[INFO] Logger redaction list omits `pass`** — `src/logger.ts:28-38`, the key the SOCKS credential travels under (`socks.ts:46`). No current path logs it; defense-in-depth only. Fix: add `'pass'` (and `'link_salt'`).
+  - _Fixed 2026-08-23:_ `pass` and `link_salt` added to `REDACT_FIELDS`.
+- [x] **[INFO] `.modlog show` prints by/target/reason without read-time stripping; legacy migrated rows never scrubbed** — `src/core/commands/modlog-commands.ts:724-739`. Write-time scrubbing covers new rows; apply `stripFormatting()` in `runShow` as `renderRow` already does.
+  - _Fixed 2026-08-23:_ `runShow` strips `by`/`channel`/`target`/`reason`/`plugin` at read time (metadata was already stripped).
+- [x] **[INFO] CTCP events are logged before the rate-limit check** — `src/irc-bridge.ts:480-485`. Every inbound CTCP (incl. attacker payload) logs at the sender's rate. Fix: log after `ctcpAllowed`, or demote blocked hits to debug.
+  - _Fixed 2026-08-23:_ both — the info log moved after `ctcpAllowed`, and blocked hits log a payload-free line at debug.
+- [x] **[INFO] `MessageQueue.flush()` bypasses the token bucket on shutdown** — `src/core/message-queue.ts:174-188`. Up to 500 unpaced sends on `.restart`; accepted-risk per its comment (disconnect path uses `flushWithDeadline`).
+  - _Accepted 2026-08-23:_ unchanged — operator-initiated `.restart` only, the in-code comment already documents the trade-off, and the disconnect path uses `flushWithDeadline`.
+- [x] **[INFO] Second racing DCC TCP connection is never destroyed** — `src/core/dcc/index.ts:1909-1913`. A connection accepted from the backlog before `close()` is emitted with no listener and left dangling. No auth impact. Fix: `server.maxConnections = 1`.
+  - _Fixed 2026-08-23:_ `server.maxConnections = 1` set on the per-offer listener, making the kernel-backlog race unrepresentable.
+- [x] **[INFO] `awaiting_password` DCC sessions don't count toward `max_sessions`** — `src/core/dcc/index.ts:1756-1760`. Bounded in practice by port range + 30s timeout. Optional: include `pendingSessions.size`.
+  - _Fixed 2026-08-23:_ `checkSessionLimit` counts `sessionStore.size + pendingSessions.size`.
+- [x] **[INFO] botlink `sweepStaleTrackers()` runs on every `admit()` before the ban check** — `src/core/botlink/auth.ts:304-305`. Contradicts §11's "banned IPs = zero resource cost"; O(n≤10000) per SYN, attacker-amplifiable. Fix: check ban state first, return before sweeping.
+  - _Fixed 2026-08-23:_ the sweep moved after the ban/CIDR-ban rejections (and out of the whitelisted/unknown lanes); banned SYNs are back to near-zero cost, and boundedness is preserved by the sweep on every admitted connection plus the 5-minute timer.
+- [x] **[INFO] botlink `ANNOUNCE` payload not stripped of formatting before DCC delivery** — `src/core/relay-orchestrator.ts:403-405`. PARTY_* strip; ANNOUNCE doesn't (no line injection — `sanitizeFrame` ran). Cosmetic. Fix: `stripFormatting()`.
+  - _Fixed 2026-08-23:_ ANNOUNCE delivery runs `stripFormatting()` for parity with the PARTY_* paths.
+- [x] **[INFO] botlink `normalizeIP` does not lowercase, contradicting comments** — `src/core/botlink/auth.ts:48-51`. Uppercase IPv6 ULA/link-local literals misclassify; fails safe in every direction. Fix: lowercase, or drop the misleading comments.
+  - _Fixed 2026-08-23:_ `normalizeIP` lowercases its result, making the `isPrivateOrLoopback` prefix checks (and their comments) correct for uppercase literals. Tests added.
+- [x] **[INFO] botlink `unknown` remote address bypasses per-IP tracking** — `src/core/botlink/auth.ts:308-311`. Untracked lane, but must still pass HMAC (not an auth bypass). Low impact under loopback-only default.
+  - _Accepted 2026-08-23:_ unchanged — a socket with no kernel-reported remote address has no key to track by; the HMAC handshake, handshake timeout, and global pending caps still apply, and the loopback-only default keeps the lane unreachable from outside.
+- [x] **[INFO] chanmod takeover hostile-response targets nicks from the threat log** — `mode-enforce-recovery.ts:327-463`. Correctly skips bot/nodesynch/exempt-flag holders and confirms presence; narrow residual window, well-guarded.
+  - _Accepted 2026-08-23:_ no change — the audit's own assessment is that the existing guards (bot/nodesynch/exempt skip + presence confirmation) cover the path; the residual is inherent to reacting to observed mode events.
+- [x] **[INFO] chanmod `!unban` with explicit mask issues `-b` after only `!`/`@` presence check** — `ban-commands.ts:215-276`. `-b` only removes bans and needs `+o` + bot ops. Low risk.
+  - _Accepted 2026-08-23:_ no change — `-b` is strictly permission-reducing, and the caller already holds `+o`.
+- [x] **[INFO] flood nick-flood enforcement targets the new nick by name** — `plugins/flood/index.ts:271-300`. A bystander adopting the just-vacated nick inside the enqueue window could be kicked/tempbanned. Core rate keys are hostmask-based so floods can't be attributed to others. Fix: build the ban mask from the triggering event's hostmask.
+  - _Fixed 2026-08-23:_ `enforcement.apply()` gained an `offenderHostmask` parameter (passed by the nick-flood handler): kick/tempban now verify the nick still resolves to the offending `ident@host` in channel state (mismatch = skip with log — a bystander never eats the punishment), and the tempban mask is built from the pinned hostmask instead of a by-nick re-lookup. Three regression tests.
+- [x] **[INFO] greeter emits stored greet text without display-time formatting strip** — `plugins/greeter/index.ts:214-225, 249`. Strip happens only on write; pre-3.0 rows render raw. Formatting-spoofing only. Fix: strip at emit time.
+  - _Fixed 2026-08-23:_ both the greet template and the join notice are `stripFormatting()`-ed at emit, covering legacy rows.
+- [x] **[INFO] `!topics preview` echoes unstripped sample text** — `plugins/topic/index.ts:245-252`. NOTICEd only to the `+o` invoker. Fix: strip for parity.
+  - _Fixed 2026-08-23:_ `sampleText` is stripped before theme rendering.
+- [x] **[INFO] Unthrottled public reply commands** — `spotify-radio/index.ts:196-198` (`!listen`), `ai-chat/index.ts:1130-1134`, `8ball/index.ts:58-68`. Noise, not DoS (message queue caps output). The help plugin's ident@host cooldown is the house pattern worth copying for `!listen`.
+  - _Fixed 2026-08-23 (`!listen`):_ 30s per-`ident@host` cooldown with inline expiry sweep (silent drop — a notice would defeat the point), copying the help-plugin house pattern. ai-chat (pre-spend rate limiting already in place) and 8ball (single-line reply, queue-paced) left as-is per the finding's own assessment.
+- [x] **[INFO] ai-chat accepts an inline `api_key` in config** — `plugins/ai-chat/config.ts:247`. An operator can set it inline in plugins.json, sidestepping §6 with no warning. Fix: warn when `api_key` is present raw rather than resolved from `api_key_env`.
+  - _Fixed 2026-08-23 (generalized):_ the warning lives in the plugin loader, not ai-chat — after `_env` resolution the plugin can no longer tell inline from resolved, so `warnInlineSecrets()` inspects the pre-resolution merged config for every plugin and `[security]`-warns on secret-shaped keys (`*_key`, `*_token`, `*_secret`, `*password*`) holding inline string values without an `_env` sibling.
+- [x] **[INFO] `api.mode()` carries no actor — plugin-driven mode changes lose triggering-user attribution** — `src/plugin-api-factory.ts:724-726`. Core `IRCCommands.mode` signature gap (not a spoofing hole). Fix: thread an optional actor through.
+  - _Fixed 2026-08-23:_ both `IRCCommands.mode` and `api.mode` accept a trailing actor object in the variadic tail (unambiguous — real mode params are always strings), keeping the trailing-actor convention of `op`/`kick`/`ban` without breaking the ~25 existing variadic call sites. The factory re-stamps `source`/`plugin` via `resolveActor()` as for every other mutator. Test added.
+- [x] **[INFO] Dispatcher auto-trips repeat-throwing binds — stricter than §4.2's "logged but not auto-unloaded"** — `src/dispatcher.ts:447-454`. A reasonable circuit breaker, but an automatic containment action §4.2 assigns to the admin. Fix: document the thresholds in §4.2, or emit an event-bus notice.
+  - _Fixed 2026-08-23 (docs):_ SECURITY.md §4.2 now documents the per-bind circuit breaker (consecutive-failure threshold, `[tripped]` visibility in `.binds`, reload-to-reset) as the intended containment behavior.
 
 ---
 
@@ -219,10 +253,16 @@ This directly violates §3.4 ("Never logged. `mod_log` records ... with no plain
 
 These are places where the code is correct/stronger than SECURITY.md states — worth reconciling so future audits don't re-flag them:
 
-- [ ] §4.1 says DB namespace isolation is enforced "at the `BotDatabase` class level"; it's actually enforced in the plugin-API factory closure (`plugin-api-factory.ts:550-565`) plus loader name rules. Isolation holds (no escape found — the plugin never supplies a namespace), but the wording is imprecise. Optionally add a `PluginScopedDatabase` wrapper to make the claim literally true.
-- [ ] §7 secure-defaults table rows for `irc.tls`/`services.sasl` (required, not defaulted) and "admin commands `+n`" (mutating `+n`, operational `+o`) — see the two INFO items above.
-- [ ] §11 "banned IPs = zero resource cost" — see the `sweepStaleTrackers` INFO.
-- [ ] §10.1 per-user flood protection is documented as per-user but implemented per-nick — see the flood-key warning.
+> **ALL RECONCILED (2026-08-23)** — SECURITY.md updated in the same pass as the INFO fixes.
+
+- [x] §4.1 says DB namespace isolation is enforced "at the `BotDatabase` class level"; it's actually enforced in the plugin-API factory closure (`plugin-api-factory.ts:550-565`) plus loader name rules. Isolation holds (no escape found — the plugin never supplies a namespace), but the wording is imprecise. Optionally add a `PluginScopedDatabase` wrapper to make the claim literally true.
+  - _Fixed 2026-08-23 (docs):_ §4.1 now names the factory closure + loader name rules as the enforcement point.
+- [x] §7 secure-defaults table rows for `irc.tls`/`services.sasl` (required, not defaulted) and "admin commands `+n`" (mutating `+n`, operational `+o`) — see the two INFO items above.
+  - _Fixed 2026-08-23 (docs):_ both table corrections landed — see the corresponding INFO entries.
+- [x] §11 "banned IPs = zero resource cost" — see the `sweepStaleTrackers` INFO.
+  - _Fixed 2026-08-23 (code):_ the code was fixed to match the doc (sweep moved after the ban check), so the §11 claim stands as written.
+- [x] §10.1 per-user flood protection is documented as per-user but implemented per-nick — see the flood-key warning.
+  - _Fixed 2026-08-23:_ the flood key moved to `ident@host` (warning fix); §10.1 now states the keying explicitly.
 
 ---
 

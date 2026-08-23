@@ -227,7 +227,13 @@ export interface PluginAPI {
   dehalfop(channel: string, nick: string, actor?: PluginModActor): void;
   kick(channel: string, nick: string, reason?: string, actor?: PluginModActor): void;
   ban(channel: string, mask: string, actor?: PluginModActor): void;
-  mode(channel: string, modes: string, ...params: string[]): void;
+  /**
+   * Raw mode change. The final argument may be a {@link PluginModActor}
+   * (unambiguous — real mode params are always strings) so mode mutations
+   * get the same triggering-user attribution as `op`/`kick`/`ban`:
+   * `api.mode(chan, '+b', mask, api.auditActor(ctx))`.
+   */
+  mode(channel: string, modes: string, ...paramsAndActor: Array<string | PluginModActor>): void;
   /** Request the current channel modes from the server (triggers RPL_CHANNELMODEIS / channel:modesReady). */
   requestChannelModes(channel: string): void;
   topic(channel: string, text: string, actor?: PluginModActor): void;
