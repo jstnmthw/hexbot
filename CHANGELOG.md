@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.1] - 2026-08-23 — Security audit remediation
+
+All critical, warning, and info findings from the 2026-08-23 security audit are fixed or explicitly dispositioned as accepted risk.
+
+### Added
+
+- **`.addhost` / `.delhost`** — add or remove hostmasks on an existing user record, with `mod_log` attribution.
+- **`mode()` / `api.mode()` accept a trailing `actor`** so plugin-initiated mode changes attribute to the triggering user in `mod_log`.
+- **Scoped `api.help.*` namespace** — the help plugin no longer value-imports from `src/` at runtime, backed by a new ESLint rule blocking value imports from `src/` in all plugins.
+
+### Changed
+
+- **Input flood limiting now defaults on**: an omitted `flood` config block applies `FLOOD_DEFAULTS` instead of disabling limiting; `bot.example.json` ships an explicit `flood` block.
+- **SASL credential fatals exit on first hit** while cert/DNS failures keep the retry budget; startup warns when `services_host_pattern` is empty; `services_host_pattern` is now a valid `bot.json` key and the example ships a concrete services host.
+- **`docs/SECURITY.md` updated** (sections 3.4, 3.5, 4.1, 4.2, 6, 6.1, 7, 10.1) to match current behavior.
+
+### Fixed
+
+#### Critical
+
+- **chanmod identity gating on re-op paths**: mass re-op and reactive `-o/-h/-v` re-enforcement route through the same hard identity gate as the auto-op join path (extracted `verifyGrantEligibility()`), and channel-state account names thread into `findByHostmask` — a nick-squatter on a weak hostmask can no longer be re-opped on hostmask alone during recovery.
+- **Secret redaction across all sinks**: `.chpass` and other secret-bearing commands are redacted before the REPL log, botnet announce, and `mod_log` writes via a shared secret-commands module (the raw line still reaches the handler for hashing); botlink relay redaction sources the same set.
+- **Botlink hub re-checks relayed command flags** against its authoritative permission DB before forwarding a cross-leaf CMD, refusing unknown or under-privileged commands instead of blind-forwarding.
+
+#### Warnings
+
+- **Permissions & identity**: flag verification fails closed on unknown flag chars; `.flags` owner-guard resolves the caller by account-aware handle; `.flags <handle> <spec> &channel` no longer silently applies globally; DCC command auth keys on the scrypt-authenticated handle instead of hostmask; `services.verifyUser` fails closed on `type:'none'`.
+- **DCC hardening**: auth lockout keys on authenticated handle / ident@host so nick rotation can't reset backoff; socket input is stripped of mIRC and C0/ANSI control bytes before dispatch; the passive-offer listener is capped at one connection; awaiting-password sessions count toward `max_sessions`.
+- **Injection/output**: shared `assertSafeRawParam` guards KICK/INVITE/JOIN/TOPIC/MODE positional params; account tags sanitized at extraction; the parsed command word is stripped of IRC formatting on all transports; the logger strips all C0 controls including ESC from user args; ban/deluser/invite confirmations and `.modlog show` output strip formatting; command flood keys on ident@host.
+- **Botlink**: cross-leaf CMD replies are bound to the leaf the request was sent to, so a compromised leaf can't resolve another leaf's pending command; IPv6 literals lowercased in `normalizeIP`; trackers swept after the ban check so banned peers stay near-zero cost; `pass` and `link_salt` redacted in logs.
+- **chanmod**: `getUserFlags` threads the account into `findByHostmask` so `$a:` pinning holds on reactive enforcement; `enforcebans` gains a mask-specificity floor and never kicks opped, voiced, or flagged members.
+- **Plugin containment**: scoped `unbind` case-folds masks; rss DOCTYPE guard scans the full body; ai-chat social-tracker capped at 10k rows with oldest-eviction.
+
+#### Info
+
+- **Flood enforcement pins the offender's hostmask** so a bystander who takes over a vacated nick is never punished.
+- **Config/secrets**: env-file permission checks sweep the whole config tree plus `HEX_ENV_FILE` (previously only `config/.env`); plugin load warns on inline secret-shaped config values lacking an `_env` sibling.
+- **`.say` / `.msg` reject comma multi-target and leading-colon targets**; nicks are sanitized in NickServ STATUS/ACC queries; account tags primed from ACTION events.
+
 ## [0.7.0] - 2026-08-22 — Services-style help, delta flags, and the July leak sweep
 
 ### Breaking
