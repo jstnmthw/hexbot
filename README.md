@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://hexbot.net/hexbot.svg" alt="HexBot" width="128" height="128" />
+  <a href="https://hexbot.net"><img src="docs/assets/hexbot.svg" alt="HexBot" width="128" height="128" /></a>
 </p>
 
 <p align="center">
